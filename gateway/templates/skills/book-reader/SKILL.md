@@ -1,142 +1,171 @@
 ---
 name: book-reader
 description: >
-  Read and memorize long-form documents such as .txt, .md, .epub, and .pdf files.
-  Use when the user wants a book or long document identified, chunked, summarized,
-  indexed into graph memory, or recalled later by chapter, concept, quote, or entity.
+  Read and memorize long-form documents (.txt, .md, .epub, .pdf) as
+  vault-ready Obsidian folders. Use when the user wants a book identified,
+  chunked, summarized, and stored so it can be recalled later by chapter,
+  character, theme, event, or quote — via Obsidian graph view, a future
+  obsidian_query tool, or the main knowledge graph.
+metadata:
+  version: "0.2.0"
 ---
 
 # Book Reader
 
-Read books the way a careful human reader does: identify the work, scan its structure,
-read it section by section, take notes, and store it so it can be recalled later.
+Read books the way a careful human reader does: identify the work, scan
+its structure, read chapter by chapter, take notes, and leave the vault
+with a fully linked record — chapters, entity pages, and a book index
+that Obsidian renders as a graph out of the box.
 
 Do not load the entire book into working context at once. Work progressively.
 
+Output syntax for every `.md` file this skill writes is defined once in
+[../_shared/obsidian_conventions.md](../_shared/obsidian_conventions.md).
+Every section heading, frontmatter key, bullet shape, and wikilink rule
+lives there — this skill does NOT redefine them.
+
 ## Use when
 
-- The user asks to read, summarize, memorize, annotate, quote from, or catalog a book or long document
-- The user wants a document added to a long-term knowledge base
+- The user asks to read, summarize, memorize, annotate, quote from, or
+  catalog a book or long document
+- The user wants a document added to a durable knowledge base
 - The user asks what was previously read from a known title or source
 
-## Core contract — exact file + tool inventory
+## Core contract — exact inventory
 
-Every successful ingestion produces **exactly**:
+Every successful ingestion produces **exactly** this folder, in the ward:
 
-1. `books/<slug>/book.json` — **one** JSON file, the book's metadata + chapter index. See `assets/schemas.md`.
-2. `books/<slug>/chunks/ch-NN.md` — **one Markdown file per chapter**, with YAML frontmatter + verbatim text. Not JSON. Not per-section. One file per chapter.
-3. `books/<slug>/book.kg.json` — **one** JSON file, the rich `{entities, relationships}` local knowledge graph for the book. Stays on disk for future promotion into the Obsidian vault and for the optional `obsidian_query` tool. It is **not** ingested into the main graph automatically — it is the per-book graph.
-4. **One** `ingest` call at the end, with **exactly one** book-level entity for the main graph — rich properties pointing into the files and memory keys above. See "Main-graph ingest" below.
-5. Memory facts for cross-book recall: **one** `domain` fact summarizing the book, plus per-character / per-theme / per-event facts with `scope=global` and hierarchical keys (`domain.<slug>.character.<kebab-name>`).
+```
+books/<slug>/
+├── _index.md                                 # book MOC (frontmatter + chapter/character/theme/event wikilink lists)
+├── chunks/ch-NN.md                           # one Markdown file per chapter, frontmatter + verbatim text
+└── entities/<type>-<name>.md                 # one page per within-book entity (character, theme, event, place, concept)
+```
 
-Anything outside this inventory is wrong. Specifically, do NOT produce:
-- Per-chapter or per-section `.kg.json` files (e.g. `section_01.kg.json`, `chapter_XX.kg.json`). ONE `book.kg.json`, period.
-- Secondary knowledge files like `insights.kg.json`, `themes.json`, `characters.json`. Everything goes in `book.kg.json`.
-- A separate "distill" or "ward-distiller" step — the skill calls `ingest` inline at the end; there is no session-end sweep.
-- A bulk `ingest` of every entity from `book.kg.json` into the main graph — only ONE book-level entity goes to the main graph. The detail entities stay in `book.kg.json` and in `memory_facts`.
-- Any file outside `books/<slug>/` unless the runtime explicitly demands it.
+And exactly one main-graph `ingest` call at the end — see
+"Main-graph ingest" below.
 
-If a chapter is too long for one Markdown file, split the Markdown (`ch-03a.md`, `ch-03b.md`) — **still one** `book.kg.json`.
+**Do NOT produce:**
+- `book.json` — its content belongs in `_index.md` frontmatter + body.
+- `book.kg.json` or any other `*.kg.json` — the graph is the linked
+  markdown. Wikilinks ARE the graph.
+- Per-section graph JSON.
+- Any file outside `books/<slug>/`.
+
+If a chapter is too long for one Markdown file, split it sequentially
+(`ch-03a.md`, `ch-03b.md`) — they share `chunk_num: 3`.
 
 ## Workflow
 
 ### 1. Check for prior ingestion
 
-Before reading, determine whether this exact book is already known by title, source, or content identity.
-If it already exists, switch to retrieval behavior and do not ingest it again.
+Look up the book by title-derived slug. If `books/<slug>/_index.md`
+already exists, switch to retrieval behavior and do not re-ingest.
 
 ### 2. Identify the work
 
-Determine the best available title, author, publication info, language, source, and canonical book id by reading **the document's own metadata**, not the filename.
+Extract title, author, publication info, language, source from the
+document's OWN metadata — never from the filename:
 
-- EPUB: parse Dublin Core fields (`<dc:title>`, `<dc:creator>`, `<dc:language>`, `<dc:source>`, `<dc:identifier>`) from the OPF inside the `.epub`. See `references/epub.md`.
-- PDF: read the PDF metadata dictionary (`/Title`, `/Author`). If empty, fall back to the first page text. See `references/pdf.md`.
-- TXT / MD: scan the first ~2KB for a title-like line (leading `#`, ALL CAPS title, Gutenberg header). See `references/txt.md`.
+- EPUB: Dublin Core in the OPF (`<dc:title>`, `<dc:creator>`, …). See
+  `references/epub.md`.
+- PDF: metadata dictionary (`/Title`, `/Author`); fall back to first-page
+  scan. See `references/pdf.md`.
+- TXT / MD: first ~2KB for a title line (leading `#`, ALL CAPS,
+  Gutenberg header). See `references/txt.md`.
 
-Filenames like `pg30254.epub`, `untitled.pdf`, or random hashes are **never** a source of truth for title or author. If the document has no extractable title, leave it `null` and abort ingestion — do NOT guess "The Gold-Bug" from a filename.
+If no title is extractable, leave the field `null` and abort ingestion —
+do NOT guess from the filename.
 
-### 2a. Derive the book slug + folder name
+### 2a. Derive the slug
 
-Once you have the real title, generate a kebab-case slug from it:
-- Lowercase, replace spaces and punctuation with `-`, collapse runs of `-`, strip leading/trailing `-`.
-- Strip leading articles (`the`, `a`, `an`) to keep slugs stable across editions.
-- Cap at ~60 chars; if longer, truncate at a word boundary.
+Generate a kebab-case slug from the real title:
+- Lowercase, non-alphanumeric → `-`, collapse runs, strip leading/trailing `-`.
+- Strip leading `the`/`a`/`an`.
+- Cap at ~60 chars at a word boundary.
 
-Examples:
-- `"The Romance of Lust"` → `romance-of-lust`
-- `"Pride and Prejudice"` → `pride-and-prejudice`
-- `"The Gold-Bug and Other Tales"` → `gold-bug-and-other-tales`
-
-Use that slug as:
-- The folder name: `books/<slug>/`
-- The `book_id` field in all artifacts and entity ids (e.g. `book:<slug>`, `character:<slug>:elizabeth-bennet`)
-
-The folder name is NEVER the input filename. `books/pg30254/` is wrong; `books/romance-of-lust/` is right. If a folder for the same slug already exists, treat the book as already ingested (Step 1).
-
-If metadata is uncertain even after parsing the document, prefer `null` over guessing — and return the session with a note that the book could not be identified, rather than fabricating a title.
+The slug is both the folder name (`books/<slug>/`) and the `<source-slug>`
+used in frontmatter and entity slugs
+(`character-<name>`, `theme-<name>`, etc.). Filenames like `pg30254.epub`
+are NEVER the slug. If a folder for the same slug already exists, treat
+the book as ingested (Step 1).
 
 ### 3. Find the reading skeleton
 
-Locate the document body and split it into natural reading units, preferably chapters.
-If the source has no explicit chapters, create a single implicit chapter covering the full body.
-
-Chunking must preserve reading order and stable source boundaries.
-See `references/chunking.md`.
-Also see `assets/schemas.md` 
+Split the document body into chapters (or a single implicit chapter if
+no chapter structure exists). Preserve reading order and stable source
+boundaries. See `references/chunking.md`.
 
 ### 4. Read and annotate progressively
 
-Read one chapter at a time. Write each chapter as `chunks/ch-NN.md` — **Markdown, not JSON**. Frontmatter carries the metadata, the body carries the verbatim chapter text.
+Read one chapter at a time. Write each chapter as `chunks/ch-NN.md` per
+the chunk shape in the shared conventions file. Requirements:
 
-For each chapter, the frontmatter must contain:
-- `book_id: <slug>`
-- `chapter_num: N`
-- `chapter_title: "..."`
-- `line_start` / `line_end`
-- `summary` — 2-4 sentences
-- `key_ideas: [...]`
-- `tags: [...]`
-- `mentions:` — `people: [...]`, `places: [...]`, `concepts: [...]` (these also become entities in `book.kg.json`)
-- `quotes:` — `[{text, line}, ...]` (these also become quote entities in `book.kg.json`)
-- `questions: [...]`
+- Full frontmatter (source, chunk_num, chunk_title, line_start/end,
+  summary, key_ideas, tags, mentions, quotes, questions).
+- Body: `## Summary`, `## Full Text` (verbatim, with mentions rewritten
+  to `[[wikilinks]]`), `## Quotes`, `## Questions`.
+- Mentions rewriting follows the rules in
+  `_shared/obsidian_conventions.md` (first-per-paragraph only, whole-word
+  match, skip inside code/quotes/frontmatter/manual blocks).
 
-The body below the frontmatter MUST include the verbatim chapter text under a `## Full Text` section — no summary-only files.
+### 5. Write entity pages
 
-Large chapters may be split into sequential Markdown files (`ch-03a.md`, `ch-03b.md`) — they stay linked to the same chapter_num. The graph payload (`book.kg.json`) stays as one file regardless.
+For every within-book entity surfaced across the chapters — character,
+theme, event, place, concept, organization (fictional or in-story) —
+write one `entities/<type>-<slug>.md` page per the entity page shape in
+the shared conventions. Requirements:
 
-### 5. Distill the whole book — produce `book.json` and `book.kg.json`
+- Full frontmatter (title, type, slug, source, aliases, tags).
+- Body: one-sentence description, `## Relationships` (typed bullets
+  shaped as `- <relation>: [[target-slug]]`), `## Mentioned in`
+  (wikilinks to chapters with line numbers), `## Evidence` (quoted
+  passages with `— [[ch-NN]] line <N>`).
 
-After all chunk Markdown files are written, read THEM (not the raw source) to build two outputs:
+The target slug of every relationship bullet MUST be an entity page this
+skill also writes in the same run. If you reference a slug that doesn't
+resolve to a written page, that's a broken link and the run fails
+acceptance.
 
-**`book.json`** — metadata + chapter index:
-- thesis
-- key ideas across the book
-- main entities (names only, for the table of contents — full entity data lives in `book.kg.json`)
-- notable quotes (with `chunk_file` + `line`)
-- chapter index (`num`, `title`, `start`, `end`, `chunk`)
-- tags
+Minimum targets for a novel-length work: ≥ 8 character pages,
+≥ 4 theme pages, ≥ 5 event pages, ≥ 10 typed relationship bullets across
+those pages, each with populated evidence. Under that count, go back —
+the vault isn't done until the graph reflects the book.
 
-**`book.kg.json`** — the complete graph payload — see "Knowledge graph output" below. Single file covering every chapter. Do NOT emit one `.kg.json` per chapter.
+### 6. Write `_index.md`
 
-### 6. Store for recall — three layers
+After every chunk + entity page is written, assemble `books/<slug>/_index.md`
+per the `_index.md` shape in the shared conventions:
 
-Store the result in three layers:
+- Frontmatter: title, type=book, slug, author, published, language,
+  thesis, tags, aliases, date_read, source.
+- Body: one-paragraph synopsis, `## Chapters` (wikilinks to ch-NN),
+  `## Characters` (wikilinks to character pages),
+  `## Themes` (wikilinks to theme pages),
+  `## Key events` (wikilinks to event pages).
+- End with an empty `<!-- manual --><!-- /manual -->` block.
 
-1. **Chapter chunk files** (`chunks/ch-*.md`) — verbatim Markdown for re-reading and exact passage recovery.
-2. **Per-book local graph** (`book.kg.json`) — rich `{entities, relationships}` covering every character, theme, event, quote, and location. This file stays on disk. It is **not** auto-ingested into the main graph. Future: it will be promoted into an Obsidian vault and queried via an optional `obsidian_query` tool.
-3. **Main-graph ingest + memory facts** — at the very end of the skill run, you MUST:
-   - Call `ingest` **once** with ONE book-level entity (`id: "book:<slug>"`, `type: "book"`) whose `properties` carry enough for future sessions to find everything: title, author, thesis, chapter_count, main character/theme/event name lists, `chunk_dir` path, `book_kg_path`, `memory_key_prefix`. See "Main-graph ingest" below for the exact shape.
-   - Save **one** `domain` memory fact with the book summary (scope can be default; key `domain.<slug>.summary`).
-   - Save per-character / per-theme / per-event memory facts with `scope=global` and hierarchical keys: `domain.<slug>.character.<kebab-name>`, `domain.<slug>.theme.<kebab-name>`, `domain.<slug>.event.<kebab-name>`. These are what `memory.recall` finds when the user later asks "who is Elizabeth Bennet" across sessions.
+### 7. Main-graph ingest
 
-Why this split:
-- Main graph stays small and cross-domain — one node per book, searchable by title/author/theme, not cluttered with 50 chapter nodes.
-- `book.kg.json` stays rich and local — the full entity graph for the book, ready for vault promotion.
-- `memory_facts` carry the character/theme detail globally — recall can surface "Charlie appears in Book X" across sessions without graph traversal.
+At the end of the run, call the `ingest` tool exactly once. The payload
+carries **one book-summary entity plus one entity per cross-source real
+entity** surfaced in the book.
 
-## Main-graph ingest — the single book-level entity
+**Within-source entities (fictional characters, in-book themes, in-book
+events) do NOT go to main KG.** They live only in the vault. A
+within-source entity is one whose identity exists only inside this book
+(Elizabeth Bennet, Netherfield ball, Austen's in-book "pride" motif).
 
-At the end of the run, call the `ingest` tool exactly once. The payload has ONE entity and NO relationships (the rich relationships live in `book.kg.json`, not in the main graph):
+**Cross-source entities (real people, real organizations, real places,
+public works, named concepts) DO go to main KG.** A cross-source entity
+exists outside this book and could appear in other books, articles, or
+research (Jane Austen the author, East India Company, London, transformer
+architecture, Newtonian mechanics).
+
+Rule of thumb: if the entity has a Wikipedia page or could plausibly have
+one, it's cross-source.
+
+Payload shape:
 
 ```json
 {
@@ -149,18 +178,27 @@ At the end of the run, call the `ingest` tool exactly once. The payload has ONE 
         "slug": "<slug>",
         "author": "<Author or null>",
         "published": "YYYY or null",
-        "language": "en or null",
+        "language": "en",
         "thesis": "one sentence",
         "tags": ["..."],
         "chapter_count": 34,
+        "vault_path": "books/<slug>/_index.md",
         "chunk_dir": "books/<slug>/chunks/",
-        "book_json_path": "books/<slug>/book.json",
-        "book_kg_path": "books/<slug>/book.kg.json",
-        "memory_key_prefix": "domain.<slug>.",
-        "characters": ["Elizabeth Bennet", "Fitzwilliam Darcy", "..."],
-        "themes": ["pride", "prejudice", "class", "..."],
-        "key_events": ["Netherfield ball", "Darcy's first proposal", "..."],
+        "entities_dir": "books/<slug>/entities/",
+        "character_count": 12,
+        "theme_count": 5,
+        "event_count": 8,
         "notable_quote": {"text": "...", "chunk_file": "chunks/ch-01.md", "line": 1}
+      }
+    },
+    {
+      "id": "person:jane-austen",
+      "name": "Jane Austen",
+      "type": "person",
+      "properties": {
+        "vault_path": "books/<slug>/entities/person-jane-austen.md",
+        "role_in_book": "author",
+        "evidence": [{"chunk_file": "chunks/ch-00.md", "line": 1}]
       }
     }
   ],
@@ -168,117 +206,55 @@ At the end of the run, call the `ingest` tool exactly once. The payload has ONE 
 }
 ```
 
-This is the ONLY thing that makes the book discoverable in the main graph. A future `graph_query(query="pride and prejudice")` returns this node and its properties — which then point the caller at `chunk_dir`, `book_kg_path`, and `memory_key_prefix` for deeper detail.
+The main-graph entities are summary-level pointers — detail lives in the
+vault. Relationships stay empty at the main-graph layer: cross-source
+relationships across multiple books accumulate naturally as each book
+adds its own `person:jane-austen` entity and properties merge.
 
-## Per-book local graph — `book.kg.json`
+### 8. Store memory facts
 
-This file stays on disk in `books/<slug>/book.kg.json`. It is NOT auto-ingested. It will later be promoted into the Obsidian vault.
+Save `memory_facts` for fast recall across sessions:
 
-### Required richness — not just structure
-
-A bland graph is a failure. "Book → has_chapter → Chapter 1" is structural padding. Every book MUST emit entities in these categories when present in the text:
-
-- `character` / `person` — every named character; populate `aliases` with every surface form they're addressed by.
-- `location` / `place` — settings, cities, houses.
-- `event` — key plot events with a sentence description.
-- `theme` — thematic threads (e.g. "Victorian hypocrisy", "coming of age").
-- `concept` — ideas, symbols, motifs the book develops.
-- `quote` — notable passages with exact `chunk_file` + `line`.
-- `organization` — institutions, families-as-units, companies.
-
-Structural entities (`book`, `chapter`, `volume`) are fine to include but must NOT be the majority.
-
-### Evidence is mandatory
-
-Every relationship MUST carry `properties.evidence` with at least one `{chunk_file, line}` pair. An empty `evidence: []` array is a failure — if you can't cite the passage, you haven't actually read enough to claim the relationship.
-
-### Stable slug IDs
-
-Use `<type>:<kebab-name>` so the same entity across books collapses in the graph:
-- `character:elizabeth-bennet`
-- `theme:victorian-hypocrisy`
-- `location:pemberley`
-
-### Shape (see `assets/schemas.md` for the full reference)
-
-```json
-{
-  "book_id": "book-slug",
-  "entities": [
-    {
-      "id": "character:elizabeth-bennet",
-      "name": "Elizabeth Bennet",
-      "type": "character",
-      "properties": {
-        "aliases": ["Lizzy", "Miss Bennet"],
-        "description": "protagonist",
-        "first_appearance": {"chunk_file": "chunks/ch-01.md", "line": 10},
-        "mentions_in": [
-          {"chunk_file": "chunks/ch-01.md", "lines": [10, 120]},
-          {"chunk_file": "chunks/ch-05.md", "lines": [12, 340]}
-        ]
-      }
-    }
-  ],
-  "relationships": [
-    {
-      "type": "loves",
-      "from": "character:elizabeth-bennet",
-      "to": "character:fitzwilliam-darcy",
-      "properties": {
-        "evidence": [
-          {"chunk_file": "chunks/ch-34.md", "line": 510, "text": "..."}
-        ],
-        "confidence": 0.92,
-        "development": [
-          {"chunk_file": "chunks/ch-05.md", "stage": "initial dislike"},
-          {"chunk_file": "chunks/ch-34.md", "stage": "proposal"}
-        ]
-      }
-    }
-  ]
-}
-```
-
-### Minimum targets for a novel-length work
-
-Roughly, for a novel, `book.kg.json` should contain: ≥ 8 character entities, ≥ 4 theme entities, ≥ 5 event entities, ≥ 10 relationships — each with populated evidence. If you finish reading and have fewer, go back and add them; the skill isn't done until `book.kg.json` reflects the book. (The main-graph `ingest` is separate and always exactly ONE book-level entity.)
-
-## Required file shapes
-
-### `book.json`
-
-Contains top-level metadata, thesis, key ideas, major entities, notable quotes, tags, source identity, and chapter-to-chunk pointers.
-
-### `chunks/ch-*.md`
-
-Markdown with a YAML frontmatter header. The frontmatter carries structured fields (book_id, chapter_num, chapter_title, line_start, line_end, summary, key_ideas, tags, mentions, quotes, questions). The body carries the **verbatim** chapter text. See `assets/schemas.md` for the full template.
-
-### `book.kg.json`
-
-Structured `{entities, relationships}` payload, described in the "Knowledge graph output" section above. Required for the book to be queryable via `graph_query` in future sessions.
+- **One** `domain` fact keyed `domain.<slug>.summary` — title, author,
+  thesis, tag list. Default scope.
+- Per-entity facts for the **most important** within-book entities
+  (protagonists, major themes, climactic events) — scope `global`, keys
+  `domain.<slug>.character.<kebab-name>`, `domain.<slug>.theme.<kebab-name>`,
+  etc. One sentence each. Do NOT save every character — just the ones a
+  user would plausibly ask about by name in a future session.
 
 ## Rules
 
-1. Always check for existing ingestion first — look up by title-derived slug.
-2. Never treat the filename as authoritative metadata. Extract title/author from the document's own metadata (EPUB OPF, PDF metadata dict, first-page scan). `books/<slug>/` uses the slugified title, not the input filename. If you catch yourself using `books/pg30254/` or `books/untitled/`, stop — go back to Step 2.
-3. Never load the whole book into working context if progressive reading is possible.
-4. Every quote must retain a recoverable source location.
-5. Chunk files must contain verbatim text, not just summaries.
-6. Book memory is one fact per book; character/theme/event detail belongs in `book.kg.json`, chapter prose belongs in chunk files. Do NOT use `memory.save_fact` as a substitute for emitting graph entities — that bypasses the graph and the next session can't query it.
-7. Keep `SKILL.md` process-shaped; keep format mechanics in referenced files.
-8. Prefer nulls over fabricated metadata.
-9. Preserve reading order and source traceability.
-10. If the document is image-only or OCR is required, hand off to an OCR-capable path first, then continue with this skill.
+1. Always check for existing ingestion first — look up by title-slug.
+2. Filename is NEVER authoritative. Extract metadata from the document
+   itself. `books/pg30254/` is wrong; `books/romance-of-lust/` is right.
+3. Never load the whole book into working context.
+4. Every chunk body includes verbatim text under `## Full Text` — no
+   summary-only chapter files.
+5. Every entity page must exist for every slug referenced in any
+   relationship bullet, `## Characters`, `## Themes`, or `## Key events`
+   list. No broken wikilinks.
+6. Every section in the shared conventions uses its fixed heading
+   vocabulary — do not invent new headings.
+7. Typed relationships use the one bullet shape: `- <relation>: [[target-slug]]`.
+   No Dataview syntax.
+8. The `ingest` call is exactly once, at the end, with one book entity
+   plus any cross-source real entities. Fictional characters stay in the
+   vault only.
+9. Prefer `null` over fabricated metadata.
+10. If the document is image-only or OCR is required, hand off to an
+    OCR-capable path first, then continue.
 
 ## Retrieval behavior
 
-When the user asks about a previously read work, use stored memory and graph structure to answer from existing artifacts before considering re-ingestion.
+When the user asks about a previously read work, answer from the vault:
 
-Support these retrieval patterns:
-- books already read
-- whether a specific title or source was read
-- what a given chapter says
-- which chapters discuss a concept
-- exact passage recovery
-- cross-book entity lookup
+- Book list / "did we read X?" — scan `books/*/_index.md` frontmatter
+  (title, aliases, slug).
+- Chapter content — read `books/<slug>/chunks/ch-NN.md`.
+- Character / theme / event — read
+  `books/<slug>/entities/<type>-<slug>.md`.
+- Cross-book entities — `graph_query` against the main KG (returns
+  `vault_path` properties pointing into each book's vault).
+
+Don't re-ingest. Don't re-chunk.
