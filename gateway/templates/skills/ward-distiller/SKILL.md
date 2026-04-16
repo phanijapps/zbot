@@ -9,7 +9,25 @@ description: >
 
 # Ward Distiller
 
-Find graph-shaped JSON in the current ward and hand it to `ingest`. Nothing more. The extraction already happened somewhere else — this skill just gets it into the graph.
+Find graph-shaped JSON in the current ward and hand it to the `ingest` tool. Nothing else. The extraction already happened somewhere else — this skill just gets the data into `kg_entities` and `kg_relationships`.
+
+## Tool discipline — non-negotiable
+
+You MUST call the `ingest` tool with `{entities: [...], relationships: [...]}` for each graph-shaped file found.
+
+You MUST NOT call `memory.save_fact` as a shortcut. Saving entities as memory facts bypasses the graph entirely — `graph_query` will not find them, the knowledge graph stays empty, and the next session cannot traverse relationships. If you find yourself typing `memory(action="save_fact", ...)` in this skill, STOP — you are using the wrong tool. The correct tool is `ingest`.
+
+### Correct call shape
+
+```
+ingest(
+  source_id="<relative/path/to/file.kg.json>",
+  entities=<the file's entities array verbatim>,
+  relationships=<the file's relationships array verbatim>
+)
+```
+
+Do not reshape the arrays. Do not summarize. Do not convert entities to facts. Pass them through.
 
 ## Use when
 
