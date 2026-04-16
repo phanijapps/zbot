@@ -803,14 +803,11 @@ export function useMissionControl() {
   const [intentAnalysis, setIntentAnalysis] = useState<IntentAnalysis | null>(null);
 
   // -- Session/conversation IDs --
-  // On fresh mount: if there's a stale session ID but no explicit resume flag,
-  // clear it so the next invoke creates a new session.
+  // Preserve the session ID across component remounts (navigating between
+  // tabs and back should continue the active session). The session ID is
+  // explicitly cleared by `createNewConversationId` ("New Chat" button) or
+  // by log-restore; no defensive clear-on-mount is needed.
   const [conversationId, setConversationId] = useState<string>(() => {
-    const logSessionId = localStorage.getItem("agentzero_log_session_id");
-    if (!logSessionId && localStorage.getItem(WEB_SESSION_ID_KEY)) {
-      // Stale session from a previous run — clear it for a fresh start
-      localStorage.removeItem(WEB_SESSION_ID_KEY);
-    }
     return getOrCreateConversationId();
   });
   const [activeSessionId, setActiveSessionId] = useState<string | null>(() => getSessionId());
