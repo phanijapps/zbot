@@ -521,10 +521,14 @@ impl MemoryRepository {
     /// Search for facts similar to the given embedding, filtered by minimum similarity threshold.
     ///
     /// Returns facts with cosine similarity >= `min_similarity`. Used for contradiction detection.
+    ///
+    /// When `agent_id` is `Some(a)`, results are scoped to facts visible to that
+    /// agent: the agent's private facts (`scope='agent'`) plus any `scope='global'`
+    /// facts. When `None`, no scope gate is applied (admin/debug path).
     pub fn search_similar_facts(
         &self,
         query_embedding: &[f32],
-        agent_id: &str,
+        agent_id: Option<&str>,
         min_similarity: f64,
         limit: usize,
         ward_id: Option<&str>,
@@ -603,11 +607,16 @@ impl MemoryRepository {
         })
     }
 
-    /// FTS5 keyword search for a specific agent.
+    /// FTS5 keyword search with scope-aware visibility.
+    ///
+    /// When `agent_id` is `Some(a)`, results include the agent's private facts
+    /// (`scope='agent'`) AND any facts marked `scope='global'` (visible to
+    /// every agent — domain knowledge, research, reference material, etc.).
+    /// When `None`, no agent/scope filter is applied (admin/debug path).
     pub fn search_memory_facts_fts(
         &self,
         query: &str,
-        agent_id: &str,
+        agent_id: Option<&str>,
         limit: usize,
         ward_id: Option<&str>,
     ) -> Result<Vec<ScoredFact>, String> {
@@ -622,40 +631,68 @@ impl MemoryRepository {
 
         self.db.with_connection(|conn| {
             let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
-                if let Some(w) = ward_id {
-                    (
+                match (agent_id, ward_id) {
+                    (Some(a), Some(w)) => (
                         format!(
                             "SELECT {FACT_COLUMNS_MF}, rank
-                         FROM memory_facts_fts fts
-                         JOIN memory_facts mf ON mf.rowid = fts.rowid
-                         WHERE memory_facts_fts MATCH ?1 AND mf.agent_id = ?2
-                           AND (mf.ward_id = '__global__' OR mf.ward_id = ?3)
-                         ORDER BY rank
-                         LIMIT ?4"
+                             FROM memory_facts_fts fts
+                             JOIN memory_facts mf ON mf.rowid = fts.rowid
+                             WHERE memory_facts_fts MATCH ?1
+                               AND ((mf.agent_id = ?2 AND mf.scope = 'agent') OR mf.scope = 'global')
+                               AND (mf.ward_id = '__global__' OR mf.ward_id = ?3)
+                             ORDER BY rank
+                             LIMIT ?4"
                         ),
                         vec![
                             Box::new(query.to_string()),
-                            Box::new(agent_id.to_string()),
+                            Box::new(a.to_string()),
                             Box::new(w.to_string()),
                             Box::new(limit as i64),
                         ],
-                    )
-                } else {
-                    (
+                    ),
+                    (Some(a), None) => (
                         format!(
                             "SELECT {FACT_COLUMNS_MF}, rank
-                         FROM memory_facts_fts fts
-                         JOIN memory_facts mf ON mf.rowid = fts.rowid
-                         WHERE memory_facts_fts MATCH ?1 AND mf.agent_id = ?2
-                         ORDER BY rank
-                         LIMIT ?3"
+                             FROM memory_facts_fts fts
+                             JOIN memory_facts mf ON mf.rowid = fts.rowid
+                             WHERE memory_facts_fts MATCH ?1
+                               AND ((mf.agent_id = ?2 AND mf.scope = 'agent') OR mf.scope = 'global')
+                             ORDER BY rank
+                             LIMIT ?3"
                         ),
                         vec![
                             Box::new(query.to_string()),
-                            Box::new(agent_id.to_string()),
+                            Box::new(a.to_string()),
                             Box::new(limit as i64),
                         ],
-                    )
+                    ),
+                    (None, Some(w)) => (
+                        format!(
+                            "SELECT {FACT_COLUMNS_MF}, rank
+                             FROM memory_facts_fts fts
+                             JOIN memory_facts mf ON mf.rowid = fts.rowid
+                             WHERE memory_facts_fts MATCH ?1
+                               AND (mf.ward_id = '__global__' OR mf.ward_id = ?2)
+                             ORDER BY rank
+                             LIMIT ?3"
+                        ),
+                        vec![
+                            Box::new(query.to_string()),
+                            Box::new(w.to_string()),
+                            Box::new(limit as i64),
+                        ],
+                    ),
+                    (None, None) => (
+                        format!(
+                            "SELECT {FACT_COLUMNS_MF}, rank
+                             FROM memory_facts_fts fts
+                             JOIN memory_facts mf ON mf.rowid = fts.rowid
+                             WHERE memory_facts_fts MATCH ?1
+                             ORDER BY rank
+                             LIMIT ?2"
+                        ),
+                        vec![Box::new(query.to_string()), Box::new(limit as i64)],
+                    ),
                 };
 
             let mut stmt = conn.prepare(&sql)?;
@@ -690,7 +727,7 @@ impl MemoryRepository {
         &self,
         query_text: &str,
         query_embedding: Option<&[f32]>,
-        agent_id: &str,
+        agent_id: Option<&str>,
         limit: usize,
         vector_weight: f64,
         bm25_weight: f64,
@@ -788,10 +825,14 @@ impl MemoryRepository {
     /// matching `memory_facts` rows and filters by agent / ward in Rust. The
     /// returned score is cosine similarity (`1 - L2_sq / 2`), valid because
     /// stored and query vectors are required to be L2-normalized.
+    ///
+    /// When `agent_id` is `Some(a)`, results include the agent's private facts
+    /// (`scope='agent'`) AND any facts marked `scope='global'`. When `None`,
+    /// no agent/scope filter is applied (admin/debug path).
     fn search_memory_facts_vector(
         &self,
         query_embedding: &[f32],
-        agent_id: &str,
+        agent_id: Option<&str>,
         limit: usize,
         ward_id: Option<&str>,
     ) -> Result<Vec<ScoredFact>, String> {
@@ -821,7 +862,13 @@ impl MemoryRepository {
 
         let mut scored: Vec<ScoredFact> = facts
             .into_iter()
-            .filter(|f| f.agent_id == agent_id)
+            // Scope-aware visibility: when agent_id is specified, return the
+            // agent's own private facts plus any facts flagged as global. When
+            // None, no agent/scope gate (admin/debug path).
+            .filter(|f| match agent_id {
+                Some(a) => (f.agent_id == a && f.scope == "agent") || f.scope == "global",
+                None => true,
+            })
             .filter(|f| match ward_id {
                 Some(w) => f.ward_id == "__global__" || f.ward_id == w,
                 None => true,
@@ -916,26 +963,52 @@ impl MemoryRepository {
     }
 
     /// Get high-confidence facts that should always be included in recall.
+    ///
+    /// When `agent_id` is `Some(a)`, results include the agent's private facts
+    /// (`scope='agent'`) plus any `scope='global'` facts. When `None`, no
+    /// agent/scope filter is applied (admin/debug path).
     pub fn get_high_confidence_facts(
         &self,
-        agent_id: &str,
+        agent_id: Option<&str>,
         min_confidence: f64,
         limit: usize,
     ) -> Result<Vec<MemoryFact>, String> {
         self.db.with_connection(|conn| {
-            let sql = format!(
-                "SELECT {FACT_COLUMNS}
-                 FROM memory_facts
-                 WHERE agent_id = ?1 AND confidence >= ?2
-                 AND (expires_at IS NULL OR expires_at > datetime('now'))
-                 ORDER BY confidence DESC, mention_count DESC
-                 LIMIT ?3"
-            );
+            let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+                if let Some(a) = agent_id {
+                    (
+                        format!(
+                            "SELECT {FACT_COLUMNS}
+                             FROM memory_facts mf
+                             WHERE ((mf.agent_id = ?1 AND mf.scope = 'agent') OR mf.scope = 'global')
+                               AND confidence >= ?2
+                               AND (expires_at IS NULL OR expires_at > datetime('now'))
+                             ORDER BY confidence DESC, mention_count DESC
+                             LIMIT ?3"
+                        ),
+                        vec![
+                            Box::new(a.to_string()),
+                            Box::new(min_confidence),
+                            Box::new(limit as i64),
+                        ],
+                    )
+                } else {
+                    (
+                        format!(
+                            "SELECT {FACT_COLUMNS}
+                             FROM memory_facts
+                             WHERE confidence >= ?1
+                               AND (expires_at IS NULL OR expires_at > datetime('now'))
+                             ORDER BY confidence DESC, mention_count DESC
+                             LIMIT ?2"
+                        ),
+                        vec![Box::new(min_confidence), Box::new(limit as i64)],
+                    )
+                };
             let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(
-                params![agent_id, min_confidence, limit as i64],
-                row_to_memory_fact,
-            )?;
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt.query_map(param_refs.as_slice(), row_to_memory_fact)?;
             rows.collect::<Result<Vec<_>, _>>()
         })
     }
@@ -1353,7 +1426,7 @@ mod tests {
         .expect("upsert 3");
 
         let results = repo
-            .search_memory_facts_fts("Rust", "agent-1", 10, None)
+            .search_memory_facts_fts("Rust", Some("agent-1"), 10, None)
             .expect("fts");
         assert!(
             results.len() >= 2,
@@ -1378,7 +1451,7 @@ mod tests {
         // Query close to fact1.
         let query = normalized_384(0.9, 0.1, 0.0);
         let (results, sources) = repo
-            .search_memory_facts_hybrid("hello", Some(&query), "agent-1", 10, 0.7, 0.3, None)
+            .search_memory_facts_hybrid("hello", Some(&query), Some("agent-1"), 10, 0.7, 0.3, None)
             .expect("hybrid");
 
         assert!(!results.is_empty(), "Should find at least one result");
@@ -1469,7 +1542,7 @@ mod tests {
         repo.upsert_memory_fact(&low).expect("upsert low");
 
         let facts = repo
-            .get_high_confidence_facts("agent-1", 0.9, 10)
+            .get_high_confidence_facts(Some("agent-1"), 0.9, 10)
             .expect("high conf");
         assert_eq!(facts.len(), 1);
         assert_eq!(facts[0].key, "important");

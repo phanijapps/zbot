@@ -156,7 +156,7 @@ impl MemoryRecall {
         let (hybrid_results, _sources) = self.memory_repo.search_memory_facts_hybrid(
             user_message,
             query_embedding.as_deref(),
-            agent_id,
+            Some(agent_id),
             limit * 2, // Fetch more than needed, we'll merge and trim
             self.config.vector_weight,
             self.config.bm25_weight,
@@ -166,7 +166,7 @@ impl MemoryRecall {
         // 3. Also fetch high-confidence facts (always relevant)
         let high_conf_facts = self
             .memory_repo
-            .get_high_confidence_facts(agent_id, self.config.high_confidence_threshold, limit)
+            .get_high_confidence_facts(Some(agent_id), self.config.high_confidence_threshold, limit)
             .unwrap_or_default();
 
         // 3b. Include relevant corrections — corrections get a 1.5x category boost
@@ -309,7 +309,7 @@ impl MemoryRecall {
             .search_memory_facts_hybrid(
                 query,
                 query_emb.as_deref(),
-                agent_id,
+                Some(agent_id),
                 10,
                 self.config.vector_weight,
                 self.config.bm25_weight,

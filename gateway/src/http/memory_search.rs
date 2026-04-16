@@ -39,6 +39,12 @@ pub struct SearchBody {
     pub filters: Option<Value>,
     #[serde(default = "default_limit")]
     pub limit: usize,
+    /// Optional agent scope. When present, memory-fact queries are restricted
+    /// to facts the given agent can see (its private `scope='agent'` facts
+    /// plus all `scope='global'` facts). When absent, no agent filter is
+    /// applied — useful for admin/debug views of the full pool.
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 fn default_mode() -> String {
@@ -257,8 +263,13 @@ fn fact_to_value(fact: gateway_database::MemoryFact, source: &str, score: Option
     v
 }
 
-/// Single agent id used when scoping procedure / episode searches in v1.
-const DEFAULT_AGENT: &str = "agent:root";
+/// Fallback agent id used when scoping procedure / episode searches in v1
+/// and no `agent_id` was supplied on the request. Procedure/episode repos
+/// still require `&str`; the unified-search API will pass the caller's agent
+/// when provided and fall back to `"root"` (the production root agent id)
+/// otherwise. Memory-fact queries no longer rely on this — they accept
+/// `Option<&str>` directly.
+const FALLBACK_AGENT: &str = "root";
 
 /// POST /api/memory/search — unified hybrid/fts/semantic search.
 pub async fn memory_search(
@@ -276,6 +287,9 @@ pub async fn memory_search(
 
     let ward: Option<String> = req.ward_ids.first().cloned();
     let ward_ref: Option<&str> = ward.as_deref();
+
+    // Optional caller-scoped agent. `None` → no agent/scope gate (admin/debug).
+    let agent: Option<String> = req.agent_id.clone();
 
     // Single embedding attempt, mode-dependent.
     let embedding: Option<Vec<f32>> = match req.mode.as_str() {
@@ -317,6 +331,7 @@ pub async fn memory_search(
     let mode = req.mode.clone();
     let limit = req.limit;
     let ward_owned = ward.clone();
+    let agent_owned = agent.clone();
 
     let facts_fut = {
         let memory_repo = memory_repo.clone();
@@ -324,6 +339,7 @@ pub async fn memory_search(
         let mode = mode.clone();
         let emb = embedding.clone();
         let ward = ward_owned.clone();
+        let agent = agent_owned.clone();
         async move {
             if !want_facts {
                 return TypeBlock::default();
@@ -334,6 +350,7 @@ pub async fn memory_search(
                 &query,
                 &mode,
                 emb.as_deref(),
+                agent.as_deref(),
                 ward.as_deref(),
                 limit,
             );
@@ -381,16 +398,18 @@ pub async fn memory_search(
         let mode = mode.clone();
         let emb = embedding.clone();
         let ward = ward_owned.clone();
+        let agent = agent_owned.clone();
         async move {
             if !want_proc {
                 return TypeBlock::default();
             }
             let t0 = Instant::now();
+            let scope_agent = agent.as_deref().unwrap_or(FALLBACK_AGENT);
             let hits: Vec<Value> = match (mode.as_str(), emb.as_ref()) {
                 // No FTS table for procedures: fts mode returns empty.
                 ("fts", _) => Vec::new(),
                 (_, Some(emb)) => proc_repo
-                    .search_by_similarity(emb, DEFAULT_AGENT, ward.as_deref(), limit)
+                    .search_by_similarity(emb, scope_agent, ward.as_deref(), limit)
                     .unwrap_or_default()
                     .into_iter()
                     .map(|(p, s)| procedure_to_value(p, s))
@@ -411,11 +430,13 @@ pub async fn memory_search(
         let mode = mode.clone();
         let emb = embedding.clone();
         let ward = ward_owned.clone();
+        let agent = agent_owned.clone();
         async move {
             if !want_eps {
                 return TypeBlock::default();
             }
             let t0 = Instant::now();
+            let scope_agent = agent.as_deref().unwrap_or(FALLBACK_AGENT);
             let hits: Vec<Value> = match (mode.as_str(), emb.as_ref()) {
                 // Pure FTS path → LIKE fallback.
                 ("fts", _) => episodes_like_search(&db, &query, ward.as_deref(), limit)
@@ -424,7 +445,7 @@ pub async fn memory_search(
                     .map(|ep| episode_to_value(ep, None, "fts"))
                     .collect(),
                 (_, Some(emb)) => episode_repo
-                    .search_by_similarity(DEFAULT_AGENT, emb, 0.0, limit)
+                    .search_by_similarity(scope_agent, emb, 0.0, limit)
                     .unwrap_or_default()
                     .into_iter()
                     // Ward-scope filter in Rust since repo search_by_similarity
@@ -458,17 +479,23 @@ pub async fn memory_search(
 
 /// Route a fact search through the memory repo according to mode. Returns
 /// JSON-ready hits.
+///
+/// `agent_id` is threaded straight into the repo methods — `Some(a)` yields
+/// scope-aware results (agent's private + global), `None` returns the
+/// unfiltered pool (admin/debug).
+#[allow(clippy::too_many_arguments)]
 fn run_facts(
     memory_repo: &gateway_database::MemoryRepository,
     query: &str,
     mode: &str,
     embedding: Option<&[f32]>,
+    agent_id: Option<&str>,
     ward: Option<&str>,
     limit: usize,
 ) -> Vec<Value> {
     match mode {
         "fts" => memory_repo
-            .search_memory_facts_fts(query, DEFAULT_AGENT, limit, ward)
+            .search_memory_facts_fts(query, agent_id, limit, ward)
             .unwrap_or_default()
             .into_iter()
             .map(|sf| fact_to_value(sf.fact, "fts", Some(sf.score)))
@@ -478,7 +505,7 @@ fn run_facts(
                 return Vec::new();
             };
             memory_repo
-                .search_similar_facts(emb, DEFAULT_AGENT, 0.0, limit, ward)
+                .search_similar_facts(emb, agent_id, 0.0, limit, ward)
                 .unwrap_or_default()
                 .into_iter()
                 .map(|sf| fact_to_value(sf.fact, "vec", Some(sf.score)))
@@ -486,7 +513,7 @@ fn run_facts(
         }
         _ => {
             let (rows, sources) = memory_repo
-                .search_memory_facts_hybrid(query, embedding, DEFAULT_AGENT, limit, 0.7, 0.3, ward)
+                .search_memory_facts_hybrid(query, embedding, agent_id, limit, 0.7, 0.3, ward)
                 .unwrap_or_default();
             let src_map: std::collections::HashMap<String, &'static str> =
                 sources.into_iter().collect();

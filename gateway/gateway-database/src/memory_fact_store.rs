@@ -106,12 +106,23 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         // Generate embedding for the content
         let embedding = self.embed_text(content).await;
 
+        // Scope auto-default. Since this `save_fact` API doesn't accept an
+        // explicit scope, derive it from the category: agent-specific behavior
+        // (corrections/strategies/instructions/patterns) stays private to the
+        // writing agent; domain/reference/research/book/user facts go global
+        // so every other agent can see them in recall.
+        let scope = match category {
+            "correction" | "strategy" | "instruction" | "pattern" => "agent",
+            _ => "global",
+        }
+        .to_string();
+
         let now = chrono::Utc::now().to_rfc3339();
         let fact = MemoryFact {
             id: format!("fact-{}", uuid::Uuid::new_v4()),
             session_id: session_id.map(String::from),
             agent_id: agent_id.to_string(),
-            scope: "agent".to_string(),
+            scope,
             category: category.to_string(),
             key: key.to_string(),
             content: content.to_string(),
@@ -140,8 +151,11 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         // category and mark them as contradicted.
         if let Some(ref emb) = embedding {
             if let Ok(similar_facts) = self.memory_repo.search_similar_facts(
-                emb, agent_id, 0.8, // high threshold to avoid false positives
-                5, None, // no ward filtering
+                emb,
+                Some(agent_id),
+                0.8, // high threshold to avoid false positives
+                5,
+                None, // no ward filtering
             ) {
                 self.mark_contradicted_facts(similar_facts, key, category);
             }
@@ -169,7 +183,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         let (results, _sources) = self.memory_repo.search_memory_facts_hybrid(
             query,
             query_embedding.as_deref(),
-            agent_id,
+            Some(agent_id),
             limit,
             0.7,  // vector weight
             0.3,  // bm25 weight
@@ -211,7 +225,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         let (mut results, _sources) = self.memory_repo.search_memory_facts_hybrid(
             query,
             query_embedding.as_deref(),
-            agent_id,
+            Some(agent_id),
             limit * 2,
             0.7,  // vector weight
             0.3,  // bm25 weight
@@ -221,7 +235,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         // Also fetch high-confidence facts (>= 0.9) — always relevant
         let high_conf_facts = self
             .memory_repo
-            .get_high_confidence_facts(agent_id, 0.9, limit)
+            .get_high_confidence_facts(Some(agent_id), 0.9, limit)
             .unwrap_or_default();
 
         // Include relevant corrections — filter by minimum cosine similarity

@@ -1,23 +1,31 @@
-//! Schema v23 for `knowledge.db`.
+//! Schema v24 for `knowledge.db`.
 //!
 //! All long-term memory + graph + vector indexes live here.
 //! Applied idempotently on daemon boot. No migrations — clean slate.
 
 use rusqlite::Connection;
 
-const SCHEMA_VERSION: i32 = 23;
+const SCHEMA_VERSION: i32 = 24;
 
 /// v23 delta: full-text search over `ward_wiki_articles` with sync triggers.
 const V23_WIKI_FTS_SQL: &str = include_str!("../migrations/v23_wiki_fts.sql");
 
-/// Initialize the knowledge database schema (v23).
+/// v24 delta: one-time backfill that promotes facts in global-type categories
+/// (domain / reference / book / research / user) from the default
+/// `scope='agent'` to `scope='global'`, making them visible to every agent
+/// via the scope-aware search filter.
+const V24_GLOBAL_SCOPE_BACKFILL_SQL: &str =
+    include_str!("../migrations/v24_global_scope_backfill.sql");
+
+/// Initialize the knowledge database schema (v24).
 ///
 /// Creates all tables and indexes if they don't exist. Records the
 /// schema version in `schema_version` table. Safe to call on an
-/// already-initialized DB.
+/// already-initialized DB — every delta is idempotent.
 pub fn initialize_knowledge_database(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute_batch(SCHEMA_SQL)?;
     conn.execute_batch(V23_WIKI_FTS_SQL)?;
+    conn.execute_batch(V24_GLOBAL_SCOPE_BACKFILL_SQL)?;
     conn.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?1, datetime('now'))",
         rusqlite::params![SCHEMA_VERSION],
@@ -461,7 +469,7 @@ mod tests {
         let version: i32 = conn
             .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 23);
+        assert_eq!(version, 24);
 
         // Regular tables.
         for table in [
