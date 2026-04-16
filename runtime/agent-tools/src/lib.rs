@@ -27,9 +27,6 @@ pub use tools::{
     // Ingestion tool (enqueue text for background extraction + bulk structured)
     IngestTool,
     IngestionAccess,
-    StructuredCounts,
-    StructuredEntity,
-    StructuredRelationship,
     // Composite re-exports
     ListAgentsTool,
     ListMcpsTool,
@@ -46,6 +43,9 @@ pub use tools::{
     SetSessionTitleTool,
     // Individual tools for lean subagent registries
     ShellTool,
+    StructuredCounts,
+    StructuredEntity,
+    StructuredRelationship,
     ToolSettings,
     UpdatePlanTool,
     // Orchestrator tools

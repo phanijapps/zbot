@@ -1741,7 +1741,8 @@ fn merge_into_existing(
         .unwrap_or_else(|_| "{}".to_string());
     let mut existing_props: serde_json::Value =
         serde_json::from_str(&existing_props_json).unwrap_or(serde_json::json!({}));
-    let candidate_props = serde_json::to_value(&candidate.properties).unwrap_or(serde_json::json!({}));
+    let candidate_props =
+        serde_json::to_value(&candidate.properties).unwrap_or(serde_json::json!({}));
     merge_json_value(&mut existing_props, &candidate_props);
     let merged_json = serde_json::to_string(&existing_props).unwrap_or_else(|_| "{}".to_string());
 
@@ -1822,12 +1823,11 @@ fn store_entity(conn: &Connection, agent_id: &str, entity: Entity) -> GraphResul
     // If the caller supplied an explicit id that matches an existing row, we
     // need to merge properties instead of overwriting them. Read + merge here
     // so the INSERT ... ON CONFLICT DO UPDATE writes the merged blob.
-    let props_to_store: String = match conn
-        .query_row(
-            "SELECT properties FROM kg_entities WHERE id = ?1",
-            params![new_id],
-            |row| row.get::<_, String>(0),
-        ) {
+    let props_to_store: String = match conn.query_row(
+        "SELECT properties FROM kg_entities WHERE id = ?1",
+        params![new_id],
+        |row| row.get::<_, String>(0),
+    ) {
         Ok(existing_json) => {
             let mut existing: serde_json::Value =
                 serde_json::from_str(&existing_json).unwrap_or(serde_json::json!({}));
