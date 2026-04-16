@@ -117,17 +117,6 @@ For new wards or new domains within an existing ward, **Step 1 of every plan** m
 - **Depends on:** none
 ```
 
-## Mandatory Step N-1 (SECOND-LAST STEP): Distill knowledge into the graph
-- **Agent:** <any agent>
-- **Goal:** Scan the ward for graph-shaped JSON files emitted by prior steps and ingest their entities + relationships into the knowledge graph.
-- **Output:** Reported counts of entities and relationships upserted (or an explicit "no graph-shaped files found" note if none exist yet).
-- **Implementation:**
-    - Load `ward-distiller` skill.
-    - The skill walks the ward, detects JSON files whose top-level shape has `entities[]` or `relationships[]` arrays, and calls the `ingest` tool per file.
-    - Idempotent: re-running on the same ward merges properties into existing nodes without duplication.
-- **Acceptance:** Either a non-zero count of upserts is reported OR a clear "no graph-shaped files found" message is returned. Failing silently is NOT acceptable.
-- **Depends on:** every earlier step
-
 ## Mandatory Step N (LAST STEP): Archive the plan
 - **Agent:** <any agent>
 - **Goal:** Move the executed plan into `specs/archive/` and reference it in AGENTS.md.
@@ -138,31 +127,17 @@ For new wards or new domains within an existing ward, **Step 1 of every plan** m
 - **Acceptance:**
     - Archived file exists at the target path and the original is removed.
     - AGENTS.md references the archived plan.
-- **Depends on:** Step N-1 (distill must complete first so any last-minute entities land in the graph before the plan is archived).
+- **Depends on:** every earlier step.
 
-## Knowledge emission on earlier steps
+## Knowledge graph ingestion is inline, not a planner-owned step
 
-For any step that extracts facts, characters, places, events, organizations, decisions, or relationships from source material — books, articles, research data, earnings calls, interviews, analyses — add a **secondary output file** alongside the step's main deliverable:
+Steps that produce knowledge — a book read, a research synthesis, an earnings-call analysis — ingest into the main graph as part of their own execution. The skill used by the step (`book-reader`, `article-reader`, domain readers) emits ONE summary entity to the graph via the `ingest` tool — a node with rich `properties` that point to where detail lives (chunk file paths, `memory_facts` key prefixes, the skill's local `<source>.kg.json` file).
 
-```
-<task-dir>/<step-name>.kg.json
-```
+Detail-level entities (individual characters, themes, events) stay in two places:
+- the skill's per-source local graph file (e.g. `books/<slug>/book.kg.json`) — a per-book graph the user can later promote into the Obsidian vault, queryable there via an optional `obsidian_query` tool.
+- `memory_facts` with `scope=global` and hierarchical keys (`domain.<slug>.character.charlie`) — queryable across sessions via `memory.recall`.
 
-Shape:
-```json
-{
-  "entities": [
-    {"id": "<type>:<kebab-name>", "name": "...", "type": "...", "properties": { /* any JSON */ }}
-  ],
-  "relationships": [
-    {"type": "...", "from": "<id>", "to": "<id>", "properties": { /* evidence, dates, confidence */ }}
-  ]
-}
-```
-
-Use stable slug ids so the same entity across sources collapses to one node (e.g. `person:steve-jobs`, `organization:apple-inc`). The distill step (N-1) picks up every `*.kg.json` automatically.
-
-Steps producing only code, data tables, config, or UI don't need a `.kg.json`.
+You do NOT plan a separate "distill" step. You do NOT emit `<task-dir>/<step-name>.kg.json` on arbitrary steps. The skill handles its own ingestion inline — planner just delegates the read/analyze step and trusts the skill.
 
 If `memory-bank/structure.md` already exists with a meaningful structure, skip this step and reference the existing structure in subsequent steps.
 

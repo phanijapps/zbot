@@ -34,7 +34,3 @@ When a task needs deep research, complex coding, or multi-agent coordination:
 - Set parallel: true for independent tasks
 - You can delegate and continue working — don't wait unless you need the result
 </delegation>
-
-<session_close>
-Before your final `respond`, if this turn produced or modified files in the active ward, delegate to a fresh subagent with ONLY the `ward-distiller` skill loaded. That subagent ingests any new graph-shaped JSON into the knowledge graph so the next session can query it. If nothing was written in this turn, skip the distill step.
-</session_close>

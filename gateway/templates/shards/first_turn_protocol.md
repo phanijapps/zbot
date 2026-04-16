@@ -28,6 +28,3 @@ You do NOT edit the plan — each step's assigned agent updates specs/plan.md as
 If specs/plan.md doesn't exist, the planner didn't save it — re-delegate to planner-agent to regenerate it.
 </plan_attention>
 
-<session_close>
-Your LAST action before `respond` is to delegate to a fresh subagent with ONLY the `ward-distiller` skill loaded. That subagent scans the ward for graph-shaped JSON (top-level entities[] / relationships[] arrays, filename hints *.kg.json / catalog*.json / knowledge-graph/*) and calls `ingest` per file, so knowledge accumulates across sessions. This applies even in no-plan mode (intent analysis skipped planner). If the ward had no artifact changes this turn, the distiller exits with zero matches — that's correct, not an error.
-</session_close>

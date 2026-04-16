@@ -63,13 +63,6 @@
     "pinned": true
   },
   {
-    "category": "correction",
-    "key": "policy.session_end.ward_distiller",
-    "content": "Before finishing any session that produced or modified files in the active ward — including sessions where intent analysis skipped the planner and you executed directly — your FINAL action MUST be to delegate to a fresh subagent with ONLY the ward-distiller skill loaded. That subagent scans the ward for graph-shaped JSON files (any file with top-level entities[] or relationships[] arrays, plus *.kg.json / catalog*.json / knowledge-graph/* patterns) and calls the ingest tool per file so the knowledge graph grows across sessions. Do not skip this step. Do not inline the distill work yourself. If the ward had no artifact changes in this session, this step is a no-op (the distiller exits with no matches), which is correct and cheap.",
-    "confidence": 1.0,
-    "pinned": true
-  },
-  {
     "category": "instruction",
     "key": "instruction.output_format",
     "content": "Prefer interactive HTML outputs with modern design. Use Tailwind CSS CDN for styling web outputs. Include responsive design for mobile viewing.",

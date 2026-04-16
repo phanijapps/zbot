@@ -19,18 +19,21 @@ Do not load the entire book into working context at once. Work progressively.
 - The user wants a document added to a long-term knowledge base
 - The user asks what was previously read from a known title or source
 
-## Core contract — exact file inventory
+## Core contract — exact file + tool inventory
 
 Every successful ingestion produces **exactly**:
 
 1. `books/<slug>/book.json` — **one** JSON file, the book's metadata + chapter index. See `assets/schemas.md`.
 2. `books/<slug>/chunks/ch-NN.md` — **one Markdown file per chapter**, with YAML frontmatter + verbatim text. Not JSON. Not per-section. One file per chapter.
-3. `books/<slug>/book.kg.json` — **one** JSON file, the `{entities: [...], relationships: [...]}` knowledge graph payload the ward-distiller picks up at session end and hands to `ingest`.
-4. **One** memory fact for the book (one `save_fact` call with category `domain`, not a summary of each chapter).
+3. `books/<slug>/book.kg.json` — **one** JSON file, the rich `{entities, relationships}` local knowledge graph for the book. Stays on disk for future promotion into the Obsidian vault and for the optional `obsidian_query` tool. It is **not** ingested into the main graph automatically — it is the per-book graph.
+4. **One** `ingest` call at the end, with **exactly one** book-level entity for the main graph — rich properties pointing into the files and memory keys above. See "Main-graph ingest" below.
+5. Memory facts for cross-book recall: **one** `domain` fact summarizing the book, plus per-character / per-theme / per-event facts with `scope=global` and hierarchical keys (`domain.<slug>.character.<kebab-name>`).
 
 Anything outside this inventory is wrong. Specifically, do NOT produce:
 - Per-chapter or per-section `.kg.json` files (e.g. `section_01.kg.json`, `chapter_XX.kg.json`). ONE `book.kg.json`, period.
 - Secondary knowledge files like `insights.kg.json`, `themes.json`, `characters.json`. Everything goes in `book.kg.json`.
+- A separate "distill" or "ward-distiller" step — the skill calls `ingest` inline at the end; there is no session-end sweep.
+- A bulk `ingest` of every entity from `book.kg.json` into the main graph — only ONE book-level entity goes to the main graph. The detail entities stay in `book.kg.json` and in `memory_facts`.
 - Any file outside `books/<slug>/` unless the runtime explicitly demands it.
 
 If a chapter is too long for one Markdown file, split the Markdown (`ch-03a.md`, `ch-03b.md`) — **still one** `book.kg.json`.
@@ -115,23 +118,61 @@ After all chunk Markdown files are written, read THEM (not the raw source) to bu
 
 **`book.kg.json`** — the complete graph payload — see "Knowledge graph output" below. Single file covering every chapter. Do NOT emit one `.kg.json` per chapter.
 
-### 6. Store for recall
+### 6. Store for recall — three layers
 
 Store the result in three layers:
-- chapter chunk files in Markdown for verbatim re-reading (`chunks/ch-*.md`)
-- the knowledge graph payload (`book.kg.json`) — see "Knowledge graph output" below for the REQUIRED shape
-- one memory fact for fast recall
 
-Graph memory should support:
-- book lookup
-- chapter lookup
-- concept-to-chapter discovery
-- entity mentions across books
-- exact-passage recovery through chunk or source pointers
+1. **Chapter chunk files** (`chunks/ch-*.md`) — verbatim Markdown for re-reading and exact passage recovery.
+2. **Per-book local graph** (`book.kg.json`) — rich `{entities, relationships}` covering every character, theme, event, quote, and location. This file stays on disk. It is **not** auto-ingested into the main graph. Future: it will be promoted into an Obsidian vault and queried via an optional `obsidian_query` tool.
+3. **Main-graph ingest + memory facts** — at the very end of the skill run, you MUST:
+   - Call `ingest` **once** with ONE book-level entity (`id: "book:<slug>"`, `type: "book"`) whose `properties` carry enough for future sessions to find everything: title, author, thesis, chapter_count, main character/theme/event name lists, `chunk_dir` path, `book_kg_path`, `memory_key_prefix`. See "Main-graph ingest" below for the exact shape.
+   - Save **one** `domain` memory fact with the book summary (scope can be default; key `domain.<slug>.summary`).
+   - Save per-character / per-theme / per-event memory facts with `scope=global` and hierarchical keys: `domain.<slug>.character.<kebab-name>`, `domain.<slug>.theme.<kebab-name>`, `domain.<slug>.event.<kebab-name>`. These are what `memory.recall` finds when the user later asks "who is Elizabeth Bennet" across sessions.
 
-## Knowledge graph output — `book.kg.json`
+Why this split:
+- Main graph stays small and cross-domain — one node per book, searchable by title/author/theme, not cluttered with 50 chapter nodes.
+- `book.kg.json` stays rich and local — the full entity graph for the book, ready for vault promotion.
+- `memory_facts` carry the character/theme detail globally — recall can surface "Charlie appears in Book X" across sessions without graph traversal.
 
-This file is the ONLY thing that makes the book queryable across future sessions. The ward-distiller skill scans the ward, finds every `*.kg.json`, and calls the `ingest` tool on it — writing entities and relationships into the shared knowledge graph.
+## Main-graph ingest — the single book-level entity
+
+At the end of the run, call the `ingest` tool exactly once. The payload has ONE entity and NO relationships (the rich relationships live in `book.kg.json`, not in the main graph):
+
+```json
+{
+  "entities": [
+    {
+      "id": "book:<slug>",
+      "name": "<Title>",
+      "type": "book",
+      "properties": {
+        "slug": "<slug>",
+        "author": "<Author or null>",
+        "published": "YYYY or null",
+        "language": "en or null",
+        "thesis": "one sentence",
+        "tags": ["..."],
+        "chapter_count": 34,
+        "chunk_dir": "books/<slug>/chunks/",
+        "book_json_path": "books/<slug>/book.json",
+        "book_kg_path": "books/<slug>/book.kg.json",
+        "memory_key_prefix": "domain.<slug>.",
+        "characters": ["Elizabeth Bennet", "Fitzwilliam Darcy", "..."],
+        "themes": ["pride", "prejudice", "class", "..."],
+        "key_events": ["Netherfield ball", "Darcy's first proposal", "..."],
+        "notable_quote": {"text": "...", "chunk_file": "chunks/ch-01.md", "line": 1}
+      }
+    }
+  ],
+  "relationships": []
+}
+```
+
+This is the ONLY thing that makes the book discoverable in the main graph. A future `graph_query(query="pride and prejudice")` returns this node and its properties — which then point the caller at `chunk_dir`, `book_kg_path`, and `memory_key_prefix` for deeper detail.
+
+## Per-book local graph — `book.kg.json`
+
+This file stays on disk in `books/<slug>/book.kg.json`. It is NOT auto-ingested. It will later be promoted into the Obsidian vault.
 
 ### Required richness — not just structure
 
@@ -201,7 +242,7 @@ Use `<type>:<kebab-name>` so the same entity across books collapses in the graph
 
 ### Minimum targets for a novel-length work
 
-Roughly, for a novel: ≥ 8 character entities, ≥ 4 theme entities, ≥ 5 event entities, ≥ 10 relationships — each with populated evidence. If you finish reading and have fewer, go back and add them; the skill isn't done until the graph reflects the book.
+Roughly, for a novel, `book.kg.json` should contain: ≥ 8 character entities, ≥ 4 theme entities, ≥ 5 event entities, ≥ 10 relationships — each with populated evidence. If you finish reading and have fewer, go back and add them; the skill isn't done until `book.kg.json` reflects the book. (The main-graph `ingest` is separate and always exactly ONE book-level entity.)
 
 ## Required file shapes
 

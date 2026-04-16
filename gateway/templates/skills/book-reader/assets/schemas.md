@@ -30,7 +30,7 @@ Keep durable outputs limited to two file shapes.
 
 ## book.kg.json
 
-The structured knowledge graph payload. The ward-distiller skill scans the ward for `*.kg.json` files and calls the `ingest` tool on each, writing entities + relationships into `kg_entities` and `kg_relationships`. Shape is dictated by the `ingest` tool.
+The structured per-book local knowledge graph. Stays on disk in `books/<slug>/book.kg.json` — not auto-ingested into the main graph. Rich enough to back a future Obsidian vault promotion and an optional `obsidian_query` tool. Shape aligns with the `ingest` tool so vault-promotion tools can consume it directly.
 
 - Use stable slug IDs: `<type>:<kebab-name>` (e.g. `character:elizabeth-bennet`, `theme:victorian-hypocrisy`) — same id across books collapses to one node.
 - Domain-specific metadata (aliases, chunk pointers, development arcs, confidence) lives in `properties`. Top-level keys for entities are `id`, `name`, `type`, `properties`; for relationships `type`, `from`, `to`, `properties`.
