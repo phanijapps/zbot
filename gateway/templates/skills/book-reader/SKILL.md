@@ -19,16 +19,21 @@ Do not load the entire book into working context at once. Work progressively.
 - The user wants a document added to a long-term knowledge base
 - The user asks what was previously read from a known title or source
 
-## Core contract
+## Core contract — exact file inventory
 
-For each book, create only these durable artifacts:
+Every successful ingestion produces **exactly**:
 
-- One `<name_ofbook>/book.json` — metadata + chapter index
-- One or more chapter chunk files in `<name_ofbook>/chunks/`
-- One `<name_ofbook>/book.kg.json` — **the structured knowledge graph payload** — picked up by the ward-distiller skill at session end and ingested into `kg_entities` + `kg_relationships`
-- One memory fact for the book
+1. `books/<slug>/book.json` — **one** JSON file, the book's metadata + chapter index. See `assets/schemas.md`.
+2. `books/<slug>/chunks/ch-NN.md` — **one Markdown file per chapter**, with YAML frontmatter + verbatim text. Not JSON. Not per-section. One file per chapter.
+3. `books/<slug>/book.kg.json` — **one** JSON file, the `{entities: [...], relationships: [...]}` knowledge graph payload the ward-distiller picks up at session end and hands to `ingest`.
+4. **One** memory fact for the book (one `save_fact` call with category `domain`, not a summary of each chapter).
 
-Do not create extra durable summary file types unless the runtime requires them transiently. Do NOT split knowledge across multiple `.kg.json` files (e.g., separate `insights.kg.json` for themes) — everything goes in one `book.kg.json`.
+Anything outside this inventory is wrong. Specifically, do NOT produce:
+- Per-chapter or per-section `.kg.json` files (e.g. `section_01.kg.json`, `chapter_XX.kg.json`). ONE `book.kg.json`, period.
+- Secondary knowledge files like `insights.kg.json`, `themes.json`, `characters.json`. Everything goes in `book.kg.json`.
+- Any file outside `books/<slug>/` unless the runtime explicitly demands it.
+
+If a chapter is too long for one Markdown file, split the Markdown (`ch-03a.md`, `ch-03b.md`) — **still one** `book.kg.json`.
 
 ## Workflow
 
@@ -78,34 +83,42 @@ Also see `assets/schemas.md`
 
 ### 4. Read and annotate progressively
 
-Read one chapter or chunk at a time.
+Read one chapter at a time. Write each chapter as `chunks/ch-NN.md` — **Markdown, not JSON**. Frontmatter carries the metadata, the body carries the verbatim chapter text.
 
-For each chunk, preserve the verbatim text and add:
-- a short summary
-- key ideas
-- notable quotes with source locations
-- major people, places, and concepts
-- open questions or unresolved themes
-- topical tags
+For each chapter, the frontmatter must contain:
+- `book_id: <slug>`
+- `chapter_num: N`
+- `chapter_title: "..."`
+- `line_start` / `line_end`
+- `summary` — 2-4 sentences
+- `key_ideas: [...]`
+- `tags: [...]`
+- `mentions:` — `people: [...]`, `places: [...]`, `concepts: [...]` (these also become entities in `book.kg.json`)
+- `quotes:` — `[{text, line}, ...]` (these also become quote entities in `book.kg.json`)
+- `questions: [...]`
 
-Large chapters may be split into multiple sequential chunk files, but they must remain linked to the same chapter.
+The body below the frontmatter MUST include the verbatim chapter text under a `## Full Text` section — no summary-only files.
 
-### 5. Distill the whole book
+Large chapters may be split into sequential Markdown files (`ch-03a.md`, `ch-03b.md`) — they stay linked to the same chapter_num. The graph payload (`book.kg.json`) stays as one file regardless.
 
-After all chunks are complete, create a book-level synthesis using the chunk files rather than rereading the entire source.
+### 5. Distill the whole book — produce `book.json` and `book.kg.json`
 
-Capture:
+After all chunk Markdown files are written, read THEM (not the raw source) to build two outputs:
+
+**`book.json`** — metadata + chapter index:
 - thesis
 - key ideas across the book
-- main entities
-- notable quotes
-- chapter index
+- main entities (names only, for the table of contents — full entity data lives in `book.kg.json`)
+- notable quotes (with `chunk_file` + `line`)
+- chapter index (`num`, `title`, `start`, `end`, `chunk`)
 - tags
+
+**`book.kg.json`** — the complete graph payload — see "Knowledge graph output" below. Single file covering every chapter. Do NOT emit one `.kg.json` per chapter.
 
 ### 6. Store for recall
 
 Store the result in three layers:
-- files for verbatim re-reading (`chunks/ch-*.json`)
+- chapter chunk files in Markdown for verbatim re-reading (`chunks/ch-*.md`)
 - the knowledge graph payload (`book.kg.json`) — see "Knowledge graph output" below for the REQUIRED shape
 - one memory fact for fast recall
 
@@ -158,10 +171,10 @@ Use `<type>:<kebab-name>` so the same entity across books collapses in the graph
       "properties": {
         "aliases": ["Lizzy", "Miss Bennet"],
         "description": "protagonist",
-        "first_appearance": {"chunk_file": "chunks/ch-01.json", "line": 10},
+        "first_appearance": {"chunk_file": "chunks/ch-01.md", "line": 10},
         "mentions_in": [
-          {"chunk_file": "chunks/ch-01.json", "lines": [10, 120]},
-          {"chunk_file": "chunks/ch-05.json", "lines": [12, 340]}
+          {"chunk_file": "chunks/ch-01.md", "lines": [10, 120]},
+          {"chunk_file": "chunks/ch-05.md", "lines": [12, 340]}
         ]
       }
     }
@@ -173,12 +186,12 @@ Use `<type>:<kebab-name>` so the same entity across books collapses in the graph
       "to": "character:fitzwilliam-darcy",
       "properties": {
         "evidence": [
-          {"chunk_file": "chunks/ch-34.json", "line": 510, "text": "..."}
+          {"chunk_file": "chunks/ch-34.md", "line": 510, "text": "..."}
         ],
         "confidence": 0.92,
         "development": [
-          {"chunk_file": "chunks/ch-05.json", "stage": "initial dislike"},
-          {"chunk_file": "chunks/ch-34.json", "stage": "proposal"}
+          {"chunk_file": "chunks/ch-05.md", "stage": "initial dislike"},
+          {"chunk_file": "chunks/ch-34.md", "stage": "proposal"}
         ]
       }
     }
@@ -196,9 +209,9 @@ Roughly, for a novel: ≥ 8 character entities, ≥ 4 theme entities, ≥ 5 even
 
 Contains top-level metadata, thesis, key ideas, major entities, notable quotes, tags, source identity, and chapter-to-chunk pointers.
 
-### `chunks/ch-*.json`
+### `chunks/ch-*.md`
 
-Contains the verbatim chunk text plus summary, ideas, quotes, mentions, questions, tags, and source span.
+Markdown with a YAML frontmatter header. The frontmatter carries structured fields (book_id, chapter_num, chapter_title, line_start, line_end, summary, key_ideas, tags, mentions, quotes, questions). The body carries the **verbatim** chapter text. See `assets/schemas.md` for the full template.
 
 ### `book.kg.json`
 
