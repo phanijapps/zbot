@@ -12,7 +12,7 @@ the whole folder goes to `Vault/30_Library/Books/<slug>/` as a unit.
 |----------------------------------|------------------|-------------------------------------------|---------------------------------|
 | `books/<slug>/`                  | book folder      | `30_Library/Books/<slug>/`                | whole folder, contents as-is    |
 | `articles/<slug>/`               | article folder   | `30_Library/Articles/<slug>/`             | whole folder, contents as-is    |
-| `research/<topic>/`              | research folder  | `40_Research/<topic>/`                    | whole folder, contents as-is    |
+| `research/<archetype>/`          | research folder  | `40_Research/<archetype>/`                | whole tree. Producers nest `<archetype>/<subject>/<date-slug>/` per `_shared/research_archetype.md` |
 | `reports/<project>/`             | project folder   | `20_Projects/<project>/`                  | whole folder, contents as-is    |
 | loose `**/*.pdf`                 | document         | `70_Assets/Documents/<ward>__<basename>`  | loose files only                |
 | loose `**/*.{png,jpg,jpeg,svg,gif,webp}` | image    | `70_Assets/Images/<ward>__<basename>`     | loose files only                |
