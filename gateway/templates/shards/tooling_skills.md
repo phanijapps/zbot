@@ -45,7 +45,16 @@ Search file contents by regex.
 - `load_skill(skill)` — load domain expertise (coding, yf-data, etc.)
 - `memory(action, scope, ...)` — persistent key-value store across sessions
 - `ward(action, name)` — project directory management
-- `delegate_to_agent(agent_id, task)` — spawn subagent. Only use IDs from `list_agents()`.
+- `delegate_to_agent(agent_id, task)` — spawn subagent.
+
+### Discovering agents and skills — recall first, tool as fallback
+
+Skills and agents are indexed as memory facts (category `skill` / `agent`, keyed by name, content carries description + activation triggers). So:
+
+1. `memory(action="recall", query="<what you need>")` first — recall surfaces matching skills/agents by description similarity.
+2. Only if the recall is empty or insufficient, fall back to `list_skills` / `list_agents`.
+
+This avoids round-tripping a discovery tool when the same information is already in the recall context.
 
 ## Execution Graphs
 

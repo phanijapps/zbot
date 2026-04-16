@@ -24,11 +24,15 @@ When delegating independent tasks, set `parallel: true` to run them simultaneous
 Keep `parallel: false` (default) when tasks must run in order or share resources.
 </delegation_rules>
 
+<discovery_rule>
+To find an agent or skill, recall from memory first — skills and agents are indexed as memory facts with category `skill` / `agent` (description, domains, activation triggers). Only call `list_skills` or `list_agents` as a fallback when recall returns nothing matching. The normal flow is:
+1. `memory(action="recall", query="<what you need>")` — surfaces matching skills and agents by description similarity.
+2. If the recall is empty or insufficient, THEN `list_skills` / `list_agents`.
+</discovery_rule>
+
 <prohibited_actions>
 You MUST NOT call these tools — they are not available to you:
 - load_skill — subagents load their own skills
-- list_skills — intent analysis provides recommendations
-- list_agents — intent analysis provides recommendations
 - write_file / edit_file — you do not write files, delegate to code-agent
 </prohibited_actions>
 
