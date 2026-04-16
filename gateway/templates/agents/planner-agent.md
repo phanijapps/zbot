@@ -117,16 +117,52 @@ For new wards or new domains within an existing ward, **Step 1 of every plan** m
 - **Depends on:** none
 ```
 
-## Mandaotry Step N (LAST STEP): Archive the plan
-- **Agent:** <Any Agent even the root>
-- **Goal:** Archive the plans into specs/archive folder
-- **Output:** specs/archive/plan_<domain_task>_date.md with tree diagram and purpose of each directory
-- **Implementation:** Move the plan file to archive
-      - Update AGENTS.md with the reference to the previous plan that was executed.
+## Mandatory Step N-1 (SECOND-LAST STEP): Distill knowledge into the graph
+- **Agent:** <any agent>
+- **Goal:** Scan the ward for graph-shaped JSON files emitted by prior steps and ingest their entities + relationships into the knowledge graph.
+- **Output:** Reported counts of entities and relationships upserted (or an explicit "no graph-shaped files found" note if none exist yet).
+- **Implementation:**
+    - Load `ward-distiller` skill.
+    - The skill walks the ward, detects JSON files whose top-level shape has `entities[]` or `relationships[]` arrays, and calls the `ingest` tool per file.
+    - Idempotent: re-running on the same ward merges properties into existing nodes without duplication.
+- **Acceptance:** Either a non-zero count of upserts is reported OR a clear "no graph-shaped files found" message is returned. Failing silently is NOT acceptable.
+- **Depends on:** every earlier step
+
+## Mandatory Step N (LAST STEP): Archive the plan
+- **Agent:** <any agent>
+- **Goal:** Move the executed plan into `specs/archive/` and reference it in AGENTS.md.
+- **Output:** `specs/archive/plan_<domain_task>_<YYYY-MM-DD>.md` + updated AGENTS.md.
+- **Implementation:**
+    - Move `specs/<domain_task>/plan.md` → `specs/archive/plan_<domain_task>_<date>.md`.
+    - Update AGENTS.md with a one-line reference to the archived plan.
 - **Acceptance:**
-  - Plan should be in the archive folder and plan created in step is deleted.
-  - AGENTS.md should have a reference to the archived plan.
-- **Depends on:** none
+    - Archived file exists at the target path and the original is removed.
+    - AGENTS.md references the archived plan.
+- **Depends on:** Step N-1 (distill must complete first so any last-minute entities land in the graph before the plan is archived).
+
+## Knowledge emission on earlier steps
+
+For any step that extracts facts, characters, places, events, organizations, decisions, or relationships from source material — books, articles, research data, earnings calls, interviews, analyses — add a **secondary output file** alongside the step's main deliverable:
+
+```
+<task-dir>/<step-name>.kg.json
+```
+
+Shape:
+```json
+{
+  "entities": [
+    {"id": "<type>:<kebab-name>", "name": "...", "type": "...", "properties": { /* any JSON */ }}
+  ],
+  "relationships": [
+    {"type": "...", "from": "<id>", "to": "<id>", "properties": { /* evidence, dates, confidence */ }}
+  ]
+}
+```
+
+Use stable slug ids so the same entity across sources collapses to one node (e.g. `person:steve-jobs`, `organization:apple-inc`). The distill step (N-1) picks up every `*.kg.json` automatically.
+
+Steps producing only code, data tables, config, or UI don't need a `.kg.json`.
 
 If `memory-bank/structure.md` already exists with a meaningful structure, skip this step and reference the existing structure in subsequent steps.
 
