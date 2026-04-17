@@ -384,6 +384,17 @@ pub async fn spawn_delegated_agent(
         handles_guard.insert(child_conversation_id.clone(), handle.clone());
     }
 
+    // Build a fact_store handle for the post-execution state_handoff hook.
+    // Kept separate from the executor's fact_store (already moved into the
+    // builder) — this one only drives session_ctx writes, not the executor.
+    let fact_store_for_ctx: Option<Arc<dyn zero_core::MemoryFactStore>> =
+        memory_repo.as_ref().map(|repo| {
+            Arc::new(gateway_database::GatewayMemoryFactStore::new(
+                repo.clone(),
+                embedding_client.clone(),
+            )) as Arc<dyn zero_core::MemoryFactStore>
+        });
+
     // Spawn the execution task
     spawn_execution_task(
         executor,
@@ -402,6 +413,7 @@ pub async fn spawn_delegated_agent(
         paths,
         delegation_permit,
         initial_history,
+        fact_store_for_ctx,
     );
 
     tracing::info!(
@@ -416,6 +428,7 @@ pub async fn spawn_delegated_agent(
 
 #[allow(clippy::too_many_arguments)]
 /// Spawn the async execution task for the delegated agent.
+#[allow(clippy::too_many_arguments)]
 fn spawn_execution_task(
     executor: AgentExecutor,
     handle: ExecutionHandle,
@@ -433,6 +446,7 @@ fn spawn_execution_task(
     paths: SharedVaultPaths,
     delegation_permit: Option<OwnedSemaphorePermit>,
     initial_history: Vec<ChatMessage>,
+    fact_store_for_ctx: Option<Arc<dyn zero_core::MemoryFactStore>>,
 ) {
     let agent_id = request.child_agent_id.clone();
     let task_msg = request.task.clone();
@@ -595,6 +609,7 @@ fn spawn_execution_task(
                     &accumulated_response,
                     &parent_agent,
                     &parent_execution_id,
+                    fact_store_for_ctx.as_ref(),
                 )
                 .await;
             }
@@ -636,6 +651,7 @@ fn spawn_execution_task(
 
 /// Handle successful execution completion.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 async fn handle_execution_success(
     conversation_repo: &ConversationRepository,
     state_service: &StateService<DatabaseManager>,
@@ -649,6 +665,7 @@ async fn handle_execution_success(
     response: &str,
     parent_agent: &str,
     parent_execution_id: &str,
+    fact_store_for_ctx: Option<&Arc<dyn zero_core::MemoryFactStore>>,
 ) {
     // Messages already streamed to child session during execution
 
@@ -725,6 +742,32 @@ async fn handle_execution_success(
         response,
     )
     .await;
+
+    // Phase 2b: write a state_handoff fact so the next subagent in this
+    // session can fetch this one's summary by exact key. We look up the
+    // session's ward so the ctx row is stored per-ward (matches plan +
+    // intent snapshots). Fire-and-forget — a failed write logs a warning
+    // but never disrupts delegation completion.
+    if let Some(fs) = fact_store_for_ctx {
+        let ward_id = conversation_repo
+            .get_session_ward_id(session_id)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "__global__".to_string());
+        crate::session_ctx::writer::state_handoff(
+            fs,
+            session_id,
+            &ward_id,
+            execution_id,
+            agent_id,
+            None, // step number not known at this call site
+            chrono::Utc::now(),
+            response, // the subagent's respond() payload becomes the summary
+            &[],      // artifacts extraction deferred — subagent responds may
+                      // include them in future revisions
+        )
+        .await;
+    }
 
     // Remove from delegation registry
     delegation_registry.remove(execution_id);
