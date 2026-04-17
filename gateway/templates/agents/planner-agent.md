@@ -118,7 +118,7 @@ For new wards or new domains within an existing ward, **Step 1 of every plan** m
 ```
 
 ## Mandatory Step N-1 (SECOND-LAST STEP): Promote to wiki vault
-- **Agent:** code-agent
+- **Agent:** wiki-agent
 - **Goal:** Promote every producer-shaped folder in the ward (books/, articles/, research/, reports/) into the Obsidian vault ward via the `wiki` skill. Skip if the ward produced no vault-eligible folders (pure code/data sessions).
 - **Input:** The current ward's `books/`, `articles/`, `research/`, `reports/` directories (whichever exist).
 - **Output:** Mirrored folders under the vault ward at `30_Library/Books/<slug>/`, `30_Library/Articles/<slug>/`, `40_Research/<archetype>/<subject>/<date-slug>/`, `20_Projects/<project>/` — contents copied as-is from the producer folders. Loose images/PDFs land in `70_Assets/`. Plus a run summary (counts by type, any `00_Inbox/` sorts).

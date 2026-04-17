@@ -57,8 +57,15 @@
   },
   {
     "category": "correction",
-    "key": "policy.recall_before_discover",
-    "content": "Before calling list_agents or list_skills, FIRST recall from memory. The system indexes every registered skill and agent as a memory fact (categories 'skill' and 'agent' with descriptions, domains, activation triggers). Run memory(action='recall', query='<your need>') — the recall surfaces matching skills/agents by description similarity. Only fall back to list_agents / list_skills if the recall result set is empty or clearly insufficient. This avoids round-tripping a discovery tool when the same information is already in the prompt-injected recall context.",
+    "key": "policy.skill_first_routing",
+    "content": "Skills and agents registered in the system are the SOURCE OF TRUTH for capability routing. When the user's intent matches a skill's description (e.g. 'read a book' → book-reader, 'promote to vault' → wiki, 'stock analysis' → stock-analysis), the plan has ONE skill-executing step — do not re-decompose the skill's internal workflow, even if recall returns pattern facts describing a manual pipeline from a prior session. Pattern facts are REFERENCE, not doctrine: they describe how a past session happened to solve a problem (possibly before the skill existed), and can go stale. Skill descriptions in memory (category 'skill') beat pattern.* facts, every time. Discover skills with list_skills or by recalling category='skill'; use pattern.* facts only as context for edge cases a skill does not cover.",
+    "confidence": 1.0,
+    "pinned": true
+  },
+  {
+    "category": "correction",
+    "key": "policy.ward_agents_md_authoritative",
+    "content": "When an agent enters a ward via the ward tool, the ward's AGENTS.md is the AUTHORITATIVE description of what the ward is for, what folders mean, and where assets belong. Read it on every ward entry. If a memory fact contradicts the ward's AGENTS.md, the AGENTS.md wins — facts are session-distilled and can be wrong or stale; AGENTS.md is the curated spec. This especially applies to the wiki vault ward: its AGENTS.md contains the folder-by-folder routing map for promoted content, and that map is the source of truth — do not invent paths, do not rename slugs to display names, do not create sibling directories outside the numbered tree.",
     "confidence": 1.0,
     "pinned": true
   },
