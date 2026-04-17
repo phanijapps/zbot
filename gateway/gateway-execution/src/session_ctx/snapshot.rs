@@ -23,11 +23,9 @@ use std::sync::Arc;
 
 use gateway_database::MemoryRepository;
 
-/// Byte caps per section — total preamble stays under ~6 KB.
+/// Byte caps per section — total preamble stays under ~5 KB.
 const AGENTS_MD_CAP: usize = 2048;
-const WARD_MD_CAP: usize = 1024;
-const CORE_DOCS_CAP: usize = 2048;
-const STRUCTURE_MD_CAP: usize = 512;
+const PRIMITIVES_CAP: usize = 2048;
 const HANDOFF_SUMMARY_CAP: usize = 400;
 const MAX_HANDOFFS: usize = 5;
 
@@ -52,10 +50,10 @@ pub fn build(
     out.push_str(ward_id);
     out.push_str("\">\n");
 
-    // 1. AGENTS.md — the authoritative ward doctrine
+    // 1. AGENTS.md — durable ward doctrine (the only filesystem read).
     if let Some(content) = read_file_capped(&ward_root.join("AGENTS.md"), AGENTS_MD_CAP) {
         if !content.trim().is_empty() {
-            out.push_str("\n## AGENTS.md (ward doctrine — authoritative)\n\n");
+            out.push_str("\n## Doctrine (AGENTS.md)\n\n");
             out.push_str(&content);
             if !content.ends_with('\n') {
                 out.push('\n');
@@ -63,49 +61,27 @@ pub fn build(
         }
     }
 
-    let memory_bank = ward_root.join("memory-bank");
-
-    // 2. memory-bank/ward.md — accumulated domain patterns
-    if let Some(content) = read_file_capped(&memory_bank.join("ward.md"), WARD_MD_CAP) {
-        if !content.trim().is_empty() {
-            out.push_str("\n## memory-bank/ward.md (domain patterns)\n\n");
-            out.push_str(&content);
-            if !content.ends_with('\n') {
+    // 2. Reusable primitives — queried live from memory_facts. Runtime
+    //    AST hook populates this when code is written; agents cannot
+    //    forget to update it (nothing to forget).
+    if let Some(repo) = memory_repo {
+        let primitives = repo.list_primitives_for_ward(ward_id).unwrap_or_default();
+        if !primitives.is_empty() {
+            let section = render_primitives(&primitives, PRIMITIVES_CAP);
+            out.push_str("\n## Primitives (import these — don't duplicate)\n\n");
+            out.push_str(&section);
+            if !section.ends_with('\n') {
                 out.push('\n');
             }
         }
     }
 
-    // 3. memory-bank/core_docs.md — importable function signatures
-    if let Some(content) = read_file_capped(&memory_bank.join("core_docs.md"), CORE_DOCS_CAP) {
-        if !content.trim().is_empty() {
-            out.push_str(
-                "\n## memory-bank/core_docs.md (reusable primitives — IMPORT these, don't duplicate)\n\n",
-            );
-            out.push_str(&content);
-            if !content.ends_with('\n') {
-                out.push('\n');
-            }
-        }
-    }
-
-    // 4. memory-bank/structure.md — directory layout (small, optional)
-    if let Some(content) = read_file_capped(&memory_bank.join("structure.md"), STRUCTURE_MD_CAP) {
-        if !content.trim().is_empty() {
-            out.push_str("\n## memory-bank/structure.md (directory layout)\n\n");
-            out.push_str(&content);
-            if !content.ends_with('\n') {
-                out.push('\n');
-            }
-        }
-    }
-
-    // 5. Prior state handoffs from this session (runtime memory)
+    // 3. Prior step handoffs from this session (runtime memory).
     if let Some(repo) = memory_repo {
         match repo.list_recent_state_handoffs(sid, MAX_HANDOFFS) {
             Ok(handoffs) if !handoffs.is_empty() => {
-                out.push_str("\n## Prior steps this session (what other subagents did)\n\n");
-                // Reverse so oldest-first matches reading order
+                out.push_str("\n## Prior steps this session\n\n");
+                // Oldest-first matches reading order.
                 for fact in handoffs.iter().rev() {
                     let exec_id = extract_exec_id(&fact.key);
                     let agent_id = extract_owner_agent(&fact.source_summary);
@@ -116,18 +92,70 @@ pub fn build(
                     ));
                 }
             }
-            Ok(_) => {} // no handoffs yet — first subagent in session
+            Ok(_) => {}
             Err(e) => {
                 tracing::warn!(
                     session_id = %sid,
                     error = %e,
-                    "Failed to fetch state handoffs for ward_snapshot — skipping that section"
+                    "Failed to fetch state handoffs for ward_snapshot — skipping"
                 );
             }
         }
     }
 
     out.push_str("</ward_snapshot>");
+    out
+}
+
+/// Render primitives grouped by file path, capped at the byte budget.
+///
+/// Input: `Vec<MemoryFact>` where each fact's `key` is
+/// `primitive.<relative_path>.<symbol>` and `content` is
+/// `signature\nsummary` (or just `signature`). Output is markdown
+/// grouped by file:
+///
+///     ## core/valuation.py
+///     - `calc_wacc(equity, debt, cost_of_equity, cost_of_debt, tax_rate) -> float`
+///       Weighted average cost of capital.
+fn render_primitives(facts: &[gateway_database::MemoryFact], cap: usize) -> String {
+    use std::collections::BTreeMap;
+    let mut by_file: BTreeMap<&str, Vec<&gateway_database::MemoryFact>> = BTreeMap::new();
+    for f in facts {
+        // Key: primitive.<path>.<symbol> → take the middle part.
+        let body = f.key.strip_prefix("primitive.").unwrap_or(&f.key);
+        let file = match body.rfind('.') {
+            Some(idx) => &body[..idx],
+            None => body,
+        };
+        by_file.entry(file).or_default().push(f);
+    }
+
+    let mut out = String::new();
+    for (file, entries) in by_file {
+        out.push_str(&format!("### {}\n", file));
+        for f in entries {
+            let (sig, summary) = match f.content.split_once('\n') {
+                Some((s, sum)) => (s, sum),
+                None => (f.content.as_str(), ""),
+            };
+            out.push_str(&format!("- `{}`", sig));
+            if !summary.is_empty() {
+                out.push_str(&format!(" — {}", summary));
+            }
+            out.push('\n');
+        }
+        if out.len() > cap {
+            // Truncate at a UTF-8 boundary + pointer; prevents bloat when
+            // wards accumulate hundreds of primitives.
+            let mut end = cap;
+            while end > 0 && !out.is_char_boundary(end) {
+                end -= 1;
+            }
+            out.truncate(end);
+            out.push_str("\n\n[…truncated; query memory_facts directly for the rest]");
+            break;
+        }
+    }
     out
 }
 
@@ -276,41 +304,81 @@ mod tests {
         let out = build("stock-analysis", "sess-1", wards, None);
         assert!(out.starts_with("<ward_snapshot ward=\"stock-analysis\">"));
         assert!(out.ends_with("</ward_snapshot>"));
-        assert!(out.contains("AGENTS.md (ward doctrine"));
+        assert!(out.contains("## Doctrine (AGENTS.md)"));
         assert!(out.contains("Purpose: value companies"));
+        // Memory-bank reads are gone — nothing references those files.
+        assert!(!out.contains("memory-bank"));
     }
 
     #[test]
-    fn test_build_composes_all_four_file_sources() {
+    fn test_build_skips_empty_agents_md() {
         let dir = TempDir::new().unwrap();
         let wards = dir.path();
-        write(wards, "w/AGENTS.md", "Ward purpose.");
-        write(wards, "w/memory-bank/ward.md", "Patterns learned.");
-        write(
-            wards,
-            "w/memory-bank/core_docs.md",
-            "## core/x.py\n  foo(a) -> int",
-        );
-        write(wards, "w/memory-bank/structure.md", "core/ analysis/");
-
+        write(wards, "w/AGENTS.md", "   \n");
+        // No memory_repo → no primitives or handoffs. An effectively
+        // empty AGENTS.md produces a snapshot with no sections.
         let out = build("w", "sess-1", wards, None);
-        assert!(out.contains("Ward purpose"));
-        assert!(out.contains("Patterns learned"));
-        assert!(out.contains("core/x.py"));
-        assert!(out.contains("foo(a) -> int"));
-        assert!(out.contains("core/ analysis/"));
+        assert!(out.starts_with("<ward_snapshot"));
+        assert!(!out.contains("## Doctrine"));
     }
 
     #[test]
-    fn test_build_skips_missing_files_silently() {
-        let dir = TempDir::new().unwrap();
-        let wards = dir.path();
-        write(wards, "w/AGENTS.md", "Doctrine.");
-        // No memory-bank/ at all — build must not panic
-        let out = build("w", "sess-1", wards, None);
-        assert!(out.contains("Doctrine"));
-        assert!(!out.contains("memory-bank/ward.md"));
-        assert!(!out.contains("memory-bank/core_docs.md"));
+    fn test_render_primitives_groups_by_file() {
+        use gateway_database::MemoryFact;
+        fn mk(key: &str, content: &str) -> MemoryFact {
+            MemoryFact {
+                id: String::new(),
+                session_id: None,
+                agent_id: "__ward__".into(),
+                scope: "global".into(),
+                category: "primitive".into(),
+                key: key.into(),
+                content: content.into(),
+                confidence: 1.0,
+                mention_count: 1,
+                source_summary: None,
+                embedding: None,
+                ward_id: "w".into(),
+                contradicted_by: None,
+                created_at: "t".into(),
+                updated_at: "t".into(),
+                expires_at: None,
+                valid_from: None,
+                valid_until: None,
+                superseded_by: None,
+                pinned: false,
+                epistemic_class: None,
+                source_episode_id: None,
+                source_ref: None,
+            }
+        }
+        let facts = vec![
+            mk(
+                "primitive.core/valuation.py.calc_wacc",
+                "calc_wacc(equity, debt) -> float\nWeighted average cost of capital.",
+            ),
+            mk(
+                "primitive.core/valuation.py.dcf_valuation",
+                "dcf_valuation(base_fcf, wacc) -> dict",
+            ),
+            mk(
+                "primitive.analysis/rel_val.py.get_multiples",
+                "get_multiples(ticker) -> dict\nPeer valuation multiples.",
+            ),
+        ];
+        let out = super::render_primitives(&facts, 10_000);
+        // Grouped by file (alphabetical): analysis first, then core.
+        assert!(out.contains("### analysis/rel_val.py"));
+        assert!(out.contains("### core/valuation.py"));
+        // Signature + summary format.
+        assert!(out.contains("`calc_wacc(equity, debt) -> float`"));
+        assert!(out.contains("Weighted average cost of capital."));
+        // Entry with no summary renders as just `sig`.
+        assert!(out.contains("`dcf_valuation(base_fcf, wacc) -> dict`"));
+        // File ordering: alphabetical.
+        let a_pos = out.find("analysis/rel_val.py").unwrap();
+        let c_pos = out.find("core/valuation.py").unwrap();
+        assert!(a_pos < c_pos);
     }
 
     #[test]
