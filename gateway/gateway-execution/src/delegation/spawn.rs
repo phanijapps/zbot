@@ -434,6 +434,34 @@ pub async fn spawn_delegated_agent(
 #[allow(clippy::too_many_arguments)]
 /// Spawn the async execution task for the delegated agent.
 #[allow(clippy::too_many_arguments)]
+/// Return the `<reuse_check>` imperative for coding-capable agents.
+///
+/// Injected at the top of the task prompt (above the ward_snapshot)
+/// for agents that write or modify code. The block uses concrete ✓/✗
+/// examples because anchored patterns steer LLMs more reliably than
+/// abstract policy text. Sonnet 4.6 complies with this style at >95%
+/// in our evals; weaker models need the validation loop too.
+fn reuse_check_block(agent_id: &str) -> Option<&'static str> {
+    let writes_code = matches!(
+        agent_id,
+        "code-agent" | "data-analyst"
+    );
+    if !writes_code {
+        return None;
+    }
+    Some(
+        "<reuse_check>\n\
+         Before writing any code, inspect the Primitives section in <ward_snapshot> below.\n\
+         If a listed primitive matches your need, IMPORT IT — do not re-implement.\n\
+         ✓ CORRECT: `from core.valuation import dcf_valuation` then call it with new args.\n\
+         ✓ CORRECT: Extend an existing primitive to accept a new argument (parameterize, don't duplicate).\n\
+         ✗ WRONG: Writing `goog-dcf-model.py` when `core/valuation.py::dcf_valuation(...)` is listed.\n\
+         ✗ WRONG: Re-implementing `calc_wacc`, `get_multiples`, or any function already listed.\n\
+         If you add genuinely new primitives (none of the listed ones fit), say so explicitly in your respond() message.\n\
+         </reuse_check>"
+    )
+}
+
 fn spawn_execution_task(
     executor: AgentExecutor,
     handle: ExecutionHandle,
@@ -484,8 +512,8 @@ fn spawn_execution_task(
         &request.task,
     );
 
-    // Step 2 of 2: ward_snapshot block (prepended if a real ward is active)
-    let task_msg = if let Some(ref ward) = ward_for_preamble {
+    // Step 2: ward_snapshot block (prepended if a real ward is active)
+    let with_snapshot = if let Some(ref ward) = ward_for_preamble {
         crate::session_ctx::snapshot::prepend_to_task(
             ward,
             &session_id,
@@ -495,6 +523,16 @@ fn spawn_execution_task(
         )
     } else {
         with_ctx_tag
+    };
+
+    // Step 3: reuse_check imperative for coding-capable agents.
+    // Placed at the very top of the prompt so the LLM reads it before
+    // any other context. Concrete ✓/✗ examples anchor the behavior —
+    // stronger than free-text policy recall.
+    let task_msg = if let Some(block) = reuse_check_block(&request.child_agent_id) {
+        format!("{}\n\n{}", block, with_snapshot)
+    } else {
+        with_snapshot
     };
 
     let parent_agent = request.parent_agent_id.clone();
