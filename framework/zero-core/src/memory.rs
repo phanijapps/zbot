@@ -55,4 +55,48 @@ pub trait MemoryFactStore: Send + Sync {
     ) -> Result<Value, String> {
         self.recall_facts(agent_id, query, limit).await
     }
+
+    /// Exact-key lookup in the session-scoped ctx namespace.
+    ///
+    /// Returns the single row matching the ctx key, or `None` if absent.
+    /// Unlike `recall_facts`, this is a precise lookup — no ranking, no
+    /// fuzzy match. Used by subagents to fetch canonical session state
+    /// (intent, prompt, plan, state.<exec_id>) by exact key.
+    ///
+    /// Default implementation returns `Ok(None)` for stores that don't
+    /// support ctx storage.
+    async fn get_ctx_fact(
+        &self,
+        _ward_id: &str,
+        _key: &str,
+    ) -> Result<Option<Value>, String> {
+        Ok(None)
+    }
+
+    /// Save a ctx-namespaced fact for the current session.
+    ///
+    /// Ctx facts use a fixed schema: `category='ctx'`, `scope='session'`,
+    /// `agent_id='__ctx__'` (sentinel — not tied to any single agent),
+    /// and the caller-supplied `ward_id` + `key`. The `owner` argument
+    /// identifies who wrote the fact: `"root"` for session-canonical
+    /// content (intent, prompt, plan) or `"subagent:<exec_id>"` for a
+    /// subagent's handoff state.
+    ///
+    /// This method does NOT perform permission checks — those happen at
+    /// the tool layer where the runtime knows if the caller is delegated.
+    /// Ctx facts are excluded from fuzzy recall by default.
+    ///
+    /// Default implementation returns an error for stores that don't
+    /// support ctx storage.
+    async fn save_ctx_fact(
+        &self,
+        _session_id: &str,
+        _ward_id: &str,
+        _key: &str,
+        _content: &str,
+        _owner: &str,
+        _pinned: bool,
+    ) -> Result<Value, String> {
+        Err("ctx storage not implemented for this store".to_string())
+    }
 }
