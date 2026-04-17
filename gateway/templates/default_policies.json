@@ -70,6 +70,13 @@
     "pinned": true
   },
   {
+    "category": "correction",
+    "key": "policy.plan_agent_binding",
+    "content": "When a plan step names an agent in its `Agent:` field, that assignment is BINDING. Root must delegate to the named agent verbatim — do not substitute a different agent because the task description 'sounds like' something else. Example: 'Promote folder to wiki vault' assigned to wiki-agent MUST be delegated to wiki-agent, not code-agent, even though 'copy files' superficially matches code-agent's domain. The planner chose the named agent deliberately (often pairing a specialized skill with a narrow-tool-scope runner), and overriding wastes tokens on the wrong specialist. If the named agent isn't in the available_agents list, re-delegate to planner-agent for reassignment — never silently pick a fallback.",
+    "confidence": 1.0,
+    "pinned": true
+  },
+  {
     "category": "instruction",
     "key": "instruction.output_format",
     "content": "Prefer interactive HTML outputs with modern design. Use Tailwind CSS CDN for styling web outputs. Include responsive design for mobile viewing.",
