@@ -194,7 +194,8 @@ impl Tool for MemoryTool {
         "Persistent memory for storing facts, notes, and context across sessions. \
         Actions: get/set/delete/list/search (key-value store), \
         save_fact (structured fact with category/key/content/confidence — automatically embedded for semantic search), \
-        recall (hybrid semantic + keyword search over saved facts). \
+        recall (hybrid semantic + keyword search over saved facts), \
+        get_fact (exact-key lookup for ctx-namespaced session state — use this to fetch intent/prompt/plan/state.<exec_id> by precise key). \
         Scopes: 'agent' (default), 'shared' (cross-session). \
         Shared memory requires a 'file' parameter: user_info, workspace, patterns, or session_summaries."
     }
@@ -205,13 +206,13 @@ impl Tool for MemoryTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["get", "set", "delete", "list", "search", "save_fact", "recall"],
+                    "enum": ["get", "set", "delete", "list", "search", "save_fact", "recall", "get_fact"],
                     "description": "The memory operation to perform"
                 },
                 "category": {
                     "type": "string",
-                    "enum": ["user", "pattern", "domain", "instruction", "correction"],
-                    "description": "Fact category (for save_fact action)"
+                    "enum": ["user", "pattern", "domain", "instruction", "correction", "ctx"],
+                    "description": "Fact category (for save_fact action). 'ctx' is reserved for session state — root writes canonicals (intent/prompt/plan); subagents can only write state.<exec_id> under their own session."
                 },
                 "content": {
                     "type": "string",
@@ -311,8 +312,9 @@ impl Tool for MemoryTool {
                     _ => unreachable!(),
                 }
             }
-            "save_fact" => self.action_save_fact(&agent_id, &args).await,
+            "save_fact" => self.action_save_fact(ctx.as_ref(), &agent_id, &args).await,
             "recall" => self.action_recall(&agent_id, &args).await,
+            "get_fact" => self.action_get_fact(ctx.as_ref(), &args).await,
             _ => Err(ZeroError::Tool(format!("Unknown action: {}", action))),
         }
     }
@@ -479,7 +481,12 @@ impl MemoryTool {
     }
 
     /// Save a structured memory fact via the DB-backed fact store.
-    async fn action_save_fact(&self, agent_id: &str, args: &Value) -> Result<Value> {
+    async fn action_save_fact(
+        &self,
+        ctx: &dyn ToolContext,
+        agent_id: &str,
+        args: &Value,
+    ) -> Result<Value> {
         let category = args
             .get("category")
             .and_then(|v| v.as_str())
@@ -500,14 +507,29 @@ impl MemoryTool {
             .and_then(|v| v.as_f64())
             .unwrap_or(0.8);
 
-        // Validate
-        let valid_categories = ["user", "pattern", "domain", "instruction", "correction"];
+        // Validate category
+        let valid_categories = [
+            "user",
+            "pattern",
+            "domain",
+            "instruction",
+            "correction",
+            "ctx",
+        ];
         if !valid_categories.contains(&category) {
             return Err(ZeroError::Tool(format!(
                 "Invalid category '{}'. Valid: {}",
                 category,
                 valid_categories.join(", ")
             )));
+        }
+
+        // Ctx category is session state — writes gate through a separate
+        // path because the permission rules + storage sentinels differ.
+        if category == "ctx" {
+            return self
+                .action_save_ctx_fact(ctx, agent_id, key, content)
+                .await;
         }
 
         if content.len() > 500 {
@@ -644,6 +666,106 @@ impl MemoryTool {
         }
     }
 
+    /// Save a ctx-namespaced fact (session state).
+    ///
+    /// Dispatched from `action_save_fact` when `category='ctx'`. Enforces
+    /// the permission rules defined in
+    /// `docs/specs/2026-04-17-session-ctx-memory-bundle.md`:
+    /// - Root (not delegated) can write any ctx key.
+    /// - Delegated subagents can ONLY write keys matching
+    ///   `ctx.<sid>.state.<anything>` — they cannot overwrite
+    ///   root-owned canonicals (intent, prompt, plan, session.meta,
+    ///   ward_briefing, memory).
+    async fn action_save_ctx_fact(
+        &self,
+        ctx: &dyn ToolContext,
+        agent_id: &str,
+        key: &str,
+        content: &str,
+    ) -> Result<Value> {
+        let is_delegated = ctx
+            .get_state("app:is_delegated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        // Pure-function permission check. Returns the session id on
+        // success so we can pass it to the store; on failure it carries
+        // the user-facing error message.
+        let sid =
+            check_ctx_write_permission(is_delegated, key).map_err(ZeroError::Tool)?;
+
+        // Ward comes from current context; ctx facts are stored per-ward
+        // so cleanup on ward deletion is straightforward.
+        let ward_id = ctx
+            .get_state("ward_id")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "__global__".to_string());
+
+        // Owner: root when not delegated, otherwise the subagent's id.
+        let owner = if is_delegated {
+            format!("subagent:{}", agent_id)
+        } else {
+            "root".to_string()
+        };
+
+        // State handoffs (pinned=false) can be overwritten on rerun;
+        // root-owned canonicals (pinned=true) are protected from drift.
+        let pinned = !is_delegated;
+
+        match &self.fact_store {
+            Some(store) => store
+                .save_ctx_fact(&sid, &ward_id, key, content, &owner, pinned)
+                .await
+                .map_err(ZeroError::Tool),
+            None => Err(ZeroError::Tool(
+                "Ctx facts require a DB-backed fact store (not available in this runtime)"
+                    .to_string(),
+            )),
+        }
+    }
+
+    /// Exact-key lookup for ctx-namespaced session state.
+    ///
+    /// Unlike `recall` (fuzzy), this returns the exact row matching the
+    /// key, or `{found: false}` on miss — never a nearest-neighbor.
+    /// Used by subagents to fetch session canonicals (intent, prompt,
+    /// plan) and prior step handoffs (state.<exec_id>) by precise key.
+    async fn action_get_fact(&self, ctx: &dyn ToolContext, args: &Value) -> Result<Value> {
+        let key = args
+            .get("key")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ZeroError::Tool("Missing 'key' for get_fact".to_string()))?;
+
+        if !key.starts_with("ctx.") {
+            return Err(ZeroError::Tool(format!(
+                "get_fact only retrieves ctx-namespaced keys. Got '{}' — use 'recall' for fuzzy search on non-ctx facts.",
+                key
+            )));
+        }
+
+        let ward_id = ctx
+            .get_state("ward_id")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "__global__".to_string());
+
+        match &self.fact_store {
+            Some(store) => {
+                let result = store
+                    .get_ctx_fact(&ward_id, key)
+                    .await
+                    .map_err(ZeroError::Tool)?;
+                match result {
+                    Some(value) => Ok(value),
+                    None => Ok(json!({ "found": false, "key": key })),
+                }
+            }
+            None => Err(ZeroError::Tool(
+                "Ctx facts require a DB-backed fact store (not available in this runtime)"
+                    .to_string(),
+            )),
+        }
+    }
+
     /// Search memory entries
     async fn action_search(&self, path: &PathBuf, args: &Value) -> Result<Value> {
         let query = args
@@ -681,6 +803,67 @@ impl MemoryTool {
             "results": matches,
         }))
     }
+}
+
+/// Classify a ctx key and enforce the writer's permission.
+///
+/// Pure function — no tool context, no I/O. Testable in isolation.
+/// Returns the extracted `session_id` on success so the caller can pass
+/// it down to storage; returns a user-facing error message on reject.
+///
+/// Permission rules:
+/// - Root (`is_delegated=false`) may write any well-formed ctx key.
+/// - Delegated subagents may only write `ctx.<sid>.state.<anything>`;
+///   they cannot overwrite root-owned canonicals (intent, prompt,
+///   plan, session.meta, ward_briefing, memory) nor invent sub-keys
+///   outside the `state.*` namespace.
+fn check_ctx_write_permission(
+    is_delegated: bool,
+    key: &str,
+) -> std::result::Result<String, String> {
+    let Some(rest) = key.strip_prefix("ctx.") else {
+        return Err(format!(
+            "Ctx key '{}' must start with 'ctx.<session_id>.'",
+            key
+        ));
+    };
+    let Some((sid, sub_key)) = rest.split_once('.') else {
+        return Err(format!(
+            "Ctx key '{}' must include session_id: ctx.<sid>.<sub_key>",
+            key
+        ));
+    };
+
+    if !is_delegated {
+        // Root can write anything well-formed.
+        return Ok(sid.to_string());
+    }
+
+    const ROOT_OWNED: &[&str] = &[
+        "intent",
+        "prompt",
+        "plan",
+        "session.meta",
+        "ward_briefing",
+        "memory",
+    ];
+
+    if ROOT_OWNED.iter().any(|&r| sub_key == r) {
+        return Err(format!(
+            "Subagent cannot write to root-owned ctx key '{}'. Root owns: {}. Subagents may only write 'ctx.<sid>.state.<...>'.",
+            key,
+            ROOT_OWNED.join(", ")
+        ));
+    }
+
+    if !sub_key.starts_with("state.") {
+        return Err(format!(
+            "Subagent ctx writes must target 'ctx.<sid>.state.<...>'. Got sub-key '{}'.",
+            sub_key
+        ));
+    }
+
+    Ok(sid.to_string())
 }
 
 // ============================================================================
@@ -803,6 +986,79 @@ mod tests {
                 .to_string()
                 .contains("Invalid shared file")
         );
+    }
+
+    // ========================================================================
+    // Ctx write permission tests (Phase 1b — memory-as-ctx bundle)
+    //
+    // Pure-function tests for the permission classifier. No tool context,
+    // no fact store — these verify the rules in isolation.
+    // ========================================================================
+
+    #[test]
+    fn test_ctx_perm_root_allowed_on_intent() {
+        let sid = check_ctx_write_permission(false, "ctx.sess-abc.intent").unwrap();
+        assert_eq!(sid, "sess-abc");
+    }
+
+    #[test]
+    fn test_ctx_perm_root_allowed_on_state() {
+        let sid =
+            check_ctx_write_permission(false, "ctx.sess-abc.state.exec-1").unwrap();
+        assert_eq!(sid, "sess-abc");
+    }
+
+    #[test]
+    fn test_ctx_perm_subagent_rejected_on_intent() {
+        let err = check_ctx_write_permission(true, "ctx.sess-abc.intent").unwrap_err();
+        assert!(err.contains("root-owned"), "error was: {}", err);
+        assert!(err.contains("intent"), "error was: {}", err);
+    }
+
+    #[test]
+    fn test_ctx_perm_subagent_rejected_on_prompt() {
+        let err = check_ctx_write_permission(true, "ctx.sess-abc.prompt").unwrap_err();
+        assert!(err.contains("root-owned"), "error was: {}", err);
+    }
+
+    #[test]
+    fn test_ctx_perm_subagent_rejected_on_plan() {
+        let err = check_ctx_write_permission(true, "ctx.sess-abc.plan").unwrap_err();
+        assert!(err.contains("root-owned"), "error was: {}", err);
+    }
+
+    #[test]
+    fn test_ctx_perm_subagent_rejected_on_session_meta() {
+        let err = check_ctx_write_permission(true, "ctx.sess-abc.session.meta").unwrap_err();
+        assert!(err.contains("root-owned"), "error was: {}", err);
+    }
+
+    #[test]
+    fn test_ctx_perm_subagent_allowed_on_state() {
+        let sid =
+            check_ctx_write_permission(true, "ctx.sess-abc.state.exec-1").unwrap();
+        assert_eq!(sid, "sess-abc");
+    }
+
+    #[test]
+    fn test_ctx_perm_subagent_rejected_on_unknown_sub_key() {
+        // Anything not root-owned and not state.* is outside the
+        // namespace shape subagents are allowed to invent.
+        let err =
+            check_ctx_write_permission(true, "ctx.sess-abc.scratchpad").unwrap_err();
+        assert!(err.contains("state"), "error was: {}", err);
+    }
+
+    #[test]
+    fn test_ctx_perm_malformed_no_ctx_prefix() {
+        let err = check_ctx_write_permission(false, "state.exec-1").unwrap_err();
+        assert!(err.contains("ctx."), "error was: {}", err);
+    }
+
+    #[test]
+    fn test_ctx_perm_malformed_no_session_id() {
+        let err = check_ctx_write_permission(false, "ctx.").unwrap_err();
+        assert!(err.contains("session_id"), "error was: {}", err);
     }
 
     #[test]
