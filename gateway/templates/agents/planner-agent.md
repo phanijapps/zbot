@@ -117,6 +117,23 @@ For new wards or new domains within an existing ward, **Step 1 of every plan** m
 - **Depends on:** none
 ```
 
+## Mandatory Step N-1 (SECOND-LAST STEP): Promote to wiki vault
+- **Agent:** code-agent
+- **Goal:** Promote every producer-shaped folder in the ward (books/, articles/, research/, reports/) into the Obsidian vault ward via the `wiki` skill. Skip if the ward produced no vault-eligible folders (pure code/data sessions).
+- **Input:** The current ward's `books/`, `articles/`, `research/`, `reports/` directories (whichever exist).
+- **Output:** Mirrored folders under the vault ward at `30_Library/Books/<slug>/`, `30_Library/Articles/<slug>/`, `40_Research/<archetype>/<subject>/<date-slug>/`, `20_Projects/<project>/` — contents copied as-is from the producer folders. Loose images/PDFs land in `70_Assets/`. Plus a run summary (counts by type, any `00_Inbox/` sorts).
+- **Implementation:**
+    - Load the `wiki` skill.
+    - The skill resolves the vault ward once (marker scan → default `wiki`), runs a cross-ward copy via `shell` with absolute paths (`SRC=$(pwd)`, `DEST=$(dirname "$SRC")/<wiki-ward>`), and reports counts. No ward-switch.
+- **Skills:** wiki
+- **Acceptance:**
+    - Every `books/<slug>/`, `articles/<slug>/`, `research/<archetype>/<subject>/`, `reports/<project>/` folder in the origin ward has a matching folder under the vault ward's canonical tree.
+    - Hash-equal items are reported as `skip` (idempotence).
+    - Unclassified items land in `00_Inbox/` with preserved relative paths (not dropped, not guessed).
+    - No content rewriting — the origin-ward file bytes equal the vault-ward file bytes for every copied item.
+    - If the ward produced nothing vault-eligible, the step reports a clear "no candidates" and exits clean.
+- **Depends on:** every earlier step except Step N.
+
 ## Mandatory Step N (LAST STEP): Archive the plan
 - **Agent:** <any agent>
 - **Goal:** Move the executed plan into `specs/archive/` and reference it in AGENTS.md.
@@ -127,7 +144,7 @@ For new wards or new domains within an existing ward, **Step 1 of every plan** m
 - **Acceptance:**
     - Archived file exists at the target path and the original is removed.
     - AGENTS.md references the archived plan.
-- **Depends on:** every earlier step.
+- **Depends on:** Step N-1.
 
 ## Knowledge graph ingestion is inline, not a planner-owned step
 

@@ -62,6 +62,9 @@ pub struct ExecutionSettings {
     /// Persistent chat session configuration.
     #[serde(default)]
     pub chat: ChatConfig,
+    /// Wiki / Obsidian vault ward configuration.
+    #[serde(default)]
+    pub wiki: WikiConfig,
     /// Experimental UI feature flags. Free-form bag persisted verbatim so
     /// we can gate beta surfaces without schema churn.
     #[serde(default)]
@@ -174,6 +177,33 @@ pub struct ChatConfig {
     pub conversation_id: Option<String>,
 }
 
+/// Configuration for the wiki / Obsidian vault ward.
+///
+/// The wiki ward is auto-created at startup and seeded with the canonical
+/// Obsidian vault layout. Producer skills (book-reader, research archetypes)
+/// write into their origin ward; the `wiki` skill then promotes content into
+/// this ward. The name is configurable so multiple vaults (work/personal/
+/// client) are a settings change away.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WikiConfig {
+    /// Ward name used as the Obsidian vault. Default: "wiki".
+    #[serde(default = "default_wiki_ward_name")]
+    pub ward_name: String,
+}
+
+fn default_wiki_ward_name() -> String {
+    "wiki".to_string()
+}
+
+impl Default for WikiConfig {
+    fn default() -> Self {
+        Self {
+            ward_name: default_wiki_ward_name(),
+        }
+    }
+}
+
 impl Default for ExecutionSettings {
     fn default() -> Self {
         Self {
@@ -185,6 +215,7 @@ impl Default for ExecutionSettings {
             distillation: DistillationConfig::default(),
             multimodal: MultimodalConfig::default(),
             chat: ChatConfig::default(),
+            wiki: WikiConfig::default(),
             feature_flags: std::collections::HashMap::new(),
         }
     }

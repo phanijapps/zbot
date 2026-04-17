@@ -1052,7 +1052,13 @@ impl AppState {
         self.populate_workspace_cache().await;
     }
 
-    /// Create the wards directory with scratch ward.
+    /// Create the wards directory with scratch ward + wiki vault ward.
+    ///
+    /// The wiki ward is the Obsidian vault — it receives promoted content
+    /// from producer-skill runs (book-reader, research archetypes) via the
+    /// `wiki` skill. Its name is configurable via `settings.json →
+    /// execution.wiki.wardName` (default `"wiki"`). We seed it at startup so
+    /// delegated subagents (which cannot create wards) can just `use` it.
     fn ensure_wards_dir(&self) {
         let wards_dir = self.config_dir.join("wards");
         let scratch_dir = wards_dir.join("scratch");
@@ -1067,6 +1073,75 @@ impl AppState {
                 );
             }
         }
+
+        let wiki_name = self
+            .settings
+            .load()
+            .ok()
+            .map(|s| s.execution.wiki.ward_name)
+            .unwrap_or_else(|| "wiki".to_string());
+
+        self.ensure_wiki_ward(&wards_dir, &wiki_name);
+    }
+
+    /// Create the wiki vault ward with canonical Obsidian tree + AGENTS.md marker.
+    ///
+    /// Idempotent — existing content is preserved. The marker
+    /// `<!-- obsidian-vault -->` in AGENTS.md lets the `wiki` skill discover
+    /// this ward via `ward(action="list")` regardless of the configured name.
+    fn ensure_wiki_ward(&self, wards_dir: &std::path::Path, wiki_name: &str) {
+        let wiki_dir = wards_dir.join(wiki_name);
+        if let Err(e) = std::fs::create_dir_all(&wiki_dir) {
+            tracing::warn!("Failed to create wiki ward directory: {}", e);
+            return;
+        }
+
+        // Canonical Obsidian vault top-level folders.
+        let vault_folders = [
+            "00_Inbox",
+            "10_Journal/Daily",
+            "10_Journal/Weekly",
+            "20_Projects",
+            "30_Library/Books",
+            "30_Library/Articles",
+            "40_Research",
+            "50_Resources",
+            "60_Archive",
+            "70_Assets/Knowledge_Graphs",
+            "70_Assets/Images",
+            "70_Assets/Documents",
+            "_zztemplates",
+        ];
+        for folder in vault_folders {
+            let _ = std::fs::create_dir_all(wiki_dir.join(folder));
+        }
+
+        // Seed AGENTS.md with the discovery marker and a brief readme.
+        let agents_md = wiki_dir.join("AGENTS.md");
+        if !agents_md.exists() {
+            let content = format!(
+                "<!-- obsidian-vault -->\n\
+                 # {wiki_name}\n\n\
+                 ## Purpose\n\
+                 Obsidian-style vault. Promoted content from other wards lands here under the canonical tree (see `memory-bank/structure.md`). Managed by the `wiki` skill — do not hand-edit promoted folders; user notes go in `<!-- manual -->` blocks within individual files.\n\n\
+                 ## Do not\n\
+                 - Run code, fetch data, or do research in this ward. It is content-only.\n\
+                 - Edit files inside `30_Library/`, `40_Research/`, `20_Projects/` outside of their `<!-- manual -->` blocks — the wiki skill overwrites on re-promotion.\n"
+            );
+            let _ = std::fs::write(&agents_md, content);
+        }
+
+        // Seed memory-bank/ scaffold so the ward matches the standard shape.
+        let memory_bank = wiki_dir.join("memory-bank");
+        let _ = std::fs::create_dir_all(&memory_bank);
+        for file in ["ward.md", "structure.md", "core_docs.md"] {
+            let path = memory_bank.join(file);
+            if !path.exists() {
+                let _ = std::fs::write(&path, "");
+            }
+        }
+
+        tracing::info!("Wiki vault ward ready at {}", wiki_dir.display());
     }
 
     /// Populate the in-memory workspace cache from workspace.json.

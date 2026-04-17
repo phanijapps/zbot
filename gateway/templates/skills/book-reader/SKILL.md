@@ -19,10 +19,13 @@ that Obsidian renders as a graph out of the box.
 
 Do not load the entire book into working context at once. Work progressively.
 
-Output syntax for every `.md` file this skill writes is defined once in
+Cross-skill output syntax (slug rules, wikilink targets, manual blocks)
+is defined once in
 [../_shared/obsidian_conventions.md](../_shared/obsidian_conventions.md).
-Every section heading, frontmatter key, bullet shape, and wikilink rule
-lives there — this skill does NOT redefine them.
+The **exact required shape** of every book-reader output file is
+inlined below — do NOT skip it or rely on the shared file alone. Past
+runs produced sparse output because the shared file was treated as
+optional; the shape rules in this SKILL.md are non-optional.
 
 ## Use when
 
@@ -98,52 +101,231 @@ boundaries. See `references/chunking.md`.
 
 ### 4. Read and annotate progressively
 
-Read one chapter at a time. Write each chapter as `chunks/ch-NN.md` per
-the chunk shape in the shared conventions file. Requirements:
+Read one chapter at a time. Write each chapter as `chunks/ch-NN.md`.
+Filename format is **exactly** `ch-NN.md` (zero-padded 2-digit number,
+no title in the filename) so wikilink targets from `_index.md` like
+`[[ch-01|Chapter 1 — The Novice]]` resolve.
 
-- Full frontmatter (source, chunk_num, chunk_title, line_start/end,
-  summary, key_ideas, tags, mentions, quotes, questions).
-- Body: `## Summary`, `## Full Text` (verbatim, with mentions rewritten
-  to `[[wikilinks]]`), `## Quotes`, `## Questions`.
-- Mentions rewriting follows the rules in
-  `_shared/obsidian_conventions.md` (first-per-paragraph only, whole-word
-  match, skip inside code/quotes/frontmatter/manual blocks).
+**Chunk frontmatter (all fields required — no omissions):**
+
+```yaml
+---
+source: <book-slug>                    # e.g. romance-of-lust
+part_of: "[[_index]]"                  # backref to the book index
+chunk_num: 1
+chunk_title: "Chapter 1 — The Novice"
+line_start: 1
+line_end: 500
+summary: "2–4 sentences capturing what happens in the chapter."
+key_ideas:
+  - "<idea 1>"
+  - "<idea 2>"
+tags:
+  - <source-slug>
+  - <theme-tag>                        # at least 2 tags
+mentions:
+  people: [character-charlie, character-mary, character-eliza]
+  places: [place-schoolroom, place-garden]
+  concepts: [concept-sexual-awakening]
+quotes:
+  - text: "<verbatim passage>"
+    line: 120
+questions:
+  - "<question the text raises>"
+---
+```
+
+`mentions.people`, `mentions.places`, `mentions.concepts` — list the
+**slug** of every entity page the chapter references. These slugs MUST
+match files you write in `entities/`. Minimum: every named entity that
+appears three or more times or drives the chapter's action.
+
+**Chunk body — every section is required. Omit none:**
+
+```markdown
+# Chapter N — <title>
+
+## Summary
+
+<2–4 sentences, same as the frontmatter `summary` field, expanded
+slightly if needed.>
+
+## Full Text
+
+<verbatim chapter text with known-entity mentions rewritten to
+wikilinks. First mention per paragraph only. Rule:
+"Elizabeth" → "[[character-elizabeth-bennet|Elizabeth]]".
+Skip inside frontmatter, code fences, existing wikilinks, quoted
+prose (lines starting with `>`), and `<!-- manual -->` blocks.>
+
+## Quotes
+
+> "<verbatim passage>"
+— line 120
+
+> "<another passage>"
+— line 342
+
+## Questions
+
+- <question 1 the text raises>
+- <question 2>
+```
+
+The body MUST contain ≥ 3 wikilinks to entity pages you write in
+`entities/`. A chunk body with zero wikilinks is a failure — go back
+and rewrite the mentions.
 
 ### 5. Write entity pages
 
 For every within-book entity surfaced across the chapters — character,
 theme, event, place, concept, organization (fictional or in-story) —
-write one `entities/<type>-<slug>.md` page per the entity page shape in
-the shared conventions. Requirements:
+write one `entities/<type>-<slug>.md` page.
 
-- Full frontmatter (title, type, slug, source, aliases, tags).
-- Body: one-sentence description, `## Relationships` (typed bullets
-  shaped as `- <relation>: [[target-slug]]`), `## Mentioned in`
-  (wikilinks to chapters with line numbers), `## Evidence` (quoted
-  passages with `— [[ch-NN]] line <N>`).
+Filename format is **exactly** `<type>-<kebab-slug>.md`. Type prefixes:
+`character-`, `theme-`, `event-`, `place-`, `concept-`,
+`organization-`. The filename matches the wikilink target exactly:
+`[[character-elizabeth-bennet|Elizabeth]]` resolves to
+`entities/character-elizabeth-bennet.md`.
 
-The target slug of every relationship bullet MUST be an entity page this
-skill also writes in the same run. If you reference a slug that doesn't
-resolve to a written page, that's a broken link and the run fails
-acceptance.
+**Entity frontmatter (all fields required):**
+
+```yaml
+---
+title: "Elizabeth Bennet"
+type: character
+slug: character-elizabeth-bennet
+source: "[[_index]]"                   # backref to the book index
+aliases: [Lizzy, Miss Bennet, Eliza]
+tags: [character, romance-of-lust]
+---
+```
+
+**Entity body — use these section headings exactly. Omit empty sections:**
+
+```markdown
+# <Display name>
+
+<one-sentence description capturing role + relationship to the book>
+
+## Relationships
+
+- loves: [[character-fitzwilliam-darcy|Fitzwilliam Darcy]]
+- sister of: [[character-jane-bennet|Jane Bennet]]
+- daughter of: [[character-mr-bennet|Mr Bennet]]
+
+## Mentioned in
+
+- [[ch-01]] lines 10, 120
+- [[ch-05]] lines 12, 340, 510
+- [[ch-34]] line 234
+
+## Evidence
+
+> "<verbatim passage featuring this entity>"
+— [[ch-34]] line 510
+
+> "<another passage>"
+— [[ch-05]] line 342
+```
+
+**Typed-relationship bullet format — one shape only:**
+
+```
+- <relation>: [[<target-slug>|<display>]]
+```
+
+- `<relation>` is lowercase, space-separated (`loves`, `sister of`,
+  `daughter of`, `enemy of`, `works for`).
+- `<target-slug>` MUST be the filename (without `.md`) of another
+  entity page this same run writes. Dangling targets = broken graph.
+- `<display>` is optional; rendered text Obsidian shows in-line.
+
+Evidence section bullets must cite the chunk and line:
+`— [[ch-NN]] line <N>` (wikilink target `ch-NN` resolves to
+`chunks/ch-NN.md`).
 
 Minimum targets for a novel-length work: ≥ 8 character pages,
 ≥ 4 theme pages, ≥ 5 event pages, ≥ 10 typed relationship bullets across
-those pages, each with populated evidence. Under that count, go back —
-the vault isn't done until the graph reflects the book.
+those pages, each with populated `## Evidence`. Under that count, go
+back — the vault isn't done until the graph reflects the book.
 
 ### 6. Write `_index.md`
 
-After every chunk + entity page is written, assemble `books/<slug>/_index.md`
-per the `_index.md` shape in the shared conventions:
+After every chunk + entity page is written, assemble `books/<slug>/_index.md`.
+This is the book's MOC (Map of Content) — the entry point Obsidian opens
+when the user clicks into the book folder.
 
-- Frontmatter: title, type=book, slug, author, published, language,
-  thesis, tags, aliases, date_read, source.
-- Body: one-paragraph synopsis, `## Chapters` (wikilinks to ch-NN),
-  `## Characters` (wikilinks to character pages),
-  `## Themes` (wikilinks to theme pages),
-  `## Key events` (wikilinks to event pages).
-- End with an empty `<!-- manual --><!-- /manual -->` block.
+**`_index.md` frontmatter (all fields required — set `null` for unknown
+metadata, never guess):**
+
+```yaml
+---
+title: "<Title>"
+type: book
+slug: <book-slug>
+author: "<Author or null>"
+published: "YYYY or null"
+language: en
+thesis: "One-sentence statement of what this book is about."
+tags: [book, <genre-tag>, <era-tag>, ...]
+aliases: ["<alternate title>"]
+date_read: 2026-04-16
+source: "<original file path or URL>"
+---
+```
+
+**`_index.md` body — four required sections, each non-empty:**
+
+```markdown
+# <Title>
+
+> <one-paragraph synopsis capturing the book's arc and central idea>
+
+## Chapters
+
+- [[ch-01|Chapter 1 — The Novice]]
+- [[ch-02|Chapter 2 — Mrs Benson]]
+- [[ch-03|Chapter 3 — Mrs Egerton]]
+...
+
+## Characters
+
+- [[character-charlie|Charlie]] — protagonist-narrator
+- [[character-mary|Mary]] — elder sister
+- [[character-eliza|Eliza]] — younger sister
+...
+
+## Themes
+
+- [[theme-sexual-awakening|Sexual awakening]]
+- [[theme-victorian-hypocrisy|Victorian hypocrisy]]
+...
+
+## Key events
+
+- [[event-mrs-benson-introduction|Mrs Benson's introduction]]
+- [[event-miss-franklands-arrival|Miss Frankland's arrival]]
+...
+
+<!-- manual -->
+<!-- /manual -->
+```
+
+**Wikilink target rule (the #1 failure mode — READ THIS):**
+
+Every `[[link]]` target MUST match a filename that exists in this
+run's output:
+
+- Chapter links: target = `ch-NN` (e.g. `[[ch-01|Display]]` →
+  `chunks/ch-01.md`). Do NOT use human-readable strings like
+  `[[Ch 01 — Volume I — The Novice]]` — they don't resolve.
+- Entity links: target = `<type>-<slug>` (e.g.
+  `[[character-charlie|Charlie]]` → `entities/character-charlie.md`).
+  Do NOT use `[[Charlie]]` or `[[Mary]]` — broken.
+- Display text goes after `|`. Omit if the slug is already readable
+  (`[[theme-pride]]` renders as "theme-pride" — usually you want a
+  display alias).
 
 ### 7. Main-graph ingest
 
@@ -258,3 +440,57 @@ When the user asks about a previously read work, answer from the vault:
   `vault_path` properties pointing into each book's vault).
 
 Don't re-ingest. Don't re-chunk.
+
+## Acceptance checklist — run before declaring done
+
+Walk through every item before you return. If any is false, go back and
+fix it — do not ship a partial vault.
+
+**File inventory**
+- [ ] `books/<slug>/_index.md` exists.
+- [ ] `books/<slug>/chunks/ch-NN.md` exists for every chapter in the
+      source, with zero-padded numbers (`ch-01.md`, not `ch-1.md`).
+- [ ] `books/<slug>/entities/<type>-<slug>.md` exists for every entity
+      mentioned in any chunk's `mentions:` frontmatter list or any
+      entity wikilink in `_index.md`.
+
+**Frontmatter completeness**
+- [ ] `_index.md` frontmatter has all 11 fields (title through source).
+      No field is `""` or omitted; unknown metadata is literally `null`.
+- [ ] Every chunk's frontmatter has all 11 fields (source through
+      questions). `mentions.people` / `.places` / `.concepts` list
+      **entity slugs**, not display names.
+- [ ] Every entity page's frontmatter has all 6 fields (title through
+      tags).
+
+**Wikilink resolution — the biggest failure mode**
+- [ ] Every `[[...]]` target in `_index.md` resolves to a file in this
+      run's output (check each target against the file inventory).
+- [ ] Every `[[...]]` target in every chunk's `## Full Text` resolves.
+- [ ] Every `[[...]]` target in every entity's `## Relationships`,
+      `## Mentioned in`, `## Evidence` resolves.
+- [ ] No wikilinks use prose strings: `[[Charlie]]`, `[[Mary]]`,
+      `[[Ch 01 — Volume I — The Novice]]` are all WRONG. Use
+      `[[character-charlie|Charlie]]`, `[[character-mary|Mary]]`,
+      `[[ch-01|Chapter 1 — The Novice]]`.
+
+**Body richness**
+- [ ] Every chunk body has `## Summary`, `## Full Text`, `## Quotes`,
+      `## Questions` sections. None is empty.
+- [ ] Every chunk's `## Full Text` contains ≥ 3 wikilinks to entity
+      pages.
+- [ ] Every entity page has `## Relationships` (≥ 1 typed bullet),
+      `## Mentioned in` (≥ 1 chapter wikilink), `## Evidence` (≥ 1
+      quoted passage with line citation).
+
+**Graph minimums (novel-length work)**
+- [ ] ≥ 8 character pages, ≥ 4 theme pages, ≥ 5 event pages.
+- [ ] ≥ 10 typed relationship bullets across all entity pages.
+
+**Main-KG ingest + memory**
+- [ ] Exactly one `ingest` call, with `book:<slug>` entity.
+- [ ] Cross-source real entities (author, real orgs/places) included
+      in the same call.
+- [ ] One `domain.<slug>.summary` memory fact written.
+- [ ] Global-scope memory facts for ≥ 3 most important within-book
+      entities.
