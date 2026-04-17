@@ -306,6 +306,31 @@ impl MemoryRepository {
         })
     }
 
+    /// List recent ctx state-handoff facts for a session, newest first.
+    ///
+    /// Used by the ward-snapshot preamble builder to surface what prior
+    /// subagents in the same session produced. Matches keys shaped as
+    /// `ctx.<session_id>.state.<execution_id>`.
+    pub fn list_recent_state_handoffs(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        self.db.with_connection(|conn| {
+            let pattern = format!("ctx.{}.state.%", session_id);
+            let sql = format!(
+                "SELECT {FACT_COLUMNS}
+                 FROM memory_facts
+                 WHERE category = 'ctx' AND key LIKE ?1 AND valid_until IS NULL
+                 ORDER BY created_at DESC
+                 LIMIT ?2"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params![pattern, limit], row_to_memory_fact)?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+    }
+
     /// Mark an existing fact as superseded by a newer fact.
     ///
     /// Sets `valid_until` to now and records the new fact's ID in `superseded_by`.

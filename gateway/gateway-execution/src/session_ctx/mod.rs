@@ -13,4 +13,5 @@
 //! full data model, key namespace, and ownership rules.
 
 pub mod preamble;
+pub mod snapshot;
 pub mod writer;

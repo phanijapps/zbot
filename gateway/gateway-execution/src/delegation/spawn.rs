@@ -395,6 +395,10 @@ pub async fn spawn_delegated_agent(
             )) as Arc<dyn zero_core::MemoryFactStore>
         });
 
+    // Phase 7: pass a MemoryRepository handle through so spawn_execution_task
+    // can query ctx.state.* rows when building the ward_snapshot preamble.
+    let memory_repo_for_snapshot = memory_repo.clone();
+
     // Spawn the execution task
     spawn_execution_task(
         executor,
@@ -414,6 +418,7 @@ pub async fn spawn_delegated_agent(
         delegation_permit,
         initial_history,
         fact_store_for_ctx,
+        memory_repo_for_snapshot,
     );
 
     tracing::info!(
@@ -447,22 +452,30 @@ fn spawn_execution_task(
     delegation_permit: Option<OwnedSemaphorePermit>,
     initial_history: Vec<ChatMessage>,
     fact_store_for_ctx: Option<Arc<dyn zero_core::MemoryFactStore>>,
+    memory_repo_for_snapshot: Option<Arc<gateway_database::MemoryRepository>>,
 ) {
     let agent_id = request.child_agent_id.clone();
 
-    // Phase 4b: prepend a <session_ctx sid="…" ward="…" /> tag to the
-    // task so the subagent knows the runtime values referenced by the
-    // static session_ctx.md shard. The shard teaches HOW to read ctx;
-    // this tag provides WHICH session + ward to target.
+    // Phase 4b + 7: build the task prefix layers.
+    //
+    // Outer layer (Phase 7): <ward_snapshot> block with AGENTS.md,
+    // memory-bank/ward.md, memory-bank/core_docs.md, memory-bank/structure.md
+    // read fresh from disk, plus the recent state.<exec_id> handoffs from
+    // this session's ctx. Push model — the subagent sees what exists in
+    // the ward without having to query.
+    //
+    // Inner layer (Phase 4b): <session_ctx ... /> tag with sid + tool
+    // hint so the subagent can fetch more ctx fields on demand.
     //
     // Ward lookup is cheap (single-row query via ConversationRepository)
-    // and falls back to the session_id itself if the ward can't be
-    // resolved — the tag is best-effort, not blocking.
+    // and falls back to "__global__" if the ward can't be resolved.
     let ward_for_preamble = conversation_repo
         .get_session_ward_id(&session_id)
         .ok()
         .flatten();
-    let task_msg = crate::session_ctx::preamble::prepend_to_task(
+
+    // Step 1 of 2: session_ctx tag (always emitted, tiny)
+    let with_ctx_tag = crate::session_ctx::preamble::prepend_to_task(
         &session_id,
         ward_for_preamble.as_deref(),
         None, // step position — plumbed in a follow-up
@@ -470,6 +483,19 @@ fn spawn_execution_task(
         &[], // prior_states — plumbed in a follow-up
         &request.task,
     );
+
+    // Step 2 of 2: ward_snapshot block (prepended if a real ward is active)
+    let task_msg = if let Some(ref ward) = ward_for_preamble {
+        crate::session_ctx::snapshot::prepend_to_task(
+            ward,
+            &session_id,
+            &paths.wards_dir(),
+            memory_repo_for_snapshot.as_ref(),
+            &with_ctx_tag,
+        )
+    } else {
+        with_ctx_tag
+    };
 
     let parent_agent = request.parent_agent_id.clone();
     let parent_execution_id = request.parent_execution_id.clone();
