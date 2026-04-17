@@ -99,4 +99,37 @@ pub trait MemoryFactStore: Send + Sync {
     ) -> Result<Value, String> {
         Err("ctx storage not implemented for this store".to_string())
     }
+
+    /// Upsert a ward-scoped primitive (function signature) extracted
+    /// from a source file by the runtime's AST hook.
+    ///
+    /// Fixed schema: `category='primitive'`, `scope='global'`,
+    /// `agent_id='__ward__'` (sentinel), caller-supplied `ward_id` +
+    /// `key` (conventionally `primitive.<relative_path>.<symbol>`).
+    /// `signature` is the one-line call form; `summary` is the first
+    /// line of the function's docstring.
+    ///
+    /// Idempotent: re-extraction of the same symbol upserts in place.
+    /// Ctx writes are cheap (no embedding generated) — primitives are
+    /// queried by key + ward prefix, not by fuzzy similarity.
+    ///
+    /// Default implementation returns an error for stores that don't
+    /// implement primitive storage.
+    async fn upsert_primitive(
+        &self,
+        _ward_id: &str,
+        _key: &str,
+        _signature: &str,
+        _summary: &str,
+    ) -> Result<Value, String> {
+        Err("primitive storage not implemented for this store".to_string())
+    }
+
+    /// List all primitives for a ward, grouped for ward-snapshot rendering.
+    ///
+    /// Returns an array of {key, signature, summary} ordered by key.
+    /// Default implementation returns an empty array.
+    async fn list_primitives(&self, _ward_id: &str) -> Result<Value, String> {
+        Ok(serde_json::json!({ "primitives": [] }))
+    }
 }

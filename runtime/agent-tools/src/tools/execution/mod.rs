@@ -4,6 +4,7 @@
 // ============================================================================
 
 pub mod apply_patch;
+pub mod ast_hook;
 pub mod edit_file;
 pub mod graph;
 pub mod session_title;

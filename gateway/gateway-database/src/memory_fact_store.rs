@@ -23,6 +23,12 @@ const CTX_AGENT_SENTINEL: &str = "__ctx__";
 const CTX_SCOPE: &str = "session";
 const CTX_CATEGORY: &str = "ctx";
 
+/// Sentinels for ward-scoped primitive facts (function signatures
+/// extracted from source files by the runtime AST hook).
+const PRIMITIVE_AGENT_SENTINEL: &str = "__ward__";
+const PRIMITIVE_SCOPE: &str = "global";
+const PRIMITIVE_CATEGORY: &str = "primitive";
+
 /// Database-backed implementation of `MemoryFactStore`.
 ///
 /// Wraps `MemoryRepository` for SQLite persistence and an optional
@@ -526,6 +532,74 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             "owner": owner,
             "session_id": session_id,
         }))
+    }
+
+    async fn upsert_primitive(
+        &self,
+        ward_id: &str,
+        key: &str,
+        signature: &str,
+        summary: &str,
+    ) -> Result<Value, String> {
+        // Primitives are queried by exact key (snapshot render) or by
+        // ward_id prefix. No embedding needed — deterministic lookup.
+        let now = chrono::Utc::now().to_rfc3339();
+        // Content shape: `signature\nsummary` so the snapshot render can
+        // split and format consistently without parsing more fields.
+        let content = if summary.is_empty() {
+            signature.to_string()
+        } else {
+            format!("{}\n{}", signature, summary)
+        };
+        let fact = MemoryFact {
+            id: format!("fact-{}", uuid::Uuid::new_v4()),
+            session_id: None,
+            agent_id: PRIMITIVE_AGENT_SENTINEL.to_string(),
+            scope: PRIMITIVE_SCOPE.to_string(),
+            category: PRIMITIVE_CATEGORY.to_string(),
+            key: key.to_string(),
+            content,
+            confidence: 1.0,
+            mention_count: 1,
+            source_summary: None,
+            embedding: None,
+            ward_id: ward_id.to_string(),
+            contradicted_by: None,
+            created_at: now.clone(),
+            updated_at: now,
+            expires_at: None,
+            valid_from: None,
+            valid_until: None,
+            superseded_by: None,
+            pinned: false,
+            epistemic_class: Some("current".to_string()),
+            source_episode_id: None,
+            source_ref: None,
+        };
+        self.memory_repo.upsert_memory_fact(&fact)?;
+        Ok(json!({ "success": true, "key": key, "ward_id": ward_id }))
+    }
+
+    async fn list_primitives(&self, ward_id: &str) -> Result<Value, String> {
+        let rows = self
+            .memory_repo
+            .list_primitives_for_ward(ward_id)
+            .map_err(|e| format!("list_primitives query failed: {}", e))?;
+        let primitives: Vec<Value> = rows
+            .into_iter()
+            .map(|f| {
+                let (signature, summary) = match f.content.split_once('\n') {
+                    Some((sig, sum)) => (sig.to_string(), sum.to_string()),
+                    None => (f.content.clone(), String::new()),
+                };
+                json!({
+                    "key": f.key,
+                    "signature": signature,
+                    "summary": summary,
+                })
+            })
+            .collect();
+        Ok(json!({ "primitives": primitives }))
     }
 }
 

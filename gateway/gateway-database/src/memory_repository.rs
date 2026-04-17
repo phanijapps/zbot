@@ -306,6 +306,26 @@ impl MemoryRepository {
         })
     }
 
+    /// List primitive facts for a ward (function signatures extracted
+    /// from the ward's source files by the AST post-write hook).
+    /// Ordered by key for deterministic snapshot rendering.
+    pub fn list_primitives_for_ward(
+        &self,
+        ward_id: &str,
+    ) -> Result<Vec<MemoryFact>, String> {
+        self.db.with_connection(|conn| {
+            let sql = format!(
+                "SELECT {FACT_COLUMNS}
+                 FROM memory_facts
+                 WHERE category = 'primitive' AND ward_id = ?1 AND valid_until IS NULL
+                 ORDER BY key"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params![ward_id], row_to_memory_fact)?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+    }
+
     /// List recent ctx state-handoff facts for a session, newest first.
     ///
     /// Used by the ward-snapshot preamble builder to surface what prior

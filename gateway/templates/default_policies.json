@@ -9,7 +9,7 @@
   {
     "category": "correction",
     "key": "policy.code_modularity",
-    "content": "Keep all code files under 3KB. Split into modules if larger. Read core_docs.md before writing — import existing functions, never rewrite what exists.",
+    "content": "Keep code files focused and under 3KB; split into modules when larger. Before writing, inspect the <ward_snapshot> primitives section for existing functions — import what's there, never re-implement.",
     "confidence": 1.0,
     "pinned": true
   },
@@ -30,7 +30,7 @@
   {
     "category": "correction",
     "key": "policy.ward_first",
-    "content": "Always enter the ward before starting work. Read AGENTS.md and core_docs.md to understand existing code and conventions.",
+    "content": "Enter the ward before starting work. The runtime injects a <ward_snapshot> preamble in every delegation task containing AGENTS.md, reusable primitives, and prior-step handoffs — read that preamble carefully; it is ground truth.",
     "confidence": 1.0,
     "pinned": true
   },
@@ -38,13 +38,6 @@
     "category": "correction",
     "key": "policy.planner_discover_agents",
     "content": "Planner agent must call list_agents before creating any plan. Never hardcode agent assignments — discover available agents and match by description.",
-    "confidence": 1.0,
-    "pinned": true
-  },
-  {
-    "category": "correction",
-    "key": "policy.update_docs_after_code",
-    "content": "After writing or modifying code, update memory-bank/core_docs.md with function signatures. After creating directories, update memory-bank/structure.md. This is mandatory.",
     "confidence": 1.0,
     "pinned": true
   },
@@ -80,13 +73,6 @@
     "category": "instruction",
     "key": "instruction.output_format",
     "content": "Prefer interactive HTML outputs with modern design. Use Tailwind CSS CDN for styling web outputs. Include responsive design for mobile viewing.",
-    "confidence": 0.9,
-    "pinned": true
-  },
-  {
-    "category": "instruction",
-    "key": "instruction.documentation_quality",
-    "content": "Update memory-bank/core_docs.md with SDK-quality documentation after writing code: full signatures, params with types, return types, one usage example per function.",
     "confidence": 0.9,
     "pinned": true
   },

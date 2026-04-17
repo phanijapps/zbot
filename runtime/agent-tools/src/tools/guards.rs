@@ -66,3 +66,77 @@ fn dir_has_placeholder_spec(dir: &std::path::Path) -> bool {
     }
     false
 }
+
+/// Reject writes to `AGENTS.md` when the caller is a delegated subagent.
+///
+/// AGENTS.md is durable ward doctrine (purpose, conventions, do-nots).
+/// Session-specific handoff content is auto-captured into ctx when a
+/// subagent calls respond() — agents must not pollute doctrine with it.
+/// Root can always write AGENTS.md (ward creation, user-driven edits).
+///
+/// Returns `Some(error_message)` to short-circuit the tool, `None` to allow.
+pub(crate) fn reject_agents_md_from_subagent(
+    is_delegated: bool,
+    path: &str,
+) -> Option<&'static str> {
+    if !is_delegated {
+        return None;
+    }
+    let filename = path.rsplit('/').next().unwrap_or(path);
+    if filename != "AGENTS.md" {
+        return None;
+    }
+    Some(
+        "AGENTS.md is ward doctrine — subagents cannot modify it. \
+         Session-specific handoff notes are auto-captured into ctx when you \
+         call respond() with a handoff field; do not write them into AGENTS.md.",
+    )
+}
+
+/// Context-bound form: reads `app:is_delegated` from the tool context.
+pub(crate) fn check_agents_md_write_gate(
+    ctx: &dyn ToolContext,
+    path: &str,
+) -> Option<&'static str> {
+    let is_delegated = ctx
+        .get_state("app:is_delegated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    reject_agents_md_from_subagent(is_delegated, path)
+}
+
+#[cfg(test)]
+mod agents_md_gate_tests {
+    use super::reject_agents_md_from_subagent;
+
+    #[test]
+    fn root_may_write_agents_md() {
+        assert!(reject_agents_md_from_subagent(false, "/wards/w/AGENTS.md").is_none());
+    }
+
+    #[test]
+    fn subagent_blocked_on_direct_path() {
+        let err = reject_agents_md_from_subagent(true, "/wards/w/AGENTS.md").unwrap();
+        assert!(err.contains("ward doctrine"));
+    }
+
+    #[test]
+    fn subagent_blocked_on_bare_filename() {
+        assert!(reject_agents_md_from_subagent(true, "AGENTS.md").is_some());
+    }
+
+    #[test]
+    fn subagent_may_write_other_files() {
+        assert!(reject_agents_md_from_subagent(true, "/wards/w/memory-bank/ward.md").is_none());
+        assert!(reject_agents_md_from_subagent(true, "/wards/w/core/valuation.py").is_none());
+    }
+
+    #[test]
+    fn directory_with_agents_md_suffix_allowed() {
+        // Writes to a path whose DIRECTORY ends in "AGENTS.md" should
+        // still be allowed — we only match the final filename.
+        assert!(
+            reject_agents_md_from_subagent(true, "/wards/w/MY_AGENTS.md/notes.txt").is_none()
+        );
+    }
+}

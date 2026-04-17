@@ -9,18 +9,29 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use zero_core::{FileSystemContext, Result, Tool, ToolContext, ZeroError};
+use zero_core::{FileSystemContext, MemoryFactStore, Result, Tool, ToolContext, ZeroError};
 
 use super::apply_patch::resolve_ward_cwd;
+use super::ast_hook;
 
 /// Tool that creates or overwrites a file with content.
 pub struct WriteFileTool {
     fs: Arc<dyn FileSystemContext>,
+    /// Optional fact store; when present, successful writes to .py
+    /// files trigger the AST post-hook that upserts primitive rows.
+    fact_store: Option<Arc<dyn MemoryFactStore>>,
 }
 
 impl WriteFileTool {
     pub fn new(fs: Arc<dyn FileSystemContext>) -> Self {
-        Self { fs }
+        Self { fs, fact_store: None }
+    }
+
+    /// Attach a fact store so the AST post-hook can upsert primitives.
+    #[must_use]
+    pub fn with_fact_store(mut self, fact_store: Arc<dyn MemoryFactStore>) -> Self {
+        self.fact_store = Some(fact_store);
+        self
     }
 }
 
@@ -56,6 +67,10 @@ impl Tool for WriteFileTool {
             .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ZeroError::Tool("Missing 'path' parameter".to_string()))?;
+
+        if let Some(err) = crate::tools::guards::check_agents_md_write_gate(ctx.as_ref(), path) {
+            return Err(ZeroError::Tool(err.to_string()));
+        }
 
         let content = args
             .get("content")
@@ -109,6 +124,22 @@ impl Tool for WriteFileTool {
 
         let action = if is_new { "created" } else { "overwritten" };
         tracing::debug!("write_file: {} {} ({} bytes)", action, path, content.len());
+
+        // Post-hook: AST extract primitives for the next subagent's snapshot.
+        // Fire-and-forget so the tool returns immediately; extraction runs
+        // off the critical path. No-op for non-.py files.
+        if let Some(fs) = self.fact_store.clone() {
+            let ward_id = ctx
+                .get_state("ward_id")
+                .and_then(|v| v.as_str().map(String::from));
+            if let Some(ward_id) = ward_id {
+                let abs = full_path.clone();
+                let rel = path.clone();
+                tokio::spawn(async move {
+                    ast_hook::run(&ward_id, &abs, &rel, &fs).await;
+                });
+            }
+        }
 
         // Size warning for large files — nudge agent to split into modules
         let warning = if content.len() > 5120 {
