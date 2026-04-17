@@ -449,7 +449,28 @@ fn spawn_execution_task(
     fact_store_for_ctx: Option<Arc<dyn zero_core::MemoryFactStore>>,
 ) {
     let agent_id = request.child_agent_id.clone();
-    let task_msg = request.task.clone();
+
+    // Phase 4b: prepend a <session_ctx sid="…" ward="…" /> tag to the
+    // task so the subagent knows the runtime values referenced by the
+    // static session_ctx.md shard. The shard teaches HOW to read ctx;
+    // this tag provides WHICH session + ward to target.
+    //
+    // Ward lookup is cheap (single-row query via ConversationRepository)
+    // and falls back to the session_id itself if the ward can't be
+    // resolved — the tag is best-effort, not blocking.
+    let ward_for_preamble = conversation_repo
+        .get_session_ward_id(&session_id)
+        .ok()
+        .flatten();
+    let task_msg = crate::session_ctx::preamble::prepend_to_task(
+        &session_id,
+        ward_for_preamble.as_deref(),
+        None, // step position — plumbed in a follow-up
+        None,
+        &[], // prior_states — plumbed in a follow-up
+        &request.task,
+    );
+
     let parent_agent = request.parent_agent_id.clone();
     let parent_execution_id = request.parent_execution_id.clone();
 

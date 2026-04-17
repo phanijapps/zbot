@@ -12,4 +12,5 @@
 //! See `docs/specs/2026-04-17-session-ctx-memory-bundle.md` for the
 //! full data model, key namespace, and ownership rules.
 
+pub mod preamble;
 pub mod writer;
