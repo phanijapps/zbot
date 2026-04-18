@@ -761,12 +761,21 @@ impl MemoryRepository {
     // HYBRID SEARCH (FTS5 + VECTOR)
     // =========================================================================
 
-    /// Hybrid search combining FTS5 keyword matching and vector similarity.
+    /// Hybrid search combining FTS5 keyword matching and vector similarity
+    /// via Reciprocal Rank Fusion (Cormack & Clarke 2009).
     ///
-    /// 1. Run FTS5 search to get keyword matches with BM25 scores
-    /// 2. Run vector search via `VectorIndex` against `memory_facts_index`
-    /// 3. Combine scores: `vector_weight * cos_sim + bm25_weight * bm25_score`
-    /// 4. Apply confidence, recency, and mention_count modifiers
+    /// 1. Run FTS5 to get top-K keyword matches by BM25.
+    /// 2. Run vector search via `VectorIndex` to get top-K by cosine similarity.
+    /// 3. Fuse by rank: `rrf(d) = Σ_arm 1 / (k + rank_arm(d))`, `k = 60`.
+    /// 4. Apply `confidence × recency × mention_boost` as relevance modulators.
+    ///
+    /// RRF is rank-based, so FTS's BM25 and vector cosine do not need to be in
+    /// commensurable score regimes. This avoids the one-arm-zero collapse of
+    /// weighted-score fusion, where an exact keyword hit absent from the vector
+    /// top-K loses to semantic near-misses that happen to rank in both arms.
+    ///
+    /// `vector_weight` and `bm25_weight` are accepted for API-compat and IGNORED;
+    /// RRF has no tunable weights.
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     pub fn search_memory_facts_hybrid(
         &self,
@@ -774,68 +783,75 @@ impl MemoryRepository {
         query_embedding: Option<&[f32]>,
         agent_id: Option<&str>,
         limit: usize,
-        vector_weight: f64,
-        bm25_weight: f64,
+        _vector_weight: f64,
+        _bm25_weight: f64,
         ward_id: Option<&str>,
     ) -> Result<(Vec<ScoredFact>, Vec<(String, &'static str)>), String> {
-        // Step 1: FTS5 keyword results
+        // Standard RRF constant. Dampens the rank-1 vs rank-20 gap so that
+        // showing up in both arms (even mid-rank) outranks a single-arm top-1.
+        const RRF_K: f64 = 60.0;
+
+        // Retrieval pool: larger than output so fusion has room to reorder.
+        let retrieval_k = (limit * 3).max(30);
+
+        // Step 1: FTS5 keyword results.
         let fts_results = self
-            .search_memory_facts_fts(query_text, agent_id, 30, ward_id)
+            .search_memory_facts_fts(query_text, agent_id, retrieval_k, ward_id)
             .unwrap_or_default();
 
-        // Step 2: Vector results (if embedding provided)
+        // Step 2: Vector results (if embedding provided).
         let vec_results = if let Some(qe) = query_embedding {
-            self.search_memory_facts_vector(qe, agent_id, 30, ward_id)?
+            self.search_memory_facts_vector(qe, agent_id, retrieval_k, ward_id)?
         } else {
             Vec::new()
         };
 
-        // Step 3: Merge results by fact ID; track which arm(s) matched.
-        // Source classification mirrors WikiRepository::search_hybrid:
+        // Step 3: Fuse by rank. Source classification:
         //   "fts"    — keyword-only match
         //   "vec"    — vector-only match
         //   "hybrid" — present in both arms
-        type ScoreSlot = (Option<f64>, Option<f64>, MemoryFact, &'static str);
+        type ScoreSlot = (f64, MemoryFact, &'static str);
         let mut score_map: std::collections::HashMap<String, ScoreSlot> =
             std::collections::HashMap::new();
 
-        for sf in fts_results {
-            score_map.insert(sf.fact.id.clone(), (None, Some(sf.score), sf.fact, "fts"));
+        for (idx, sf) in fts_results.iter().enumerate() {
+            let rank = (idx + 1) as f64;
+            let contribution = 1.0 / (RRF_K + rank);
+            score_map.insert(
+                sf.fact.id.clone(),
+                (contribution, sf.fact.clone(), "fts"),
+            );
         }
 
-        for sf in vec_results {
+        for (idx, sf) in vec_results.into_iter().enumerate() {
+            let rank = (idx + 1) as f64;
+            let contribution = 1.0 / (RRF_K + rank);
             score_map
                 .entry(sf.fact.id.clone())
-                .and_modify(|(vec_s, _, _, src)| {
-                    *vec_s = Some(sf.score);
+                .and_modify(|(rrf, _, src)| {
+                    *rrf += contribution;
                     *src = "hybrid";
                 })
-                .or_insert((Some(sf.score), None, sf.fact, "vec"));
+                .or_insert((contribution, sf.fact, "vec"));
         }
 
-        // Step 4: Compute final weighted score
+        // Step 4: Apply modulators. These are orthogonal to fusion — they
+        // downweight stale / low-confidence facts and upweight frequently
+        // referenced ones, independent of how a fact was retrieved.
         let now = chrono::Utc::now();
         let mut ranked: Vec<(ScoredFact, &'static str)> = score_map
             .into_values()
-            .map(|(vec_score, bm25_score, fact, src)| {
-                let vs = vec_score.unwrap_or(0.0);
-                let bs = bm25_score.unwrap_or(0.0);
-
-                let base_score = vector_weight * vs + bm25_weight * bs;
-
-                // Confidence modifier
+            .map(|(rrf_score, fact, src)| {
                 let conf = fact.confidence;
 
-                // Recency modifier: decay older facts
                 let days_old = chrono::DateTime::parse_from_rfc3339(&fact.updated_at)
                     .map(|dt| (now - dt.with_timezone(&chrono::Utc)).num_days() as f64)
                     .unwrap_or(30.0);
                 let recency = 1.0 / (1.0 + days_old * 0.01);
 
-                // Mention count modifier
                 let mention_boost = 1.0 + (fact.mention_count as f64 + 1.0).ln() / 10.0_f64.ln();
 
-                let final_score = base_score * conf * recency * mention_boost;
+                let final_score = rrf_score * conf * recency * mention_boost;
 
                 (
                     ScoredFact {

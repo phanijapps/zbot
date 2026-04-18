@@ -701,7 +701,13 @@ struct SearchResults {
 }
 
 /// Minimum relevance score to include a result (filters noise).
-const MIN_RELEVANCE_SCORE: f64 = 0.15;
+///
+/// Calibrated to the RRF regime in `search_memory_facts_hybrid`. Raw RRF
+/// scores max at roughly 2/61 (≈ 0.033) when a fact is #1 in both arms,
+/// then get modulated by `confidence × recency × mention_boost`. A value
+/// near 0.005 retains exact keyword hits and mid-ranked dual-arm matches
+/// while filtering single-arm tail noise.
+const MIN_RELEVANCE_SCORE: f64 = 0.005;
 /// Maximum skills to send to the LLM.
 const MAX_SKILLS: usize = 8;
 /// Maximum agents to send to the LLM.

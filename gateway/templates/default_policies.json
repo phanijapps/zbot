@@ -72,9 +72,9 @@
   {
     "category": "instruction",
     "key": "instruction.output_format",
-    "content": "Prefer interactive HTML outputs with modern design. Use Tailwind CSS CDN for styling web outputs. Include responsive design for mobile viewing.",
-    "confidence": 0.9,
-    "pinned": true
+    "content": "Default output is markdown or plain text. Generate HTML/Tailwind ONLY when the user explicitly asks for a report, dashboard, or visual deliverable — and only after the planner has emitted an HTML step. For analysis questions ('is X overvalued?', 'summarize Y'), never generate HTML. Ambiguity defaults to markdown.",
+    "confidence": 0.7,
+    "pinned": false
   },
   {
     "category": "user",

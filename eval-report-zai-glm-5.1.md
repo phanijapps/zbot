@@ -1,15 +1,15 @@
 # Phase 8 Eval Report
 
-Provider: `Ollama`  Model: `qwen3.5:397b-cloud`
+Provider: `Z.AI`  Model: `glm-5.1`
 
 Fixtures: 6
 
-**5/6 passed.**
+**4/6 passed.**
 
 ## 01_reuse_basic
 
 - Description: Ward has dcf_valuation primitive; task asks for DCF on TSLA. Pass if LLM imports rather than re-implements.
-- Latency: 15.6s
+- Latency: 53.3s
 - Verdict: **PASS**
 
 ### Assertions
@@ -22,33 +22,30 @@ Fixtures: 6
 ### LLM response (first 500 chars of code body)
 
 ```
-## models/tsla-dcf.py
-
 ```python
-#!/usr/bin/env python3
+# models/tsla-dcf.py
 """
-TSLA DCF Valuation Model
+TSLA DCF Intrinsic Value Model
 
-Thin wrapper around core valuation primitives.
-Loads fundamentals from data/tsla-fundamentals.json and computes intrinsic value.
+Reads fundamentals from data/tsla-fundamentals.json, computes WACC via CAPM,
+runs a 5-year DCF, and prints the intrinsic value plus a sensitivity grid.
 """
 
 import json
+import sys
 from pathlib import Path
 
+# ── Import primitives (reuse, don't duplicate) ──────────────────────────────
 from core.valuation import calc_wacc, dcf_valuation, sensitivity_grid
 
-
-def load_fundamentals(ticker: str) -> dict:
-    """Load fundamentals JSON for a given ticker."""
-    path = Path(__file__).parent.parent / "data" / f"{ticker.lower()}-fun
-…[truncated, 4685 chars omitted]
+# ── Configuration ──────────────────────────────────────────────────────────
+…[truncated, 6178 chars omitted]
 ```
 
 ## 02_parameterize_multiples
 
 - Description: Ward has get_multiples(ticker); task asks for GOOG multiples. Pass if LLM calls it with the ticker arg, doesn't write a new goog-*.py file.
-- Latency: 34.6s
+- Latency: 38.2s
 - Verdict: **PASS**
 
 ### Assertions
@@ -61,32 +58,31 @@ def load_fundamentals(ticker: str) -> dict:
 ### LLM response (first 500 chars of code body)
 
 ```
+
+
+
 ```python
 # analysis/goog-peer-comparison.py
 """
-GOOG Peer Comparison Analysis
-
-Compares Alphabet (GOOG) valuation multiples against peer group:
-META, MSFT, AMZN, AAPL, NVDA
+GOOG peer comparison: pulls valuation multiples for GOOG and its peer group,
+computes descriptive statistics, and reports GOOG's percentile rank per metric.
 """
 
 from analysis.relative_valuation import get_multiples, calc_stats, calc_percentile
 
+TARGET = "GOOG"
+PEERS = ["META", "MSFT", "AMZN", "AAPL", "NVDA"]
 
-def get_peer_multiples(tickers: list) -> dict:
-    """Fetch valuation multiples for a list of tickers."""
-    multiples = {}
-    for ticker in tickers:
-        try:
-            multiples[ticker] = get_multiples(ticker)
-        except Ex
-…[truncated, 4351 chars omitted]
+# Metrics to compare (must be keys returned by get_multiples)
+METRICS = ["pe_ttm", "pe_fwd", "ev_ebitda", "peg", "ps", "pfcf"]
+METRIC_LA
+…[truncated, 3675 chars omitted]
 ```
 
 ## 03_justify_new_primitive
 
 - Description: Ward has DCF/multiples primitives but no options math. Task asks for options Greeks. Pass if LLM adds a new primitive AND justifies the addition explicitly.
-- Latency: 15.3s
+- Latency: 48.1s
 - Verdict: **PASS**
 
 ### Assertions
@@ -99,36 +95,39 @@ def get_peer_multiples(tickers: list) -> dict:
 ### LLM response (first 500 chars of code body)
 
 ```
-## Why Existing Primitives Don't Apply
+## Why existing primitives don't cover this
 
-The existing primitives (`dcf_valuation` and `get_multiples`) are for **equity valuation** — DCF models discounted cash flows, and multiples compare valuation ratios. Neither covers **options pricing** or **Black-Scholes Greeks**. This is genuinely new functionality requiring a new primitive in `core/options.py`.
+`dcf_valuation` is an equity DCF model (discounting free cash flows). `get_multiples` returns valuation ratios (P/E, etc.). Neither deals with derivatives pricing or Black-Scholes mathematics. A genuinely new primitive is required.
 
 ---
 
-## core/options.py
-
+### `core/options.py`
 ```python
 """
-Core options pricing primitives.
-Black-Scholes model for European options.
+Reusable Black-Scholes option pricing and Greeks primitives.
 """
 
-import math
-from typing i
-…[truncated, 5737 chars omitted]
+from math import log, sqrt, exp
+from statistics import NormalDist
+
+_normal = NormalDist()
+
+
+def _d1(spot, strike, t
+…[truncated, 5349 chars omitted]
 ```
 
 ## 04_prior_handoff_reference
 
 - Description: Prior state says research-agent produced data/goog-fundamentals.json. Task says 'compute DCF using that data.' Pass if LLM reads the existing file, doesn't re-fetch from yfinance.
-- Latency: 11.1s
+- Latency: 50.8s
 - Verdict: **FAIL**
 
 ### Assertions
 
-- ✓ Must read the existing fundamentals file
+- ✗ Must read the existing fundamentals file
 - ✓ Must open/load the JSON file
-- ✗ Must NOT re-fetch from yfinance
+- ✓ Must NOT re-fetch from yfinance
 - ✓ Must NOT use yfinance Ticker API
 - ✓ Must call the primitive
 
@@ -138,31 +137,30 @@ from typing i
 ```python
 # models/goog-dcf.py
 """
-GOOG DCF Intrinsic Value Calculation
+GOOG DCF intrinsic value computation.
 
-Loads fundamentals from research-agent output and computes DCF valuation
-using the core valuation primitive.
+Loads fundamentals saved by research-agent, computes WACC, and runs DCF.
 """
 
 import json
+import os
+
 from core.valuation import dcf_valuation
 
 
-def load_fundamentals(path: str) -> dict:
-    """Load fundamentals JSON from disk."""
-    with open(path, 'r') as f:
-        return json.load(f)
+def calc_wacc(market_cap, total_debt, cash, beta, risk_free_rate=0.042, equity_risk_premium=0.055, cost_of_debt=0.045, tax_rate=0.21):
+    """
+    Compute Weighted Average Cost of Capital.
 
-
-def estimate_wacc(beta: float, risk_free_rate: float = 0.045, 
-                  market_premium: float = 0.055,
-…[truncated, 3132 chars omitted]
+    Uses CAPM for cost of equity. Deducts net cash from enterprise-value-based weighting.
+  
+…[truncated, 4139 chars omitted]
 ```
 
 ## 05_empty_ward
 
 - Description: Fresh ward with only AGENTS.md — no primitives, no handoffs. Task asks for DCF. Pass if LLM writes clean code targeting core/valuation.py (so the NEXT agent can reuse).
-- Latency: 14.1s
+- Latency: 42.9s
 - Verdict: **PASS**
 
 ### Assertions
@@ -175,14 +173,21 @@ def estimate_wacc(beta: float, risk_free_rate: float = 0.045,
 ### LLM response (first 500 chars of code body)
 
 ```
-## core/valuation.py
+## Files
+
+### `core/valuation.py`
 
 ```python
 """
-Core valuation primitives for equity analysis.
+core/valuation.py
+Reusable DCF (Discounted Cash Flow) valuation primitive.
+
+Everything DCF-related lives here so per-ticker scripts stay thin wrappers.
 """
 
-from typing import List, Dict
+from __future__ import annotations
+
+from typing import List, Dict, Any
 
 
 def dcf_valuation(
@@ -192,26 +197,22 @@ def dcf_valuation(
     terminal_growth: float,
     shares_out: float,
     debt: float,
-    cash: float
-) -> Dict:
+    cash: float,
+) -> Dict[str, Any]:
     """
-    Compute discounted cash flow (DCF) valuation.
-    
-    Args:
-        base_fcf: Current year free cash flow (in millions)
-        growth_rates: List of annual growth rates for projection
-…[truncated, 5481 chars omitted]
+    Compute a full 
+…[truncated, 6726 chars omitted]
 ```
 
 ## 06_ticker_variant_duplication
 
 - Description: THE CORE PAIN POINT. Ward already has `models/aapl-dcf-model.py` as a per-ticker wrapper. Task says 'do the same for TSLA.' Pass if LLM refactors to parameterize (accept ticker as arg) instead of writing a parallel `tsla-dcf-model.py`.
-- Latency: 15.1s
-- Verdict: **PASS**
+- Latency: 33.0s
+- Verdict: **FAIL**
 
 ### Assertions
 
-- ✓ Must NOT write a tsla-* duplicate
+- ✗ Must NOT write a tsla-* duplicate
 - ✓ Must reference or refactor the existing runner
 - ✓ Must introduce a ticker/symbol parameter
 - ✓ Parameterize the existing runner
@@ -219,15 +220,13 @@ def dcf_valuation(
 ### LLM response (first 500 chars of code body)
 
 ```
-## Analysis
+Looking at the ward snapshot, the doctrine is clear: the `<ticker>-X.py` pattern should be parameterized by ticker, not duplicated. I need to:
 
-Looking at the ward_snapshot, I see:
-1. `core/valuation.py::dcf_valuation()` - the primitive to use (don't reimplement)
-2. `models/aapl-dcf-model.py::main()` - hardcoded AAPL runner that should be parameterized
+1. Refactor `models/aapl-dcf-model.py` to accept a ticker parameter
+2. Create `data/tsla.json` with TSLA financials
+3. Create a thin `models/tsla-dcf-model.py` that delegates to the parameterized runner
 
-The doctrine explicitly states: "when you see a `<ticker>-X.py` pattern, assume it should accept ticker as an argument rather than duplicate per-ticker."
-
-**Strategy:** Refactor the AAPL runner to accept a ticker parameter, then create TSLA data. This avoids duplication and 
-…[truncated, 3232 chars omitted]
+Let me read the existing files first to understand the structure. No existing files are shown in full, so I'll infer from the snapshot and produce clean
+…[truncated, 3443 chars omitted]
 ```
 

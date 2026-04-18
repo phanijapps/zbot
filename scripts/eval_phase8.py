@@ -14,6 +14,7 @@ implementation in:
 If those Rust sources change, update this harness.
 """
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -22,7 +23,10 @@ from pathlib import Path
 FIXTURES_DIR = Path.home() / "Documents" / "zbot" / "wards" / "_eval_fixtures"
 PROVIDERS_PATH = Path.home() / "Documents" / "zbot" / "config" / "providers.json"
 REPORT_PATH = Path(__file__).parent.parent / "eval-report.md"
-MODEL = "anthropic/claude-sonnet-4.6"
+
+# Overridable via env: EVAL_PROVIDER + EVAL_MODEL.
+PROVIDER_NAME = os.environ.get("EVAL_PROVIDER", "OpenRouter")
+MODEL = os.environ.get("EVAL_MODEL", "anthropic/claude-sonnet-4.6")
 
 REUSE_CHECK_BLOCK = (
     "<reuse_check>\n"
@@ -89,16 +93,21 @@ def build_prompt(fixture: dict) -> str:
 # OpenRouter call
 # ------------------------------------------------------------------
 
-def load_openrouter_key() -> str:
+def load_provider() -> dict:
     providers = json.load(PROVIDERS_PATH.open())
     for p in providers:
-        if p["name"] == "OpenRouter":
-            return p["apiKey"]
-    raise RuntimeError("OpenRouter provider not found in providers.json")
+        if p["name"] == PROVIDER_NAME:
+            return p
+    raise RuntimeError(
+        f"Provider '{PROVIDER_NAME}' not found in providers.json "
+        f"(set EVAL_PROVIDER env var to one of: {[x['name'] for x in providers]})"
+    )
 
 
-def call_sonnet(prompt: str, api_key: str) -> dict:
-    """Call Sonnet 4.6 via OpenRouter's OpenAI-compatible endpoint."""
+def call_llm(prompt: str, provider: dict) -> dict:
+    """Call the configured model via the provider's OpenAI-compatible endpoint."""
+    base_url = provider["baseUrl"].rstrip("/")
+    url = f"{base_url}/chat/completions"
     body = json.dumps({
         "model": MODEL,
         "messages": [
@@ -110,14 +119,14 @@ def call_sonnet(prompt: str, api_key: str) -> dict:
     }).encode()
 
     req = urllib.request.Request(
-        "https://openrouter.ai/api/v1/chat/completions",
+        url,
         data=body,
         headers={
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {provider['apiKey']}",
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    with urllib.request.urlopen(req, timeout=180) as resp:
         payload = json.load(resp)
     return payload
 
@@ -186,13 +195,13 @@ def main():
     if not FIXTURES_DIR.is_dir():
         sys.exit(f"Fixtures directory missing: {FIXTURES_DIR}")
 
-    api_key = load_openrouter_key()
+    provider = load_provider()
     fixtures = sorted(FIXTURES_DIR.glob("*.json"))
-    print(f"Loaded {len(fixtures)} fixtures; calling {MODEL} for each.\n")
+    print(f"Loaded {len(fixtures)} fixtures; calling {PROVIDER_NAME}/{MODEL} for each.\n")
 
     report: list[str] = []
     report.append(f"# Phase 8 Eval Report\n\n")
-    report.append(f"Model: `{MODEL}`\n\n")
+    report.append(f"Provider: `{PROVIDER_NAME}`  Model: `{MODEL}`\n\n")
     report.append(f"Fixtures: {len(fixtures)}\n\n")
 
     passed = 0
@@ -203,7 +212,7 @@ def main():
         prompt = build_prompt(fixture)
         t0 = time.time()
         try:
-            payload = call_sonnet(prompt, api_key)
+            payload = call_llm(prompt, provider)
             content = extract_content(payload)
         except Exception as e:
             print(f"  ERROR: {e}\n")
