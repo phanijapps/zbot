@@ -451,13 +451,25 @@ fn reuse_check_block(agent_id: &str) -> Option<&'static str> {
     }
     Some(
         "<reuse_check>\n\
-         Before writing any code, inspect the Primitives section in <ward_snapshot> below.\n\
-         If a listed primitive matches your need, IMPORT IT — do not re-implement.\n\
-         ✓ CORRECT: `from core.valuation import dcf_valuation` then call it with new args.\n\
-         ✓ CORRECT: Extend an existing primitive to accept a new argument (parameterize, don't duplicate).\n\
-         ✗ WRONG: Writing `goog-dcf-model.py` when `core/valuation.py::dcf_valuation(...)` is listed.\n\
-         ✗ WRONG: Re-implementing `calc_wacc`, `get_multiples`, or any function already listed.\n\
-         If you add genuinely new primitives (none of the listed ones fit), say so explicitly in your respond() message.\n\
+         Before writing ANY code:\n\
+         1. Read the <ward_snapshot> below. If it contains a Conventions block, follow it exactly — it declares this ward's language, module_root (where reusable code lives), import_syntax, and signature_registry. Do not improvise a different layout.\n\
+         2. Inspect the Primitives section. Every listed symbol is importable from the ward's module_root. Plan your imports against them.\n\
+         3. Emit a reuse_audit block in your first action or respond() message, in this exact shape:\n\
+         \n\
+           reuse_audit:\n\
+             looking_for: <symbols you need>\n\
+             found:       <subset already listed in Primitives — will import via import_syntax>\n\
+             missing:     <subset not listed — will add to module_root/ and register in signature_registry>\n\
+             plan:        <one-sentence import+implement sequence>\n\
+         \n\
+         4. THEN write code. Imports use the Conventions' import_syntax. New primitives go under module_root/ (at the WARD ROOT, never inside the task directory) and get appended to signature_registry.\n\
+         \n\
+         ✓ CORRECT: Import a listed primitive via the ward's import_syntax; call it with new args.\n\
+         ✓ CORRECT: Extend a primitive to accept a new argument (parameterize in place, don't fork a near-copy under a new name).\n\
+         ✓ CORRECT: Add a genuinely new primitive to module_root/, register it, then import from the task script.\n\
+         ✗ WRONG: Writing a parallel copy of a listed primitive under a different name (e.g. `goog-dcf-model.py` when `core/valuation.py::dcf_valuation(...)` is listed).\n\
+         ✗ WRONG: Putting reusable code inside the task directory (`<task>/core/`, `<task>/lib/`). Reusable code is ward-level per Conventions.\n\
+         ✗ WRONG: Writing code without emitting the reuse_audit block first — that's guessing, not reusing.\n\
          </reuse_check>"
     )
 }
