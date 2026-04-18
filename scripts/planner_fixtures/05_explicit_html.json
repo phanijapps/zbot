@@ -1,0 +1,11 @@
+{
+  "name": "05_explicit_html_dashboard",
+  "description": "User explicitly asks for a styled HTML dashboard. This is the one case HTML step should be emitted. Expected: HTML step present, premium-report referenced.",
+  "task": "<ward_snapshot ward=\"stock-analysis\">\n\n## Doctrine (AGENTS.md)\n\n# stock-analysis\n\n## Available skills (live from list_skills)\n\n- `stock-analysis` — equity research orchestrator.\n- `yf-fundamentals` — fundamentals via yfinance.\n- `yf-signals` — technicals.\n- `premium-report` — HTML report styling with Tailwind.\n\n## Available agents (live from list_agents)\n\n- `code-agent`\n- `data-analyst`\n- `research-agent`\n- `writing-agent`\n- `wiki-agent`\n\n</ward_snapshot>\n\nPlan this goal.\n\nUser's verbatim ask: \"build me a styled HTML dashboard comparing AAPL, MSFT, and GOOG on P/E, market cap, and revenue growth. I want a visual web page I can share.\"\n\nWard: stock-analysis\nDomain: big-tech-dashboard\n\nSave the plan to wards/stock-analysis/specs/big-tech-dashboard/plan.md using the two-phase structure.",
+  "assertions": [
+    {"type": "plan_classification_equals", "value": "build"},
+    {"type": "pattern_present", "value": "HTML", "in": "all"},
+    {"type": "pattern_present", "value": "premium-report", "in": "all"},
+    {"type": "no_step_assigns", "agent": "research-agent", "when_skills_include": ["yf-fundamentals", "yf-signals"]}
+  ]
+}

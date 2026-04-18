@@ -1,0 +1,12 @@
+{
+  "name": "03_book_reader_skill_match",
+  "description": "User asks to read a book. book-reader skill exists. Expected: skill_match → 1 step loading book-reader.",
+  "task": "<ward_snapshot ward=\"reading\">\n\n## Doctrine (AGENTS.md)\n\n# reading\n\n## Available skills (live from list_skills)\n\n- `book-reader` — Read, chunk, and ingest a book into the knowledge graph. Triggers: 'read X', 'memorize this book', 'summarize Moby Dick', 'ingest War and Peace'.\n- `article-reader` — Read articles / essays.\n- `pdf` — Extract text from PDF.\n- `duckduckgo-search` — Web search.\n- `wiki` — Promote session folders to vault.\n- `book-reader` internally loads chunking and indexing patterns.\n\n## Available agents (live from list_agents)\n\n- `code-agent`\n- `data-analyst`\n- `research-agent`\n- `writing-agent`\n- `wiki-agent`\n\n</ward_snapshot>\n\nPlan this goal.\n\nUser's verbatim ask: \"read The Great Gatsby and memorize it\"\n\nWard: reading\nDomain: gatsby\n\nSave the plan to wards/reading/specs/gatsby/plan.md using the two-phase structure.",
+  "assertions": [
+    {"type": "plan_classification_equals", "value": "skill_match"},
+    {"type": "plan_step_count_equals", "value": 1},
+    {"type": "step_has_skill", "step": 1, "value": "book-reader"},
+    {"type": "pattern_absent", "value": "HTML", "in": "step1"},
+    {"type": "pattern_absent", "value": "premium-report", "in": "step1"}
+  ]
+}

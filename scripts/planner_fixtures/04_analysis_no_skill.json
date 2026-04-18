@@ -1,0 +1,12 @@
+{
+  "name": "04_analysis_no_skill_match",
+  "description": "User asks a general question with no skill that fits. Expected: classification=analysis, 1-3 steps, no scaffold (no Step 0), no HTML.",
+  "task": "<ward_snapshot ward=\"research\">\n\n## Doctrine (AGENTS.md)\n\n# research\n\n## Available skills (live from list_skills)\n\n- `stock-analysis` — end-to-end equity research workflow (orchestrates yf-* internally).\n- `book-reader` — end-to-end book ingestion workflow (extract + chunk + index + summarize).\n- `duckduckgo-search` — TOOL: runs a single web-search query and returns URLs + snippets. Not a workflow; use within an analysis step.\n- `light-panda-browser` — TOOL: fetches a single web page's rendered content. Not a workflow.\n- `wiki` — promotes session folders into the Obsidian vault.\n\n## Available agents (live from list_agents)\n\n- `code-agent`\n- `data-analyst`\n- `research-agent`\n- `writing-agent`\n- `wiki-agent`\n\n</ward_snapshot>\n\nPlan this goal.\n\nUser's verbatim ask: \"What were the five biggest product launches from Apple in 2024? Give me a brief summary of each.\"\n\nWard: research\nDomain: apple-2024-launches\n\nSave the plan to wards/research/specs/apple-2024-launches/plan.md using the two-phase structure.",
+  "assertions": [
+    {"type": "plan_classification_equals", "value": "analysis"},
+    {"type": "plan_step_count_at_most", "value": 3},
+    {"type": "pattern_absent", "value": "HTML", "in": "all"},
+    {"type": "pattern_absent", "value": "premium-report", "in": "all"},
+    {"type": "pattern_absent", "value": "steps/step0.md", "in": "plan"}
+  ]
+}
