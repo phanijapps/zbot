@@ -121,7 +121,7 @@ def call_planner(
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=360) as resp:
+    with urllib.request.urlopen(req, timeout=600) as resp:
         payload = json.load(resp)
     return payload["choices"][0]["message"]["content"]
 

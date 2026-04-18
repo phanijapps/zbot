@@ -68,10 +68,6 @@ impl Tool for WriteFileTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ZeroError::Tool("Missing 'path' parameter".to_string()))?;
 
-        if let Some(err) = crate::tools::guards::check_agents_md_write_gate(ctx.as_ref(), path) {
-            return Err(ZeroError::Tool(err.to_string()));
-        }
-
         let content = args
             .get("content")
             .and_then(|v| v.as_str())
