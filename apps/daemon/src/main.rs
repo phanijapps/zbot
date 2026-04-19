@@ -75,8 +75,10 @@ struct Args {
     #[arg(long, default_value_t = gateway::DEFAULT_HTTP_PORT)]
     http_port: u16,
 
-    /// Host address to bind to
-    #[arg(long, default_value = "127.0.0.1")]
+    /// Host address to bind to. Default binds to all interfaces so the
+    /// daemon is reachable from other devices on the LAN. Override with
+    /// `--host 127.0.0.1` to restrict to localhost.
+    #[arg(long, default_value = "0.0.0.0")]
     host: String,
 
     /// Path to z-Bot data directory (default: ~/Documents/zbot)
