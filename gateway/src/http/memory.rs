@@ -182,10 +182,11 @@ pub async fn search_memory_facts(
     let ward_id = query.ward_id.as_deref();
 
     // Build (fact, source) pairs according to the requested mode.
+    let scope_agent: Option<&str> = Some(agent_id.as_str());
     let scored: Vec<(MemoryFact, &'static str)> = match mode {
         "fts" => {
             let rows = memory_repo
-                .search_memory_facts_fts(&query.q, &agent_id, query.limit, ward_id)
+                .search_memory_facts_fts(&query.q, scope_agent, query.limit, ward_id)
                 .map_err(|e| search_err("Failed to search memory facts (fts)", e))?;
             rows.into_iter().map(|sf| (sf.fact, "fts")).collect()
         }
@@ -207,7 +208,7 @@ pub async fn search_memory_facts(
                 })?;
             let qe = emb.into_iter().next().unwrap_or_default();
             let rows = memory_repo
-                .search_similar_facts(&qe, &agent_id, 0.0, query.limit, ward_id)
+                .search_similar_facts(&qe, scope_agent, 0.0, query.limit, ward_id)
                 .map_err(|e| search_err("Failed to search memory facts (semantic)", e))?;
             rows.into_iter().map(|sf| (sf.fact, "vec")).collect()
         }
@@ -229,7 +230,7 @@ pub async fn search_memory_facts(
                 .search_memory_facts_hybrid(
                     &query.q,
                     qe_opt.as_deref(),
-                    &agent_id,
+                    scope_agent,
                     query.limit,
                     0.7,
                     0.3,

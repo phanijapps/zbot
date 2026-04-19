@@ -46,7 +46,9 @@ pub use graph_query::{EntityInfo, GraphQueryTool, GraphStorageAccess, NeighborIn
 pub use goal::{GoalAccess, GoalSummary, GoalTool};
 // ingest types are public API for downstream crates (gateway wiring)
 #[allow(unused_imports)]
-pub use ingest::{IngestTool, IngestionAccess};
+pub use ingest::{
+    IngestTool, IngestionAccess, StructuredCounts, StructuredEntity, StructuredRelationship,
+};
 pub use introspection::{ListMcpsTool, ListSkillsTool, ListToolsTool};
 pub use memory::{MemoryEntry, MemoryStore, MemoryTool};
 pub use multimodal::MultimodalAnalyzeTool;

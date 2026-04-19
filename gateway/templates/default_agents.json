@@ -1,6 +1,6 @@
 [
   {
-    "name": "code-agent",
+    "name": "builder-agent",
     "displayName": "Code Agent",
     "description": "Specialized in code generation, review, debugging, and software engineering tasks.",
     "agentType": "specialist",
@@ -9,16 +9,7 @@
     "skills": [],
     "mcps": []
   },
-  {
-    "name": "data-analyst",
-    "displayName": "Data Analyst",
-    "description": "Specialized in data analysis, visualization, statistical analysis, and creating insights from datasets.",
-    "agentType": "specialist",
-    "temperature": 0.3,
-    "maxTokens": 100000,
-    "skills": ["duckduckgo-search", "light-panda-browser", "playwright", "spreadsheet"],
-    "mcps": ["sequential-thinking"]
-  },
+
   {
     "name": "planner-agent",
     "displayName": "Planner",
@@ -39,26 +30,8 @@
     "skills": ["duckduckgo-search", "light-panda-browser", "playwright"],
     "mcps": ["Brave Search"]
   },
-  {
-    "name": "summarizer",
-    "displayName": "Summarizer",
-    "description": "Specialized in condensing long outputs, extracting key points, and creating concise summaries from detailed content.",
-    "agentType": "specialist",
-    "temperature": 0.3,
-    "maxTokens": 100000,
-    "skills": ["duckduckgo-search", "light-panda-browser"],
-    "mcps": []
-  },
-  {
-    "name": "tutor-agent",
-    "displayName": "Tutor Agent",
-    "description": "Specialized in educational explanations, step-by-step guidance, and breaking down complex concepts into understandable pieces.",
-    "agentType": "specialist",
-    "temperature": 0.5,
-    "maxTokens": 50000,
-    "skills": ["duckduckgo-search", "light-panda-browser", "playwright"],
-    "mcps": []
-  },
+
+
   {
     "name": "writing-agent",
     "displayName": "Writing Agent",

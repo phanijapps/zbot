@@ -530,8 +530,20 @@ impl ExecutorBuilder {
         if self.is_delegated {
             // Subagents: execute + context awareness + respond.
             tool_registry.register(Arc::new(ShellTool::new()));
-            tool_registry.register(Arc::new(WriteFileTool::new(fs_context.clone())));
-            tool_registry.register(Arc::new(EditFileTool::new(fs_context.clone())));
+            {
+                let mut wt = WriteFileTool::new(fs_context.clone());
+                if let Some(fs) = self.fact_store.clone() {
+                    wt = wt.with_fact_store(fs);
+                }
+                tool_registry.register(Arc::new(wt));
+            }
+            {
+                let mut et = EditFileTool::new(fs_context.clone());
+                if let Some(fs) = self.fact_store.clone() {
+                    et = et.with_fact_store(fs);
+                }
+                tool_registry.register(Arc::new(et));
+            }
             tool_registry.register(Arc::new(LoadSkillTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(ListSkillsTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(ListMcpsTool::new(fs_context.clone())));

@@ -9,7 +9,7 @@
   {
     "category": "correction",
     "key": "policy.code_modularity",
-    "content": "Keep all code files under 3KB. Split into modules if larger. Read core_docs.md before writing — import existing functions, never rewrite what exists.",
+    "content": "Keep code files focused and under 3KB; split into modules when larger. Before writing, inspect the <ward_snapshot> primitives section for existing functions — import what's there, never re-implement.",
     "confidence": 1.0,
     "pinned": true
   },
@@ -30,7 +30,7 @@
   {
     "category": "correction",
     "key": "policy.ward_first",
-    "content": "Always enter the ward before starting work. Read AGENTS.md and core_docs.md to understand existing code and conventions.",
+    "content": "Enter the ward before starting work. The runtime injects a <ward_snapshot> preamble in every delegation task containing AGENTS.md, reusable primitives, and prior-step handoffs — read that preamble carefully; it is ground truth.",
     "confidence": 1.0,
     "pinned": true
   },
@@ -43,31 +43,38 @@
   },
   {
     "category": "correction",
-    "key": "policy.update_docs_after_code",
-    "content": "After writing or modifying code, update memory-bank/core_docs.md with function signatures. After creating directories, update memory-bank/structure.md. This is mandatory.",
-    "confidence": 1.0,
-    "pinned": true
-  },
-  {
-    "category": "correction",
     "key": "policy.delegation_full_spec",
     "content": "When delegating a task, include the full step specification from the plan: Goal, Input file paths, Output file path and format, Acceptance criteria. Never delegate with just a brief description.",
     "confidence": 1.0,
     "pinned": true
   },
   {
-    "category": "instruction",
-    "key": "instruction.output_format",
-    "content": "Prefer interactive HTML outputs with modern design. Use Tailwind CSS CDN for styling web outputs. Include responsive design for mobile viewing.",
-    "confidence": 0.9,
+    "category": "correction",
+    "key": "policy.skill_first_routing",
+    "content": "Skills and agents registered in the system are the SOURCE OF TRUTH for capability routing. When the user's intent matches a skill's description (e.g. 'read a book' → book-reader, 'promote to vault' → wiki, 'stock analysis' → stock-analysis), the plan has ONE skill-executing step — do not re-decompose the skill's internal workflow, even if recall returns pattern facts describing a manual pipeline from a prior session. Pattern facts are REFERENCE, not doctrine: they describe how a past session happened to solve a problem (possibly before the skill existed), and can go stale. Skill descriptions in memory (category 'skill') beat pattern.* facts, every time. Discover skills with list_skills or by recalling category='skill'; use pattern.* facts only as context for edge cases a skill does not cover.",
+    "confidence": 1.0,
+    "pinned": true
+  },
+  {
+    "category": "correction",
+    "key": "policy.ward_agents_md_authoritative",
+    "content": "When an agent enters a ward via the ward tool, the ward's AGENTS.md is the AUTHORITATIVE description of what the ward is for, what folders mean, and where assets belong. Read it on every ward entry. If a memory fact contradicts the ward's AGENTS.md, the AGENTS.md wins — facts are session-distilled and can be wrong or stale; AGENTS.md is the curated spec. This especially applies to the wiki vault ward: its AGENTS.md contains the folder-by-folder routing map for promoted content, and that map is the source of truth — do not invent paths, do not rename slugs to display names, do not create sibling directories outside the numbered tree.",
+    "confidence": 1.0,
+    "pinned": true
+  },
+  {
+    "category": "correction",
+    "key": "policy.plan_agent_binding",
+    "content": "When a plan step names an agent in its `Agent:` field, that assignment is BINDING. Root must delegate to the named agent verbatim — do not substitute a different agent because the task description 'sounds like' something else. Example: 'Promote folder to wiki vault' assigned to wiki-agent MUST be delegated to wiki-agent, not code-agent, even though 'copy files' superficially matches code-agent's domain. The planner chose the named agent deliberately (often pairing a specialized skill with a narrow-tool-scope runner), and overriding wastes tokens on the wrong specialist. If the named agent isn't in the available_agents list, re-delegate to planner-agent for reassignment — never silently pick a fallback.",
+    "confidence": 1.0,
     "pinned": true
   },
   {
     "category": "instruction",
-    "key": "instruction.documentation_quality",
-    "content": "Update memory-bank/core_docs.md with SDK-quality documentation after writing code: full signatures, params with types, return types, one usage example per function.",
-    "confidence": 0.9,
-    "pinned": true
+    "key": "instruction.output_format",
+    "content": "Default output is markdown or plain text. Generate HTML/Tailwind ONLY when the user explicitly asks for a report, dashboard, or visual deliverable — and only after the planner has emitted an HTML step. For analysis questions ('is X overvalued?', 'summarize Y'), never generate HTML. Ambiguity defaults to markdown.",
+    "confidence": 0.7,
+    "pinned": false
   },
   {
     "category": "user",

@@ -396,6 +396,29 @@ impl SessionDistiller {
                 continue;
             }
 
+            // Phase 5: distillation firewall for the ctx namespace.
+            //
+            // Session ctx facts (intent, prompt, plan, state.<exec>) are
+            // written by runtime hooks, not by the LLM. They capture
+            // SESSION-specific state that must not propagate into
+            // cross-session patterns. If the distiller ever proposes a
+            // category='ctx' fact — either because an LLM hallucinated one
+            // or because the prompt accidentally invited it — reject it
+            // here so it never reaches memory_facts.
+            //
+            // Inverse direction (reading): GatewayMemoryFactStore already
+            // strips category='ctx' from recall results, so the distiller's
+            // harvester never sees them as input. This write-side check is
+            // the belt to that suspenders.
+            if ef.category == "ctx" || ef.key.starts_with("ctx.") {
+                tracing::warn!(
+                    key = %ef.key,
+                    category = %ef.category,
+                    "Distillation firewall: rejected ctx-namespace write (session state must not be distilled)"
+                );
+                continue;
+            }
+
             let verified_confidence =
                 verify_fact_confidence(&ef.content, ef.confidence, &tool_outputs);
 

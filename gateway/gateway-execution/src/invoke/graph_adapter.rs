@@ -8,7 +8,48 @@ use std::sync::Arc;
 
 use agent_tools::{EntityInfo, GraphStorageAccess, NeighborInfo};
 use async_trait::async_trait;
-use knowledge_graph::{Direction, GraphService, GraphStorage, GraphView};
+use knowledge_graph::{Direction, Entity, GraphService, GraphStorage, GraphView, Relationship};
+
+/// Map `knowledge_graph::Entity` to the tool-facing [`EntityInfo`] WITHOUT
+/// dropping fields. `properties` is round-tripped as JSON so everything the
+/// ingest payload wrote (aliases, chunk-file refs, evidence, roles, dates)
+/// reaches the agent.
+fn entity_to_info(e: Entity) -> EntityInfo {
+    let properties = serde_json::to_value(&e.properties).unwrap_or_else(|_| serde_json::json!({}));
+    EntityInfo {
+        id: e.id,
+        name: e.name,
+        entity_type: e.entity_type.as_str().to_string(),
+        mention_count: e.mention_count,
+        properties,
+        first_seen_at: e.first_seen_at.to_rfc3339(),
+        last_seen_at: e.last_seen_at.to_rfc3339(),
+    }
+}
+
+/// Same for relationships — carry the edge's own `properties` (evidence,
+/// confidence, development timeline) through to the tool payload.
+fn neighbor_to_info(
+    entity: Entity,
+    relationship: Relationship,
+    direction: Direction,
+) -> NeighborInfo {
+    let dir_str = match direction {
+        Direction::Outgoing => "outgoing",
+        Direction::Incoming => "incoming",
+        Direction::Both => "both",
+    };
+    let rel_properties =
+        serde_json::to_value(&relationship.properties).unwrap_or_else(|_| serde_json::json!({}));
+    NeighborInfo {
+        entity: entity_to_info(entity),
+        relationship_type: relationship.relationship_type.as_str().to_string(),
+        direction: dir_str.to_string(),
+        rel_properties,
+        rel_first_seen_at: relationship.first_seen_at.to_rfc3339(),
+        rel_last_seen_at: relationship.last_seen_at.to_rfc3339(),
+    }
+}
 
 /// Adapter that implements [`GraphStorageAccess`] by delegating to a
 /// [`GraphStorage`] instance.
@@ -49,11 +90,7 @@ impl GraphStorageAccess for GraphStorageAdapter {
                     .unwrap_or(true)
             })
             .take(limit)
-            .map(|e| EntityInfo {
-                name: e.name,
-                entity_type: e.entity_type.as_str().to_string(),
-                mention_count: e.mention_count,
-            })
+            .map(entity_to_info)
             .collect();
 
         Ok(results)
@@ -81,11 +118,7 @@ impl GraphStorageAccess for GraphStorageAdapter {
                     .unwrap_or(true)
             })
             .take(limit)
-            .map(|e| EntityInfo {
-                name: e.name,
-                entity_type: e.entity_type.as_str().to_string(),
-                mention_count: e.mention_count,
-            })
+            .map(entity_to_info)
             .collect())
     }
 
@@ -118,22 +151,7 @@ impl GraphStorageAccess for GraphStorageAdapter {
 
         Ok(neighbors
             .into_iter()
-            .map(|n| {
-                let dir_str = match n.direction {
-                    Direction::Outgoing => "outgoing",
-                    Direction::Incoming => "incoming",
-                    Direction::Both => "both",
-                };
-                NeighborInfo {
-                    entity: EntityInfo {
-                        name: n.entity.name,
-                        entity_type: n.entity.entity_type.as_str().to_string(),
-                        mention_count: n.entity.mention_count,
-                    },
-                    relationship_type: n.relationship.relationship_type.as_str().to_string(),
-                    direction: dir_str.to_string(),
-                }
-            })
+            .map(|n| neighbor_to_info(n.entity, n.relationship, n.direction))
             .collect())
     }
 
@@ -143,10 +161,6 @@ impl GraphStorageAccess for GraphStorageAdapter {
             .get_entity_by_name(GLOBAL_AGENT_ID, name)
             .map_err(|e| format!("entity lookup failed: {e}"))?;
 
-        Ok(entity.map(|e| EntityInfo {
-            name: e.name,
-            entity_type: e.entity_type.as_str().to_string(),
-            mention_count: e.mention_count,
-        }))
+        Ok(entity.map(entity_to_info))
     }
 }

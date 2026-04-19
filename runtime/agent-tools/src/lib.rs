@@ -24,7 +24,7 @@ pub use tools::{
     GraphQueryTool,
     GraphStorageAccess,
     GrepTool,
-    // Ingestion tool (enqueue text for background extraction)
+    // Ingestion tool (enqueue text for background extraction + bulk structured)
     IngestTool,
     IngestionAccess,
     // Composite re-exports
@@ -43,6 +43,9 @@ pub use tools::{
     SetSessionTitleTool,
     // Individual tools for lean subagent registries
     ShellTool,
+    StructuredCounts,
+    StructuredEntity,
+    StructuredRelationship,
     ToolSettings,
     UpdatePlanTool,
     // Orchestrator tools

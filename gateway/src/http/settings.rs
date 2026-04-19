@@ -343,6 +343,7 @@ impl UpdateExecutionSettingsRequest {
 
             // Runtime state (preserved from existing settings)
             chat: existing.chat.clone(),
+            wiki: existing.wiki.clone(),
         }
     }
 }

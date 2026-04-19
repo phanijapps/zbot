@@ -1676,6 +1676,36 @@ fn resolve_via_resolver(
 
 /// Merge a candidate entity into an existing one: add alias, bump mention_count,
 /// update last_seen_at.
+/// Merge `patch` into `base` recursively:
+/// - Objects are key-merged (patch keys overwrite base keys of same name).
+/// - Arrays are concatenated, preserving insertion order and dropping exact
+///   duplicates — critical for evidence lists that grow across sources.
+/// - Scalars and mismatched types: patch wins.
+pub(crate) fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
+    match (base, patch) {
+        (serde_json::Value::Object(b), serde_json::Value::Object(p)) => {
+            for (k, v) in p {
+                match b.get_mut(k) {
+                    Some(bv) => merge_json_value(bv, v),
+                    None => {
+                        b.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        (serde_json::Value::Array(b), serde_json::Value::Array(p)) => {
+            for item in p {
+                if !b.contains(item) {
+                    b.push(item.clone());
+                }
+            }
+        }
+        (base_slot, patch_val) => {
+            *base_slot = patch_val.clone();
+        }
+    }
+}
+
 fn merge_into_existing(
     conn: &Connection,
     existing_id: &str,
@@ -1698,13 +1728,32 @@ fn merge_into_existing(
     )
     .map_err(GraphError::Database)?;
 
-    // Bump mention_count + last_seen_at on the winner.
+    // Merge candidate.properties INTO the existing row's properties so nothing
+    // is lost across sources. A biography supplying `{founded: "1976"}` and a
+    // later stock analysis supplying `{industry: "tech"}` must produce
+    // `{founded: "1976", industry: "tech"}`, not either alone.
+    let existing_props_json: String = conn
+        .query_row(
+            "SELECT properties FROM kg_entities WHERE id = ?1",
+            params![existing_id],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| "{}".to_string());
+    let mut existing_props: serde_json::Value =
+        serde_json::from_str(&existing_props_json).unwrap_or(serde_json::json!({}));
+    let candidate_props =
+        serde_json::to_value(&candidate.properties).unwrap_or(serde_json::json!({}));
+    merge_json_value(&mut existing_props, &candidate_props);
+    let merged_json = serde_json::to_string(&existing_props).unwrap_or_else(|_| "{}".to_string());
+
+    // Bump mention_count + last_seen_at on the winner, write merged properties.
     conn.execute(
         "UPDATE kg_entities
          SET mention_count = mention_count + 1,
-             last_seen_at = ?1
-         WHERE id = ?2",
-        params![chrono::Utc::now().to_rfc3339(), existing_id],
+             last_seen_at = ?1,
+             properties = ?2
+         WHERE id = ?3",
+        params![chrono::Utc::now().to_rfc3339(), merged_json, existing_id],
     )
     .map_err(GraphError::Database)?;
     Ok(())
@@ -1770,6 +1819,26 @@ fn store_entity(conn: &Connection, agent_id: &str, entity: Entity) -> GraphResul
         norm_name.hash(&mut h);
         format!("{:x}", h.finish())
     };
+
+    // If the caller supplied an explicit id that matches an existing row, we
+    // need to merge properties instead of overwriting them. Read + merge here
+    // so the INSERT ... ON CONFLICT DO UPDATE writes the merged blob.
+    let props_to_store: String = match conn.query_row(
+        "SELECT properties FROM kg_entities WHERE id = ?1",
+        params![new_id],
+        |row| row.get::<_, String>(0),
+    ) {
+        Ok(existing_json) => {
+            let mut existing: serde_json::Value =
+                serde_json::from_str(&existing_json).unwrap_or(serde_json::json!({}));
+            let patch: serde_json::Value =
+                serde_json::from_str(&properties_json).unwrap_or(serde_json::json!({}));
+            merge_json_value(&mut existing, &patch);
+            serde_json::to_string(&existing).unwrap_or(properties_json.clone())
+        }
+        Err(_) => properties_json.clone(),
+    };
+
     conn.execute(
         "INSERT INTO kg_entities (id, agent_id, entity_type, name, normalized_name, normalized_hash, properties, first_seen_at, last_seen_at, mention_count)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
@@ -1784,7 +1853,7 @@ fn store_entity(conn: &Connection, agent_id: &str, entity: Entity) -> GraphResul
             entity.name,
             norm_name,
             norm_hash,
-            properties_json,
+            props_to_store,
             entity.first_seen_at.to_rfc3339(),
             entity.last_seen_at.to_rfc3339(),
             entity.mention_count,
@@ -1906,6 +1975,30 @@ fn store_relationship(
     let properties_json =
         serde_json::to_string(&relationship.properties).unwrap_or_else(|_| "".to_string());
 
+    // Merge properties if a relationship with the same (source, target, type)
+    // already exists. Evidence arrays in particular grow across sources and
+    // must concatenate, not replace.
+    let props_to_store: String = match conn.query_row(
+        "SELECT properties FROM kg_relationships
+         WHERE source_entity_id = ?1 AND target_entity_id = ?2 AND relationship_type = ?3",
+        params![
+            relationship.source_entity_id,
+            relationship.target_entity_id,
+            rel_type_str
+        ],
+        |row| row.get::<_, String>(0),
+    ) {
+        Ok(existing_json) => {
+            let mut existing: serde_json::Value =
+                serde_json::from_str(&existing_json).unwrap_or(serde_json::json!({}));
+            let patch: serde_json::Value =
+                serde_json::from_str(&properties_json).unwrap_or(serde_json::json!({}));
+            merge_json_value(&mut existing, &patch);
+            serde_json::to_string(&existing).unwrap_or(properties_json.clone())
+        }
+        Err(_) => properties_json.clone(),
+    };
+
     conn.execute(
         "INSERT INTO kg_relationships (id, agent_id, source_entity_id, target_entity_id, relationship_type, properties, first_seen_at, last_seen_at, mention_count)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
@@ -1919,7 +2012,7 @@ fn store_relationship(
             relationship.source_entity_id,
             relationship.target_entity_id,
             rel_type_str,
-            properties_json,
+            props_to_store,
             relationship.first_seen_at.to_rfc3339(),
             relationship.last_seen_at.to_rfc3339(),
             relationship.mention_count,
@@ -1938,6 +2031,44 @@ mod tests {
     use super::*;
     use crate::types::{EntityType, RelationshipType};
     use tempfile::tempdir;
+
+    #[test]
+    fn merge_json_value_adds_new_keys() {
+        let mut base = serde_json::json!({"a": 1});
+        let patch = serde_json::json!({"b": 2});
+        merge_json_value(&mut base, &patch);
+        assert_eq!(base, serde_json::json!({"a": 1, "b": 2}));
+    }
+
+    #[test]
+    fn merge_json_value_arrays_concat_dedupe() {
+        let mut base = serde_json::json!({"evidence": [{"chunk": "a"}]});
+        let patch = serde_json::json!({"evidence": [{"chunk": "b"}, {"chunk": "a"}]});
+        merge_json_value(&mut base, &patch);
+        assert_eq!(
+            base,
+            serde_json::json!({"evidence": [{"chunk": "a"}, {"chunk": "b"}]})
+        );
+    }
+
+    #[test]
+    fn merge_json_value_nested_objects_merge_recursively() {
+        let mut base = serde_json::json!({"meta": {"founded": "1976"}});
+        let patch = serde_json::json!({"meta": {"industry": "tech"}});
+        merge_json_value(&mut base, &patch);
+        assert_eq!(
+            base,
+            serde_json::json!({"meta": {"founded": "1976", "industry": "tech"}})
+        );
+    }
+
+    #[test]
+    fn merge_json_value_scalar_newer_wins() {
+        let mut base = serde_json::json!({"status": "draft"});
+        let patch = serde_json::json!({"status": "final"});
+        merge_json_value(&mut base, &patch);
+        assert_eq!(base, serde_json::json!({"status": "final"}));
+    }
 
     fn create_test_storage() -> GraphStorage {
         let dir = tempdir().unwrap();

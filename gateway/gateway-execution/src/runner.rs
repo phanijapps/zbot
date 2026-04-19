@@ -1818,6 +1818,24 @@ impl ExecutionRunner {
                                         })
                                         .await;
 
+                                    // Phase 2b: populate session ctx with the intent-analyzer's
+                                    // decision + verbatim user prompt. Subagents spawned later
+                                    // can fetch these via memory(get_fact, key="ctx.<sid>.intent")
+                                    // without re-reading the original message.
+                                    if let Some(ref fs) = fact_store_for_indexing {
+                                        let ward = analysis.ward_recommendation.ward_name.as_str();
+                                        let intent_json = serde_json::to_value(&analysis)
+                                            .unwrap_or(serde_json::Value::Null);
+                                        crate::session_ctx::writer::intent_snapshot(
+                                            fs,
+                                            session_id,
+                                            ward,
+                                            &intent_json,
+                                            msg,
+                                        )
+                                        .await;
+                                    }
+
                                     // Log for session replay
                                     if let Ok(meta) = serde_json::to_value(&analysis) {
                                         let log_entry = api_logs::ExecutionLog::new(
@@ -2204,6 +2222,10 @@ async fn invoke_continuation(
                 embedding_client.clone(),
             )) as Arc<dyn zero_core::MemoryFactStore>
         });
+    // Clone for session-ctx plan_snapshot below — the builder moves the
+    // primary Arc, so we keep a separate handle to write plan text to
+    // ctx.<sid>.plan on continuations that load a plan.md.
+    let fact_store_for_ctx = fact_store.clone();
     if let Some(fs) = fact_store {
         builder = builder.with_fact_store(fs);
     }
@@ -2299,6 +2321,14 @@ async fn invoke_continuation(
         });
 
         if let Some(plan) = plan_hint {
+            // Phase 2b: also populate session ctx with the plan so
+            // subagents can fetch it via memory(get_fact, key="ctx.<sid>.plan")
+            // instead of re-reading the specs file each turn.
+            if let (Some(ref fs), Some(ref ward)) =
+                (fact_store_for_ctx.as_ref(), session_ward_id.as_ref())
+            {
+                crate::session_ctx::writer::plan_snapshot(fs, session_id, ward, &plan).await;
+            }
             format!(
                 "[DELEGATION COMPLETED. YOUR PLAN IS BELOW.\n\
                  DO NOT read files. DO NOT analyze. DO NOT use shell.\n\

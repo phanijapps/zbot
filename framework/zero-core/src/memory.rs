@@ -55,4 +55,81 @@ pub trait MemoryFactStore: Send + Sync {
     ) -> Result<Value, String> {
         self.recall_facts(agent_id, query, limit).await
     }
+
+    /// Exact-key lookup in the session-scoped ctx namespace.
+    ///
+    /// Returns the single row matching the ctx key, or `None` if absent.
+    /// Unlike `recall_facts`, this is a precise lookup — no ranking, no
+    /// fuzzy match. Used by subagents to fetch canonical session state
+    /// (intent, prompt, plan, state.<exec_id>) by exact key.
+    ///
+    /// Default implementation returns `Ok(None)` for stores that don't
+    /// support ctx storage.
+    async fn get_ctx_fact(
+        &self,
+        _ward_id: &str,
+        _key: &str,
+    ) -> Result<Option<Value>, String> {
+        Ok(None)
+    }
+
+    /// Save a ctx-namespaced fact for the current session.
+    ///
+    /// Ctx facts use a fixed schema: `category='ctx'`, `scope='session'`,
+    /// `agent_id='__ctx__'` (sentinel — not tied to any single agent),
+    /// and the caller-supplied `ward_id` + `key`. The `owner` argument
+    /// identifies who wrote the fact: `"root"` for session-canonical
+    /// content (intent, prompt, plan) or `"subagent:<exec_id>"` for a
+    /// subagent's handoff state.
+    ///
+    /// This method does NOT perform permission checks — those happen at
+    /// the tool layer where the runtime knows if the caller is delegated.
+    /// Ctx facts are excluded from fuzzy recall by default.
+    ///
+    /// Default implementation returns an error for stores that don't
+    /// support ctx storage.
+    async fn save_ctx_fact(
+        &self,
+        _session_id: &str,
+        _ward_id: &str,
+        _key: &str,
+        _content: &str,
+        _owner: &str,
+        _pinned: bool,
+    ) -> Result<Value, String> {
+        Err("ctx storage not implemented for this store".to_string())
+    }
+
+    /// Upsert a ward-scoped primitive (function signature) extracted
+    /// from a source file by the runtime's AST hook.
+    ///
+    /// Fixed schema: `category='primitive'`, `scope='global'`,
+    /// `agent_id='__ward__'` (sentinel), caller-supplied `ward_id` +
+    /// `key` (conventionally `primitive.<relative_path>.<symbol>`).
+    /// `signature` is the one-line call form; `summary` is the first
+    /// line of the function's docstring.
+    ///
+    /// Idempotent: re-extraction of the same symbol upserts in place.
+    /// Ctx writes are cheap (no embedding generated) — primitives are
+    /// queried by key + ward prefix, not by fuzzy similarity.
+    ///
+    /// Default implementation returns an error for stores that don't
+    /// implement primitive storage.
+    async fn upsert_primitive(
+        &self,
+        _ward_id: &str,
+        _key: &str,
+        _signature: &str,
+        _summary: &str,
+    ) -> Result<Value, String> {
+        Err("primitive storage not implemented for this store".to_string())
+    }
+
+    /// List all primitives for a ward, grouped for ward-snapshot rendering.
+    ///
+    /// Returns an array of {key, signature, summary} ordered by key.
+    /// Default implementation returns an empty array.
+    async fn list_primitives(&self, _ward_id: &str) -> Result<Value, String> {
+        Ok(serde_json::json!({ "primitives": [] }))
+    }
 }

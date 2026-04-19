@@ -389,15 +389,20 @@ impl AppState {
         };
 
         // Build agent-tool adapters so runner can register `ingest` + `goal` tools.
+        // The adapter needs graph_storage so the structured-ingest path can
+        // call `store_knowledge` directly without going through LLM extraction.
         let ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>> =
-            ingestion_queue.as_ref().map(|q| {
-                Arc::new(
+            match (ingestion_queue.as_ref(), runner_graph_storage.as_ref()) {
+                (Some(q), Some(gs)) => Some(Arc::new(
                     gateway_execution::invoke::ingest_adapter::IngestionAdapter::new(
                         q.clone(),
                         kg_episode_repo.clone(),
+                        gs.clone(),
                     ),
-                ) as Arc<dyn agent_tools::IngestionAccess>
-            });
+                )
+                    as Arc<dyn agent_tools::IngestionAccess>),
+                _ => None,
+            };
         let goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>> = Some(Arc::new(
             gateway_execution::invoke::goal_adapter::GoalAdapter::new(goal_repo.clone()),
         )
@@ -1047,7 +1052,13 @@ impl AppState {
         self.populate_workspace_cache().await;
     }
 
-    /// Create the wards directory with scratch ward.
+    /// Create the wards directory with scratch ward + wiki vault ward.
+    ///
+    /// The wiki ward is the Obsidian vault — it receives promoted content
+    /// from producer-skill runs (book-reader, research archetypes) via the
+    /// `wiki` skill. Its name is configurable via `settings.json →
+    /// execution.wiki.wardName` (default `"wiki"`). We seed it at startup so
+    /// delegated subagents (which cannot create wards) can just `use` it.
     fn ensure_wards_dir(&self) {
         let wards_dir = self.config_dir.join("wards");
         let scratch_dir = wards_dir.join("scratch");
@@ -1062,6 +1073,121 @@ impl AppState {
                 );
             }
         }
+
+        let wiki_name = self
+            .settings
+            .load()
+            .ok()
+            .map(|s| s.execution.wiki.ward_name)
+            .unwrap_or_else(|| "wiki".to_string());
+
+        self.ensure_wiki_ward(&wards_dir, &wiki_name);
+    }
+
+    /// Create the wiki vault ward with canonical Obsidian tree + AGENTS.md marker.
+    ///
+    /// Idempotent — existing content is preserved. The marker
+    /// `<!-- obsidian-vault -->` in AGENTS.md lets the `wiki` skill discover
+    /// this ward via `ward(action="list")` regardless of the configured name.
+    fn ensure_wiki_ward(&self, wards_dir: &std::path::Path, wiki_name: &str) {
+        let wiki_dir = wards_dir.join(wiki_name);
+        if let Err(e) = std::fs::create_dir_all(&wiki_dir) {
+            tracing::warn!("Failed to create wiki ward directory: {}", e);
+            return;
+        }
+
+        // Canonical Obsidian vault top-level folders.
+        let vault_folders = [
+            "00_Inbox",
+            "10_Journal/Daily",
+            "10_Journal/Weekly",
+            "20_Projects",
+            "30_Library/Books",
+            "30_Library/Articles",
+            "40_Research",
+            "50_Resources",
+            "60_Archive",
+            "70_Assets/Knowledge_Graphs",
+            "70_Assets/Images",
+            "70_Assets/Documents",
+            "_zztemplates",
+        ];
+        for folder in vault_folders {
+            let _ = std::fs::create_dir_all(wiki_dir.join(folder));
+        }
+
+        // Seed AGENTS.md with the discovery marker and the full routing map.
+        // This file is the source of truth for where content belongs — agents
+        // that enter this ward read it on entry and follow it exactly.
+        //
+        // Re-seed on every startup IF the existing content starts with our
+        // `<!-- obsidian-vault -->` marker (i.e. we wrote it previously, not
+        // the user). This lets template updates flow through on gateway
+        // restart without preserving a user-hand-edited file.
+        let agents_md = wiki_dir.join("AGENTS.md");
+        let should_seed = match std::fs::read_to_string(&agents_md) {
+            Ok(existing) => existing.starts_with("<!-- obsidian-vault -->"),
+            Err(_) => true, // missing → seed
+        };
+        if should_seed {
+            let content = format!(
+                "<!-- obsidian-vault -->\n\
+                 # {wiki_name}\n\n\
+                 ## Purpose\n\
+                 Obsidian-style vault. Producer skills (book-reader, stock-analysis, news-research, …) emit vault-ready folders in their origin ward; the `wiki` skill promotes them here. **This AGENTS.md is the authoritative routing map.** If a memory fact contradicts it, this file wins.\n\n\
+                 ## Folder map — what goes where\n\n\
+                 | Vault path | What lives here | Producer source |\n\
+                 | --- | --- | --- |\n\
+                 | `00_Inbox/` | Unclassified items awaiting manual sorting. Never delete; the user reviews periodically. | Anything that fails classification |\n\
+                 | `10_Journal/Daily/` | One `YYYY-MM-DD.md` per day. | Journal skill (future) |\n\
+                 | `10_Journal/Weekly/` | One `YYYY-Www.md` per ISO week. | Journal skill (future) |\n\
+                 | `20_Projects/<project>/` | Agent-produced final project reports and deliverables. One folder per project. | `reports/<project>/` in origin ward |\n\
+                 | `30_Library/Books/<slug>/` | A book as `_index.md` + `chunks/ch-NN.md` + `entities/<type>-<slug>.md`. `<slug>` is kebab-case from the title (strip leading articles). | `books/<slug>/` in origin ward (book-reader) |\n\
+                 | `30_Library/Articles/<slug>/` | An article as `_index.md` (+ optional supporting files). `<slug>` is kebab-case from the title. | `articles/<slug>/` in origin ward (article-reader) |\n\
+                 | `40_Research/<archetype>/<subject>/<date-slug>/` | Research snapshots. `<archetype>` is the producer skill name (`stock-analysis`, `news-research`, `product-research`, `competitive-analysis`, `academic-research`, `market-research`, `technical-research`, `policy-research`). `<subject>` is kebab-case. `<date-slug>` is ISO date with optional suffix. | `research/<archetype>/<subject>/<date-slug>/` |\n\
+                 | `50_Resources/` | Durable reference material the user curates. | Manual only — `wiki` skill does not write here. |\n\
+                 | `60_Archive/` | Superseded or retired content. Move here manually when an item is no longer current. | Manual only. |\n\
+                 | `70_Assets/Knowledge_Graphs/` | KG exports (DB dumps) if generated by a separate tool. | Reserved — `wiki` does not write here. |\n\
+                 | `70_Assets/Images/` | Loose images from any ward. Renamed `<ward>__<basename>` on copy to avoid collisions. | `**/*.{{png,jpg,jpeg,svg,gif,webp}}` in origin ward |\n\
+                 | `70_Assets/Documents/` | Loose PDFs from any ward. Renamed `<ward>__<basename>` on copy. | `**/*.pdf` in origin ward |\n\
+                 | `_zztemplates/` | Obsidian note templates the user maintains. | Manual only — the skill never writes or reads here. |\n\n\
+                 ## Slug rules (the #1 failure mode)\n\n\
+                 Folder names under `30_Library/Books/`, `30_Library/Articles/`, `40_Research/<archetype>/`, `20_Projects/` are always **kebab-case slugs**, never display titles:\n\n\
+                 - `30_Library/Books/christmas-carol/` ✅  not `30_Library/Books/A Christmas Carol/` ❌\n\
+                 - `30_Library/Books/pride-and-prejudice/` ✅  not `30_Library/Books/Pride and Prejudice/` ❌\n\
+                 - `40_Research/stock-analysis/tsla/2026-04-16-q1/` ✅  not `40_Research/Stock Analysis/TSLA Q1 2026/` ❌\n\n\
+                 The display title lives in `_index.md` frontmatter (`title:`) and in wikilink aliases (`[[slug|Display Title]]`). The filesystem always uses the slug.\n\n\
+                 ## Routing contract for the wiki skill\n\n\
+                 The skill performs **whole-folder copy** with absolute paths, no content rewriting. For each producer folder in the origin ward:\n\n\
+                 1. Compute source path: `SRC=<origin-ward>/<producer-folder>` (e.g. `<origin>/books/christmas-carol/`).\n\
+                 2. Compute destination path per the folder map above: `DEST=<wiki-ward>/<vault-path>/<slug>/`.\n\
+                 3. Copy `cp -a \"$SRC\" \"$DEST\"`. Preserve timestamps; preserve names; preserve nested structure.\n\
+                 4. If the source doesn't match any rule, route to `00_Inbox/<relative-path>` — do NOT guess a category.\n\n\
+                 ## Hard don'ts\n\n\
+                 - Do NOT invent folders outside the numbered tree (`Literature/`, `StockResearch/`, `Books/`, etc. are WRONG — use the numbered paths).\n\
+                 - Do NOT use display-case folder names with spaces or capitals.\n\
+                 - Do NOT rewrite frontmatter, wikilinks, or markdown during the copy — producer skills own the content shape.\n\
+                 - Do NOT delete from the origin ward.\n\
+                 - Do NOT write into `50_Resources/`, `60_Archive/`, `_zztemplates/`, or `70_Assets/Knowledge_Graphs/` — those are user-managed or reserved.\n\
+                 - Do NOT run code, fetch data, or do research in this ward. It is content-only.\n\
+                 - Do NOT edit promoted files outside their `<!-- manual -->` blocks — the skill overwrites on re-promotion.\n\n\
+                 ## Discovery marker\n\n\
+                 The first line of this file (`<!-- obsidian-vault -->`) is the marker the wiki skill uses to find this ward via `ward(action=\"list\")`. Do not remove it.\n"
+            );
+            let _ = std::fs::write(&agents_md, content);
+        }
+
+        // Seed memory-bank/ scaffold so the ward matches the standard shape.
+        let memory_bank = wiki_dir.join("memory-bank");
+        let _ = std::fs::create_dir_all(&memory_bank);
+        for file in ["ward.md", "structure.md", "core_docs.md"] {
+            let path = memory_bank.join(file);
+            if !path.exists() {
+                let _ = std::fs::write(&path, "");
+            }
+        }
+
+        tracing::info!("Wiki vault ward ready at {}", wiki_dir.display());
     }
 
     /// Populate the in-memory workspace cache from workspace.json.

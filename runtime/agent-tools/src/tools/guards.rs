@@ -66,3 +66,10 @@ fn dir_has_placeholder_spec(dir: &std::path::Path) -> bool {
     }
     false
 }
+
+// The AGENTS.md write gate (reject_agents_md_from_subagent /
+// check_agents_md_write_gate) was removed in the four-agent redesign:
+// solution-agent owns architecture + AGENTS.md authoring, and it runs as a
+// delegated subagent. Blocking subagent writes to AGENTS.md would block
+// solution-agent's core responsibility. Root is no longer the exclusive
+// writer of ward doctrine; any agent the plan assigns Step 0 to is.

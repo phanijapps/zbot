@@ -9,18 +9,28 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use zero_core::{FileSystemContext, Result, Tool, ToolContext, ZeroError};
+use zero_core::{FileSystemContext, MemoryFactStore, Result, Tool, ToolContext, ZeroError};
 
 use super::apply_patch::resolve_ward_cwd;
+use super::ast_hook;
 
 /// Tool that performs find-and-replace edits on existing files.
 pub struct EditFileTool {
     fs: Arc<dyn FileSystemContext>,
+    fact_store: Option<Arc<dyn MemoryFactStore>>,
 }
 
 impl EditFileTool {
     pub fn new(fs: Arc<dyn FileSystemContext>) -> Self {
-        Self { fs }
+        Self { fs, fact_store: None }
+    }
+
+    /// Attach a fact store so the AST post-hook can upsert primitives
+    /// after successful edits to supported-language source files.
+    #[must_use]
+    pub fn with_fact_store(mut self, fact_store: Arc<dyn MemoryFactStore>) -> Self {
+        self.fact_store = Some(fact_store);
+        self
     }
 }
 
@@ -160,6 +170,21 @@ impl Tool for EditFileTool {
             .map_err(|e| ZeroError::Tool(format!("Failed to write {}: {}", path, e)))?;
 
         tracing::debug!("edit_file: replaced unique match in {}", path);
+
+        // Post-hook: AST extract primitives so the next subagent sees
+        // the updated signatures. Fire-and-forget, .py files only.
+        if let Some(fs) = self.fact_store.clone() {
+            if let Some(ward_id) = ctx
+                .get_state("ward_id")
+                .and_then(|v| v.as_str().map(String::from))
+            {
+                let abs = full_path.clone();
+                let rel = path.to_string();
+                tokio::spawn(async move {
+                    ast_hook::run(&ward_id, &abs, &rel, &fs).await;
+                });
+            }
+        }
 
         Ok(json!({
             "success": true,

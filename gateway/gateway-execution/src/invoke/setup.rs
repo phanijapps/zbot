@@ -395,9 +395,17 @@ pub fn append_system_context(
         .map(|f| String::from_utf8_lossy(&f.data).to_string())
         .unwrap_or_default();
 
+    // Session-ctx shard — teaches every subagent how to read shared session
+    // state via memory(get_fact, key="ctx.<sid>.<field>"). Same static text
+    // for every subagent, so the provider's prompt cache keeps it warm.
+    // Phase 4a of the session-ctx bundle.
+    let ctx_shard = gateway_templates::Templates::get("shards/session_ctx.md")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .unwrap_or_default();
+
     format!(
-        "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}\n\n{}{}",
-        instructions, os_context, memory_shard, curation_shard, rules
+        "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}\n\n{}\n\n{}{}",
+        instructions, os_context, memory_shard, curation_shard, ctx_shard, rules
     )
 }
 
@@ -413,7 +421,17 @@ fn build_specialist_instructions(agent_id: &str, paths: &SharedVaultPaths) -> St
         .map(|f| String::from_utf8_lossy(&f.data).to_string())
         .unwrap_or_default();
 
-    format!("{}\n\n{}\n\n{}", role_preamble, os_context, tooling)
+    // Session-ctx shard — auto-created specialists need to know how to
+    // read shared session state too. Keep the shard identical to what
+    // pre-configured agents get via append_system_context.
+    let ctx_shard = gateway_templates::Templates::get("shards/session_ctx.md")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .unwrap_or_default();
+
+    format!(
+        "{}\n\n{}\n\n{}\n\n{}",
+        role_preamble, os_context, tooling, ctx_shard
+    )
 }
 
 /// Generate a role-specific preamble based on the agent name.

@@ -11,6 +11,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use zero_core::{Result, Tool, ToolContext, ZeroError};
@@ -19,21 +20,44 @@ use zero_core::{Result, Tool, ToolContext, ZeroError};
 // DATA TYPES
 // ============================================================================
 
-/// Minimal entity information returned by graph queries.
-#[derive(Debug, Clone)]
+/// Rich entity payload — carries everything an agent needs to reason about an
+/// entity without a follow-up query: the canonical id, the full free-form
+/// `properties` blob (aliases, evidence, location refs, roles, dates — the
+/// domain-specific content the ingest tool placed here), and temporal metadata.
+///
+/// The JSON serialization is what reaches the LLM. Fields map one-to-one onto
+/// the `kg_entities` columns the storage layer already hydrates into
+/// `knowledge_graph::Entity`.
+#[derive(Debug, Clone, Serialize)]
 pub struct EntityInfo {
+    /// Canonical stable id — the dedup key. Same id across sources collapses
+    /// to one node, so reading this tells the agent it's looking at THE
+    /// Steve Jobs, not a second one.
+    pub id: String,
     pub name: String,
     pub entity_type: String,
     pub mention_count: i64,
+    /// Free-form property map — aliases, roles, descriptions, chunk-file
+    /// pointers, evidence, dates, anything the ingest payload carried.
+    pub properties: Value,
+    /// ISO-8601 timestamps.
+    pub first_seen_at: String,
+    pub last_seen_at: String,
 }
 
-/// A neighbor entity with the relationship connecting it.
-#[derive(Debug, Clone)]
+/// A neighbor entity with the edge connecting it. Carries the same rich
+/// entity payload as [`EntityInfo`], plus the edge's own free-form properties
+/// (evidence chunks per relationship, confidence, development timeline, etc.).
+#[derive(Debug, Clone, Serialize)]
 pub struct NeighborInfo {
     pub entity: EntityInfo,
     pub relationship_type: String,
     /// "outgoing" or "incoming"
     pub direction: String,
+    /// Edge-level property map — evidence, confidence, direction, etc.
+    pub rel_properties: Value,
+    pub rel_first_seen_at: String,
+    pub rel_last_seen_at: String,
 }
 
 // ============================================================================
@@ -208,7 +232,9 @@ impl GraphQueryTool {
 
         if entities.is_empty() {
             return Ok(json!({
-                "result": format!("No entities found matching \"{}\".", query)
+                "summary": format!("No entities found matching \"{}\".", query),
+                "count": 0,
+                "entities": []
             }));
         }
 
@@ -216,12 +242,19 @@ impl GraphQueryTool {
         for e in &entities {
             let _ = writeln!(
                 md,
-                "- **{}** ({}): mentions={}",
-                e.name, e.entity_type, e.mention_count
+                "- **{}** [{}] ({}) — mentions={}",
+                e.name, e.id, e.entity_type, e.mention_count
             );
         }
 
-        Ok(json!({ "result": md, "count": entities.len() }))
+        // Structured payload carries the rich fields (id, properties, timestamps)
+        // so the agent doesn't need a follow-up query to read aliases, chunk
+        // pointers, evidence, etc. `summary` is the human-glance one-liner.
+        Ok(json!({
+            "summary": md,
+            "count": entities.len(),
+            "entities": entities,
+        }))
     }
 
     async fn handle_neighbors(&self, args: &Value, limit: usize) -> Result<Value> {
@@ -252,13 +285,16 @@ impl GraphQueryTool {
 
         let Some(entity) = entity else {
             return Ok(json!({
-                "result": format!("Entity \"{}\" not found in the knowledge graph.", entity_name)
+                "summary": format!("Entity \"{}\" not found in the knowledge graph.", entity_name),
+                "entity": null,
+                "neighbors": [],
+                "count": 0
             }));
         };
 
         let mut md = format!(
-            "## Neighbors of \"{}\" ({})\n",
-            entity.name, entity.entity_type
+            "## Neighbors of \"{}\" [{}] ({})\n",
+            entity.name, entity.id, entity.entity_type
         );
 
         // Depth-1 neighbors
@@ -270,7 +306,12 @@ impl GraphQueryTool {
 
         if neighbors.is_empty() {
             let _ = writeln!(md, "No relationships found.");
-            return Ok(json!({ "result": md, "count": 0 }));
+            return Ok(json!({
+                "summary": md,
+                "entity": entity,
+                "neighbors": [],
+                "count": 0
+            }));
         }
 
         Self::append_neighbors(&mut md, &neighbors, 1);
@@ -282,7 +323,15 @@ impl GraphQueryTool {
         }
 
         let count = neighbors.len();
-        Ok(json!({ "result": md, "count": count }))
+        // Structured payload: the focal entity + every neighbor with full
+        // properties, relationship properties, and timestamps. Agent can read
+        // chunk_file pointers, evidence arrays, aliases directly.
+        Ok(json!({
+            "summary": md,
+            "entity": entity,
+            "neighbors": neighbors,
+            "count": count
+        }))
     }
 
     fn append_neighbors(md: &mut String, neighbors: &[NeighborInfo], depth: usize) {
@@ -347,7 +396,10 @@ impl GraphQueryTool {
 
         if entities.is_empty() {
             return Ok(json!({
-                "result": format!("No context found for topic \"{}\".", topic)
+                "summary": format!("No context found for topic \"{}\".", topic),
+                "count": 0,
+                "entities": [],
+                "relationships": []
             }));
         }
 
@@ -355,14 +407,16 @@ impl GraphQueryTool {
         for e in &entities {
             let _ = writeln!(
                 md,
-                "- **{}** ({}): mentions={}",
-                e.name, e.entity_type, e.mention_count
+                "- **{}** [{}] ({}) — mentions={}",
+                e.name, e.id, e.entity_type, e.mention_count
             );
         }
 
-        // Gather relationships for found entities (limit expansion)
+        // Gather relationships for found entities (limit expansion) and also
+        // accumulate them structurally so the agent has chunk-file pointers,
+        // evidence, etc., not just a markdown blurb.
         let _ = writeln!(md, "\n### Relationships");
-        let mut has_relationships = false;
+        let mut rel_rows: Vec<NeighborInfo> = Vec::new();
         for e in entities.iter().take(5) {
             let neighbors = self
                 .storage
@@ -370,7 +424,6 @@ impl GraphQueryTool {
                 .await
                 .map_err(|err| ZeroError::Tool(format!("Context neighbors failed: {err}")))?;
             for n in &neighbors {
-                has_relationships = true;
                 let arrow = if n.direction == "outgoing" {
                     "-->"
                 } else {
@@ -382,13 +435,19 @@ impl GraphQueryTool {
                     e.name, arrow, n.entity.name, n.relationship_type
                 );
             }
+            rel_rows.extend(neighbors);
         }
 
-        if !has_relationships {
+        if rel_rows.is_empty() {
             let _ = writeln!(md, "No relationships found.");
         }
 
-        Ok(json!({ "result": md, "count": entities.len() }))
+        Ok(json!({
+            "summary": md,
+            "count": entities.len(),
+            "entities": entities,
+            "relationships": rel_rows,
+        }))
     }
 }
 
@@ -410,41 +469,57 @@ mod tests {
 
     impl MockGraphStorage {
         fn sample() -> Self {
-            let entities = vec![
-                EntityInfo {
-                    name: "yfinance".to_string(),
-                    entity_type: "module".to_string(),
-                    mention_count: 5,
-                },
-                EntityInfo {
-                    name: "rate_limiting".to_string(),
-                    entity_type: "concept".to_string(),
-                    mention_count: 3,
-                },
-                EntityInfo {
-                    name: "pandas".to_string(),
-                    entity_type: "module".to_string(),
-                    mention_count: 8,
-                },
-            ];
+            // Sample data carries realistic rich `properties` so tests verify
+            // the tool preserves ingest-written content (aliases, chunk file
+            // pointers, evidence) through the full pipeline.
+            let now = "2026-04-16T12:00:00Z".to_string();
+            let yfinance = EntityInfo {
+                id: "module:yfinance".into(),
+                name: "yfinance".into(),
+                entity_type: "module".into(),
+                mention_count: 5,
+                properties: serde_json::json!({
+                    "aliases": ["yf"],
+                    "description": "Python library for stock data",
+                }),
+                first_seen_at: now.clone(),
+                last_seen_at: now.clone(),
+            };
+            let rate_limiting = EntityInfo {
+                id: "concept:rate-limiting".into(),
+                name: "rate_limiting".into(),
+                entity_type: "concept".into(),
+                mention_count: 3,
+                properties: serde_json::json!({}),
+                first_seen_at: now.clone(),
+                last_seen_at: now.clone(),
+            };
+            let pandas = EntityInfo {
+                id: "module:pandas".into(),
+                name: "pandas".into(),
+                entity_type: "module".into(),
+                mention_count: 8,
+                properties: serde_json::json!({"aliases": ["pd"]}),
+                first_seen_at: now.clone(),
+                last_seen_at: now.clone(),
+            };
+            let entities = vec![yfinance.clone(), rate_limiting.clone(), pandas.clone()];
             let neighbors = vec![
                 NeighborInfo {
-                    entity: EntityInfo {
-                        name: "rate_limiting".to_string(),
-                        entity_type: "concept".to_string(),
-                        mention_count: 3,
-                    },
-                    relationship_type: "requires".to_string(),
-                    direction: "outgoing".to_string(),
+                    entity: rate_limiting,
+                    relationship_type: "requires".into(),
+                    direction: "outgoing".into(),
+                    rel_properties: serde_json::json!({"confidence": 0.9}),
+                    rel_first_seen_at: now.clone(),
+                    rel_last_seen_at: now.clone(),
                 },
                 NeighborInfo {
-                    entity: EntityInfo {
-                        name: "pandas".to_string(),
-                        entity_type: "module".to_string(),
-                        mention_count: 8,
-                    },
-                    relationship_type: "depends_on".to_string(),
-                    direction: "outgoing".to_string(),
+                    entity: pandas,
+                    relationship_type: "depends_on".into(),
+                    direction: "outgoing".into(),
+                    rel_properties: serde_json::json!({"evidence": [{"chunk_file": "chunks/ch-01.json", "line": 42}]}),
+                    rel_first_seen_at: now.clone(),
+                    rel_last_seen_at: now.clone(),
                 },
             ];
             Self {
@@ -566,7 +641,7 @@ mod tests {
             .execute(make_ctx(), json!({"action": "search", "query": "yfinance"}))
             .await
             .unwrap();
-        let text = result["result"].as_str().unwrap();
+        let text = result["summary"].as_str().unwrap();
         assert!(text.contains("yfinance"));
         assert!(text.contains("module"));
         assert_eq!(result["count"], 1);
@@ -582,7 +657,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let text = result["result"].as_str().unwrap();
+        let text = result["summary"].as_str().unwrap();
         assert!(text.contains("No entities found"));
     }
 
@@ -596,7 +671,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let text = result["result"].as_str().unwrap();
+        let text = result["summary"].as_str().unwrap();
         assert!(text.contains("rate_limiting"));
         assert!(!text.contains("yfinance"));
     }
@@ -611,7 +686,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let text = result["result"].as_str().unwrap();
+        let text = result["summary"].as_str().unwrap();
         assert!(text.contains("rate_limiting"));
         assert!(text.contains("requires"));
         assert!(text.contains("-->"));
@@ -627,7 +702,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let text = result["result"].as_str().unwrap();
+        let text = result["summary"].as_str().unwrap();
         assert!(text.contains("not found"));
     }
 
@@ -638,7 +713,7 @@ mod tests {
             .execute(make_ctx(), json!({"action": "context", "query": "finance"}))
             .await
             .unwrap();
-        let text = result["result"].as_str().unwrap();
+        let text = result["summary"].as_str().unwrap();
         assert!(text.contains("Context for"));
         assert!(text.contains("yfinance"));
         assert!(text.contains("Relationships"));
@@ -651,7 +726,7 @@ mod tests {
             .execute(make_ctx(), json!({"action": "context", "query": "nothing"}))
             .await
             .unwrap();
-        let text = result["result"].as_str().unwrap();
+        let text = result["summary"].as_str().unwrap();
         assert!(text.contains("No context found"));
     }
 
@@ -662,5 +737,55 @@ mod tests {
             .execute(make_ctx(), json!({"action": "bad_action"}))
             .await;
         assert!(result.is_err());
+    }
+
+    /// The point of the richness fix: ingest writes `properties` with
+    /// chunk-file pointers, aliases, evidence; the agent reads all of that
+    /// back through graph_query without a follow-up call. This test proves
+    /// the round-trip for both entity and neighbor/relationship properties.
+    #[tokio::test]
+    async fn search_payload_carries_rich_properties() {
+        let tool = GraphQueryTool::new(Arc::new(MockGraphStorage::sample()));
+        let result = tool
+            .execute(make_ctx(), json!({"action": "search", "query": "yfinance"}))
+            .await
+            .unwrap();
+        let entities = result["entities"].as_array().expect("entities array");
+        assert_eq!(entities.len(), 1);
+        let e = &entities[0];
+        assert_eq!(e["id"], "module:yfinance");
+        assert_eq!(e["name"], "yfinance");
+        assert_eq!(e["properties"]["aliases"][0], "yf");
+        assert_eq!(
+            e["properties"]["description"],
+            "Python library for stock data"
+        );
+        assert!(e["first_seen_at"].is_string());
+    }
+
+    #[tokio::test]
+    async fn neighbors_payload_carries_edge_evidence() {
+        let tool = GraphQueryTool::new(Arc::new(MockGraphStorage::sample()));
+        let result = tool
+            .execute(
+                make_ctx(),
+                json!({"action": "neighbors", "entity_name": "yfinance"}),
+            )
+            .await
+            .unwrap();
+        let ns = result["neighbors"].as_array().expect("neighbors array");
+        // The sample mock returns both neighbors for any entity lookup.
+        assert_eq!(ns.len(), 2);
+        let pandas_edge = ns
+            .iter()
+            .find(|n| n["entity"]["id"] == "module:pandas")
+            .expect("pandas neighbor present");
+        assert_eq!(pandas_edge["relationship_type"], "depends_on");
+        assert_eq!(
+            pandas_edge["rel_properties"]["evidence"][0]["chunk_file"],
+            "chunks/ch-01.json"
+        );
+        assert_eq!(pandas_edge["rel_properties"]["evidence"][0]["line"], 42);
+        assert!(pandas_edge["rel_first_seen_at"].is_string());
     }
 }

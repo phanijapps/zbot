@@ -384,6 +384,21 @@ pub async fn spawn_delegated_agent(
         handles_guard.insert(child_conversation_id.clone(), handle.clone());
     }
 
+    // Build a fact_store handle for the post-execution state_handoff hook.
+    // Kept separate from the executor's fact_store (already moved into the
+    // builder) — this one only drives session_ctx writes, not the executor.
+    let fact_store_for_ctx: Option<Arc<dyn zero_core::MemoryFactStore>> =
+        memory_repo.as_ref().map(|repo| {
+            Arc::new(gateway_database::GatewayMemoryFactStore::new(
+                repo.clone(),
+                embedding_client.clone(),
+            )) as Arc<dyn zero_core::MemoryFactStore>
+        });
+
+    // Phase 7: pass a MemoryRepository handle through so spawn_execution_task
+    // can query ctx.state.* rows when building the ward_snapshot preamble.
+    let memory_repo_for_snapshot = memory_repo.clone();
+
     // Spawn the execution task
     spawn_execution_task(
         executor,
@@ -402,6 +417,8 @@ pub async fn spawn_delegated_agent(
         paths,
         delegation_permit,
         initial_history,
+        fact_store_for_ctx,
+        memory_repo_for_snapshot,
     );
 
     tracing::info!(
@@ -416,6 +433,47 @@ pub async fn spawn_delegated_agent(
 
 #[allow(clippy::too_many_arguments)]
 /// Spawn the async execution task for the delegated agent.
+#[allow(clippy::too_many_arguments)]
+/// Return the `<reuse_check>` imperative for coding-capable agents.
+///
+/// Injected at the top of the task prompt (above the ward_snapshot)
+/// for agents that write or modify code. The block uses concrete ✓/✗
+/// examples because anchored patterns steer LLMs more reliably than
+/// abstract policy text. Sonnet 4.6 complies with this style at >95%
+/// in our evals; weaker models need the validation loop too.
+fn reuse_check_block(agent_id: &str) -> Option<&'static str> {
+    let writes_code = matches!(
+        agent_id,
+        "code-agent" | "data-analyst"
+    );
+    if !writes_code {
+        return None;
+    }
+    Some(
+        "<reuse_check>\n\
+         Before writing ANY code:\n\
+         1. Read the <ward_snapshot> below. If it contains a Conventions block, follow it exactly — it declares this ward's language, module_root (where reusable code lives), import_syntax, and signature_registry. Do not improvise a different layout.\n\
+         2. Inspect the Primitives section. Every listed symbol is importable from the ward's module_root. Plan your imports against them.\n\
+         3. Emit a reuse_audit block in your first action or respond() message, in this exact shape:\n\
+         \n\
+           reuse_audit:\n\
+             looking_for: <symbols you need>\n\
+             found:       <subset already listed in Primitives — will import via import_syntax>\n\
+             missing:     <subset not listed — will add to module_root/ and register in signature_registry>\n\
+             plan:        <one-sentence import+implement sequence>\n\
+         \n\
+         4. THEN write code. Imports use the Conventions' import_syntax. New primitives go under module_root/ (at the WARD ROOT, never inside the task directory) and get appended to signature_registry.\n\
+         \n\
+         ✓ CORRECT: Import a listed primitive via the ward's import_syntax; call it with new args.\n\
+         ✓ CORRECT: Extend a primitive to accept a new argument (parameterize in place, don't fork a near-copy under a new name).\n\
+         ✓ CORRECT: Add a genuinely new primitive to module_root/, register it, then import from the task script.\n\
+         ✗ WRONG: Writing a parallel copy of a listed primitive under a different name (e.g. `goog-dcf-model.py` when `core/valuation.py::dcf_valuation(...)` is listed).\n\
+         ✗ WRONG: Putting reusable code inside the task directory (`<task>/core/`, `<task>/lib/`). Reusable code is ward-level per Conventions.\n\
+         ✗ WRONG: Writing code without emitting the reuse_audit block first — that's guessing, not reusing.\n\
+         </reuse_check>"
+    )
+}
+
 fn spawn_execution_task(
     executor: AgentExecutor,
     handle: ExecutionHandle,
@@ -433,9 +491,62 @@ fn spawn_execution_task(
     paths: SharedVaultPaths,
     delegation_permit: Option<OwnedSemaphorePermit>,
     initial_history: Vec<ChatMessage>,
+    fact_store_for_ctx: Option<Arc<dyn zero_core::MemoryFactStore>>,
+    memory_repo_for_snapshot: Option<Arc<gateway_database::MemoryRepository>>,
 ) {
     let agent_id = request.child_agent_id.clone();
-    let task_msg = request.task.clone();
+
+    // Phase 4b + 7: build the task prefix layers.
+    //
+    // Outer layer (Phase 7): <ward_snapshot> block with AGENTS.md,
+    // memory-bank/ward.md, memory-bank/core_docs.md, memory-bank/structure.md
+    // read fresh from disk, plus the recent state.<exec_id> handoffs from
+    // this session's ctx. Push model — the subagent sees what exists in
+    // the ward without having to query.
+    //
+    // Inner layer (Phase 4b): <session_ctx ... /> tag with sid + tool
+    // hint so the subagent can fetch more ctx fields on demand.
+    //
+    // Ward lookup is cheap (single-row query via ConversationRepository)
+    // and falls back to "__global__" if the ward can't be resolved.
+    let ward_for_preamble = conversation_repo
+        .get_session_ward_id(&session_id)
+        .ok()
+        .flatten();
+
+    // Step 1 of 2: session_ctx tag (always emitted, tiny)
+    let with_ctx_tag = crate::session_ctx::preamble::prepend_to_task(
+        &session_id,
+        ward_for_preamble.as_deref(),
+        None, // step position — plumbed in a follow-up
+        None,
+        &[], // prior_states — plumbed in a follow-up
+        &request.task,
+    );
+
+    // Step 2: ward_snapshot block (prepended if a real ward is active)
+    let with_snapshot = if let Some(ref ward) = ward_for_preamble {
+        crate::session_ctx::snapshot::prepend_to_task(
+            ward,
+            &session_id,
+            &paths.wards_dir(),
+            memory_repo_for_snapshot.as_ref(),
+            &with_ctx_tag,
+        )
+    } else {
+        with_ctx_tag
+    };
+
+    // Step 3: reuse_check imperative for coding-capable agents.
+    // Placed at the very top of the prompt so the LLM reads it before
+    // any other context. Concrete ✓/✗ examples anchor the behavior —
+    // stronger than free-text policy recall.
+    let task_msg = if let Some(block) = reuse_check_block(&request.child_agent_id) {
+        format!("{}\n\n{}", block, with_snapshot)
+    } else {
+        with_snapshot
+    };
+
     let parent_agent = request.parent_agent_id.clone();
     let parent_execution_id = request.parent_execution_id.clone();
 
@@ -595,6 +706,7 @@ fn spawn_execution_task(
                     &accumulated_response,
                     &parent_agent,
                     &parent_execution_id,
+                    fact_store_for_ctx.as_ref(),
                 )
                 .await;
             }
@@ -636,6 +748,7 @@ fn spawn_execution_task(
 
 /// Handle successful execution completion.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 async fn handle_execution_success(
     conversation_repo: &ConversationRepository,
     state_service: &StateService<DatabaseManager>,
@@ -649,6 +762,7 @@ async fn handle_execution_success(
     response: &str,
     parent_agent: &str,
     parent_execution_id: &str,
+    fact_store_for_ctx: Option<&Arc<dyn zero_core::MemoryFactStore>>,
 ) {
     // Messages already streamed to child session during execution
 
@@ -725,6 +839,32 @@ async fn handle_execution_success(
         response,
     )
     .await;
+
+    // Phase 2b: write a state_handoff fact so the next subagent in this
+    // session can fetch this one's summary by exact key. We look up the
+    // session's ward so the ctx row is stored per-ward (matches plan +
+    // intent snapshots). Fire-and-forget — a failed write logs a warning
+    // but never disrupts delegation completion.
+    if let Some(fs) = fact_store_for_ctx {
+        let ward_id = conversation_repo
+            .get_session_ward_id(session_id)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "__global__".to_string());
+        crate::session_ctx::writer::state_handoff(
+            fs,
+            session_id,
+            &ward_id,
+            execution_id,
+            agent_id,
+            None, // step number not known at this call site
+            chrono::Utc::now(),
+            response, // the subagent's respond() payload becomes the summary
+            &[],      // artifacts extraction deferred — subagent responds may
+                      // include them in future revisions
+        )
+        .await;
+    }
 
     // Remove from delegation registry
     delegation_registry.remove(execution_id);
