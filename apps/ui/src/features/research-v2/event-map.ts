@@ -21,8 +21,9 @@ function previewArgs(args: Record<string, unknown>): string {
 }
 
 function previewResult(result: unknown): string {
-  const s = typeof result === "string" ? result : JSON.stringify(result ?? "");
-  if (typeof s !== "string") return "";
+  // `JSON.stringify` can return `undefined` for circular refs — coerce to "" in that case.
+  const raw = typeof result === "string" ? result : JSON.stringify(result ?? "");
+  const s = typeof raw === "string" ? raw : "";
   return s.length <= RESULT_PREVIEW_LIMIT ? s : s.slice(0, RESULT_PREVIEW_LIMIT - 1) + "…";
 }
 
