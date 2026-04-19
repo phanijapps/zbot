@@ -16,7 +16,7 @@ function makeTurn(overrides: Partial<AgentTurn>): AgentTurn {
     respond: null,
     respondStreaming: "",
     thinkingExpanded: false,
-    errorMessage: null,
+    errorMessage: null, request: null,
     ...overrides,
   };
 }

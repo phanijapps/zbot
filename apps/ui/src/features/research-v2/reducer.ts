@@ -34,6 +34,8 @@ export type ResearchAction =
       parentExecutionId: string | null;
       wardId: string | null;
       startedAt: number;
+      /** Optional — populated when this event came from delegation_started. */
+      request?: string | null;
     }
   | { type: "AGENT_COMPLETED"; turnId: string; completedAt: number }
   | { type: "AGENT_STOPPED"; turnId: string; completedAt: number }
@@ -72,6 +74,7 @@ function ensureTurn(
     completedAt: null,
     status: "running",
     wardId: seed?.wardId ?? state.wardId,
+    request: seed?.request ?? null,
     timeline: [],
     tokenCount: 0,
     respond: null,
@@ -135,6 +138,7 @@ function handleAgentStarted(
     parentExecutionId: action.parentExecutionId,
     startedAt: action.startedAt,
     wardId: wardForTurn,
+    request: action.request ?? null,
   });
 }
 

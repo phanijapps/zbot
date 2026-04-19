@@ -36,6 +36,12 @@ export interface AgentTurn {
   status: AgentTurnStatus;
   /** Ward at the time this turn started (sticky — see WARD_CHANGED handling). */
   wardId: string | null;
+  /**
+   * Delegation task the parent gave this subagent (from
+   * `delegation_started.task`). Null on root turns. Rendered as the
+   * "Request:" header on subagent cards.
+   */
+  request: string | null;
   timeline: TimelineEntry[];
   tokenCount: number;
   /** Final respond() content (markdown). Null until Respond event arrives. */

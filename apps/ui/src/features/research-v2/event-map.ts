@@ -64,6 +64,7 @@ function mapDelegationStarted(e: Record<string, unknown>, now: number): Research
   const childExec = e["child_execution_id"];
   const parentExec = e["parent_execution_id"];
   const childAgent = e["child_agent_id"];
+  const task = e["task"];
   if (typeof childExec !== "string" || childExec.length === 0) return null;
   return {
     type: "AGENT_STARTED",
@@ -72,6 +73,7 @@ function mapDelegationStarted(e: Record<string, unknown>, now: number): Research
     parentExecutionId: typeof parentExec === "string" ? parentExec : null,
     wardId: null,
     startedAt: now,
+    request: typeof task === "string" ? task : null,
   };
 }
 

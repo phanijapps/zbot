@@ -309,12 +309,78 @@
   font-style: italic;
 }
 
-.agent-turn-block__thinking-footer {
-  margin-top: 8px;
-  font-size: 11px;
-  opacity: 0.65;
+/* --- Root block: nested subagent cards ---------------------------------- */
+
+.root-turn__subagents {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
 }
-.agent-turn-block__thinking-footer:hover {
+
+/* --- Subagent cards (request + response) --------------------------------- */
+
+.subagent-card {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--background-surface);
+  border: 1px solid var(--border);
+  position: relative;
+}
+.subagent-card-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.subagent-card-tree__nested {
+  margin-left: var(--turn-indent);
+  padding-left: 12px;
+  border-left: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--turn-gap);
+  margin-top: 6px;
+}
+.subagent-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.subagent-card__agent {
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+}
+.subagent-card__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+}
+.subagent-card__section {
+  margin-top: 6px;
+}
+.subagent-card__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted-foreground);
+  margin-bottom: 2px;
+}
+.subagent-card__text {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--foreground);
+}
+.subagent-card .research-msg__copy {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  opacity: 0;
+}
+.subagent-card:hover .research-msg__copy {
   opacity: 1;
 }
 

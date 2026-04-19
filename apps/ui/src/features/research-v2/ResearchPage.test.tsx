@@ -272,11 +272,11 @@ describe("<ResearchPage>", () => {
     expect(screen.getByText(/analyzing intent/i)).toBeTruthy();
   });
 
-  it("renders nested subagent turns under their parent (depth 0 → 1 → 2)", () => {
+  it("renders nested subagent cards under their parent (depth 0 → 1 → 2)", () => {
     const now = 1000;
     const root = {
       id: "root-1",
-      agentId: "planner",
+      agentId: "root",
       parentExecutionId: null,
       startedAt: now,
       completedAt: now + 100,
@@ -287,23 +287,25 @@ describe("<ResearchPage>", () => {
       respond: "root body",
       respondStreaming: "",
       thinkingExpanded: false,
-      errorMessage: null,
+      errorMessage: null, request: null,
     };
     const child = {
       ...root,
       id: "child-1",
-      agentId: "solution",
+      agentId: "planner-agent",
       parentExecutionId: "root-1",
       startedAt: now + 200,
       respond: "child body",
+      request: "Plan this goal.",
     };
     const grandchild = {
       ...root,
       id: "grand-1",
-      agentId: "builder",
+      agentId: "builder-agent",
       parentExecutionId: "child-1",
       startedAt: now + 400,
       respond: "grand body",
+      request: "Run builder step.",
     };
     researchRef.current = {
       ...makeIdleResearch(),
@@ -315,25 +317,19 @@ describe("<ResearchPage>", () => {
     };
     const { container } = renderPage();
 
-    // Root is rendered as a top-level block (data-parent empty).
-    const rootBlock = container.querySelector('.agent-turn-block[data-parent=""]');
-    expect(rootBlock).toBeTruthy();
+    // Root renders as an assistant message (not a bordered turn block).
+    expect(container.querySelector(".research-msg--assistant")).toBeTruthy();
 
-    // The root block contains the nested children container.
-    const nestedContainer = rootBlock?.querySelector(".agent-turn-block__children");
-    expect(nestedContainer).toBeTruthy();
+    // Both subagent cards present, and grand-child is nested under child.
+    const planner = container.querySelector('.subagent-card[data-parent="root-1"]');
+    expect(planner).toBeTruthy();
+    const builder = container.querySelector('.subagent-card[data-parent="child-1"]');
+    expect(builder).toBeTruthy();
 
-    // Inside the nested container, the child block is present…
-    const childBlock = nestedContainer?.querySelector('[data-parent="root-1"]');
-    expect(childBlock).toBeTruthy();
-
-    // …and the child block contains ITS OWN nested container for the grandchild.
-    const grandBlock = childBlock?.querySelector('[data-parent="child-1"]');
-    expect(grandBlock).toBeTruthy();
-
-    // All three agent labels present.
-    const agentLabels = container.querySelectorAll(".agent-turn-block__agent");
-    expect(agentLabels).toHaveLength(3);
+    // All three respond bodies are visible.
+    expect(container.textContent).toContain("root body");
+    expect(container.textContent).toContain("child body");
+    expect(container.textContent).toContain("grand body");
   });
 
   it("shows intent classification line when set", () => {

@@ -2,38 +2,23 @@ import type React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  ChevronRight,
   CheckCircle2,
   Square,
   AlertCircle,
   Loader2,
 } from "lucide-react";
 import type { AgentTurn, AgentTurnStatus } from "./types";
-import { ThinkingTimeline } from "./ThinkingTimeline";
 import { childrenOf } from "./turn-tree";
 import { AgentAvatar, CopyButton } from "./ResearchMessages";
 
 export interface AgentTurnBlockProps {
   turn: AgentTurn;
-  onToggleThinking(turnId: string): void;
-  /**
-   * Direct children of `turn`. Optional — omit for leaf-only rendering.
-   * Callers derive this with `childrenOf(turn, allTurns)`.
-   *
-   * Named `childTurns` (not `children`) to avoid shadowing React's implicit
-   * `children: ReactNode` prop — which would produce cryptic type errors for
-   * anyone writing `<AgentTurnBlock>text</AgentTurnBlock>` and mislead
-   * React DevTools.
-   */
+  /** Kept for API stability; the redesigned layout no longer exposes a
+   *  toggle surface — all tool/thinking events land in the top pill ticker. */
+  onToggleThinking?(turnId: string): void;
+  /** Direct children of `turn`. */
   childTurns?: AgentTurn[];
-  /**
-   * Full flat turn list used to recurse past the first child level.
-   * Choice A (see R14b spec): passing allTurns down keeps the component pure
-   * and the tree shape derived at render. Alternative B (pre-computed nested
-   * children) would push recursion into the parent and make the block
-   * artificially dumb, but would couple parents to grand-children and make
-   * tests brittle. A wins on testability and separation of concerns.
-   */
+  /** Full flat turn list so subagent cards can recurse into grand-children. */
   allTurns?: AgentTurn[];
 }
 
@@ -121,204 +106,152 @@ function RespondBody({ turn }: { turn: AgentTurn }): React.ReactElement {
   return <WaitingPlaceholder />;
 }
 
-interface ThinkingChevronProps {
-  turnId: string;
-  count: number;
-  expanded: boolean;
-  onToggle(turnId: string): void;
-}
-
-function ThinkingChevron({ turnId, count, expanded, onToggle }: ThinkingChevronProps) {
-  const label = `${count} ${count === 1 ? "action" : "actions"}`;
-  return (
-    <button
-      type="button"
-      data-testid={`thinking-chevron-${turnId}`}
-      className="agent-turn-block__chevron"
-      onClick={() => onToggle(turnId)}
-      aria-expanded={expanded}
-    >
-      <ChevronRight
-        size={14}
-        style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}
-      />
-      <span>Thinking ({label})</span>
-    </button>
-  );
-}
-
-interface TurnMetaProps {
-  turn: AgentTurn;
-  color: string;
-}
-
-function AgentLabel({ agentId, color }: { agentId: string; color: string }) {
-  // TODO: pull the root agent's display name from settings when available;
-  // for now the root turn shows the brand icon instead of the raw id "root".
-  if (agentId === "root") {
-    return <AgentAvatar />;
-  }
-  return (
-    <span className="agent-turn-block__agent" style={{ color }}>
-      {agentId}
-    </span>
-  );
-}
-
-function TurnHeader({ turn, color }: TurnMetaProps) {
-  return (
-    <div className="agent-turn-block__header">
-      <AgentLabel agentId={turn.agentId} color={color} />
-      <span className="agent-turn-block__meta">
-        <StatusIcon status={turn.status} />
-        <span>{formatDuration(turn.startedAt, turn.completedAt)}</span>
-        {turn.tokenCount > 0 && <span>{turn.tokenCount}tok</span>}
-        {turn.status === "running" && (
-          <span
-            data-testid="turn-running-badge"
-            className="agent-turn-block__running"
-          >
-            · running
-          </span>
-        )}
-      </span>
-    </div>
-  );
-}
-
 function respondIsStreaming(turn: AgentTurn): boolean {
   return turn.respond === null && turn.respondStreaming.length > 0;
 }
 
 /** What the copy button should copy. Prefer finalized respond, then the
- *  streaming buffer; return null when there's nothing useful (error banner
- *  has its own visible text; placeholder is "waiting…"). */
+ *  streaming buffer; return null when there's nothing useful. */
 function copyableRespondText(turn: AgentTurn): string | null {
   if (turn.respond && turn.respond.length > 0) return turn.respond;
   if (turn.respondStreaming && turn.respondStreaming.length > 0) return turn.respondStreaming;
   return null;
 }
 
-interface NestedChildrenProps {
-  childTurns: AgentTurn[];
-  allTurns: AgentTurn[];
-  onToggleThinking(turnId: string): void;
+/**
+ * Subagent card: Request + Response only, no thinking/tool timeline. All
+ * subagent tool/thinking events surface in the top pill (news ticker). The
+ * card's job is to show "what we asked of this delegate" and "what it came
+ * back with". Running → Request + "waiting…". Completed → Request + Response.
+ */
+interface SubagentCardProps {
+  turn: AgentTurn;
 }
 
-/** Recursively renders child turns indented under their parent. */
-function NestedChildren({ childTurns, allTurns, onToggleThinking }: NestedChildrenProps) {
-  if (childTurns.length === 0) return null;
+function SubagentResponseBody({ turn }: SubagentCardProps): React.ReactElement {
+  if (turn.status === "error" && turn.errorMessage) {
+    return <ErrorBanner message={turn.errorMessage} />;
+  }
+  if (turn.respond) return <RespondMarkdown content={turn.respond} />;
+  if (turn.respondStreaming) return <StreamingBuffer text={turn.respondStreaming} />;
+  if (turn.status === "running") return <WaitingPlaceholder />;
+  return <span className="agent-turn-block__placeholder">(no response)</span>;
+}
+
+function SubagentCard({ turn }: SubagentCardProps) {
+  const color = agentColour(turn.agentId);
+  const respondText = copyableRespondText(turn);
   return (
     <div
-      className="agent-turn-block__children"
-      data-testid="nested-children"
+      className="subagent-card"
+      style={{ borderLeft: `3px solid ${color}` }}
+      data-parent={turn.parentExecutionId ?? ""}
     >
-      {childTurns.map((child) => (
-        <AgentTurnBlock
-          key={child.id}
-          turn={child}
-          onToggleThinking={onToggleThinking}
-          childTurns={childrenOf(child, allTurns)}
-          allTurns={allTurns}
-        />
-      ))}
+      <div className="subagent-card__header">
+        <span className="subagent-card__agent" style={{ color }}>
+          {turn.agentId}
+        </span>
+        <span className="subagent-card__meta">
+          <StatusIcon status={turn.status} />
+          <span>{formatDuration(turn.startedAt, turn.completedAt)}</span>
+        </span>
+      </div>
+      {turn.request && (
+        <div className="subagent-card__section">
+          <div className="subagent-card__label">Request</div>
+          <div className="subagent-card__text">{turn.request}</div>
+        </div>
+      )}
+      <div className="subagent-card__section">
+        <div className="subagent-card__label">Response</div>
+        <div className="subagent-card__text">
+          <SubagentResponseBody turn={turn} />
+        </div>
+      </div>
+      {respondText !== null && (
+        <CopyButton text={respondText} label="Copy response" />
+      )}
     </div>
   );
 }
 
-/** Is this turn done + simple enough to render as a plain assistant message?
- *  Root turns that completed with no children AND no tool/result timeline
- *  collapse to the hydrated-style bubble — no status chrome, no chevron,
- *  no duration badge. Subagent turns always keep their chrome so the user
- *  can see which delegate is talking. */
-function isSimpleCompletedRoot(turn: AgentTurn, childCount: number): boolean {
-  if (turn.agentId !== "root") return false;
-  if (turn.status !== "completed") return false;
-  if (childCount > 0) return false;
-  return true;
+/**
+ * Root block: avatar + nested subagent cards + final respond + copy.
+ * No thinking chevron, no tool timeline — root's thinking/tool_calls surface
+ * only in the top pill ticker. All subagent cards appear here; whether they're
+ * running or complete they render as minimal Request/Response cards.
+ */
+interface RootTurnProps {
+  turn: AgentTurn;
+  childTurns: AgentTurn[];
+  allTurns: AgentTurn[];
+}
+
+function RootTurn({ turn, childTurns, allTurns }: RootTurnProps) {
+  const respondText = copyableRespondText(turn);
+  return (
+    <div
+      className={`research-msg research-msg--assistant${respondIsStreaming(turn) ? " research-msg--streaming" : ""}`}
+      data-parent=""
+    >
+      <AgentAvatar />
+      <div className="research-msg__body">
+        {childTurns.length > 0 && (
+          <div className="root-turn__subagents">
+            {childTurns.map((child) => (
+              <SubagentCardTree key={child.id} turn={child} allTurns={allTurns} />
+            ))}
+          </div>
+        )}
+        <RespondBody turn={turn} />
+      </div>
+      {respondText !== null && (
+        <CopyButton text={respondText} label="Copy response" />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Subagent cards can themselves delegate — render grand-children inside the
+ * card recursively. Kept as a separate component so the root block stays
+ * readable and the recursion is isolated.
+ */
+interface SubagentCardTreeProps {
+  turn: AgentTurn;
+  allTurns: AgentTurn[];
+}
+
+function SubagentCardTree({ turn, allTurns }: SubagentCardTreeProps) {
+  const grandChildren = childrenOf(turn, allTurns);
+  return (
+    <div className="subagent-card-tree">
+      <SubagentCard turn={turn} />
+      {grandChildren.length > 0 && (
+        <div className="subagent-card-tree__nested">
+          {grandChildren.map((gc) => (
+            <SubagentCardTree key={gc.id} turn={gc} allTurns={allTurns} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function AgentTurnBlock({
   turn,
-  onToggleThinking,
   childTurns,
   allTurns,
 }: AgentTurnBlockProps) {
-  const color = agentColour(turn.agentId);
   const childList = childTurns ?? [];
   const fullList = allTurns ?? childList;
 
-  // Simple completed root → render as a clean assistant message like the
-  // hydrated-history path. The thinking timeline stays accessible via the
-  // collapsed chevron rendered below the respond.
-  if (isSimpleCompletedRoot(turn, childList.length)) {
-    const respondText = copyableRespondText(turn);
-    return (
-      <div className="research-msg research-msg--assistant" data-parent={turn.parentExecutionId ?? ""}>
-        <AgentAvatar />
-        <div className="research-msg__body">
-          <RespondBody turn={turn} />
-          {turn.timeline.length > 0 && (
-            <div className="agent-turn-block__thinking-footer">
-              <ThinkingChevron
-                turnId={turn.id}
-                count={turn.timeline.length}
-                expanded={turn.thinkingExpanded}
-                onToggle={onToggleThinking}
-              />
-              {turn.thinkingExpanded && (
-                <div className="agent-turn-block__timeline">
-                  <ThinkingTimeline entries={turn.timeline} />
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-        {respondText !== null && (
-          <CopyButton text={respondText} label="Copy response" />
-        )}
-      </div>
-    );
+  // Root turn → clean assistant layout with nested subagent cards.
+  if (turn.parentExecutionId === null) {
+    return <RootTurn turn={turn} childTurns={childList} allTurns={fullList} />;
   }
 
-  return (
-    <div
-      className="agent-turn-block"
-      style={{ borderLeft: `3px solid ${color}` }}
-      data-parent={turn.parentExecutionId ?? ""}
-    >
-      <TurnHeader turn={turn} color={color} />
-
-      <ThinkingChevron
-        turnId={turn.id}
-        count={turn.timeline.length}
-        expanded={turn.thinkingExpanded}
-        onToggle={onToggleThinking}
-      />
-
-      {turn.thinkingExpanded && (
-        <div className="agent-turn-block__timeline">
-          <ThinkingTimeline entries={turn.timeline} />
-        </div>
-      )}
-
-      <div
-        className={`agent-turn-block__respond research-msg research-msg--assistant${respondIsStreaming(turn) ? " agent-turn-block__respond--streaming" : ""}`}
-      >
-        <AgentAvatar />
-        <div className="research-msg__body">
-          <RespondBody turn={turn} />
-        </div>
-        {copyableRespondText(turn) !== null && (
-          <CopyButton text={copyableRespondText(turn) as string} label="Copy response" />
-        )}
-      </div>
-
-      <NestedChildren
-        childTurns={childList}
-        allTurns={fullList}
-        onToggleThinking={onToggleThinking}
-      />
-    </div>
-  );
+  // Subagent turn rendered standalone (shouldn't normally happen — the root
+  // wraps them — but covers orphan-subagent edge cases).
+  return <SubagentCardTree turn={turn} allTurns={fullList} />;
 }
