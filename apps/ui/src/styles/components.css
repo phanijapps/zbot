@@ -163,6 +163,18 @@
   font-weight: 500;
 }
 
+.nav-link__badge {
+  margin-left: var(--spacing-2);
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(100, 200, 255, 0.18);
+  color: rgb(140, 220, 255);
+}
+
 /* Connection Status */
 .connection-status {
   display: flex;
