@@ -124,9 +124,29 @@ describe("mapGatewayEventToResearchAction", () => {
       .toEqual({ type: "ERROR", message: "boom" });
   });
 
-  it("turn_complete maps (informational; reducer treats as no-op)", () => {
+  it("turn_complete WITHOUT final_message → TURN_COMPLETE (informational)", () => {
     expect(mapGatewayEventToResearchAction({ type: "turn_complete", execution_id: "exec-1" } as any))
       .toEqual({ type: "TURN_COMPLETE", turnId: "exec-1" });
+  });
+
+  it("turn_complete WITH final_message → RESPOND (real answer rides here on the wire)", () => {
+    expect(
+      mapGatewayEventToResearchAction({
+        type: "turn_complete",
+        execution_id: "exec-1",
+        final_message: "4",
+      } as any),
+    ).toEqual({ type: "RESPOND", turnId: "exec-1", text: "4" });
+  });
+
+  it("turn_complete WITH empty final_message falls back to TURN_COMPLETE", () => {
+    expect(
+      mapGatewayEventToResearchAction({
+        type: "turn_complete",
+        execution_id: "exec-1",
+        final_message: "",
+      } as any),
+    ).toEqual({ type: "TURN_COMPLETE", turnId: "exec-1" });
   });
 
   it("agent_completed maps", () => {

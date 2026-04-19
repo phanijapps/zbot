@@ -119,6 +119,22 @@ function mapRespond(e: Record<string, unknown>): ResearchAction | null {
   return { type: "RESPOND", turnId: turnIdOf(e), text };
 }
 
+/**
+ * Gateway's WS handler translates `GatewayEvent::Respond` into
+ * `ServerMessage::TurnComplete { final_message }` (see
+ * gateway/src/websocket/handler.rs:909). So the frontend never receives
+ * a standalone `respond` event — the final answer rides on
+ * `turn_complete.final_message`. Emit RESPOND when present so the turn
+ * renders its answer without a page reload.
+ */
+function mapTurnComplete(e: Record<string, unknown>): ResearchAction {
+  const finalMessage = e["final_message"];
+  if (typeof finalMessage === "string" && finalMessage.length > 0) {
+    return { type: "RESPOND", turnId: turnIdOf(e), text: finalMessage };
+  }
+  return { type: "TURN_COMPLETE", turnId: turnIdOf(e) };
+}
+
 function mapSessionBound(e: Record<string, unknown>): ResearchAction | null {
   const sid = e["session_id"];
   const cid = e["conversation_id"];
@@ -148,7 +164,7 @@ export function mapGatewayEventToResearchAction(ev: ConversationEvent): Research
     case "tool_result":              return mapToolResult(e, now);
     case "token":                    return mapToken(e);
     case "respond":                  return mapRespond(e);
-    case "turn_complete":            return { type: "TURN_COMPLETE", turnId: turnIdOf(e) };
+    case "turn_complete":            return mapTurnComplete(e);
     case "session_title_changed":    return { type: "TITLE_CHANGED", title: (e["title"] as string) ?? "" };
     case "intent_analysis_started":  return { type: "INTENT_ANALYSIS_STARTED" };
     case "intent_analysis_complete": return { type: "INTENT_ANALYSIS_COMPLETE", classification: (e["classification"] as string) ?? "" };

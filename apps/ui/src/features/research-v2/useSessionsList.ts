@@ -24,18 +24,23 @@ function mapStatus(s: string | undefined): SessionSummary["status"] {
 
 // ---------------------------------------------------------------------------
 // Title synthesis
-// The /api/logs/sessions endpoint does not return a user-authored title for
-// every row. We synthesise one from agent name + token/tool counts.
+// The /api/logs/sessions endpoint derives `title` from the first user message;
+// for brand-new sessions that field is still empty. Fall back to a
+// user-friendly "New research · HH:MM" over the started_at timestamp so the
+// drawer never shows raw agent names or token counts.
 // ---------------------------------------------------------------------------
 
+const UNTITLED_LABEL = "New research";
+
+function formatClock(ms: number): string {
+  const d = new Date(ms);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
 function synthTitle(row: LogSession): string {
-  const agent = row.agent_name ?? row.agent_id ?? "unknown";
-  const tokens = row.token_count ?? 0;
-  const tools = row.tool_call_count ?? 0;
-  if (tokens > 0 || tools > 0) {
-    return `${agent} · ${tokens} tok · ${tools} tool`;
-  }
-  return agent;
+  return `${UNTITLED_LABEL} · ${formatClock(parseTimestamp(row.started_at))}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -96,7 +101,15 @@ export function useSessionsList(
       const transport = await getTransport();
       const result = await transport.listLogSessions();
       if (result.success && Array.isArray(result.data)) {
-        const mapped = result.data
+        // Filter out subagent executions — /api/logs/sessions emits one row per
+        // execution, including children (planner/coder/writer). Showing those
+        // in the drawer produces duplicate-looking entries under the same
+        // research question. Only root-level rows (no parent_session_id)
+        // represent user-visible research sessions.
+        const rootRows = result.data.filter(
+          (row) => !row.parent_session_id || row.parent_session_id.length === 0,
+        );
+        const mapped = rootRows
           .map((row) => rowToSummary(row))
           .filter((s): s is SessionSummary => s !== null);
         setSessions(mapped);
