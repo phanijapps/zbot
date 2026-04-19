@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, type Dispatch } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { getTransport } from "@/services/transport";
-import type { Transport } from "@/services/transport";
+import { getTransport, type Transport } from "@/services/transport";
 import type { ConversationEvent, SessionMessage, UnsubscribeFn } from "@/services/transport/types";
 import { useStatusPill, type PillEventSink } from "../shared/statusPill";
 import { type ResearchMessage, EMPTY_RESEARCH_STATE } from "./types";
@@ -9,20 +8,16 @@ import { reduceResearch, type ResearchAction } from "./reducer";
 import { mapGatewayEventToResearchAction, mapGatewayEventToPillEvent } from "./event-map";
 
 const ROOT_AGENT_ID = "root";
-const RESEARCH_MODE: string | undefined = undefined; // executor picks SessionMode::Research
 const HISTORY_TAIL_LIMIT = 50;
+// Client-owned conv_id prefix. Research has no `/api/chat/init`, so the UI
+// mints the id and subscribes to it BEFORE invoke — that ordering is what
+// lets the first token reach the UI (R14a).
 const CONV_ID_PREFIX = "research-";
+// pillSink from useStatusPill() has a stable identity (memoised sink).
+// Omitting from useCallback deps is intentional; closure captures the latest
+// reference. Per-line eslint-disable is still required for the linter.
 
-// Client-owned conv_id. Research has no `/api/chat/init`, so the UI mints
-// the id and subscribes to it BEFORE invoke — that ordering is what lets
-// the first token reach the UI (R14a).
-function generateConvId(): string {
-  return `${CONV_ID_PREFIX}${crypto.randomUUID()}`;
-}
-
-// -------------------------------------------------------------------------
-// Pure helpers
-// -------------------------------------------------------------------------
+// --- Pure helpers ---------------------------------------------------------
 
 function isVisibleResearchMessage(m: SessionMessage): boolean {
   if (m.role === "tool") return false;
@@ -88,12 +83,14 @@ function teardownSubscription(refs: SubscriptionRefs): void {
   refs.unsubscribeRef.current = null;
   refs.subscribedConvIdRef.current = null;
   if (!unsub) return;
-  try { unsub(); } catch { /* transport already gone is fine */ }
+  try {
+    unsub();
+  } catch (err) {
+    console.warn("[research-v2] unsubscribe failed", err);
+  }
 }
 
-// -------------------------------------------------------------------------
-// Hook
-// -------------------------------------------------------------------------
+// --- Hook -----------------------------------------------------------------
 
 export function useResearchSession() {
   const { sessionId: urlSessionId } = useParams<{ sessionId: string }>();
@@ -101,11 +98,9 @@ export function useResearchSession() {
   const [state, dispatch] = useReducer(reduceResearch, EMPTY_RESEARCH_STATE);
   const { state: pillState, sink: pillSink } = useStatusPill();
 
-  // Idempotency for one-shot hydration. Set AFTER async completes so
-  // StrictMode's double-mount doesn't skip dispatch (learnings #6).
+  // Idempotency for one-shot hydration; set AFTER async completes (StrictMode).
   const hydratedForSessionRef = useRef<string | null>(null);
-  // Subscription ownership (R14a): sendMessage owns this, NOT an effect
-  // keyed on state.conversationId (that was the chicken-and-egg bug).
+  // Subscription ownership (R14a): sendMessage owns this, not an effect.
   const subscribedConvIdRef = useRef<string | null>(null);
   const unsubscribeRef = useRef<UnsubscribeFn | null>(null);
 
@@ -121,6 +116,8 @@ export function useResearchSession() {
         dispatch({ type: "ERROR", message: "Failed to load session" });
         return;
       }
+      // TODO: populate title/wardId/wardName/turns/artifacts from /state when the
+      // spurious-404 issue documented in hydrateExistingSession() is fixed.
       dispatch({
         type: "HYDRATE",
         sessionId: urlSessionId,
@@ -136,8 +133,7 @@ export function useResearchSession() {
     })();
   }, [urlSessionId]);
 
-  // --- Subscription cleanup on unmount (StrictMode-safe: no-op if nothing
-  //     is subscribed yet; cleanup captures refs, not their .current). ---
+  // --- Subscription cleanup on unmount (StrictMode-safe). ---
   useEffect(() => {
     const refs: SubscriptionRefs = { subscribedConvIdRef, unsubscribeRef };
     return () => teardownSubscription(refs);
@@ -164,33 +160,38 @@ export function useResearchSession() {
           timestamp: Date.now(),
         },
       });
-      const convId = state.conversationId ?? generateConvId();
+      // Closure read: safe because only SESSION_BOUND (dispatched below) mutates state.conversationId.
+      const convId = state.conversationId ?? `${CONV_ID_PREFIX}${crypto.randomUUID()}`;
       const refs: SubscriptionRefs = { subscribedConvIdRef, unsubscribeRef };
       const onEvent = makeEventHandler(pillSink, dispatch);
-      await ensureSubscription(convId, onEvent, refs);
-      // Pre-invoke SESSION_BOUND seeds state.conversationId. The server's
-      // invoke_accepted SESSION_BOUND re-dispatches with session_id; the
-      // reducer's null-guard preserves whichever id lands first.
-      dispatch({
-        type: "SESSION_BOUND",
-        conversationId: convId,
-        sessionId: state.sessionId,
-      });
-      const transport = await getTransport();
-      const result = await transport.executeAgent(
-        ROOT_AGENT_ID,
-        convId,
-        trimmed,
-        state.sessionId ?? undefined,
-        RESEARCH_MODE
-      );
-      if (!result.success) {
-        dispatch({ type: "ERROR", message: result.error ?? "Failed to send" });
+      try {
+        await ensureSubscription(convId, onEvent, refs);
+        // Pre-invoke SESSION_BOUND seeds state.conversationId. The server's
+        // invoke_accepted SESSION_BOUND re-dispatches with session_id; the
+        // reducer's null-guard preserves whichever id lands first.
+        dispatch({
+          type: "SESSION_BOUND",
+          conversationId: convId,
+          sessionId: state.sessionId,
+        });
+        const transport = await getTransport();
+        const result = await transport.executeAgent(
+          ROOT_AGENT_ID,
+          convId,
+          trimmed,
+          state.sessionId ?? undefined,
+          // mode undefined → executor defaults to SessionMode::Research
+          undefined
+        );
+        if (!result.success) {
+          dispatch({ type: "ERROR", message: result.error ?? "Failed to send" });
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to send";
+        dispatch({ type: "ERROR", message });
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- pillSink is a
-    // memoised stable reference from useStatusPill; listing it would rebuild
-    // sendMessage every render and churn subscriptions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pillSink stable, see module-level note above.
     [state.status, state.conversationId, state.sessionId]
   );
 
@@ -207,8 +208,7 @@ export function useResearchSession() {
     dispatch({ type: "RESET" });
     hydratedForSessionRef.current = null;
     navigate("/research-v2", { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- pillSink is a
-    // memoised stable reference; see sendMessage.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pillSink stable, see module-level note above.
   }, [navigate]);
 
   const toggleThinking = useCallback((turnId: string) => {

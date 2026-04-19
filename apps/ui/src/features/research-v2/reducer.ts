@@ -212,6 +212,13 @@ function handleToggleThinking(
   }));
 }
 
+function handleAppendUser(
+  state: ResearchSessionState,
+  action: Extract<ResearchAction, { type: "APPEND_USER" }>
+): ResearchSessionState {
+  return { ...state, messages: [...state.messages, action.message], status: "running" };
+}
+
 // ---------------------------------------------------------------------------
 // Reducer
 // ---------------------------------------------------------------------------
@@ -224,7 +231,7 @@ export function reduceResearch(
     case "HYDRATE":
       return handleHydrate(state, action);
     case "APPEND_USER":
-      return { ...state, messages: [...state.messages, action.message], status: "running" };
+      return handleAppendUser(state, action);
     case "SESSION_BOUND":
       // Idempotent on matching conv_id: the hook dispatches a pre-invoke
       // SESSION_BOUND with a client-owned conversationId and sessionId:null;

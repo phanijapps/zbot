@@ -13,6 +13,7 @@ import { renderHook, act } from "@testing-library/react";
 import { createElement, StrictMode, type PropsWithChildren } from "react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import type { Transport } from "@/services/transport";
+import type { ConversationEvent } from "@/services/transport/types";
 
 // ---------------------------------------------------------------------------
 // Transport mock — per-test spies for order assertions
@@ -54,10 +55,10 @@ function routerWrapper(initialPath: string) {
       createElement(
         Routes,
         null,
-        createElement(Route, { path: "/research-v2", element: children as React.ReactElement }),
+        createElement(Route, { path: "/research-v2", element: children }),
         createElement(Route, {
           path: "/research-v2/:sessionId",
-          element: children as React.ReactElement,
+          element: children,
         })
       )
     );
@@ -87,12 +88,10 @@ beforeEach(() => {
     callLog.push(`subscribe:${convId}`);
     return unsubscribeSpy;
   });
-  executeAgent.mockImplementation(
-    async (_agent, convId /* , msg, sessionId */) => {
-      callLog.push(`invoke:${convId}`);
-      return { success: true, data: { conversationId: convId } };
-    }
-  );
+  executeAgent.mockImplementation(async (_agent, convId) => {
+    callLog.push(`invoke:${convId}`);
+    return { success: true, data: { conversationId: convId } };
+  });
   stopAgent.mockResolvedValue({ success: true, data: undefined });
   getSessionMessages.mockResolvedValue({ success: true, data: [] });
 });
@@ -161,7 +160,13 @@ describe("useResearchSession — subscription ordering (R14a)", () => {
     // session_complete; error path works the same for this test's purpose.
     const onEvent = subscribeConversation.mock.calls[0][1].onEvent;
     act(() => {
-      onEvent({ type: "error", message: "simulated" } as never);
+      onEvent({
+        type: "error",
+        timestamp: Date.now(),
+        session_id: "",
+        execution_id: "",
+        message: "simulated",
+      } as ConversationEvent);
     });
 
     await act(async () => {
@@ -292,6 +297,35 @@ describe("useResearchSession — subscription ordering (R14a)", () => {
     expect(result.current.state.status).toBe("error");
     // Subscription is intact so the user can retry/observe.
     expect(unsubscribeSpy).not.toHaveBeenCalled();
+  });
+
+  it("subscribe throws: state becomes 'error' and a retry is still possible", async () => {
+    // First subscribeConversation throws synchronously; executeAgent must NOT
+    // have been called (we bail in the try/catch before reaching invoke).
+    subscribeConversation.mockImplementationOnce(() => {
+      throw new Error("ws boom");
+    });
+
+    const { result } = renderHook(() => useResearchSession(), {
+      wrapper: routerWrapper(TEST_INITIAL_PATH),
+    });
+
+    await act(async () => {
+      await result.current.sendMessage("first");
+    });
+
+    // The hook must not be stuck on "running" — it must land on "error".
+    expect(result.current.state.status).toBe("error");
+    expect(executeAgent).not.toHaveBeenCalled();
+
+    // Idempotency after failure: a fresh send attempts subscribe+invoke again
+    // (the second subscribe mock uses the default happy-path implementation).
+    await act(async () => {
+      await result.current.sendMessage("retry");
+    });
+
+    expect(subscribeConversation).toHaveBeenCalledTimes(2);
+    expect(executeAgent).toHaveBeenCalledTimes(1);
   });
 });
 
