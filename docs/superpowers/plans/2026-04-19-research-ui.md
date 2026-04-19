@@ -88,29 +88,39 @@ The research reducer has ~14 action variants. Extract each `case` into a named h
 
 ```
 apps/ui/src/features/research-v2/
-    types.ts                         # ResearchSessionState, AgentTurn, TimelineEntry
-    reducer.ts                       # reduceResearchSession
-    reducer.test.ts                  # reducer unit tests
-    event-map.ts                     # GatewayEvent → ResearchAction + PillEvent
-    event-map.test.ts                # mapping tests
-    useResearchSession.ts            # main hook
-    useResearchSession.test.ts       # hook test (lightweight)
-    AgentTurnBlock.tsx               # collapsed Thinking + visible Respond block
+    types.ts                         # ResearchSessionState, AgentTurn, TimelineEntry, ResearchArtifactRef
+    reducer.ts                       # reduceResearchSession (per-case helpers)
+    reducer.test.ts                  # reducer unit tests (incl. SET_ARTIFACTS, silent-crash inference)
+    event-map.ts                     # GatewayEvent → ResearchAction + PillEvent (verified wire format)
+    event-map.test.ts                # mapping tests (positive + wire-format-fallback)
+    useResearchSession.ts            # main hook (server-owned ids, post-async ref, memoised pillSink)
+    useResearchSession.test.ts       # hook test (lightweight; heavy coverage in __tests__/flows.integration.test.tsx)
+    AgentTurnBlock.tsx               # collapsed Thinking + visible Respond + error banner
     AgentTurnBlock.test.tsx          # render tests
     ThinkingTimeline.tsx             # inner timeline shown when chevron expanded
-    SessionsList.tsx                 # presentation-agnostic list (drawer-ready AND topbar-ready)
-    SessionsList.test.tsx            # render tests
+    SessionsList.tsx                 # presentation-agnostic list + per-row Delete button
+    SessionsList.test.tsx            # render tests (incl. Delete click isolation)
     SessionsDrawer.tsx               # wrapper that slides SessionsList from the left
+    useSessionsList.ts               # hook: list + refresh + deleteSession
     ResearchPage.tsx                 # page component
     ResearchPage.test.tsx            # render tests
-    research.css                     # scoped styles
+    research.css                     # scoped styles (theme tokens only)
     index.ts                         # barrel
+    __tests__/
+        transport-mock.ts            # reusable Transport mock + event-stream DSL
+        flows.integration.test.tsx   # full-flow + negative-path integration tests
 ```
 
 ### Modified files
 
 ```
-apps/ui/src/App.tsx                  # route wiring for /research-v2 and /research-v2/:sessionId + sidebar link
+apps/ui/src/App.tsx                             # route wiring for /research-v2 and /research-v2/:sessionId + sidebar link
+apps/ui/src/services/transport/interface.ts     # + deleteSession()
+apps/ui/src/services/transport/http.ts          # + deleteSession() implementation
+gateway/src/http/sessions.rs                    # + DELETE /api/sessions/:id handler
+gateway/src/http/mod.rs                         # + DELETE route registration
+services/execution-state/src/service.rs         # + delete_session_cascade()
+services/execution-state/src/repository.rs      # + transactional cascade + unit tests
 ```
 
 ### Not modified
@@ -2302,131 +2312,706 @@ git commit -m "feat(research-v2): surface silent crash as per-turn error banner"
 
 ---
 
-### Task 17: E2E Playwright spec
+### Task 17: E2E Playwright — **slim smoke only**
 
-**Files:**
-- Create: `apps/ui/tests/e2e/research-v2.spec.ts`
+**Why slim:** research sessions are long-running (minutes, multi-agent). Full flow E2E is flaky and expensive. The heavy lifting moves to integration tests (Task 20 below) that drive the hook with a mocked transport and hand-roll event streams. E2E keeps two smoke tests: one route-mocked structural, one live-agent "it walks" confidence check.
 
-Follow the chat-v2 pattern (`apps/ui/tests/e2e/quick-chat.spec.ts`). Three describe-blocks:
+**File:** `apps/ui/tests/e2e/research-v2.spec.ts`
 
-- [ ] **Step 1: Page-load tests (no daemon)**
-
-```typescript
-test.describe('Research v2 — page load', () => {
-  test('renders empty state with composer', async ({ page }) => {
-    await page.goto('/research-v2');
-    await page.waitForSelector('.research-page', { state: 'visible', timeout: 15_000 });
-    await expect(page.getByPlaceholder('Type a message...')).toBeVisible();
-  });
-
-  test('drawer toggle opens and closes', async ({ page }) => {
-    await page.goto('/research-v2');
-    const toggle = page.getByRole('button', { name: /sessions/i });
-    await toggle.click();
-    await expect(page.locator('.sessions-drawer')).toBeVisible();
-    await page.keyboard.press('Escape');
-    await expect(page.locator('.sessions-drawer')).toHaveCount(0);
-  });
-
-  test('no status pill until a turn is active', async ({ page }) => {
-    await page.goto('/research-v2');
-    await expect(page.locator('[data-testid="status-pill"]')).toHaveCount(0);
-  });
-});
-```
-
-- [ ] **Step 2: Route-mocked tests**
+- [ ] **Step 1: Smoke 1 — route-mocked critical path**
 
 ```typescript
-const STUB_SESSION_ID = 'sess-research-e2e';
+import { test, expect, type Page, type Route } from '@playwright/test';
 
-async function installApiStubs(page: Page) {
-  // Sessions list — two rows to exercise drawer grouping.
-  await page.route('**/api/logs/sessions', (route) =>
+const SID = 'sess-research-smoke';
+
+async function installStubs(page: Page) {
+  await page.route('**/api/logs/sessions', (route: Route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify([
-        { session_id: STUB_SESSION_ID, conversation_id: 'r-1', agent_id: 'root',
-          agent_name: 'root', started_at: new Date().toISOString(), status: 'running',
-          token_count: 123, tool_call_count: 2, duration_ms: 5000 },
+        { session_id: SID, conversation_id: 'r-1', agent_id: 'root',
+          agent_name: 'root', started_at: new Date().toISOString(),
+          status: 'running', token_count: 123, tool_call_count: 2, duration_ms: 5000 },
       ]),
     })
   );
-  await page.route(`**/api/executions/v2/sessions/${STUB_SESSION_ID}/messages*`, (route) =>
+  await page.route(`**/api/executions/v2/sessions/${SID}/messages*`, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
   );
-  await page.route(`**/api/sessions/${STUB_SESSION_ID}/artifacts`, (route) =>
-    route.fulfill({
-      status: 200, contentType: 'application/json',
-      body: JSON.stringify([{
-        id: 'art-r-1', sessionId: STUB_SESSION_ID,
-        filePath: '/tmp/plan.md', fileName: 'plan.md', fileType: 'md',
-        fileSize: 512, label: 'research plan', createdAt: new Date().toISOString(),
-      }]),
-    })
-  );
-  await page.route('**/api/artifacts/art-r-1/content', (route) =>
-    route.fulfill({ status: 200, contentType: 'text/markdown', body: '# Plan\n\nOutline of research.\n' })
+  await page.route(`**/api/sessions/${SID}/artifacts`, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
   );
 }
 
-test('drawer lists sessions; clicking a row navigates to it', async ({ page }) => {
-  await installApiStubs(page);
+test('smoke: page renders, drawer lists sessions, row click navigates', async ({ page }) => {
+  await installStubs(page);
   await page.goto('/research-v2');
-  await page.getByRole('button', { name: /sessions/i }).click();
-  await page.getByText(/root/i).first().click();
-  await expect(page).toHaveURL(new RegExp(STUB_SESSION_ID));
-});
+  await page.waitForSelector('.research-page', { state: 'visible', timeout: 15_000 });
 
-test('artifact strip + slide-out', async ({ page }) => {
-  await installApiStubs(page);
-  await page.goto(`/research-v2/${STUB_SESSION_ID}`);
-  const card = page.getByTestId('research-v2-artifact').first();
-  await card.waitFor({ state: 'visible', timeout: 10_000 });
-  await expect(card).toContainText('plan.md');
-  await card.click();
-  const slideOut = page.locator('.artifact-slideout').first();
-  await expect(slideOut).toBeVisible();
-  await expect(slideOut).toContainText('Outline of research');
-  await slideOut.getByTitle('Close').click();
-  await expect(slideOut).toHaveCount(0);
+  // Composer + drawer toggle present.
+  await expect(page.getByPlaceholder('Type a message...')).toBeVisible();
+  await expect(page.locator('[data-testid="status-pill"]')).toHaveCount(0);
+
+  // Drawer opens, session row visible, clicking navigates.
+  await page.getByRole('button', { name: /sessions/i }).click();
+  await expect(page.locator('.sessions-drawer')).toBeVisible();
+  await page.getByText(/root/i).first().click();
+  await expect(page).toHaveURL(new RegExp(SID));
 });
 ```
 
-- [ ] **Step 3: Agent-backed tests (auto-skip when daemon down)**
+- [ ] **Step 2: Smoke 2 — agent-backed (auto-skips when daemon unreachable)**
 
 ```typescript
-test.describe('Research v2 — agent-backed', () => {
+async function daemonReachable(): Promise<boolean> {
+  try {
+    const res = await fetch('http://localhost:18791/api/health', { signal: AbortSignal.timeout(2000) });
+    return res.ok;
+  } catch { return false; }
+}
+
+test.describe('Research v2 — agent-backed smoke', () => {
   test.beforeEach(async ({}, testInfo) => {
     const ok = await daemonReachable();
     testInfo.skip(!ok, 'gateway daemon not reachable');
   });
 
-  test('sends a prompt and renders at least one turn block', async ({ page }) => {
+  test('live: simple prompt lands a turn block with Respond', async ({ page }) => {
     test.setTimeout(120_000);
     await page.goto('/research-v2');
-    await sendPrompt(page, 'Summarise today in one sentence.');
+    await page.waitForSelector('.research-page', { state: 'visible' });
+    await page.getByPlaceholder('Type a message...').fill('Summarise today in one sentence.');
+    await page.getByPlaceholder('Type a message...').press('Enter');
     const turnBlock = page.locator('.agent-turn-block').first();
     await expect(turnBlock).toBeVisible({ timeout: 90_000 });
-    // Respond text lands inside the block after agent_completed.
     await expect(turnBlock.locator('.agent-turn-block__respond')).toBeVisible({ timeout: 60_000 });
   });
 });
 ```
 
-- [ ] **Step 4: Run + commit**
+- [ ] **Step 3: Run + commit**
 
 ```
-cd apps/ui && npx playwright test research-v2.spec.ts --grep 'page load|route-mocked'
+cd apps/ui && npx playwright test research-v2.spec.ts
 ```
 
-Expected: all non-agent-backed tests pass.
+Expected: 2 tests. The agent-backed one skips on CI (no daemon).
 
 ```bash
 git add apps/ui/tests/e2e/research-v2.spec.ts
-git commit -m "test(research-v2): playwright spec — page load, route-mocked, agent-backed"
+git commit -m "test(research-v2): slim E2E smoke — route-mocked + agent-backed"
 ```
+
+---
+
+### Task 18: Backend — `DELETE /api/sessions/:id` with memory-preserving cascade
+
+**Files:**
+- Modify: `gateway/src/http/sessions.rs` (add handler)
+- Modify: `gateway/src/http/mod.rs` (register route)
+- Modify: `services/execution-state/src/service.rs` (add `delete_session_cascade` method)
+- Modify: `services/execution-state/src/repository.rs` (SQL cascade implementation)
+- Add test: `services/execution-state/src/repository.rs` `#[cfg(test)]` block
+
+**Why:** Research is multi-session. Users need a per-row Delete affordance in the sessions drawer to permanently remove a session and its data — the "Clear" pattern we shipped in chat-v2 scaled for a single reserved session but is wrong for a drawer full of rows.
+
+**Invariant — what gets deleted vs preserved:**
+
+| Table | Delete? | Reasoning |
+|---|---|---|
+| `sessions` | YES | The session row itself. |
+| `messages` | YES | Conversation content of this session. |
+| `agent_executions` | YES | Per-session execution metadata. |
+| `execution_logs` | YES | Per-execution logs. |
+| `artifacts` | YES | Artifact POINTERS — files on disk in ward dirs are NOT deleted (they live under `~/Documents/zbot/wards/...` and users may still want them). The DB row just disconnects them from this session. |
+| `distillation_runs` | YES | Per-session distillation audit. |
+| `bridge_outbox` | YES | Per-session WS outbox. |
+| `recall_log` | YES | Audit of which facts were recalled in this session. The facts themselves are NOT deleted. |
+| `memory_facts` | **NO — PRESERVED** | Cross-session memory. |
+| `memory_facts_index` (vec0) | **NO — PRESERVED** | Embeddings tied to memory_facts. |
+| Knowledge graph (`entities`, `relationships`) | **NO — PRESERVED** | Cross-session graph. |
+| Ward directories on disk | **NO — PRESERVED** | User's ward content. |
+
+- [ ] **Step 1: Service-level cascade method**
+
+Add to `services/execution-state/src/service.rs`:
+
+```rust
+/// Delete a session and all tables that hold per-session data.
+///
+/// Preserves cross-session data: memory_facts, memory_facts_index, and
+/// the knowledge graph tables. This is the hard-delete used by the
+/// sessions drawer's per-row Delete action.
+///
+/// Returns the number of rows deleted across all cascaded tables
+/// (informational; primarily for logging and tests).
+pub fn delete_session_cascade(&self, session_id: &str) -> Result<usize, String> {
+    self.repo.delete_session_cascade(session_id)
+}
+```
+
+And in `services/execution-state/src/repository.rs`, implement inside one SQLite transaction:
+
+```rust
+pub fn delete_session_cascade(&self, session_id: &str) -> Result<usize, String> {
+    self.db.with_connection(|conn| {
+        let tx = conn.transaction()?;
+        let mut total = 0usize;
+        // Order matters only for FK-checks-on tables; we run everything
+        // in one transaction so partial failures roll back cleanly.
+        total += tx.execute("DELETE FROM messages        WHERE session_id = ?", params![session_id])?;
+        total += tx.execute("DELETE FROM agent_executions WHERE session_id = ?", params![session_id])?;
+        total += tx.execute("DELETE FROM execution_logs  WHERE session_id = ?", params![session_id])?;
+        total += tx.execute("DELETE FROM artifacts       WHERE session_id = ?", params![session_id])?;
+        total += tx.execute("DELETE FROM distillation_runs WHERE session_id = ?", params![session_id])?;
+        total += tx.execute("DELETE FROM bridge_outbox   WHERE session_id = ?", params![session_id])?;
+        total += tx.execute("DELETE FROM recall_log      WHERE session_id = ?", params![session_id])?;
+        total += tx.execute("DELETE FROM sessions        WHERE id = ?",         params![session_id])?;
+        // memory_facts, memory_facts_index, entities, relationships:
+        // intentionally NOT touched — cross-session data.
+        tx.commit()?;
+        Ok(total)
+    })
+}
+```
+
+**Schema sanity-check before writing this:** verify the actual column name in each table (`session_id` vs `parent_session_id` vs `child_session_id`). For `agent_executions` there's also a `child_session_id` column — the cascade handles it implicitly because `delete_session_cascade` is called per session; deleting child sessions is a separate call the UI makes if the user chooses.
+
+- [ ] **Step 2: HTTP handler**
+
+Add to `gateway/src/http/sessions.rs`:
+
+```rust
+/// DELETE /api/sessions/:id — hard-delete session and per-session data.
+///
+/// Preserves memory facts, embeddings, and the knowledge graph. Returns
+/// 204 on success, 404 if the session doesn't exist, 500 on DB error.
+pub async fn delete_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<SessionErrorResponse>)> {
+    let runner = state.runtime.runner().ok_or_else(|| (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(SessionErrorResponse { error: "Runtime not available".to_string() }),
+    ))?;
+    let state_service = runner.state_service();
+
+    // Presence check so we can return 404 rather than silent success.
+    match state_service.get_session(&session_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => return Err((
+            StatusCode::NOT_FOUND,
+            Json(SessionErrorResponse { error: format!("Session not found: {}", session_id) }),
+        )),
+        Err(e) => return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(SessionErrorResponse { error: format!("Lookup failed: {}", e) }),
+        )),
+    }
+
+    match state_service.delete_session_cascade(&session_id) {
+        Ok(rows) => {
+            tracing::info!(session_id = %session_id, rows, "deleted session cascade");
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(SessionErrorResponse { error: format!("Delete failed: {}", e) }),
+        )),
+    }
+}
+```
+
+- [ ] **Step 3: Route registration**
+
+In `gateway/src/http/mod.rs`, add to the sessions routes block:
+
+```rust
+.route("/api/sessions/:id", delete(sessions::delete_session))
+```
+
+- [ ] **Step 4: Cascade unit test**
+
+Add to `services/execution-state/src/repository.rs` tests:
+
+```rust
+#[test]
+fn delete_session_cascade_removes_session_rows_but_not_memory() {
+    let db = fresh_test_db();
+    let repo = SessionRepository::new(db.clone());
+    // Seed a session + one execution + one message + one artifact + one
+    // memory_fact (which must survive).
+    let sid = "sess-cascade-test";
+    seed_session(&repo, sid);
+    seed_execution(&db, sid, "exec-1");
+    seed_message(&db, sid, "exec-1", "hello");
+    seed_artifact(&db, sid, "note.md");
+    seed_memory_fact(&db, "persistent fact");
+    // Act.
+    let rows = repo.delete_session_cascade(sid).unwrap();
+    assert!(rows >= 4, "expected at least 4 rows deleted, got {rows}");
+    // Assert session and its children are gone.
+    assert_eq!(repo.get_session(sid).unwrap(), None);
+    assert_eq!(count_rows(&db, "messages", "session_id", sid), 0);
+    assert_eq!(count_rows(&db, "agent_executions", "session_id", sid), 0);
+    assert_eq!(count_rows(&db, "artifacts", "session_id", sid), 0);
+    // Assert memory is untouched.
+    assert_eq!(count_rows(&db, "memory_facts", "content", "persistent fact"), 1);
+}
+
+#[test]
+fn delete_session_cascade_on_missing_session_is_noop_not_error() {
+    let db = fresh_test_db();
+    let repo = SessionRepository::new(db);
+    let rows = repo.delete_session_cascade("sess-does-not-exist").unwrap();
+    assert_eq!(rows, 0);
+}
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+cargo check -p gateway && cargo test -p execution-state delete_session_cascade
+git add gateway/src/http/sessions.rs gateway/src/http/mod.rs services/execution-state/
+git commit -m "feat(sessions): DELETE /api/sessions/:id with memory-preserving cascade"
+```
+
+---
+
+### Task 19: Frontend — Delete session button per drawer row
+
+**Files:**
+- Modify: `apps/ui/src/services/transport/interface.ts` (add `deleteSession`)
+- Modify: `apps/ui/src/services/transport/http.ts` (implementation)
+- Modify: `apps/ui/src/features/research-v2/SessionsList.tsx` (per-row Trash button)
+- Modify: `apps/ui/src/features/research-v2/useSessionsList.ts` (optimistic refresh)
+- Modify: `apps/ui/src/features/research-v2/useResearchSession.ts` (handle "current session deleted")
+
+- [ ] **Step 1: Transport method**
+
+Add to `TransportInterface`:
+
+```typescript
+/**
+ * Hard-delete a session and its per-session data (messages, executions,
+ * artifacts). Memory facts, embeddings, and the knowledge graph are
+ * preserved.
+ */
+deleteSession(sessionId: string): Promise<TransportResult<void>>;
+```
+
+Implementation in `HttpTransport`:
+
+```typescript
+async deleteSession(sessionId: string): Promise<TransportResult<void>> {
+  if (!this.config) return { success: false, error: "Transport not initialized" };
+  try {
+    const response = await fetch(
+      `${this.config.httpUrl}/api/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE" }
+    );
+    if (response.status === 404) return { success: false, error: "Session not found" };
+    if (!response.ok) return { success: false, error: `HTTP ${response.status}: ${response.statusText}` };
+    return { success: true, data: undefined };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+```
+
+- [ ] **Step 2: SessionsList row — trash icon on hover**
+
+Extend the row with a Trash2 icon button that only appears on row hover (keeps the row tidy by default). Pass a `onDelete(sessionId)` handler from the parent.
+
+```tsx
+<button
+  type="button"
+  className="sessions-list__row-delete"
+  onClick={(e) => { e.stopPropagation(); onDelete(s.session_id); }}
+  aria-label={`Delete session ${s.title ?? s.session_id}`}
+  title="Delete session"
+  data-testid={`sessions-list-delete-${s.session_id}`}
+>
+  <Trash2 size={12} />
+</button>
+```
+
+CSS: `.sessions-list__row-delete { opacity: 0; }` with `.sessions-list__row:hover .sessions-list__row-delete { opacity: 1; }`. Colors via theme tokens (`var(--destructive)` on hover, `var(--muted-foreground)` default).
+
+**Stop propagation on the onClick** — the row itself has an onClick that navigates. Without `stopPropagation`, deleting a session would also navigate to it post-delete.
+
+- [ ] **Step 3: Confirm + call sequence in useSessionsList**
+
+```typescript
+const deleteSession = useCallback(async (sessionId: string) => {
+  const confirmText =
+    `Delete this session permanently?\n\n` +
+    `This removes the conversation, executions, and artifact pointers ` +
+    `for this session. Memory facts, embeddings, and knowledge graph ` +
+    `entries are preserved. Files on disk are not deleted.`;
+  if (!window.confirm(confirmText)) return;
+  const transport = await getTransport();
+  const result = await transport.deleteSession(sessionId);
+  if (!result.success) {
+    // Surface via toast or error callback; for now, console.error.
+    // eslint-disable-next-line no-console
+    console.error("Failed to delete session:", result.error);
+    return;
+  }
+  await refresh();
+  onAfterDelete?.(sessionId);
+}, [refresh, onAfterDelete]);
+
+return { sessions, loading, refresh, deleteSession };
+```
+
+The `onAfterDelete` callback lets the ResearchPage handle the "the current session is the one that was just deleted" case.
+
+- [ ] **Step 4: Handle "current session deleted"**
+
+In `ResearchPage.tsx`:
+
+```typescript
+const { sessions, deleteSession, refresh } = useSessionsList({
+  onAfterDelete: (deletedId) => {
+    if (state.sessionId === deletedId) {
+      startNewResearch(); // clears state + navigates to /research-v2
+    }
+  },
+});
+```
+
+- [ ] **Step 5: Tests (fat unit coverage — see Task 20 for integration)**
+
+Add to `apps/ui/src/features/research-v2/SessionsList.test.tsx`:
+
+```typescript
+it("renders a Delete button for each session row", () => {
+  const sessions = [seed({ session_id: "s1" }), seed({ session_id: "s2" })];
+  renderList(sessions);
+  expect(screen.getByTestId("sessions-list-delete-s1")).toBeTruthy();
+  expect(screen.getByTestId("sessions-list-delete-s2")).toBeTruthy();
+});
+
+it("Delete click fires onDelete with the session id (not the row select)", () => {
+  const onDelete = vi.fn();
+  const onSelect = vi.fn();
+  renderList([seed({ session_id: "s1" })], { onDelete, onSelect });
+  fireEvent.click(screen.getByTestId("sessions-list-delete-s1"));
+  expect(onDelete).toHaveBeenCalledWith("s1");
+  expect(onSelect).not.toHaveBeenCalled(); // stopPropagation worked
+});
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add apps/ui/src/services/transport/ apps/ui/src/features/research-v2/
+git commit -m "feat(research-v2): per-row Delete session (memory-preserving cascade)"
+```
+
+---
+
+### Task 20: Integration tests — hook + mocked transport (heavy coverage)
+
+**Rationale:** research sessions are long-running and multi-agent, so Playwright can't cover every path in reasonable time. Move the full-flow + negative-path coverage into fast vitest integration tests that drive the hook with a hand-rolled transport mock and inject synthetic event streams.
+
+**Files:**
+- Create: `apps/ui/src/features/research-v2/__tests__/transport-mock.ts` — reusable transport mock + event-stream builder
+- Create: `apps/ui/src/features/research-v2/__tests__/flows.integration.test.tsx` — full-flow tests driven via `@testing-library/react`'s `renderHook`
+
+- [ ] **Step 1: Transport mock + event stream builder**
+
+```typescript
+// transport-mock.ts
+import { vi } from "vitest";
+import type { Transport } from "@/services/transport";
+import type { ConversationEvent, SessionMessage, SessionState } from "@/services/transport/types";
+
+export interface MockTransport extends Transport {
+  __pushEvent(event: ConversationEvent): void;
+  __close(): void;
+  calls: {
+    initChatSession: ReturnType<typeof vi.fn>;
+    getSessionMessages: ReturnType<typeof vi.fn>;
+    listSessionArtifacts: ReturnType<typeof vi.fn>;
+    executeAgent: ReturnType<typeof vi.fn>;
+    stopAgent: ReturnType<typeof vi.fn>;
+    deleteSession: ReturnType<typeof vi.fn>;
+    subscribeConversation: ReturnType<typeof vi.fn>;
+  };
+}
+
+export function makeMockTransport(opts: {
+  messages?: SessionMessage[];
+  artifacts?: Artifact[];
+} = {}): MockTransport {
+  let handler: ((e: ConversationEvent) => void) | null = null;
+
+  const calls = {
+    initChatSession: vi.fn().mockResolvedValue({ success: true, data: { sessionId: "sess-mock", conversationId: "conv-mock", created: false } }),
+    getSessionMessages: vi.fn().mockResolvedValue({ success: true, data: opts.messages ?? [] }),
+    listSessionArtifacts: vi.fn().mockResolvedValue({ success: true, data: opts.artifacts ?? [] }),
+    executeAgent: vi.fn().mockResolvedValue({ success: true, data: { conversationId: "conv-mock" } }),
+    stopAgent: vi.fn().mockResolvedValue({ success: true }),
+    deleteSession: vi.fn().mockResolvedValue({ success: true, data: undefined }),
+    subscribeConversation: vi.fn().mockImplementation((convId, { onEvent }) => {
+      handler = onEvent;
+      return () => { handler = null; };
+    }),
+  };
+
+  const transport: MockTransport = {
+    ...(calls as unknown as Transport),
+    calls,
+    __pushEvent: (e: ConversationEvent) => { if (handler) handler(e); },
+    __close: () => { handler = null; },
+  };
+  return transport;
+}
+
+// Event stream DSL for readable tests.
+export const ev = {
+  agentStarted: (exec = "exec-1", agent = "root"): ConversationEvent => ({ type: "agent_started", execution_id: exec, agent_id: agent, session_id: "sess-mock", conversation_id: "conv-mock" } as any),
+  thinking: (exec: string, content: string): ConversationEvent => ({ type: "thinking", execution_id: exec, content } as any),
+  toolCall: (exec: string, tool_name: string, args: unknown = {}): ConversationEvent => ({ type: "tool_call", execution_id: exec, tool_name, args } as any),
+  toolResult: (exec: string, tool_name: string, result: unknown = ""): ConversationEvent => ({ type: "tool_result", execution_id: exec, tool_name, result } as any),
+  token: (exec: string, delta: string): ConversationEvent => ({ type: "token", execution_id: exec, delta } as any),
+  respond: (exec: string, message: string): ConversationEvent => ({ type: "respond", execution_id: exec, message } as any),
+  agentCompleted: (exec: string, agent = "root"): ConversationEvent => ({ type: "agent_completed", execution_id: exec, agent_id: agent } as any),
+  turnComplete: (exec: string): ConversationEvent => ({ type: "turn_complete", execution_id: exec, final_message: "" } as any),
+  invokeAccepted: (): ConversationEvent => ({ type: "invoke_accepted", session_id: "sess-mock", conversation_id: "conv-mock" } as any),
+  wardChanged: (ward_id: string): ConversationEvent => ({ type: "ward_changed", ward_id } as any),
+  error: (message: string): ConversationEvent => ({ type: "error", message } as any),
+  delegationStarted: (parent: string, child: string, childAgent: string): ConversationEvent => ({ type: "delegation_started", parent_execution_id: parent, child_execution_id: child, child_agent_id: childAgent } as any),
+};
+```
+
+- [ ] **Step 2: Happy-path full flow**
+
+```typescript
+it("drives a full single-turn flow: start → tool → respond → complete", async () => {
+  const transport = makeMockTransport();
+  vi.mocked(getTransport).mockResolvedValue(transport);
+  const { result } = renderHook(() => useResearchSession(), { wrapper: MemoryRouterWrapper });
+
+  // User sends.
+  await act(() => result.current.sendMessage("analyze Q4"));
+  await waitFor(() => expect(transport.calls.executeAgent).toHaveBeenCalled());
+
+  // Backend stream.
+  await act(async () => {
+    transport.__pushEvent(ev.invokeAccepted());
+    transport.__pushEvent(ev.agentStarted("exec-1"));
+    transport.__pushEvent(ev.wardChanged("stock-analysis"));
+    transport.__pushEvent(ev.thinking("exec-1", "recall Q4 fundamentals"));
+    transport.__pushEvent(ev.toolCall("exec-1", "shell", { command: "cat data.csv" }));
+    transport.__pushEvent(ev.toolResult("exec-1", "shell", "..."));
+    transport.__pushEvent(ev.respond("exec-1", "Q4 revenue was $X"));
+    transport.__pushEvent(ev.agentCompleted("exec-1"));
+    transport.__pushEvent(ev.turnComplete("exec-1"));
+  });
+
+  // Assertions on reducer state.
+  expect(result.current.state.sessionId).toBe("sess-mock");
+  expect(result.current.state.wardName).toBe("stock-analysis");
+  expect(result.current.state.turns).toHaveLength(1);
+  const turn = result.current.state.turns[0];
+  expect(turn.agentId).toBe("root");
+  expect(turn.respond).toBe("Q4 revenue was $X");
+  expect(turn.timeline.some((e) => e.kind === "thinking")).toBe(true);
+  expect(turn.timeline.some((e) => e.kind === "tool_call")).toBe(true);
+  expect(turn.timeline.some((e) => e.kind === "tool_result")).toBe(true);
+  expect(turn.status).toBe("completed");
+});
+```
+
+- [ ] **Step 3: Negative — silent crash path (chat-v2 backlog B3)**
+
+```typescript
+it("infers error when turn_complete arrives with empty content and no respond", async () => {
+  const transport = makeMockTransport();
+  vi.mocked(getTransport).mockResolvedValue(transport);
+  const { result } = renderHook(() => useResearchSession(), { wrapper: MemoryRouterWrapper });
+  await act(() => result.current.sendMessage("bad prompt"));
+  await act(async () => {
+    transport.__pushEvent(ev.invokeAccepted());
+    transport.__pushEvent(ev.agentStarted("exec-1"));
+    // NO thinking, NO tool_call, NO respond. Crashed silently.
+    transport.__pushEvent(ev.turnComplete("exec-1"));
+    transport.__pushEvent(ev.agentCompleted("exec-1"));
+  });
+  const turn = result.current.state.turns[0];
+  expect(turn.status).toBe("error");
+  expect(turn.errorMessage).toContain("no output");
+});
+```
+
+- [ ] **Step 4: Negative — orphan Respond (AgentStarted lost over the socket)**
+
+```typescript
+it("renders Respond even without a preceding AgentStarted event", async () => {
+  const transport = makeMockTransport();
+  vi.mocked(getTransport).mockResolvedValue(transport);
+  const { result } = renderHook(() => useResearchSession(), { wrapper: MemoryRouterWrapper });
+  await act(() => result.current.sendMessage("q"));
+  await act(async () => {
+    transport.__pushEvent(ev.invokeAccepted());
+    // Skip agent_started entirely (packet loss / reconnect race).
+    transport.__pushEvent(ev.respond("exec-orphan", "late reply"));
+  });
+  // A synthetic turn with id "exec-orphan" exists and carries the respond.
+  const turn = result.current.state.turns.find((t) => t.id === "exec-orphan");
+  expect(turn?.respond).toBe("late reply");
+});
+```
+
+- [ ] **Step 5: Negative — ward never flips to "unknown"**
+
+```typescript
+it("preserves sticky ward when later events omit ward_id", async () => {
+  const transport = makeMockTransport();
+  vi.mocked(getTransport).mockResolvedValue(transport);
+  const { result } = renderHook(() => useResearchSession(), { wrapper: MemoryRouterWrapper });
+  await act(() => result.current.sendMessage("q"));
+  await act(async () => {
+    transport.__pushEvent(ev.invokeAccepted());
+    transport.__pushEvent(ev.wardChanged("stock-analysis"));
+    transport.__pushEvent(ev.agentStarted("exec-1"));
+    // agentStarted omits ward_id; sticky ward must NOT clear.
+  });
+  expect(result.current.state.wardName).toBe("stock-analysis");
+});
+```
+
+- [ ] **Step 6: Negative — malformed events don't crash**
+
+```typescript
+it.each([
+  ["token with no delta and no content", { type: "token", execution_id: "e1" } as any],
+  ["respond with no message and no content", { type: "respond", execution_id: "e1" } as any],
+  ["ward_changed with no ward_id or ward.name", { type: "ward_changed" } as any],
+  ["tool_call with no tool_name and no tool", { type: "tool_call", execution_id: "e1" } as any],
+  ["unknown event kind", { type: "foo_bar_baz" } as any],
+])("ignores malformed event: %s", async (_, event) => {
+  const transport = makeMockTransport();
+  vi.mocked(getTransport).mockResolvedValue(transport);
+  const { result } = renderHook(() => useResearchSession(), { wrapper: MemoryRouterWrapper });
+  await act(() => result.current.sendMessage("q"));
+  const beforeTurns = result.current.state.turns.length;
+  await act(async () => {
+    transport.__pushEvent(event);
+  });
+  expect(result.current.state.turns.length).toBe(beforeTurns);
+});
+```
+
+- [ ] **Step 7: Delegation chain**
+
+```typescript
+it("nests a child turn under its parent via parentExecutionId", async () => {
+  const transport = makeMockTransport();
+  vi.mocked(getTransport).mockResolvedValue(transport);
+  const { result } = renderHook(() => useResearchSession(), { wrapper: MemoryRouterWrapper });
+  await act(() => result.current.sendMessage("plan and build"));
+  await act(async () => {
+    transport.__pushEvent(ev.invokeAccepted());
+    transport.__pushEvent(ev.agentStarted("exec-root"));
+    transport.__pushEvent(ev.delegationStarted("exec-root", "exec-writer", "writer-agent"));
+    transport.__pushEvent({ ...ev.agentStarted("exec-writer", "writer-agent"), parent_execution_id: "exec-root" } as any);
+    transport.__pushEvent(ev.respond("exec-writer", "memo draft"));
+    transport.__pushEvent(ev.agentCompleted("exec-writer", "writer-agent"));
+    transport.__pushEvent(ev.respond("exec-root", "done — see memo"));
+    transport.__pushEvent(ev.agentCompleted("exec-root"));
+  });
+  const root = result.current.state.turns.find((t) => t.id === "exec-root");
+  const child = result.current.state.turns.find((t) => t.id === "exec-writer");
+  expect(child?.parentExecutionId).toBe("exec-root");
+  expect(root?.respond).toContain("memo");
+  expect(child?.respond).toContain("memo draft");
+});
+```
+
+- [ ] **Step 8: Delete-session flow**
+
+```typescript
+it("deleting the current session clears state and navigates to /research-v2", async () => {
+  const transport = makeMockTransport();
+  vi.mocked(getTransport).mockResolvedValue(transport);
+  const { result } = renderHook(() => ({
+    session: useResearchSession(),
+    list: useSessionsList(),
+  }), { wrapper: MemoryRouterWrapper });
+
+  // Hydrate a session id.
+  await act(async () => {
+    transport.__pushEvent(ev.invokeAccepted());
+  });
+  expect(result.current.session.state.sessionId).toBe("sess-mock");
+
+  // Auto-accept confirm.
+  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  await act(() => result.current.list.deleteSession("sess-mock"));
+  expect(transport.calls.deleteSession).toHaveBeenCalledWith("sess-mock");
+
+  // If the page wires onAfterDelete → startNewResearch, state is cleared.
+  // (Integration test includes the full wiring via ResearchPage wrapper.)
+  confirmSpy.mockRestore();
+});
+
+it("deleteSession declines gracefully when confirm is cancelled", async () => {
+  const transport = makeMockTransport();
+  vi.mocked(getTransport).mockResolvedValue(transport);
+  const { result } = renderHook(() => useSessionsList(), { wrapper: MemoryRouterWrapper });
+  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+  await act(() => result.current.deleteSession("sess-mock"));
+  expect(transport.calls.deleteSession).not.toHaveBeenCalled();
+  confirmSpy.mockRestore();
+});
+
+it("deleteSession surfaces backend 404 as a console error and does not refresh", async () => {
+  const transport = makeMockTransport();
+  transport.calls.deleteSession.mockResolvedValue({ success: false, error: "Session not found" });
+  vi.mocked(getTransport).mockResolvedValue(transport);
+  const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  const { result } = renderHook(() => useSessionsList(), { wrapper: MemoryRouterWrapper });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  await act(() => result.current.deleteSession("sess-missing"));
+  expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to delete"), expect.anything());
+  consoleSpy.mockRestore();
+});
+```
+
+- [ ] **Step 9: Resubscribe-storm regression guard**
+
+```typescript
+it("does not resubscribe on unrelated re-renders (pillSink stability)", async () => {
+  const transport = makeMockTransport();
+  vi.mocked(getTransport).mockResolvedValue(transport);
+  const { result, rerender } = renderHook(() => useResearchSession(), { wrapper: MemoryRouterWrapper });
+  await act(() => result.current.sendMessage("q"));
+  const subscribeCallsAfterFirst = transport.calls.subscribeConversation.mock.calls.length;
+  rerender(); rerender(); rerender();
+  expect(transport.calls.subscribeConversation.mock.calls.length).toBe(subscribeCallsAfterFirst);
+});
+```
+
+- [ ] **Step 10: Run + commit**
+
+```
+cd apps/ui && npx vitest run src/features/research-v2/__tests__/flows.integration.test.tsx
+```
+
+Expected: all integration tests pass.
+
+```bash
+git add apps/ui/src/features/research-v2/__tests__/
+git commit -m "test(research-v2): integration tests — happy path + 8 negative scenarios"
+```
+
+---
 
 ---
 
@@ -2447,7 +3032,9 @@ Before declaring complete:
    - [x] Final Respond reliability / orphan turn (Task 2 RESPOND works without AGENT_STARTED)
    - [x] Artifact strip + slide-out (Task 15 — promoted from optional to required)
    - [x] Silent-crash surfacing per turn (Task 16 — addresses chat-v2 backlog B3 at the UI layer)
-   - [x] E2E Playwright spec with route-mocked coverage (Task 17)
+   - [x] E2E Playwright smoke (Task 17 — 2 tests only; heavy coverage moved to Task 20 integration)
+   - [x] **Per-row Delete session with memory-preserving cascade (Tasks 18 + 19)**
+   - [x] **Integration tests — hook + mocked transport — full flow + 8 negative paths (Task 20)**
    - [x] Routes alongside `/` (Task 12)
 
 2. **chat-v2 learnings applied** — see `memory-bank/components/chat-v2/learnings.md`. This plan incorporates all 12:
