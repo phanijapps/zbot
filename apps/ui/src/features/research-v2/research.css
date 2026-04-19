@@ -47,6 +47,28 @@
   color: var(--primary);
 }
 
+/* Clickable button variant — opens the ward folder in the OS file browser (R14c). */
+.research-page__ward-chip--clickable {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  transition: background 120ms ease;
+  font: inherit;
+  color: inherit;
+}
+.research-page__ward-chip--clickable:hover {
+  background: var(--muted);
+}
+.research-page__ward-chip--clickable:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
 /* --- Pill strip ------------------------------------------------------------ */
 
 .research-page__pill-strip {

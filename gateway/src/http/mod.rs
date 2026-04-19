@@ -28,6 +28,7 @@ mod setup;
 mod skills;
 mod tools;
 mod upload;
+mod ward_actions;
 mod ward_content;
 mod webhooks;
 
@@ -212,6 +213,11 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route(
             "/api/wards/:ward_id/content",
             get(ward_content::get_ward_content),
+        )
+        // Ward actions — opens folder in native OS file browser (R14c)
+        .route(
+            "/api/wards/:ward_id/open",
+            post(ward_actions::open_ward_folder),
         )
         // Upload endpoint
         .route(

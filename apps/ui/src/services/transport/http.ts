@@ -1454,6 +1454,13 @@ export class HttpTransport implements Transport {
     );
   }
 
+  async openWard(wardId: string): Promise<TransportResult<{ path: string }>> {
+    return this.post<{ path: string }>(
+      `/api/wards/${encodeURIComponent(wardId)}/open`,
+      {},
+    );
+  }
+
   async searchMemoryHybrid(
     req: HybridSearchRequest
   ): Promise<TransportResult<HybridSearchResponse>> {

@@ -446,6 +446,101 @@ describe('Connector Inbound Log API', () => {
 });
 
 // ============================================================================
+// Ward Actions API Tests — POST /api/wards/:ward_id/open (R14c)
+// ============================================================================
+
+describe('Ward Open API', () => {
+  it('POSTs to /api/wards/:ward_id/open and returns the resolved path', async () => {
+    const wardId = 'stock-analysis';
+    let receivedMethod: string | null = null;
+    let receivedPath: string | null = null;
+
+    server.use(
+      http.post(`${API_BASE}/api/wards/:ward_id/open`, ({ request, params }) => {
+        receivedMethod = request.method;
+        receivedPath = String(params.ward_id);
+        return HttpResponse.json({ path: `/vault/wards/${params.ward_id}` });
+      })
+    );
+
+    const response = await fetch(`${API_BASE}/api/wards/${wardId}/open`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(response.ok).toBe(true);
+    expect(receivedMethod).toBe('POST');
+    expect(receivedPath).toBe(wardId);
+
+    const body = await response.json();
+    expect(body).toHaveProperty('path');
+    expect(body.path).toBe(`/vault/wards/${wardId}`);
+  });
+
+  it('URL-encodes the ward id segment', async () => {
+    const wardId = 'project/alpha beta';
+    let capturedParam: string | null = null;
+
+    server.use(
+      http.post(`${API_BASE}/api/wards/:ward_id/open`, ({ params }) => {
+        capturedParam = String(params.ward_id);
+        return HttpResponse.json({ path: '/vault/wards/x' });
+      })
+    );
+
+    await fetch(`${API_BASE}/api/wards/${encodeURIComponent(wardId)}/open`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(capturedParam).toBe(wardId);
+  });
+
+  it('surfaces 404 when the ward folder does not exist', async () => {
+    server.use(
+      http.post(`${API_BASE}/api/wards/:ward_id/open`, () => {
+        return HttpResponse.json(
+          { error: "Ward 'ghost' has no folder on disk" },
+          { status: 404 }
+        );
+      })
+    );
+
+    const response = await fetch(`${API_BASE}/api/wards/ghost/open`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error).toMatch(/ghost/);
+  });
+
+  it('surfaces 500 when the launcher fails to spawn', async () => {
+    server.use(
+      http.post(`${API_BASE}/api/wards/:ward_id/open`, () => {
+        return HttpResponse.json(
+          { error: 'Failed to open folder with xdg-open: No such file or directory' },
+          { status: 500 }
+        );
+      })
+    );
+
+    const response = await fetch(`${API_BASE}/api/wards/stock-analysis/open`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(response.status).toBe(500);
+  });
+});
+
+// ============================================================================
 // Request/Response Format Tests
 // ============================================================================
 

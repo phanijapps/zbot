@@ -10,9 +10,10 @@
 // ArtifactSlideOut state is scaffolded here; artifact CARDS are added in R15.
 // =============================================================================
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Menu, Plus, Square } from "lucide-react";
+import { FolderOpen, Menu, Plus, Square } from "lucide-react";
+import { toast } from "sonner";
 import { ChatInput } from "../chat/ChatInput";
 import { ArtifactSlideOut } from "../chat/ArtifactSlideOut";
 import { StatusPill } from "../shared/statusPill";
@@ -21,6 +22,7 @@ import { SessionsDrawer } from "./SessionsDrawer";
 import { useResearchSession } from "./useResearchSession";
 import { useSessionsList } from "./useSessionsList";
 import { rootTurns, childrenOf } from "./turn-tree";
+import { getTransport } from "@/services/transport";
 import type { ResearchSessionState } from "./types";
 import type { Artifact } from "@/services/transport/types";
 import "./research.css";
@@ -32,9 +34,10 @@ interface ResearchHeaderProps {
   onOpenDrawer(): void;
   onNew(): void;
   onStop(): void;
+  onOpenWard(wardId: string): void;
 }
 
-function ResearchHeader({ state, onOpenDrawer, onNew, onStop }: ResearchHeaderProps) {
+function ResearchHeader({ state, onOpenDrawer, onNew, onStop, onOpenWard }: ResearchHeaderProps) {
   return (
     <div className="research-page__header">
       <button
@@ -50,8 +53,17 @@ function ResearchHeader({ state, onOpenDrawer, onNew, onStop }: ResearchHeaderPr
       <div className="research-page__title">zbot</div>
 
       <div className="research-page__header-actions">
-        {state.wardName && (
-          <span className="research-page__ward-chip">{state.wardName}</span>
+        {state.wardId && state.wardName && (
+          <button
+            type="button"
+            className="research-page__ward-chip research-page__ward-chip--clickable"
+            onClick={() => onOpenWard(state.wardId as string)}
+            title={`Open ward folder: ${state.wardName}`}
+            aria-label={`Open ward folder: ${state.wardName}`}
+          >
+            <FolderOpen size={12} />
+            <span>{state.wardName}</span>
+          </button>
         )}
         <button type="button" className="btn btn--ghost btn--sm" onClick={onNew}>
           <Plus size={14} /> New research
@@ -158,6 +170,15 @@ export function ResearchPage() {
     void refreshSessions();
   };
 
+  // Memoised so the ResearchHeader sub-component doesn't re-render each tick.
+  const handleOpenWard = useCallback(async (wardId: string) => {
+    const transport = await getTransport();
+    const r = await transport.openWard(wardId);
+    if (!r.success) {
+      toast.error(`Failed to open ward folder: ${r.error ?? "unknown"}`);
+    }
+  }, []);
+
   const composerDisabled = state.status === "running";
 
   return (
@@ -167,6 +188,7 @@ export function ResearchPage() {
         onOpenDrawer={() => setDrawerOpen(true)}
         onNew={handleNew}
         onStop={stopAgent}
+        onOpenWard={handleOpenWard}
       />
 
       <div className="research-page__pill-strip">

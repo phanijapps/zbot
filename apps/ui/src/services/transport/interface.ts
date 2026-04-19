@@ -448,6 +448,13 @@ export interface Transport {
   /** Get full content (facts, wiki, procedures, episodes) for a single ward */
   getWardContent(wardId: string): Promise<TransportResult<WardContent>>;
 
+  /**
+   * Open the ward's vault folder in the OS native file browser
+   * (POST /api/wards/:ward_id/open). Returns the resolved absolute path on
+   * success; fails with 404 if the ward directory doesn't exist on disk.
+   */
+  openWard(wardId: string): Promise<TransportResult<{ path: string }>>;
+
   /** Unified hybrid search across memory types (POST /api/memory/search) */
   searchMemoryHybrid(req: HybridSearchRequest): Promise<TransportResult<HybridSearchResponse>>;
 
