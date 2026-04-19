@@ -91,7 +91,15 @@ function RespondMarkdown({ content }: { content: string }) {
 }
 
 function StreamingBuffer({ text }: { text: string }) {
-  return <span className="agent-turn-block__streaming">{text}</span>;
+  // Parity with chat-v2: stream tokens render as markdown too (same component
+  // as the final respond, just styled with a "streaming" class for cursor/
+  // opacity). Without this, code fences and lists flash as raw text until the
+  // turn completes.
+  return (
+    <div className="agent-turn-block__streaming">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    </div>
+  );
 }
 
 function WaitingPlaceholder() {

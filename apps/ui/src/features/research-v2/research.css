@@ -216,8 +216,17 @@
 }
 
 .agent-turn-block__streaming {
-  color: var(--muted-foreground);
-  font-style: italic;
+  opacity: 0.85;
+}
+.agent-turn-block__streaming > *:last-child::after {
+  content: "▊";
+  color: var(--primary);
+  margin-left: 2px;
+  animation: agent-turn-block-cursor 1s steps(2, end) infinite;
+}
+@keyframes agent-turn-block-cursor {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
 }
 
 .agent-turn-block__placeholder {
