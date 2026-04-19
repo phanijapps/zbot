@@ -53,4 +53,11 @@ describe("reducePillState", () => {
     const s2 = reducePillState(s1, { kind: "reset" });
     expect(s2).toEqual(EMPTY_PILL);
   });
+
+  it("flips category to respond on respond event", () => {
+    const s1 = reducePillState(EMPTY_PILL, { kind: "agent_started", agent_id: "root" });
+    const s2 = reducePillState(s1, { kind: "respond" });
+    expect(s2.category).toBe("respond");
+    expect(s2.swapCounter).toBeGreaterThan(s1.swapCounter);
+  });
 });
