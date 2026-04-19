@@ -142,24 +142,29 @@
   align-items: flex-start;
   position: relative;
 }
+/* User message stays right-aligned and horizontally packed. */
 .research-msg--user {
   justify-content: flex-end;
 }
+/* Assistant message stacks: avatar on top, message below, copy tucked
+ * under the body on the left. Gives the response room to breathe. */
 .research-msg--assistant {
-  justify-content: flex-start;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
 }
 .research-msg__avatar {
   flex-shrink: 0;
-  margin-top: 2px;
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
   background: var(--muted);
-  padding: 2px;
+  padding: 3px;
 }
 .research-msg__body {
   flex: 1;
   min-width: 0;
+  width: 100%;
 }
 .research-msg__copy {
   flex-shrink: 0;
@@ -168,7 +173,6 @@
   justify-content: center;
   width: 22px;
   height: 22px;
-  margin-top: 2px;
   background: transparent;
   color: var(--muted-foreground);
   border: 1px solid transparent;
@@ -176,6 +180,11 @@
   cursor: pointer;
   opacity: 0;
   transition: opacity 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+/* Assistant copy sits under the message, left-aligned. */
+.research-msg--assistant .research-msg__copy {
+  align-self: flex-start;
+  margin-left: 0;
 }
 .research-msg:hover .research-msg__copy,
 .research-msg__copy:focus-visible {
