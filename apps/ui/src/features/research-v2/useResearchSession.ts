@@ -31,6 +31,34 @@ function isVisibleResearchMessage(m: SessionMessage): boolean {
   return m.role === "user" || m.role === "assistant";
 }
 
+/**
+ * Agents often stream 2–3 intermediate narrations per user turn
+ * ("I'll help you…", "Step 1 requires…", "All 4 steps are complete…") that
+ * get persisted as separate assistant rows. On hydrate we keep only the
+ * LAST assistant per user turn — the true "final answer" in respond-tool
+ * sessions, and the least-bad fallback otherwise. Tool-call placeholders
+ * are already dropped by isVisibleResearchMessage.
+ */
+function collapseAssistantsPerUserTurn(
+  msgs: SessionMessage[],
+): SessionMessage[] {
+  const out: SessionMessage[] = [];
+  let lastAssistant: SessionMessage | null = null;
+  for (const m of msgs) {
+    if (m.role === "user") {
+      if (lastAssistant) {
+        out.push(lastAssistant);
+        lastAssistant = null;
+      }
+      out.push(m);
+    } else {
+      lastAssistant = m;
+    }
+  }
+  if (lastAssistant) out.push(lastAssistant);
+  return out;
+}
+
 function messageFromApi(m: SessionMessage): ResearchMessage {
   return {
     id: m.id,
@@ -52,8 +80,9 @@ async function hydrateExistingSession(
 ): Promise<{ messages: ResearchMessage[] } | null> {
   const msgs = await transport.getSessionMessages(sessionId, { scope: "root" });
   if (!msgs.success || !msgs.data) return null;
-  const messages = msgs.data
-    .filter(isVisibleResearchMessage)
+  const visible = msgs.data.filter(isVisibleResearchMessage);
+  const collapsed = collapseAssistantsPerUserTurn(visible);
+  const messages = collapsed
     .slice(-HISTORY_TAIL_LIMIT)
     .map(messageFromApi);
   return { messages };
