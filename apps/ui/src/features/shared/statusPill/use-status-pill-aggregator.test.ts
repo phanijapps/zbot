@@ -20,7 +20,7 @@ describe("reducePillState", () => {
     const s1 = reducePillState(EMPTY_PILL, { kind: "agent_started", agent_id: "root" });
     const s2 = reducePillState(s1, { kind: "tool_call", tool: "write_file", args: { path: "a.py" } });
     expect(s2.narration).toBe("Creating a.py");
-    expect(s2.suffix).toBe("· a.py");
+    expect(s2.suffix).toBe("a.py");
     expect(s2.category).toBe("write");
     expect(s2.starting).toBe(false);
   });

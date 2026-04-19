@@ -1,33 +1,42 @@
-/* Status indicator — "inkwell strip"
+/* Status indicator — two-row "inkwell + terminal"
  *
- * A flat card (not a pill) that matches the warm-paper theme. A left
- * accent stripe carries the category color, the narration is italicised
- * and continuously shimmers in a primary→foreground gradient so the eye
- * catches the motion without needing a chrome-heavy container. The
- * monospace suffix right-aligns to anchor the active tool/file.
+ * Top row (always visible while pill is visible): paper surface with the
+ * verb narration, category-colored pulsing dot, and a slow shimmer on
+ * the text.
+ *
+ * Bottom row (visible only when suffix is present): dark terminal-style
+ * surface with a green `$` prompt and monospace command text. Truncates
+ * with ellipsis.
+ *
+ * All colors are theme tokens. No hardcoded hex values.
  */
 .status-pill {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
   width: 480px;
   max-width: calc(100% - 32px);
-  padding: 8px 14px 8px 18px;
-  border-radius: 4px;
-  font-size: 13px;
-  line-height: 1.35;
-
   background: var(--background-surface);
   border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
   animation: status-pill-slide-in 180ms ease-out;
   color: var(--muted-foreground);
-  overflow: hidden;
 }
 
-/* Left accent stripe — category color. */
-.status-pill::before {
+/* --- Header row ---------------------------------------------------------- */
+.status-pill__header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px 8px 18px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+/* Left accent stripe — pulses in the category color. */
+.status-pill__header::before {
   content: "";
   position: absolute;
   left: 0;
@@ -38,17 +47,15 @@
   animation: status-pill-stripe-glow 1.6s ease-in-out infinite;
 }
 
-/* The "ink running" dot — a tiny writing head that tracks the shimmer. */
 .status-pill__dot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
   background: currentColor;
   flex-shrink: 0;
-  opacity: 0.8;
+  opacity: 0.85;
 }
 
-/* Narration — the headline. Italic + continuous shimmer gradient. */
 .status-pill__narration {
   flex: 1;
   min-width: 0;
@@ -72,46 +79,62 @@
   white-space: nowrap;
 }
 
-.status-pill__suffix {
-  color: var(--muted-foreground);
-  font-family: ui-monospace, monospace;
-  font-size: 11px;
+/* --- Terminal row -------------------------------------------------------- */
+.status-pill__terminal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--sidebar);
+  border-top: 1px solid var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--background);
+}
+
+.status-pill__prompt {
+  color: var(--success);
   flex-shrink: 0;
-  max-width: 40%;
+  font-weight: 600;
+  user-select: none;
+}
+
+.status-pill__command {
+  flex: 1;
+  min-width: 0;
+  color: var(--background);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding-left: 8px;
-  border-left: 1px solid var(--border);
 }
 
+/* --- Category accents (top row only) ------------------------------------ */
 .status-pill[data-category="read"]     { color: var(--blue); }
 .status-pill[data-category="write"]    { color: var(--teal); }
 .status-pill[data-category="delegate"] { color: var(--purple); }
 .status-pill[data-category="respond"]  { color: var(--success); }
 .status-pill[data-category="neutral"]  { color: var(--muted-foreground); }
 
+/* --- Animations ---------------------------------------------------------- */
 @keyframes status-pill-slide-in {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Accent stripe pulses gently — a heartbeat, not a flashing alert. */
 @keyframes status-pill-stripe-glow {
   0%, 100% { opacity: 0.55; }
   50%      { opacity: 1; }
 }
 
-/* Ink shimmer — gradient sweeps right-to-left across the narration. */
 @keyframes status-pill-ink-flow {
   0%   { background-position: 100% 0; }
   100% { background-position: -100% 0; }
 }
 
-/* Reduce motion for accessibility. */
 @media (prefers-reduced-motion: reduce) {
   .status-pill,
-  .status-pill::before,
+  .status-pill__header::before,
   .status-pill__narration {
     animation: none;
   }

@@ -9,21 +9,40 @@ describe("<StatusPill>", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders narration + suffix when visible", () => {
+  it("renders narration only (no terminal row) when suffix is empty", () => {
     render(
       <StatusPill
         state={{
           ...EMPTY_PILL,
           visible: true,
-          narration: "Recalling fundamentals",
-          suffix: "· memory",
+          narration: "Thinking…",
+          suffix: "",
+          category: "neutral",
+          swapCounter: 1,
+        }}
+      />
+    );
+    expect(screen.getByText("Thinking…")).toBeTruthy();
+    expect(screen.queryByTestId("status-pill-terminal")).toBeNull();
+  });
+
+  it("renders narration + terminal row when suffix is present", () => {
+    render(
+      <StatusPill
+        state={{
+          ...EMPTY_PILL,
+          visible: true,
+          narration: "Running shell",
+          suffix: "ls -la ~",
           category: "read",
           swapCounter: 1,
         }}
       />
     );
-    expect(screen.getByText("Recalling fundamentals")).toBeTruthy();
-    expect(screen.getByText("· memory")).toBeTruthy();
+    expect(screen.getByText("Running shell")).toBeTruthy();
+    expect(screen.getByTestId("status-pill-terminal")).toBeTruthy();
+    expect(screen.getByText("ls -la ~")).toBeTruthy();
+    expect(screen.getByText("$")).toBeTruthy();
   });
 
   it("applies category data attribute", () => {
