@@ -26,9 +26,14 @@ const CONV_ID_PREFIX = "research-";
 // --- Pure helpers ---------------------------------------------------------
 
 function isVisibleResearchMessage(m: SessionMessage): boolean {
-  if (m.role === "tool") return false;
-  if (m.role === "assistant" && m.content.trim() === "[tool calls]") return false;
-  return m.role === "user" || m.role === "assistant";
+  if (m.role !== "user" && m.role !== "assistant") return false;
+  // `[tool calls]` rows that carry a respond message in their toolCalls column
+  // get upgraded to the real message in messageFromApi — keep them visible.
+  // Pure tool-call placeholders without a respond get dropped.
+  if (m.role === "assistant" && m.content.trim() === "[tool calls]") {
+    return extractRespondMessage(m) !== null;
+  }
+  return true;
 }
 
 /**
@@ -59,14 +64,49 @@ function collapseAssistantsPerUserTurn(
   return out;
 }
 
+/**
+ * `[tool calls]` is the content placeholder the backend writes when an
+ * assistant message was a pure tool invocation. The actual respond message
+ * (the final answer) lives in the parallel `toolCalls` column as a JSON
+ * string whose entries carry `tool_name: "respond"` and `args.message`.
+ * Upgrade the placeholder to the real message so hydrated history
+ * surfaces the agent's final deliverable. Accepts both camelCase
+ * `toolCalls` (current wire) and snake_case `tool_calls` (legacy).
+ */
+function extractRespondMessage(m: SessionMessage): string | null {
+  const candidate =
+    (m as unknown as { toolCalls?: unknown }).toolCalls ?? m.tool_calls;
+  if (candidate == null) return null;
+  const raw = typeof candidate === "string" ? candidate : JSON.stringify(candidate);
+  try {
+    const parsed = JSON.parse(raw) as Array<{
+      tool_name?: string;
+      args?: { message?: string };
+    }>;
+    if (!Array.isArray(parsed)) return null;
+    for (const call of parsed) {
+      if (call?.tool_name === "respond" && typeof call.args?.message === "string") {
+        return call.args.message;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function messageFromApi(m: SessionMessage): ResearchMessage {
+  const upgraded =
+    m.role === "assistant" && m.content.trim() === "[tool calls]"
+      ? extractRespondMessage(m)
+      : null;
   return {
     id: m.id,
     // Live sessions render the agent's answer through turn blocks; hydrated
     // history lacks turns to rebuild from, so the page renders these assistant
     // messages directly as markdown (see ResearchPage.MainColumn).
     role: m.role === "user" ? "user" : "assistant",
-    content: m.content,
+    content: upgraded ?? m.content,
     timestamp: new Date(m.created_at).getTime(),
   };
 }
