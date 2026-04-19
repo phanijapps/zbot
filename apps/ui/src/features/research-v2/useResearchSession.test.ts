@@ -319,9 +319,15 @@ describe("useResearchSession — subscription ordering (R14a)", () => {
       await result.current.sendMessage("follow-up");
     });
 
-    expect(subscribeConversation).toHaveBeenCalledTimes(1);
-    const convId = lastSubscribedConvId();
+    // R14g: two subscriptions now — one on the client-minted convId (for
+    // conv-id-routed events) and one on sessionId (scope="session", for
+    // session-routed events like delegation_started, title changes, subagent
+    // lifecycle). Transport seq dedup handles any overlap.
+    expect(subscribeConversation).toHaveBeenCalledTimes(2);
+    const subscribedKeys = subscribeConversation.mock.calls.map((c) => c[0]);
+    const convId = subscribedKeys.find((k) => k.startsWith("research-"));
     expect(convId).toMatch(/^research-/);
+    expect(subscribedKeys).toContain(EXISTING_SESSION);
 
     // executeAgent gets (agentId, convId, message, sessionId, mode).
     const invokeArgs = executeAgent.mock.calls[0];
@@ -454,8 +460,14 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
     await act(async () => {
       await result.current.sendMessage("hello");
     });
-    expect(subscribeConversation).toHaveBeenCalledTimes(1);
-    const onEvent = subscribeConversation.mock.calls[0][1].onEvent;
+    // R14g: dual subscription — the client-minted convId from sendMessage PLUS
+    // the session-id subscription (scope="session") that kicks in once status
+    // flips to "running". Both feed the same handler.
+    expect(subscribeConversation).toHaveBeenCalledTimes(2);
+    // Grab the convId handler for event injection (both share the same ctx).
+    const convCall = subscribeConversation.mock.calls.find((c) => c[0].startsWith("research-"));
+    expect(convCall).toBeTruthy();
+    const onEvent = convCall![1].onEvent;
 
     // Second snapshot returns the finalised title + artifact.
     listLogSessions.mockResolvedValue({

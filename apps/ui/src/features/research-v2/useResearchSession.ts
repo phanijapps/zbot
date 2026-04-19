@@ -188,6 +188,13 @@ export function useResearchSession() {
   const hydratedForSessionRef = useRef<string | null>(null); // one-shot hydration guard (StrictMode)
   const subscribedConvIdRef = useRef<string | null>(null); // R14a: sendMessage owns subscription
   const unsubscribeRef = useRef<UnsubscribeFn | null>(null);
+  // R14g: second subscription on state.sessionId + scope="session". Receives
+  // events routed by session_id (delegation_started/_completed,
+  // session_title_changed, subagent agent_started/_completed, etc.) that the
+  // conv-id-keyed subscription misses because those events lack a top-level
+  // conversation_id field. Transport's seq-based dedup handles any overlap.
+  const subscribedSessionIdRef = useRef<string | null>(null);
+  const unsubscribeSessionRef = useRef<UnsubscribeFn | null>(null);
   // state holds light refs; latestArtifactsRef mirrors the full Artifact
   // records so ArtifactSlideOut can resolve id → Artifact without refetching.
   const latestArtifactsRef = useRef<Artifact[]>([]);
@@ -208,9 +215,54 @@ export function useResearchSession() {
 
   // --- Subscription cleanup on unmount (StrictMode-safe). ---
   useEffect(() => {
-    const refs: SubscriptionRefs = { subscribedConvIdRef, unsubscribeRef };
-    return () => teardownSubscription(refs);
+    const convRefs: SubscriptionRefs = { subscribedConvIdRef, unsubscribeRef };
+    const sessionRefs: SubscriptionRefs = {
+      subscribedConvIdRef: subscribedSessionIdRef,
+      unsubscribeRef: unsubscribeSessionRef,
+    };
+    return () => {
+      teardownSubscription(convRefs);
+      teardownSubscription(sessionRefs);
+    };
   }, []);
+
+  // --- R14g: session-id subscription (scope="session"). Fires whenever a
+  // session is RUNNING and its sessionId is known (from snapshot hydrate OR
+  // invoke_accepted). Receives session-routed events the conv-id subscription
+  // misses (delegation, title change, subagent lifecycle). Idle/complete
+  // sessions don't subscribe — nothing more to receive. ---
+  useEffect(() => {
+    const sid = state.sessionId;
+    if (!sid || state.status !== "running") return;
+    if (subscribedSessionIdRef.current === sid) return;
+    const onRootAgentCompleted = (execId: string) => {
+      if (resnapshotForExecRef.current === execId) return;
+      resnapshotForExecRef.current = execId;
+      void hydrateFromSnapshot(sid, dispatch, latestArtifactsRef);
+    };
+    const onEvent = makeEventHandler({ pillSink, dispatch, onRootAgentCompleted });
+    // Tear down any prior session-id subscription, then register the new one.
+    teardownSubscription({
+      subscribedConvIdRef: subscribedSessionIdRef,
+      unsubscribeRef: unsubscribeSessionRef,
+    });
+    let cancelled = false;
+    void (async () => {
+      const transport = await getTransport();
+      if (cancelled) return;
+      const unsub = transport.subscribeConversation(sid, {
+        scope: "session",
+        onEvent,
+      });
+      subscribedSessionIdRef.current = sid;
+      unsubscribeSessionRef.current = unsub;
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // pillSink has stable identity; dispatch is stable; intentional exhaustive-deps skip.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.sessionId, state.status]);
 
   // --- Sync URL when the backend hands us a session id ---
   useEffect(() => {
