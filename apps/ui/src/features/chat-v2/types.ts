@@ -18,6 +18,14 @@ export interface QuickChatMessage {
 
 export type QuickChatStatus = "idle" | "running" | "error";
 
+export interface QuickChatArtifactRef {
+  id: string;
+  fileName: string;
+  fileType?: string;
+  fileSize?: number;
+  label?: string;
+}
+
 export interface QuickChatState {
   /** Set by HYDRATE after the reserved chat session is bootstrapped. */
   sessionId: string | null;
@@ -26,6 +34,8 @@ export interface QuickChatState {
   messages: QuickChatMessage[];
   status: QuickChatStatus;
   activeWardName: string | null;
+  /** Files the agent wrote during this session, newest-last. */
+  artifacts: QuickChatArtifactRef[];
 }
 
 export const EMPTY_QUICK_CHAT_STATE: QuickChatState = {
@@ -34,4 +44,5 @@ export const EMPTY_QUICK_CHAT_STATE: QuickChatState = {
   messages: [],
   status: "idle",
   activeWardName: null,
+  artifacts: [],
 };

@@ -26,6 +26,7 @@ function makeIdleHook(): MockHookReturn {
       messages: [],
       status: "idle",
       activeWardName: "stock-analysis",
+      artifacts: [],
     },
     pillState: { visible: false, narration: "", suffix: "", category: "neutral", starting: false, swapCounter: 0 },
     sendMessage: vi.fn(),

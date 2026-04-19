@@ -2,11 +2,13 @@ import { useCallback, useEffect, useReducer, useRef, type Dispatch } from "react
 import { getTransport } from "@/services/transport";
 import type { Transport } from "@/services/transport";
 import type {
+  Artifact,
   ConversationEvent,
   SessionMessage,
 } from "@/services/transport/types";
 import { useStatusPill, type PillEventSink } from "../shared/statusPill";
 import {
+  type QuickChatArtifactRef,
   type QuickChatMessage,
   EMPTY_QUICK_CHAT_STATE,
 } from "./types";
@@ -56,27 +58,49 @@ function sessionMessageToQuickChat(m: SessionMessage): QuickChatMessage {
   };
 }
 
-/** Idempotent bootstrap: init the reserved session and pull the history tail. */
+function artifactToRef(a: Artifact): QuickChatArtifactRef {
+  return {
+    id: a.id,
+    fileName: a.fileName,
+    fileType: a.fileType,
+    fileSize: a.fileSize,
+    label: a.label,
+  };
+}
+
+/** Pull the session's current artifact manifest; swallow errors. */
+async function fetchArtifacts(
+  transport: Transport,
+  sessionId: string
+): Promise<QuickChatArtifactRef[]> {
+  const result = await transport.listSessionArtifacts(sessionId);
+  if (!result.success || !result.data) return [];
+  return result.data.map(artifactToRef);
+}
+
+/** Idempotent bootstrap: init the reserved session, pull history + artifacts. */
 async function bootstrapChatSession(
   transport: Transport
 ): Promise<{
   sessionId: string;
   conversationId: string;
   messages: QuickChatMessage[];
+  artifacts: QuickChatArtifactRef[];
 } | null> {
   const init = await transport.initChatSession();
   if (!init.success || !init.data) return null;
 
   const { sessionId, conversationId, created } = init.data;
 
-  // New sessions have no history to fetch — skip the round-trip.
+  // New sessions have no history or artifacts to fetch.
   if (created) {
-    return { sessionId, conversationId, messages: [] };
+    return { sessionId, conversationId, messages: [], artifacts: [] };
   }
 
-  const history = await transport.getSessionMessages(sessionId, {
-    scope: "root",
-  });
+  const [history, artifacts] = await Promise.all([
+    transport.getSessionMessages(sessionId, { scope: "root" }),
+    fetchArtifacts(transport, sessionId),
+  ]);
   const messages =
     history.success && history.data
       ? history.data
@@ -85,7 +109,7 @@ async function bootstrapChatSession(
           .map(sessionMessageToQuickChat)
       : [];
 
-  return { sessionId, conversationId, messages };
+  return { sessionId, conversationId, messages, artifacts };
 }
 
 /** Build the WS event handler once; closure captures the stable pill sink. */
@@ -135,6 +159,7 @@ export function useQuickChat() {
         conversationId: result.conversationId,
         messages: result.messages,
         wardName: null, // populated by later WardChanged events
+        artifacts: result.artifacts,
       });
     })();
   }, []);
@@ -159,6 +184,21 @@ export function useQuickChat() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.conversationId]);
+
+  // --- Refresh artifacts on turn completion ---
+  // When a turn finishes the agent may have written new files; pull the
+  // artifact manifest so cards appear in the assistant bubble.
+  useEffect(() => {
+    if (state.status !== "idle" || !state.sessionId) return;
+    let cancelled = false;
+    (async () => {
+      const transport = await getTransport();
+      const fresh = await fetchArtifacts(transport, state.sessionId!);
+      if (cancelled) return;
+      dispatch({ type: "SET_ARTIFACTS", artifacts: fresh });
+    })();
+    return () => { cancelled = true; };
+  }, [state.status, state.sessionId]);
 
   // --- Send a user message against the reserved session ---
   const sendMessage = useCallback(
@@ -217,6 +257,7 @@ export function useQuickChat() {
       conversationId: fresh.conversationId,
       messages: fresh.messages,
       wardName: null,
+      artifacts: fresh.artifacts,
     });
   }, []);
 

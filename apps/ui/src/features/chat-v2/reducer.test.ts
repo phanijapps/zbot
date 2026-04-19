@@ -66,10 +66,20 @@ describe("reduceQuickChat", () => {
       conversationId: "quick-chat-1",
       messages: [{ id: "m1", role: "user", content: "hi", timestamp: 1 }],
       wardName: "default",
+      artifacts: [],
     });
     expect(s.sessionId).toBe("sess-1");
     expect(s.messages).toHaveLength(1);
     expect(s.activeWardName).toBe("default");
+  });
+
+  it("SET_ARTIFACTS replaces artifact list", () => {
+    const s = reduceQuickChat(EMPTY_QUICK_CHAT_STATE, {
+      type: "SET_ARTIFACTS",
+      artifacts: [{ id: "art-1", fileName: "scratch-today.md", fileType: "md" }],
+    });
+    expect(s.artifacts).toHaveLength(1);
+    expect(s.artifacts[0].fileName).toBe("scratch-today.md");
   });
 
   it("AGENT_STARTED flips status to running", () => {

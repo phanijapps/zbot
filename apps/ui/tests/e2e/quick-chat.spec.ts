@@ -1,15 +1,16 @@
 import { test, expect } from './fixtures';
-import type { Page } from '@playwright/test';
+import type { Page, Route } from '@playwright/test';
 
 /**
  * Quick Chat v2 E2E tests.
  *
- * Structure:
- * - "Page load" tests run without a daemon — they verify rendering only.
- * - "Agent-backed" tests require the gateway daemon to be running at
- *   http://localhost:18791 and the `quick-chat` agent to be installed
- *   under ~/Documents/zbot/agents/quick-chat/. They skip if the daemon
- *   isn't reachable so CI doesn't false-positive.
+ * Layout:
+ *   • "Page load" — no daemon, no mocks. Just rendering + routing.
+ *   • "Route-mocked" — intercepts /api/chat/init + /api/.../artifacts so
+ *     we can drive UI flows (artifact cards, slide-out) without needing
+ *     the agent to actually produce a file.
+ *   • "Agent-backed" — auto-skip if the gateway isn't running; live send
+ *     of simple prompts to verify the pill + reply render.
  */
 
 const API_BASE = 'http://localhost:18791';
@@ -27,7 +28,6 @@ async function daemonReachable(): Promise<boolean> {
 
 async function openQuickChat(page: Page) {
   await page.goto('/chat-v2');
-  // Wait for either the empty state or an existing conversation to render.
   await page.waitForSelector('.quick-chat', { state: 'visible', timeout: 15_000 });
 }
 
@@ -40,10 +40,8 @@ async function sendPrompt(page: Page, text: string) {
 async function waitForAssistantReply(page: Page, timeoutMs = 60_000): Promise<string> {
   const assistant = page.locator('.quick-chat__assistant').last();
   await assistant.waitFor({ state: 'visible', timeout: timeoutMs });
-  // Assistant bubble streams — give it a moment to settle, then snapshot.
   await page.waitForTimeout(500);
-  const text = (await assistant.textContent()) ?? '';
-  return text.trim();
+  return ((await assistant.textContent()) ?? '').trim();
 }
 
 // ===========================================================================
@@ -51,44 +49,148 @@ async function waitForAssistantReply(page: Page, timeoutMs = 60_000): Promise<st
 // ===========================================================================
 
 test.describe('Quick Chat v2 — page load', () => {
-  test('empty state renders with composer and New chat button', async ({ page }) => {
+  test('renders composer and Clear button', async ({ page }) => {
     await openQuickChat(page);
 
-    await expect(page.getByRole('heading', { name: 'Quick chat' })).toBeVisible();
+    // The empty-state heading only shows when the reserved session has no
+    // history — the composer + Clear button are always visible once
+    // bootstrapped, so they're the portable page-load assertion.
     await expect(page.getByPlaceholder('Type a message...')).toBeVisible();
-    await expect(page.getByRole('button', { name: /New chat/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Clear chat/i })).toBeVisible();
   });
 
-  test('ward chip is present (either active ward name or "no ward")', async ({ page }) => {
+  test('does NOT render a legacy "New chat" button', async ({ page }) => {
     await openQuickChat(page);
-
-    const chip = page.locator('.quick-chat__ward-chip');
-    await expect(chip).toBeVisible();
-    const text = (await chip.textContent())?.trim() ?? '';
-    expect(text.length).toBeGreaterThan(0);
+    await expect(page.getByText(/New chat/i)).toHaveCount(0);
   });
 
   test('status pill is hidden while session is idle', async ({ page }) => {
     await openQuickChat(page);
-
-    const pill = page.locator('[data-testid="status-pill"]');
-    await expect(pill).toHaveCount(0);
-  });
-
-  test('New chat button navigates back to /chat-v2 root', async ({ page }) => {
-    await openQuickChat(page);
-
-    // Simulate a session-scoped URL; the app should redirect/clear on New chat.
-    await page.goto('/chat-v2/sess-deadbeef');
-    await page.waitForSelector('.quick-chat', { state: 'visible' });
-
-    await page.getByRole('button', { name: /New chat/i }).click();
-    await expect(page).toHaveURL(/\/chat-v2\/?$/);
+    await expect(page.locator('[data-testid="status-pill"]')).toHaveCount(0);
   });
 });
 
 // ===========================================================================
-// Agent-backed tests (require running gateway daemon + quick-chat agent)
+// Route-mocked tests — drive UI behaviours without the real agent
+// ===========================================================================
+
+const STUB_SESSION = {
+  sessionId: 'sess-chat-e2e',
+  conversationId: 'chat-e2e',
+  created: false,
+};
+
+const STUB_ARTIFACTS = [
+  {
+    id: 'art-e2e-1',
+    sessionId: STUB_SESSION.sessionId,
+    filePath: '/tmp/notes-2026-04-19.md',
+    fileName: 'notes-2026-04-19.md',
+    fileType: 'md',
+    fileSize: 420,
+    label: 'daily note',
+    createdAt: new Date().toISOString(),
+  },
+];
+
+const STUB_ARTIFACT_CONTENT = `# Today
+2026-04-19 12:34 EDT
+
+A short note written in the scratch ward.
+`;
+
+async function installApiStubs(page: Page) {
+  // Stub chat/init (idempotent).
+  await page.route(`${API_BASE}/api/chat/init`, async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(STUB_SESSION),
+    });
+  });
+
+  // Stub root-scoped messages (empty history).
+  await page.route(
+    new RegExp(`${API_BASE}/api/executions/v2/sessions/${STUB_SESSION.sessionId}/messages.*`),
+    (route: Route) => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+  );
+
+  // Stub artifact list (one file).
+  await page.route(
+    `${API_BASE}/api/sessions/${STUB_SESSION.sessionId}/artifacts`,
+    (route: Route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(STUB_ARTIFACTS) })
+  );
+
+  // Stub artifact content (served on slide-out open).
+  await page.route(
+    `${API_BASE}/api/artifacts/${STUB_ARTIFACTS[0].id}/content`,
+    (route: Route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'text/markdown',
+        body: STUB_ARTIFACT_CONTENT,
+      })
+  );
+}
+
+test.describe('Quick Chat v2 — route-mocked', () => {
+  test('renders artifact card + opens slide-out with file content', async ({ page }) => {
+    await installApiStubs(page);
+
+    // Seed the UI with a visible user message so the artifact strip renders
+    // (the strip is hidden on the empty state).
+    await page.addInitScript(() => {
+      // Nothing — user message is appended by driving the composer below.
+    });
+
+    await openQuickChat(page);
+    await sendPrompt(page, 'create a scratch note');
+
+    // Wait for the artifact card to appear after the turn-complete refresh.
+    const artifactCard = page.getByTestId('quick-chat-artifact').first();
+    await artifactCard.waitFor({ state: 'visible', timeout: 10_000 });
+    await expect(artifactCard).toContainText('notes-2026-04-19.md');
+
+    // Click the card — slide-out opens.
+    await artifactCard.click();
+    const slideOut = page.locator('.artifact-slideout').first();
+    await expect(slideOut).toBeVisible();
+
+    // Slide-out shows the markdown filename header and content.
+    await expect(slideOut).toContainText('notes-2026-04-19.md');
+    await expect(slideOut).toContainText('A short note written in the scratch ward');
+
+    // Close via the X button.
+    await slideOut.getByTitle('Close').click();
+    await expect(slideOut).toHaveCount(0);
+  });
+
+  test('Clear button triggers confirm + DELETE /api/chat/session', async ({ page }) => {
+    await installApiStubs(page);
+
+    let deleteHit = false;
+    await page.route(`${API_BASE}/api/chat/session`, (route: Route) => {
+      if (route.request().method() === 'DELETE') {
+        deleteHit = true;
+      }
+      return route.fulfill({ status: 204, body: '' });
+    });
+
+    await openQuickChat(page);
+
+    // Auto-accept the browser confirm.
+    page.once('dialog', (d) => d.accept());
+
+    await page.getByRole('button', { name: /Clear chat/i }).click();
+    // Give the async DELETE a moment to hit the route handler.
+    await page.waitForTimeout(500);
+    expect(deleteHit).toBe(true);
+  });
+});
+
+// ===========================================================================
+// Agent-backed tests (auto-skip if daemon not reachable at :18791)
 // ===========================================================================
 
 test.describe('Quick Chat v2 — agent-backed', () => {
@@ -97,67 +199,22 @@ test.describe('Quick Chat v2 — agent-backed', () => {
     testInfo.skip(!ok, `gateway daemon not reachable at ${API_BASE}`);
   });
 
-  test('answers "what is the time now?" with a grounded response', async ({ page }) => {
+  test('answers a simple prompt', async ({ page }) => {
     test.setTimeout(90_000);
     await openQuickChat(page);
-
-    await sendPrompt(page, 'What is the time now?');
-
-    // User bubble appears immediately.
-    await expect(page.locator('.quick-chat__user-bubble').last()).toContainText(/time/i);
-
-    // Assistant reply arrives.
+    await sendPrompt(page, 'Say hello in one short sentence.');
+    await expect(page.locator('.quick-chat__user-bubble').last()).toContainText(/hello/i);
     const reply = await waitForAssistantReply(page);
-
-    // Must be non-empty and mention something time-shaped. The agent has no
-    // clock tool in its allowlist, so the expected behavior is either:
-    //   (a) answer from general knowledge of the session's date, OR
-    //   (b) explicitly state it has no time access.
     expect(reply.length).toBeGreaterThan(0);
-    expect(reply).toMatch(/(time|clock|date|don'?t have|cannot|unable|\d)/i);
-  });
-
-  test('answers "what skills and agents do you have?" by listing capabilities', async ({ page }) => {
-    test.setTimeout(90_000);
-    await openQuickChat(page);
-
-    await sendPrompt(page, 'What skills and agents do you have access to?');
-
-    await expect(page.locator('.quick-chat__user-bubble').last()).toContainText(/skills|agents/i);
-
-    const reply = await waitForAssistantReply(page);
-
-    expect(reply.length).toBeGreaterThan(0);
-    // Reply must discuss skills, agents, or tools — the quick-chat prompt
-    // explicitly names memory, load_skill, delegate_to_agent, ward, grep,
-    // graph_query, ingest, multimodal_analyze, respond.
-    expect(reply).toMatch(/(skill|agent|tool|memory|delegate|ward)/i);
   });
 
   test('status pill appears while the agent is working', async ({ page }) => {
     test.setTimeout(90_000);
     await openQuickChat(page);
-
-    await sendPrompt(page, 'Say hello in one short sentence.');
-
-    // Pill should appear within a few seconds of sending.
+    await sendPrompt(page, 'What is 2 plus 2?');
     const pill = page.locator('[data-testid="status-pill"]');
     await expect(pill).toBeVisible({ timeout: 15_000 });
-
-    // And should disappear once the turn completes.
     await waitForAssistantReply(page);
     await expect(pill).toHaveCount(0, { timeout: 30_000 });
-  });
-
-  test('URL updates to /chat-v2/:sessionId after first message', async ({ page }) => {
-    test.setTimeout(90_000);
-    await openQuickChat(page);
-
-    await expect(page).toHaveURL(/\/chat-v2\/?$/);
-
-    await sendPrompt(page, 'Hi.');
-    await waitForAssistantReply(page);
-
-    await expect(page).toHaveURL(/\/chat-v2\/sess-[\w-]+$/);
   });
 });

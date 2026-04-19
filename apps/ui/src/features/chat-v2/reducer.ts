@@ -1,7 +1,7 @@
-import type { QuickChatMessage, QuickChatState, QuickChatInlineChip } from "./types";
+import type { QuickChatArtifactRef, QuickChatMessage, QuickChatState, QuickChatInlineChip } from "./types";
 
 export type QuickChatAction =
-  | { type: "HYDRATE"; sessionId: string; conversationId: string; messages: QuickChatMessage[]; wardName: string | null }
+  | { type: "HYDRATE"; sessionId: string; conversationId: string; messages: QuickChatMessage[]; wardName: string | null; artifacts: QuickChatArtifactRef[] }
   | { type: "APPEND_USER"; message: QuickChatMessage }
   | { type: "SESSION_BOUND"; sessionId: string }
   | { type: "AGENT_STARTED"; agentId: string }
@@ -10,7 +10,8 @@ export type QuickChatAction =
   | { type: "ADD_CHIP"; chip: QuickChatInlineChip }
   | { type: "TURN_COMPLETE" }
   | { type: "ERROR"; message: string }
-  | { type: "WARD_CHANGED"; wardName: string };
+  | { type: "WARD_CHANGED"; wardName: string }
+  | { type: "SET_ARTIFACTS"; artifacts: QuickChatArtifactRef[] };
 
 function upsertStreamingAssistant(
   messages: QuickChatMessage[],
@@ -65,6 +66,7 @@ export function reduceQuickChat(state: QuickChatState, action: QuickChatAction):
         messages: action.messages,
         activeWardName: action.wardName,
         status: "idle",
+        artifacts: action.artifacts,
       };
     case "APPEND_USER":
       return { ...state, messages: [...state.messages, action.message], status: "running" };
@@ -84,6 +86,8 @@ export function reduceQuickChat(state: QuickChatState, action: QuickChatAction):
       return { ...state, status: "error" };
     case "WARD_CHANGED":
       return { ...state, activeWardName: action.wardName };
+    case "SET_ARTIFACTS":
+      return { ...state, artifacts: action.artifacts };
     default:
       return state;
   }
