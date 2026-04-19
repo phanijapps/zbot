@@ -104,12 +104,6 @@ export function mapGatewayEventToQuickChatAction(ev: ConversationEvent): QuickCh
 // mapGatewayEventToPillEvent
 // ---------------------------------------------------------------------------
 
-function mapPillThinking(ev: Record<string, unknown>): PillEvent | null {
-  const content = ev["content"];
-  if (typeof content !== "string" || content.length === 0) return null;
-  return { kind: "thinking", content };
-}
-
 function mapPillToolCall(ev: Record<string, unknown>): PillEvent | null {
   const tool = (ev["tool_name"] ?? ev["tool"]) as string | undefined;
   if (typeof tool !== "string") return null;
@@ -133,7 +127,6 @@ export function mapGatewayEventToPillEvent(ev: ConversationEvent): PillEvent | n
   switch (type) {
     case "agent_started":   return { kind: "agent_started", agent_id: (raw["agent_id"] ?? "") as string };
     case "agent_completed": return mapPillAgentCompleted(raw);
-    case "thinking":        return mapPillThinking(raw);
     case "tool_call":       return mapPillToolCall(raw);
     case "respond":         return { kind: "respond" };
     default:                return null;

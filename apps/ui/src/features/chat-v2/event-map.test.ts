@@ -104,9 +104,9 @@ describe("mapGatewayEventToPillEvent", () => {
     expect(mapGatewayEventToPillEvent({ type: "agent_started", agent_id: "quick-chat" } as any))
       .toEqual({ kind: "agent_started", agent_id: "quick-chat" });
   });
-  it("maps thinking", () => {
+  it("ignores thinking events (too noisy for pill narration)", () => {
     expect(mapGatewayEventToPillEvent({ type: "thinking", content: "…" } as any))
-      .toEqual({ kind: "thinking", content: "…" });
+      .toBeNull();
   });
   it("maps tool_call with wire field tool_name", () => {
     expect(mapGatewayEventToPillEvent({ type: "tool_call", tool_name: "write_file", args: { path: "a.py" } } as any))

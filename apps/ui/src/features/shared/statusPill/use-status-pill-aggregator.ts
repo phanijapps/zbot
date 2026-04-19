@@ -1,27 +1,33 @@
 import { useMemo, useReducer } from "react";
-import { type PillState, EMPTY_PILL, NARRATION_MAX } from "./types";
+import { type PillState, EMPTY_PILL } from "./types";
 import { describeTool } from "./tool-phrase";
 
-// Normalized events — aggregator only needs these kinds.
+// Normalized events consumed by the pill.
+//
+// Thinking events are intentionally *not* in this union: provider-emitted
+// thinking is either absent (simple prompts) or streams per-token (complex
+// prompts), so driving pill narration from it flashes unreadably or leaves
+// it empty. The pill is deterministic: AgentStarted → "Thinking…",
+// ToolCall → tool phrase, Respond → "Responding", AgentCompleted → fade.
 export type PillEvent =
   | { kind: "idle" }
   | { kind: "reset" }
   | { kind: "agent_started"; agent_id: string }
   | { kind: "agent_completed"; agent_id: string; is_final: boolean }
-  | { kind: "thinking"; content: string }
   | { kind: "tool_call"; tool: string; args: Record<string, unknown> }
   | { kind: "respond" };
 
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1) + "…";
-}
+const STARTING_NARRATION = "Thinking…";
+const RESPONDING_NARRATION = "Responding";
 
 function handleAgentStarted(state: PillState): PillState {
   return {
     ...state,
     visible: true,
-    starting: state.narration === "" && state.suffix === "",
+    starting: true,
+    narration: STARTING_NARRATION,
+    suffix: "",
+    category: "neutral",
     swapCounter: state.swapCounter + 1,
   };
 }
@@ -36,16 +42,6 @@ function handleAgentCompleted(
   return state;
 }
 
-function handleThinking(state: PillState, content: string): PillState {
-  return {
-    ...state,
-    visible: true,
-    starting: false,
-    narration: truncate(content.trim(), NARRATION_MAX),
-    swapCounter: state.swapCounter + 1,
-  };
-}
-
 function handleToolCall(
   state: PillState,
   tool: string,
@@ -56,10 +52,21 @@ function handleToolCall(
     ...state,
     visible: true,
     starting: false,
-    // Narration from Thinking takes priority over the dictionary fallback.
-    narration: state.narration || phrase.narration,
+    narration: phrase.narration,
     suffix: phrase.suffix,
     category: phrase.category,
+    swapCounter: state.swapCounter + 1,
+  };
+}
+
+function handleRespond(state: PillState): PillState {
+  return {
+    ...state,
+    visible: true,
+    starting: false,
+    narration: RESPONDING_NARRATION,
+    suffix: "",
+    category: "respond",
     swapCounter: state.swapCounter + 1,
   };
 }
@@ -74,12 +81,10 @@ export function reducePillState(state: PillState, ev: PillEvent): PillState {
       return handleAgentStarted(state);
     case "agent_completed":
       return handleAgentCompleted(state, ev);
-    case "thinking":
-      return handleThinking(state, ev.content);
     case "tool_call":
       return handleToolCall(state, ev.tool, ev.args);
     case "respond":
-      return { ...state, category: "respond", swapCounter: state.swapCounter + 1 };
+      return handleRespond(state);
     default:
       return state;
   }
