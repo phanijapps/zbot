@@ -300,6 +300,15 @@
   font-style: italic;
 }
 
+.agent-turn-block__thinking-footer {
+  margin-top: 8px;
+  font-size: 11px;
+  opacity: 0.65;
+}
+.agent-turn-block__thinking-footer:hover {
+  opacity: 1;
+}
+
 .agent-turn-block__error {
   display: inline-flex;
   align-items: center;

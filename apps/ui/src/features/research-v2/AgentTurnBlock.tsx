@@ -226,6 +226,18 @@ function NestedChildren({ childTurns, allTurns, onToggleThinking }: NestedChildr
   );
 }
 
+/** Is this turn done + simple enough to render as a plain assistant message?
+ *  Root turns that completed with no children AND no tool/result timeline
+ *  collapse to the hydrated-style bubble — no status chrome, no chevron,
+ *  no duration badge. Subagent turns always keep their chrome so the user
+ *  can see which delegate is talking. */
+function isSimpleCompletedRoot(turn: AgentTurn, childCount: number): boolean {
+  if (turn.agentId !== "root") return false;
+  if (turn.status !== "completed") return false;
+  if (childCount > 0) return false;
+  return true;
+}
+
 export function AgentTurnBlock({
   turn,
   onToggleThinking,
@@ -235,6 +247,39 @@ export function AgentTurnBlock({
   const color = agentColour(turn.agentId);
   const childList = childTurns ?? [];
   const fullList = allTurns ?? childList;
+
+  // Simple completed root → render as a clean assistant message like the
+  // hydrated-history path. The thinking timeline stays accessible via the
+  // collapsed chevron rendered below the respond.
+  if (isSimpleCompletedRoot(turn, childList.length)) {
+    const respondText = copyableRespondText(turn);
+    return (
+      <div className="research-msg research-msg--assistant" data-parent={turn.parentExecutionId ?? ""}>
+        <AgentAvatar />
+        <div className="research-msg__body">
+          <RespondBody turn={turn} />
+          {turn.timeline.length > 0 && (
+            <div className="agent-turn-block__thinking-footer">
+              <ThinkingChevron
+                turnId={turn.id}
+                count={turn.timeline.length}
+                expanded={turn.thinkingExpanded}
+                onToggle={onToggleThinking}
+              />
+              {turn.thinkingExpanded && (
+                <div className="agent-turn-block__timeline">
+                  <ThinkingTimeline entries={turn.timeline} />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        {respondText !== null && (
+          <CopyButton text={respondText} label="Copy response" />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
