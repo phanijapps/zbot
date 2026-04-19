@@ -52,6 +52,35 @@ function mapAgentStarted(e: Record<string, unknown>, now: number): ResearchActio
   };
 }
 
+/**
+ * `delegation_started` is the canonical signal for a subagent spawn — it's
+ * the only event that carries both parent + child execution ids. The child's
+ * own `agent_started` may follow on a different conv_id that isn't in our
+ * subscription, so we must seed the nested turn from this event.
+ * AGENT_STARTED is idempotent (ensureTurn no-ops on duplicate id), so if the
+ * child's own agent_started does arrive later, no harm done.
+ */
+function mapDelegationStarted(e: Record<string, unknown>, now: number): ResearchAction | null {
+  const childExec = e["child_execution_id"];
+  const parentExec = e["parent_execution_id"];
+  const childAgent = e["child_agent_id"];
+  if (typeof childExec !== "string" || childExec.length === 0) return null;
+  return {
+    type: "AGENT_STARTED",
+    turnId: childExec,
+    agentId: typeof childAgent === "string" ? childAgent : "subagent",
+    parentExecutionId: typeof parentExec === "string" ? parentExec : null,
+    wardId: null,
+    startedAt: now,
+  };
+}
+
+function mapDelegationCompleted(e: Record<string, unknown>, now: number): ResearchAction | null {
+  const childExec = e["child_execution_id"];
+  if (typeof childExec !== "string" || childExec.length === 0) return null;
+  return { type: "AGENT_COMPLETED", turnId: childExec, completedAt: now };
+}
+
 function mapWardChanged(e: Record<string, unknown>): ResearchAction | null {
   const flat = e["ward_id"];
   if (typeof flat === "string" && flat.length > 0) {
@@ -158,6 +187,8 @@ export function mapGatewayEventToResearchAction(ev: ConversationEvent): Research
     case "agent_started":            return mapAgentStarted(e, now);
     case "agent_completed":          return { type: "AGENT_COMPLETED", turnId: turnIdOf(e), completedAt: now };
     case "agent_stopped":            return { type: "AGENT_STOPPED",   turnId: turnIdOf(e), completedAt: now };
+    case "delegation_started":       return mapDelegationStarted(e, now);
+    case "delegation_completed":     return mapDelegationCompleted(e, now);
     case "ward_changed":             return mapWardChanged(e);
     case "thinking":                 return mapThinkingDelta(e, now);
     case "tool_call":                return mapToolCall(e, now);

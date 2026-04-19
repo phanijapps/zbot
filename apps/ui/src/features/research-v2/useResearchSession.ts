@@ -85,6 +85,23 @@ function respondActionFromToolCall(
   return { type: "RESPOND", turnId, text: message };
 }
 
+/**
+ * `delegation_completed` is the only event we reliably receive for a child
+ * subagent (its own WS events run on a different conv_id). The `result`
+ * field carries the child's final answer — populate the child turn's
+ * respond body from it so the nested turn renders its output.
+ */
+function respondActionFromDelegationCompleted(
+  event: Record<string, unknown>,
+): ResearchAction | null {
+  if (event["type"] !== "delegation_completed") return null;
+  const childExec = event["child_execution_id"];
+  if (typeof childExec !== "string" || childExec.length === 0) return null;
+  const result = event["result"];
+  if (typeof result !== "string" || result.length === 0) return null;
+  return { type: "RESPOND", turnId: childExec, text: result };
+}
+
 function makeEventHandler(pillSink: PillEventSink, dispatch: Dispatch<ResearchAction>) {
   return (event: ConversationEvent) => {
     const action = mapGatewayEventToResearchAction(event);
@@ -92,8 +109,11 @@ function makeEventHandler(pillSink: PillEventSink, dispatch: Dispatch<ResearchAc
     // Respond-tool path: synthesize RESPOND from tool_call.args.message
     // because turn_complete.final_message arrives empty for tool-emitted
     // responses (Done.final_message is populated only from streamed tokens).
-    const synthesized = respondActionFromToolCall(event as unknown as Record<string, unknown>);
-    if (synthesized) dispatch(synthesized);
+    const raw = event as unknown as Record<string, unknown>;
+    const synthesizedRespond = respondActionFromToolCall(raw);
+    if (synthesizedRespond) dispatch(synthesizedRespond);
+    const synthesizedChildRespond = respondActionFromDelegationCompleted(raw);
+    if (synthesizedChildRespond) dispatch(synthesizedChildRespond);
     const pillEv = mapGatewayEventToPillEvent(event);
     if (pillEv) pillSink.push(pillEv);
   };
