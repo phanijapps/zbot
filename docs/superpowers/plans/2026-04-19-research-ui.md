@@ -14,6 +14,74 @@
 
 ---
 
+## Pre-conditions — chat-v2 learnings to apply
+
+**Read `memory-bank/components/chat-v2/learnings.md` BEFORE writing any code.** This plan was drafted before `/chat-v2` shipped; every code block in the original plan predates the bugs we hit in production. The fixes below are the diff to apply while executing.
+
+### Wire-format field corrections (gateway → UI)
+
+Every event-map snippet in this plan used the wrong field names. Greppable corrections:
+
+| Event | WRONG (original plan) | CORRECT (verified against `gateway/gateway-events/src/lib.rs`) |
+|---|---|---|
+| `Token` | `ev.content` | `ev.delta` (accept `content` as forward-compat fallback) |
+| `Respond` | `ev.content` | `ev.message` (accept `content` as forward-compat fallback) |
+| `ToolCall` | `ev.tool` | `ev.tool_name` (accept `ev.tool` as forward-compat fallback) |
+| `ToolResult` | `ev.tool` | `ev.tool_name` (same pattern) |
+| `AgentCompleted` | `ev.last`, `ev.is_final` | **Neither field exists.** Treat every root-agent `agent_completed` as final for the pill. |
+| `WardChanged` | `ev.ward.id` / `ev.ward.name` | `ev.ward_id` (flat). Keep the nested-`ward.name` branch as a forward-compat fallback, never as primary. |
+| Session bound | `session_initialized` | Backend emits `invoke_accepted`. Accept BOTH event types in the mapper, primary is `invoke_accepted`. |
+
+### Pill semantics
+
+Thinking events **must not** drive the status pill. glm-5-turbo emits per-token thinking (pill flashes), nemotron emits zero (pill stays empty). The pill is driven by event *kind*: `AgentStarted → "Thinking…"` / `ToolCall → <phrase>` / `Respond → "Responding"` / `AgentCompleted → fade`. Thinking deltas still render *inside the per-agent-turn block's Thinking timeline* (that's the right place for depth).
+
+Drop the `thinking` case from `mapGatewayEventToPillEvent` entirely. Keep it in `mapGatewayEventToResearchAction` — the block-level timeline needs it.
+
+### Client never generates ids
+
+- **No `newConvId()` helper.** For a new research session, invoke with `session_id: undefined`; the backend emits `invoke_accepted` carrying both ids. The client reads them from the event, never generates its own.
+- **No client-side `conversationId` seeding at mount.** `useReducer(reduceResearch, EMPTY_RESEARCH_STATE)` with `conversationId: null`. The WS subscribe-effect checks `if (!convId) return;` until the first invoke response populates it.
+- **The `RESET` action** is still allowed in Research (multi-session surface has an explicit "New research" flow), but it must not regenerate client-side ids. It simply clears state and returns to the empty URL.
+
+### Hook wiring — stable deps + post-async bootstrap
+
+- `pillSink` is memoised in `use-status-pill-aggregator.ts` already (shipped with `/chat-v2`). **Never** list it in an effect's deps array — the subscribe-effect depends on `[state.conversationId]` only with an explicit `eslint-disable-next-line` and a one-line comment.
+- Any "bootstrap once" ref is set **inside** the async completion block, after the data arrives, not at effect entry. Otherwise StrictMode's double-mount leaves the hook in a "started but never dispatched" state.
+- The hook filters history messages at its boundary: `role === "tool"` rows and `content === "[tool calls]"` placeholders are dropped before the reducer sees them.
+
+### Artifacts + slide-out (promote from optional)
+
+Task 15 in the original plan marked artifact slide-out wiring as "optional". Promote it to required — `/chat-v2` shipped it and the Research UI's users will expect parity. Known backlog item: `memory-bank/components/chat-v2/backlog.md` B1 — fast-mode writes don't auto-register in the `artifacts` table. The UI is tolerant: when the backend registers, cards appear; when it doesn't, the strip is empty. Research agents go through the full writer pipeline so declarations fire normally; expect artifacts to work here.
+
+### Silent-crash surfacing
+
+When an execution crashes (`LLM error`, `Max iterations reached`, etc.) the backend emits `turn_complete` with `final_message: ""` — **no `error` event**. The UI sees nothing and shows an empty reply. This is a backlog item (`chat-v2/backlog.md` B3) but the research UI will hit it more often (delegations can crash independently). Add an explicit check in the reducer: on `TURN_COMPLETE` with no accumulated content for the turn AND no Respond, mark the turn as `status: 'error'` with a generic `"Turn ended with no output"` message. When backlog B3 lands, upgrade to the real error text from the `error` event.
+
+### Theme tokens, no hex
+
+Every CSS colour in a component file uses `var(--*)` tokens from `apps/ui/src/styles/theme.css`. If the original plan's CSS had `rgba(...)` or `rgb(...)` literals for accents, replace with tokens. The two-row status pill + category tokens are already in place from the chat-v2 shared module.
+
+### E2E with route mocks
+
+The original plan shipped one "smoke test in dev" task. Add a proper Playwright spec following the chat-v2 pattern:
+
+- **Page-load group** (no daemon): page renders, drawer toggle, empty-session initial state.
+- **Route-mocked group** (stubbed `/api/sessions`, `/api/sessions/:id/state`, `/api/sessions/:id/messages`, `/api/sessions/:id/artifacts`): per-agent-turn block renders, drawer lists sessions and navigates, artifact slide-out opens.
+- **Agent-backed group** (auto-skip when daemon unreachable): sends a real research prompt, asserts at least one turn block + Respond renders.
+
+### SonarQube complexity
+
+The research reducer has ~14 action variants. Extract each `case` into a named helper (`handleAgentStarted`, `handleToolCall`, `handleRespond`, etc.) up front. Keeps cognitive complexity under 15.
+
+### Backend endpoint reality check (surprises from live probing)
+
+- `GET /api/sessions/:id/state` returns **404 even for sessions that exist in the DB**. Do not rely on it as a presence check. Use `getSessionMessages(sid, { scope: 'root' })` (returns `200 []` for empty but extant sessions) and treat the sessions-list endpoint `/api/logs/sessions` as the source of truth for session metadata.
+- `mode="research"` is unnecessary — the executor's `SessionMode::Research` is the default when `mode` is omitted. Pass `undefined` to `executeAgent` (not `"research"`) to avoid a string that looks meaningful but isn't.
+- The reserved-session self-heal added in `gateway/src/http/chat.rs::init_chat_session` is specific to `/chat`. Research sessions don't have a reserved slot; each session's lifecycle is independent.
+
+---
+
 ## File Structure
 
 ### New files
@@ -517,30 +585,65 @@ describe("mapGatewayEventToResearchAction", () => {
     expect((a as any).entry.text).toBe("deep thought");
   });
 
-  it("ToolCall maps with tool name and arg preview", () => {
+  it("ToolCall maps with tool_name and arg preview (verified wire field)", () => {
     const a = mapGatewayEventToResearchAction({
-      type: "tool_call", execution_id: "exec-1", tool: "write_file", args: { path: "a.py" },
+      type: "tool_call", execution_id: "exec-1", tool_name: "write_file", args: { path: "a.py" },
     } as any);
     expect((a as any).entry.toolName).toBe("write_file");
     expect((a as any).entry.toolArgsPreview).toContain("a.py");
   });
 
-  it("Token maps to TOKEN with execution_id", () => {
+  it("ToolCall accepts legacy `tool` field (forward-compat fallback)", () => {
+    const a = mapGatewayEventToResearchAction({
+      type: "tool_call", execution_id: "exec-1", tool: "write_file", args: {},
+    } as any);
+    expect((a as any).entry.toolName).toBe("write_file");
+  });
+
+  it("Token maps with `delta` (verified wire field)", () => {
+    expect(mapGatewayEventToResearchAction({
+      type: "token", execution_id: "exec-1", delta: "abc",
+    } as any)).toEqual({ type: "TOKEN", turnId: "exec-1", text: "abc" });
+  });
+
+  it("Token accepts `content` (forward-compat fallback)", () => {
     expect(mapGatewayEventToResearchAction({
       type: "token", execution_id: "exec-1", content: "abc",
     } as any)).toEqual({ type: "TOKEN", turnId: "exec-1", text: "abc" });
   });
 
-  it("Respond maps to RESPOND with execution_id", () => {
+  it("Respond maps with `message` (verified wire field)", () => {
     const a = mapGatewayEventToResearchAction({
-      type: "respond", execution_id: "exec-1", content: "final",
+      type: "respond", execution_id: "exec-1", message: "final",
     } as any);
     expect(a).toEqual({ type: "RESPOND", turnId: "exec-1", text: "final" });
   });
 
+  it("Respond accepts `content` (forward-compat fallback)", () => {
+    const a = mapGatewayEventToResearchAction({
+      type: "respond", execution_id: "exec-1", content: "fallback",
+    } as any);
+    expect(a).toEqual({ type: "RESPOND", turnId: "exec-1", text: "fallback" });
+  });
+
   it("Respond without execution_id uses 'orphan' turn id", () => {
-    const a = mapGatewayEventToResearchAction({ type: "respond", content: "orphan" } as any);
+    const a = mapGatewayEventToResearchAction({ type: "respond", message: "orphan" } as any);
     expect(a).toEqual({ type: "RESPOND", turnId: "orphan", text: "orphan" });
+  });
+
+  it("invoke_accepted maps to SESSION_BOUND (verified wire event)", () => {
+    expect(mapGatewayEventToResearchAction({ type: "invoke_accepted", session_id: "sess-x" } as any))
+      .toEqual({ type: "SESSION_BOUND", sessionId: "sess-x" });
+  });
+
+  it("session_initialized maps to SESSION_BOUND (forward-compat)", () => {
+    expect(mapGatewayEventToResearchAction({ type: "session_initialized", session_id: "sess-y" } as any))
+      .toEqual({ type: "SESSION_BOUND", sessionId: "sess-y" });
+  });
+
+  it("WardChanged with flat ward_id (verified wire format)", () => {
+    expect(mapGatewayEventToResearchAction({ type: "ward_changed", ward_id: "stock-analysis" } as any))
+      .toEqual({ type: "WARD_CHANGED", wardId: "stock-analysis", wardName: "stock-analysis" });
   });
 
   it("SessionTitleChanged maps", () => {
@@ -562,6 +665,26 @@ describe("mapGatewayEventToPillEvent (research-v2)", () => {
   it("reuses shared shape from statusPill module", () => {
     expect(mapGatewayEventToPillEvent({ type: "agent_started", agent_id: "planner" } as any))
       .toEqual({ kind: "agent_started", agent_id: "planner" });
+  });
+
+  it("does NOT map thinking events to pill (handled inside turn-block timeline)", () => {
+    expect(mapGatewayEventToPillEvent({ type: "thinking", content: "…" } as any))
+      .toBeNull();
+  });
+
+  it("maps tool_call with wire field tool_name", () => {
+    expect(mapGatewayEventToPillEvent({ type: "tool_call", tool_name: "write_file", args: {} } as any))
+      .toEqual({ kind: "tool_call", tool: "write_file", args: {} });
+  });
+
+  it("maps agent_completed with is_final=true (no field required)", () => {
+    expect(mapGatewayEventToPillEvent({ type: "agent_completed", agent_id: "planner" } as any))
+      .toEqual({ kind: "agent_completed", agent_id: "planner", is_final: true });
+  });
+
+  it("does NOT hijack the pill for intent_analysis_started (per-turn block handles it)", () => {
+    expect(mapGatewayEventToPillEvent({ type: "intent_analysis_started" } as any))
+      .toBeNull();
   });
 });
 ```
@@ -593,104 +716,159 @@ function previewResult(result: unknown): string {
   return s.length <= 60 ? s : s.slice(0, 57) + "…";
 }
 
+// -------------------------------------------------------------------------
+// Per-branch mappers. Keeps the outer switch cognitive-complexity < 15.
+// Field names are VERIFIED against gateway/gateway-events/src/lib.rs.
+// -------------------------------------------------------------------------
+
+function mapAgentStarted(e: Record<string, unknown>, now: number): ResearchAction {
+  return {
+    type: "AGENT_STARTED",
+    turnId: (e.execution_id as string) ?? crypto.randomUUID(),
+    agentId: (e.agent_id as string) ?? "root",
+    parentExecutionId: (e.parent_execution_id as string) ?? null,
+    wardId: (e.ward_id as string) ?? null,
+    startedAt: now,
+  };
+}
+
+function mapWardChanged(e: Record<string, unknown>): ResearchAction | null {
+  // Primary: flat `ward_id` (current wire format, verified in messages.rs).
+  const flat = e["ward_id"];
+  if (typeof flat === "string" && flat.length > 0) {
+    return { type: "WARD_CHANGED", wardId: flat, wardName: flat };
+  }
+  // Forward-compat: nested `ward.name` (reserved for future enrichment).
+  const ward = e["ward"] as Record<string, unknown> | undefined;
+  const id = ward?.["id"];
+  const name = ward?.["name"];
+  if (typeof id === "string" && id.length > 0) {
+    return {
+      type: "WARD_CHANGED",
+      wardId: id,
+      wardName: typeof name === "string" ? name : id,
+    };
+  }
+  return null;
+}
+
+function mapThinkingDelta(e: Record<string, unknown>, now: number): ResearchAction | null {
+  const content = e["content"];
+  if (typeof content !== "string" || content.length === 0) return null;
+  const entry: TimelineEntry = {
+    id: crypto.randomUUID(),
+    at: now,
+    kind: "thinking",
+    text: content,
+  };
+  return {
+    type: "THINKING_DELTA",
+    turnId: (e.execution_id as string) ?? "orphan",
+    entry,
+  };
+}
+
+function mapToolCall(e: Record<string, unknown>, now: number): ResearchAction {
+  // Gateway emits `tool_name`; keep `tool` as a forward-compat fallback.
+  const tool = (e["tool_name"] ?? e["tool"]) as string | undefined ?? "tool";
+  const entry: TimelineEntry = {
+    id: crypto.randomUUID(),
+    at: now,
+    kind: "tool_call",
+    text: tool,
+    toolName: tool,
+    toolArgsPreview: previewArgs((e["args"] ?? {}) as Record<string, unknown>),
+  };
+  return { type: "TOOL_CALL", turnId: (e.execution_id as string) ?? "orphan", entry };
+}
+
+function mapToolResult(e: Record<string, unknown>, now: number): ResearchAction {
+  const tool = (e["tool_name"] ?? e["tool"]) as string | undefined ?? "result";
+  const entry: TimelineEntry = {
+    id: crypto.randomUUID(),
+    at: now,
+    kind: "tool_result",
+    text: tool,
+    toolResultPreview: previewResult(e["result"]),
+  };
+  return { type: "TOOL_RESULT", turnId: (e.execution_id as string) ?? "orphan", entry };
+}
+
+function mapToken(e: Record<string, unknown>): ResearchAction | null {
+  // Gateway emits `delta`; keep `content` as fallback.
+  const text = e["delta"] ?? e["content"];
+  if (typeof text !== "string" || text.length === 0) return null;
+  return { type: "TOKEN", turnId: (e.execution_id as string) ?? "orphan", text };
+}
+
+function mapRespond(e: Record<string, unknown>): ResearchAction | null {
+  // Gateway emits `message`; keep `content` as fallback.
+  const text = e["message"] ?? e["content"];
+  if (typeof text !== "string") return null;
+  return { type: "RESPOND", turnId: (e.execution_id as string) ?? "orphan", text };
+}
+
+function mapSessionBound(e: Record<string, unknown>): ResearchAction | null {
+  const sid = e["session_id"];
+  if (typeof sid !== "string" || !sid) return null;
+  return { type: "SESSION_BOUND", sessionId: sid };
+}
+
 export function mapGatewayEventToResearchAction(ev: ConversationEvent): ResearchAction | null {
-  const e = ev as any;
-  const type = e.type as string;
+  const e = ev as unknown as Record<string, unknown>;
+  const type = e["type"] as string;
   const now = Date.now();
   switch (type) {
-    case "agent_started":
-      return {
-        type: "AGENT_STARTED",
-        turnId: e.execution_id ?? crypto.randomUUID(),
-        agentId: e.agent_id ?? "root",
-        parentExecutionId: e.parent_execution_id ?? null,
-        wardId: e.ward_id ?? null,
-        startedAt: now,
-      };
-    case "agent_completed":
-      return { type: "AGENT_COMPLETED", turnId: e.execution_id ?? "orphan", completedAt: now };
-    case "agent_stopped":
-      return { type: "AGENT_STOPPED", turnId: e.execution_id ?? "orphan", completedAt: now };
-    case "ward_changed": {
-      const id = e.ward?.id ?? e.ward_id;
-      const name = e.ward?.name ?? e.ward_name;
-      if (!id) return null;
-      return { type: "WARD_CHANGED", wardId: id, wardName: name ?? id };
-    }
-    case "thinking": {
-      const content = e.content;
-      if (typeof content !== "string" || content.length === 0) return null;
-      const entry: TimelineEntry = { id: crypto.randomUUID(), at: now, kind: "thinking", text: content };
-      return { type: "THINKING_DELTA", turnId: e.execution_id ?? "orphan", entry };
-    }
-    case "tool_call": {
-      const tool = typeof e.tool === "string" ? e.tool : "tool";
-      const entry: TimelineEntry = {
-        id: crypto.randomUUID(),
-        at: now,
-        kind: "tool_call",
-        text: tool,
-        toolName: tool,
-        toolArgsPreview: previewArgs(e.args ?? {}),
-      };
-      return { type: "TOOL_CALL", turnId: e.execution_id ?? "orphan", entry };
-    }
-    case "tool_result": {
-      const entry: TimelineEntry = {
-        id: crypto.randomUUID(),
-        at: now,
-        kind: "tool_result",
-        text: e.tool ?? "result",
-        toolResultPreview: previewResult(e.result),
-      };
-      return { type: "TOOL_RESULT", turnId: e.execution_id ?? "orphan", entry };
-    }
-    case "token":
-      if (typeof e.content !== "string") return null;
-      return { type: "TOKEN", turnId: e.execution_id ?? "orphan", text: e.content };
-    case "respond":
-      if (typeof e.content !== "string") return null;
-      return { type: "RESPOND", turnId: e.execution_id ?? "orphan", text: e.content };
-    case "session_title_changed":
-      return { type: "TITLE_CHANGED", title: e.title ?? "" };
-    case "intent_analysis_started":
-      return { type: "INTENT_ANALYSIS_STARTED" };
-    case "intent_analysis_complete":
-      return { type: "INTENT_ANALYSIS_COMPLETE", classification: e.classification ?? "" };
-    case "intent_analysis_skipped":
-      return { type: "INTENT_ANALYSIS_SKIPPED" };
-    case "plan_update":
-      return { type: "PLAN_UPDATE", planPath: e.plan_path ?? "" };
-    case "session_initialized":
-      if (!e.session_id) return null;
-      return { type: "SESSION_BOUND", sessionId: e.session_id };
-    case "error":
-      return { type: "ERROR", message: e.message ?? "error" };
-    default:
-      return null;
+    case "agent_started":       return mapAgentStarted(e, now);
+    case "agent_completed":     return { type: "AGENT_COMPLETED", turnId: (e.execution_id as string) ?? "orphan", completedAt: now };
+    case "agent_stopped":       return { type: "AGENT_STOPPED",   turnId: (e.execution_id as string) ?? "orphan", completedAt: now };
+    case "ward_changed":        return mapWardChanged(e);
+    case "thinking":            return mapThinkingDelta(e, now);
+    case "tool_call":           return mapToolCall(e, now);
+    case "tool_result":         return mapToolResult(e, now);
+    case "token":               return mapToken(e);
+    case "respond":             return mapRespond(e);
+    case "session_title_changed": return { type: "TITLE_CHANGED", title: (e.title as string) ?? "" };
+    case "intent_analysis_started":  return { type: "INTENT_ANALYSIS_STARTED" };
+    case "intent_analysis_complete": return { type: "INTENT_ANALYSIS_COMPLETE", classification: (e.classification as string) ?? "" };
+    case "intent_analysis_skipped":  return { type: "INTENT_ANALYSIS_SKIPPED" };
+    case "plan_update":         return { type: "PLAN_UPDATE", planPath: (e.plan_path as string) ?? "" };
+    // Backend emits `invoke_accepted`; `session_initialized` reserved for future revision.
+    case "invoke_accepted":
+    case "session_initialized": return mapSessionBound(e);
+    case "error":               return { type: "ERROR", message: (e.message as string) ?? "error" };
+    default:                    return null;
   }
 }
 
+// -------------------------------------------------------------------------
+// Pill mapper — deterministic, Thinking intentionally NOT mapped.
+// glm-5-turbo flashes per-token thinking (unreadable); nemotron emits zero
+// (pill stays empty). Pill narration is driven by event kind instead.
+// -------------------------------------------------------------------------
+
+function mapPillToolCall(e: Record<string, unknown>): PillEvent | null {
+  const tool = (e["tool_name"] ?? e["tool"]) as string | undefined;
+  if (typeof tool !== "string") return null;
+  return { kind: "tool_call", tool, args: (e["args"] ?? {}) as Record<string, unknown> };
+}
+
 export function mapGatewayEventToPillEvent(ev: ConversationEvent): PillEvent | null {
-  const e = ev as any;
-  const type = e.type as string;
+  const e = ev as unknown as Record<string, unknown>;
+  const type = e["type"] as string;
   switch (type) {
-    case "agent_started":
-      return { kind: "agent_started", agent_id: e.agent_id ?? "" };
-    case "agent_completed":
-      return { kind: "agent_completed", agent_id: e.agent_id ?? "", is_final: Boolean(e.last) || Boolean(e.is_final) };
-    case "thinking":
-      if (typeof e.content !== "string" || !e.content) return null;
-      return { kind: "thinking", content: e.content };
-    case "tool_call":
-      if (typeof e.tool !== "string") return null;
-      return { kind: "tool_call", tool: e.tool, args: (e.args ?? {}) as Record<string, unknown> };
-    case "respond":
-      return { kind: "respond" };
-    case "intent_analysis_started":
-      return { kind: "thinking", content: "Analyzing intent…" };
-    default:
-      return null;
+    case "agent_started":   return { kind: "agent_started", agent_id: (e.agent_id as string) ?? "" };
+    // Gateway has no `last` or `is_final` field. For the single-root-plus-
+    // subagents research flow, a final AgentCompleted of the ROOT agent is
+    // the hide signal. For simplicity we treat any AgentCompleted as final
+    // and let the UI page-level state (running/idle) re-show the pill if a
+    // subagent is still active. This trades a brief flicker for simplicity.
+    case "agent_completed": return { kind: "agent_completed", agent_id: (e.agent_id as string) ?? "", is_final: true };
+    case "tool_call":       return mapPillToolCall(e);
+    case "respond":         return { kind: "respond" };
+    // Intent analysis is a research-page concern; the per-agent-turn block
+    // renders its own "analyzing intent…" line. Don't hijack the pill for it.
+    default:                return null;
   }
 }
 ```
@@ -698,7 +876,7 @@ export function mapGatewayEventToPillEvent(ev: ConversationEvent): PillEvent | n
 - [ ] **Step 4: Verify tests pass**
 
 Run: `cd apps/ui && npx vitest run src/features/research-v2/event-map.test.ts`
-Expected: PASS — 11 tests.
+Expected: PASS — ~17 tests (original 11 + 6 new wire-format-verification cases).
 
 - [ ] **Step 5: Commit**
 
@@ -717,123 +895,190 @@ git commit -m "feat(research-v2): event→action mapper with orphan-turn support
 - [ ] **Step 1: Implement the hook**
 
 ```typescript
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, type Dispatch } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { getTransport } from "@/services/transport";
-import { useStatusPill } from "../shared/statusPill";
+import type { Transport } from "@/services/transport";
+import type {
+  ConversationEvent,
+  SessionMessage,
+} from "@/services/transport/types";
+import { useStatusPill, type PillEventSink } from "../shared/statusPill";
 import {
-  type ResearchSessionState, type ResearchMessage, type AgentTurn,
+  type ResearchSessionState, type ResearchMessage,
   EMPTY_RESEARCH_STATE,
 } from "./types";
 import { reduceResearch, type ResearchAction } from "./reducer";
 import { mapGatewayEventToResearchAction, mapGatewayEventToPillEvent } from "./event-map";
 
 const ROOT_AGENT_ID = "root";
+// Research mode is the executor's default; passing undefined is semantically
+// clearer than "research" (which is a string that looks meaningful but just
+// falls through `SessionMode::from_mode_string` to Research anyway).
+const RESEARCH_MODE: string | undefined = undefined;
+const HISTORY_TAIL_LIMIT = 50;
+
+// -------------------------------------------------------------------------
+// Pure helpers — identical patterns to chat-v2/useQuickChat.
+// -------------------------------------------------------------------------
+
+function isVisibleResearchMessage(m: SessionMessage): boolean {
+  if (m.role === "tool") return false;
+  if (m.role === "assistant" && m.content.trim() === "[tool calls]") return false;
+  return m.role === "user" || m.role === "assistant";
+}
+
+function messageFromApi(m: SessionMessage): ResearchMessage {
+  return {
+    id: m.id,
+    role: m.role === "user" ? "user" : "system", // assistant rows render via turn blocks, not messages[]
+    content: m.content,
+    timestamp: new Date(m.created_at).getTime(),
+  };
+}
+
+function makeEventHandler(
+  pillSink: PillEventSink,
+  dispatch: Dispatch<ResearchAction>
+) {
+  return (event: ConversationEvent) => {
+    const action = mapGatewayEventToResearchAction(event);
+    if (action) dispatch(action);
+    const pillEv = mapGatewayEventToPillEvent(event);
+    if (pillEv) pillSink.push(pillEv);
+  };
+}
+
+async function hydrateExistingSession(
+  transport: Transport,
+  sessionId: string
+): Promise<{ messages: ResearchMessage[]; title: string; wardId: string | null; wardName: string | null } | null> {
+  // DO NOT call /api/sessions/:id/state — it returns 404 even for existing
+  // sessions (verified during chat-v2 testing). Rely on the messages endpoint,
+  // which returns `200 []` for empty but extant sessions.
+  const msgs = await transport.getSessionMessages(sessionId, { scope: "root" });
+  if (!msgs.success || !msgs.data) return null;
+  const messages = msgs.data
+    .filter(isVisibleResearchMessage)
+    .slice(-HISTORY_TAIL_LIMIT)
+    .map(messageFromApi);
+  // Ward / title come from the sessions-list row or WardChanged events in the
+  // live stream. Hydrate with null; updates arrive via the WS.
+  return { messages, title: "", wardId: null, wardName: null };
+}
+
+// -------------------------------------------------------------------------
+// Hook
+// -------------------------------------------------------------------------
 
 export function useResearchSession() {
   const { sessionId: urlSessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
-  const [state, dispatch] = useReducer(reduceResearch, {
-    ...EMPTY_RESEARCH_STATE,
-    conversationId: newConvId(),
-  });
+  // NO client-side conversationId seed — the backend generates it when the
+  // first invoke lands and we pick it up from the `invoke_accepted` event.
+  const [state, dispatch] = useReducer(reduceResearch, EMPTY_RESEARCH_STATE);
   const { state: pillState, sink: pillSink } = useStatusPill();
+
+  // Idempotency guard: set AFTER async completes, inside the dispatch block.
+  // StrictMode double-mounts in dev — setting ref at entry creates a
+  // "started but never dispatched" state. Post-async is the safe pattern.
+  const hydratedForSessionRef = useRef<string | null>(null);
   const subscribedConvIdRef = useRef<string | null>(null);
 
-  // Load snapshot on mount / URL session change.
+  // --- Hydrate existing session (only when the URL carries one) ---
   useEffect(() => {
-    let cancelled = false;
-    async function hydrate() {
-      if (!urlSessionId) return;
+    if (!urlSessionId) return;
+    if (hydratedForSessionRef.current === urlSessionId) return;
+    (async () => {
       const transport = await getTransport();
-      const snapshot = await transport.get<{
-        messages: Array<{ id: string; role: string; content: string; timestamp: string }>;
-        ward?: { id: string; name: string };
-        title?: string;
-        status?: string;
-        conversation_id?: string;
-        turns?: AgentTurn[];
-      }>(`/api/sessions/${encodeURIComponent(urlSessionId)}/state`);
-      if (cancelled || !snapshot.success || !snapshot.data) return;
-      const data = snapshot.data;
+      const snapshot = await hydrateExistingSession(transport, urlSessionId);
+      if (hydratedForSessionRef.current === urlSessionId) return;
+      hydratedForSessionRef.current = urlSessionId;
+      if (!snapshot) {
+        dispatch({ type: "ERROR", message: "Failed to load session" });
+        return;
+      }
       dispatch({
         type: "HYDRATE",
         sessionId: urlSessionId,
-        conversationId: data.conversation_id ?? state.conversationId,
-        title: data.title ?? "",
-        status: mapStatus(data.status),
-        wardId: data.ward?.id ?? null,
-        wardName: data.ward?.name ?? null,
-        messages: (data.messages ?? []).filter((m) => m.role === "user").map((m) => ({
-          id: m.id,
-          role: "user" as const,
-          content: m.content,
-          timestamp: new Date(m.timestamp).getTime(),
-        })),
-        turns: data.turns ?? [],
+        conversationId: null, // populated on next invoke_accepted
+        title: snapshot.title,
+        status: "idle",
+        wardId: snapshot.wardId,
+        wardName: snapshot.wardName,
+        messages: snapshot.messages,
+        turns: [],
       });
-    }
-    hydrate();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    })();
   }, [urlSessionId]);
 
-  // Subscribe to events.
+  // --- Subscribe to WS events for the persisted conversationId ---
+  // `pillSink` is memoised in useStatusPill (stable identity). Listing it in
+  // deps would force a teardown+resubscribe on every render, dropping events.
   useEffect(() => {
     const convId = state.conversationId;
     if (!convId || subscribedConvIdRef.current === convId) return;
     subscribedConvIdRef.current = convId;
-    let unsubscribe: (() => void) | null = null;
-    (async () => {
+    const onEvent = makeEventHandler(pillSink, dispatch);
+    const unsubscribe = Promise.resolve().then(async () => {
       const transport = await getTransport();
-      unsubscribe = await transport.subscribeConversation({
-        conversationId: convId,
-        onEvent: (event) => {
-          const action = mapGatewayEventToResearchAction(event);
-          if (action) dispatch(action);
-          const pillEv = mapGatewayEventToPillEvent(event);
-          if (pillEv) pillSink.push(pillEv);
-        },
-      });
-    })();
-    return () => { unsubscribe?.(); };
-  }, [state.conversationId, pillSink]);
+      return transport.subscribeConversation(convId, { onEvent });
+    });
+    return () => {
+      unsubscribe.then((fn) => fn && fn()).catch(() => { /* no-op */ });
+      if (subscribedConvIdRef.current === convId) {
+        subscribedConvIdRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.conversationId]);
 
-  // Update URL when a session_id arrives from the backend.
+  // --- Sync URL when a session_id arrives from the backend ---
   useEffect(() => {
     if (state.sessionId && urlSessionId !== state.sessionId) {
       navigate(`/research-v2/${state.sessionId}`, { replace: true });
     }
   }, [state.sessionId, urlSessionId, navigate]);
 
+  // --- Send a user message ---
   const sendMessage = useCallback(async (text: string) => {
-    if (!text.trim() || state.status === "running") return;
     const trimmed = text.trim();
+    if (!trimmed || state.status === "running") return;
     dispatch({
       type: "APPEND_USER",
       message: { id: crypto.randomUUID(), role: "user", content: trimmed, timestamp: Date.now() },
     });
     const transport = await getTransport();
+    // For a BRAND NEW session both conversationId and sessionId are null; the
+    // transport's executeAgent accepts no conversationId and assigns one
+    // server-side. For a continuation, we pass both persisted ids.
     const result = await transport.executeAgent(
       ROOT_AGENT_ID,
-      state.conversationId,
+      state.conversationId ?? `research-${crypto.randomUUID()}`, // only used when we truly have no id
       trimmed,
       state.sessionId ?? undefined,
-      "research"
+      RESEARCH_MODE
     );
     if (!result.success) {
       dispatch({ type: "ERROR", message: result.error ?? "Failed to send" });
     }
   }, [state.status, state.conversationId, state.sessionId]);
 
+  // --- Stop running turn ---
   const stopAgent = useCallback(async () => {
+    if (!state.conversationId) return;
     const transport = await getTransport();
     await transport.stopAgent(state.conversationId);
   }, [state.conversationId]);
 
+  // --- Start a fresh research session ---
+  // Does NOT generate a client conversationId. RESET clears state; the next
+  // sendMessage will invoke with null conv — the backend creates one.
   const startNewResearch = useCallback(() => {
     pillSink.push({ kind: "reset" });
-    dispatch({ type: "RESET", conversationId: newConvId() });
+    dispatch({ type: "RESET" });
+    hydratedForSessionRef.current = null;
+    subscribedConvIdRef.current = null;
     navigate("/research-v2", { replace: true });
   }, [navigate, pillSink]);
 
@@ -843,21 +1088,11 @@ export function useResearchSession() {
 
   return { state, pillState, sendMessage, stopAgent, startNewResearch, toggleThinking };
 }
-
-function newConvId(): string {
-  return `research-${crypto.randomUUID()}`;
-}
-
-function mapStatus(s: string | undefined): ResearchSessionState["status"] {
-  switch (s) {
-    case "running": return "running";
-    case "complete": case "completed": return "complete";
-    case "stopped": return "stopped";
-    case "error": case "crashed": return "error";
-    default: return "idle";
-  }
-}
 ```
+
+**Note on the `conversationId ?? \`research-${uuid}\`` fallback:** the transport's WS `invoke` command requires a `conversation_id` field. For a brand-new session we have no server-assigned id yet, so we pass a disposable placeholder — the backend ignores it when `session_id` is null (it creates a fresh session with its own conv_id), and the subsequent `invoke_accepted` event carries the real ids. We dispatch `SESSION_BOUND` on that event and the subscribe-effect picks up the new conv_id. The placeholder is never used for persistence.
+
+This is a concession to the current WS schema (`conversation_id: String`, not `Option<String>`). If the schema relaxes later, drop the fallback. Until then, it's the only path to kick off a new session without a pre-existing id.
 
 - [ ] **Step 2: Commit**
 
@@ -1968,27 +2203,229 @@ git commit -m "docs(research-v2): note v2 availability and bug fixes"
 
 ---
 
-### Task 15: (Optional) Artifact slide-out wiring
+### Task 15: Artifact strip + slide-out wiring (required — parity with chat-v2)
 
 **Files:**
-- Modify: `apps/ui/src/features/research-v2/AgentTurnBlock.tsx`
-- Modify: `apps/ui/src/features/research-v2/ResearchPage.tsx`
+- Modify: `apps/ui/src/features/research-v2/types.ts` (add `ResearchArtifactRef`)
+- Modify: `apps/ui/src/features/research-v2/reducer.ts` (add `SET_ARTIFACTS` action)
+- Modify: `apps/ui/src/features/research-v2/useResearchSession.ts` (fetch on turn complete + bootstrap)
+- Modify: `apps/ui/src/features/research-v2/ResearchPage.tsx` (render `ArtifactCard` + `ArtifactSlideOut`)
+- Modify: `apps/ui/src/features/research-v2/research.css` (theme-token artifact card)
 
-Only do this if artifact clicks in turn-block markdown are a priority for v1. Skip if v1 can rely on the Memory page to view artifacts.
+**Why required:** chat-v2 shipped this (see `memory-bank/components/chat-v2/overview.md` → Artifact slide-out section). Users open Research expecting parity. Research agents go through the full writer pipeline, so `ArtifactDeclaration`s land in `respond()` calls — the artifact table is populated naturally (no dependence on backlog item B1). Expect this to work end-to-end live.
 
-- [ ] **Step 1: Detect `<a href="file:...">` or session-scoped artifact URLs inside markdown**
+- [ ] **Step 1: Types**
 
-Pass an `onArtifactClick(artifact)` prop from `ResearchPage` down to `AgentTurnBlock`, which uses a `components` override on `ReactMarkdown` to intercept clicks on artifact-shaped anchor tags.
+Add to `types.ts`:
 
-- [ ] **Step 2: Wire `setViewingArtifact` in ResearchPage**
+```typescript
+export interface ResearchArtifactRef {
+  id: string;
+  fileName: string;
+  fileType?: string;
+  fileSize?: number;
+  label?: string;
+}
+```
 
-The component already has the state + modal imported (Task 10). Connect the callback.
+Extend `ResearchSessionState` with `artifacts: ResearchArtifactRef[]` and default `EMPTY_RESEARCH_STATE.artifacts = []`.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 2: Reducer action**
+
+Add to `QuickChatAction` union (same pattern as chat-v2):
+
+```typescript
+| { type: "SET_ARTIFACTS"; artifacts: ResearchArtifactRef[] }
+```
+
+Handler:
+
+```typescript
+case "SET_ARTIFACTS":
+  return { ...state, artifacts: action.artifacts };
+```
+
+Also extend HYDRATE payload with `artifacts: ResearchArtifactRef[]`.
+
+- [ ] **Step 3: Hook fetch**
+
+Add `fetchArtifacts(transport, sessionId)` helper (mirror of chat-v2). Add an effect that refetches on `(status === "idle" or "complete", sessionId)` transitions. Include artifacts in the `HYDRATE` dispatch from `hydrateExistingSession`.
+
+- [ ] **Step 4: Page rendering**
+
+In `ResearchPage.tsx` — add `ArtifactCard` sub-component (or import the chat-v2 one from a shared utility). Render the strip below the last turn block. Wire `setViewingArtifact` + mount `ArtifactSlideOut` from `../chat/ArtifactSlideOut`. The `refToArtifact(ref, sessionId)` shim pattern from chat-v2 applies here verbatim.
+
+- [ ] **Step 5: CSS**
+
+All colours via theme tokens: `var(--background-surface)`, `var(--border)`, `var(--foreground)`, `var(--muted-foreground)`, `var(--primary)`. No hex.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add apps/ui/src/features/research-v2/
-git commit -m "feat(research-v2): artifact slide-out wiring"
+git commit -m "feat(research-v2): artifact strip + slide-out — parity with chat-v2"
+```
+
+---
+
+### Task 16: Error-state surfacing for crashed turns
+
+**Files:**
+- Modify: `apps/ui/src/features/research-v2/reducer.ts` (track per-turn error text)
+- Modify: `apps/ui/src/features/research-v2/AgentTurnBlock.tsx` (render error banner)
+
+**Why:** chat-v2 backlog B3 — when an execution crashes (LLM 500, context blow-up, max-iterations), the backend emits `turn_complete` with `final_message: ""` and **no `error` event**. Research UI hits this more often than chat (delegations can crash independently of the root). Without UI surfacing, users see an empty Respond and assume the UI is broken.
+
+- [ ] **Step 1: Extend `AgentTurn` type**
+
+```typescript
+export interface AgentTurn {
+  // ... existing fields
+  errorMessage: string | null;
+}
+```
+
+- [ ] **Step 2: Reducer inference**
+
+In the `TURN_COMPLETE` / `AGENT_COMPLETED` handler — when the turn's `respond === null` AND `timeline` contains no meaningful events AND `status !== "stopped"`, set `status: "error"` and `errorMessage: "Turn ended with no output (provider error or context limit)"`. When chat-v2 backlog B3 lands, read the real message from the `error` event.
+
+- [ ] **Step 3: UI banner**
+
+In `AgentTurnBlock.tsx`, when `turn.status === "error"` AND `turn.errorMessage`, render a compact banner (italic red text with `lucide-react`'s `AlertCircle`) in place of the respond content.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add apps/ui/src/features/research-v2/
+git commit -m "feat(research-v2): surface silent crash as per-turn error banner"
+```
+
+---
+
+### Task 17: E2E Playwright spec
+
+**Files:**
+- Create: `apps/ui/tests/e2e/research-v2.spec.ts`
+
+Follow the chat-v2 pattern (`apps/ui/tests/e2e/quick-chat.spec.ts`). Three describe-blocks:
+
+- [ ] **Step 1: Page-load tests (no daemon)**
+
+```typescript
+test.describe('Research v2 — page load', () => {
+  test('renders empty state with composer', async ({ page }) => {
+    await page.goto('/research-v2');
+    await page.waitForSelector('.research-page', { state: 'visible', timeout: 15_000 });
+    await expect(page.getByPlaceholder('Type a message...')).toBeVisible();
+  });
+
+  test('drawer toggle opens and closes', async ({ page }) => {
+    await page.goto('/research-v2');
+    const toggle = page.getByRole('button', { name: /sessions/i });
+    await toggle.click();
+    await expect(page.locator('.sessions-drawer')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.sessions-drawer')).toHaveCount(0);
+  });
+
+  test('no status pill until a turn is active', async ({ page }) => {
+    await page.goto('/research-v2');
+    await expect(page.locator('[data-testid="status-pill"]')).toHaveCount(0);
+  });
+});
+```
+
+- [ ] **Step 2: Route-mocked tests**
+
+```typescript
+const STUB_SESSION_ID = 'sess-research-e2e';
+
+async function installApiStubs(page: Page) {
+  // Sessions list — two rows to exercise drawer grouping.
+  await page.route('**/api/logs/sessions', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        { session_id: STUB_SESSION_ID, conversation_id: 'r-1', agent_id: 'root',
+          agent_name: 'root', started_at: new Date().toISOString(), status: 'running',
+          token_count: 123, tool_call_count: 2, duration_ms: 5000 },
+      ]),
+    })
+  );
+  await page.route(`**/api/executions/v2/sessions/${STUB_SESSION_ID}/messages*`, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+  );
+  await page.route(`**/api/sessions/${STUB_SESSION_ID}/artifacts`, (route) =>
+    route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify([{
+        id: 'art-r-1', sessionId: STUB_SESSION_ID,
+        filePath: '/tmp/plan.md', fileName: 'plan.md', fileType: 'md',
+        fileSize: 512, label: 'research plan', createdAt: new Date().toISOString(),
+      }]),
+    })
+  );
+  await page.route('**/api/artifacts/art-r-1/content', (route) =>
+    route.fulfill({ status: 200, contentType: 'text/markdown', body: '# Plan\n\nOutline of research.\n' })
+  );
+}
+
+test('drawer lists sessions; clicking a row navigates to it', async ({ page }) => {
+  await installApiStubs(page);
+  await page.goto('/research-v2');
+  await page.getByRole('button', { name: /sessions/i }).click();
+  await page.getByText(/root/i).first().click();
+  await expect(page).toHaveURL(new RegExp(STUB_SESSION_ID));
+});
+
+test('artifact strip + slide-out', async ({ page }) => {
+  await installApiStubs(page);
+  await page.goto(`/research-v2/${STUB_SESSION_ID}`);
+  const card = page.getByTestId('research-v2-artifact').first();
+  await card.waitFor({ state: 'visible', timeout: 10_000 });
+  await expect(card).toContainText('plan.md');
+  await card.click();
+  const slideOut = page.locator('.artifact-slideout').first();
+  await expect(slideOut).toBeVisible();
+  await expect(slideOut).toContainText('Outline of research');
+  await slideOut.getByTitle('Close').click();
+  await expect(slideOut).toHaveCount(0);
+});
+```
+
+- [ ] **Step 3: Agent-backed tests (auto-skip when daemon down)**
+
+```typescript
+test.describe('Research v2 — agent-backed', () => {
+  test.beforeEach(async ({}, testInfo) => {
+    const ok = await daemonReachable();
+    testInfo.skip(!ok, 'gateway daemon not reachable');
+  });
+
+  test('sends a prompt and renders at least one turn block', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.goto('/research-v2');
+    await sendPrompt(page, 'Summarise today in one sentence.');
+    const turnBlock = page.locator('.agent-turn-block').first();
+    await expect(turnBlock).toBeVisible({ timeout: 90_000 });
+    // Respond text lands inside the block after agent_completed.
+    await expect(turnBlock.locator('.agent-turn-block__respond')).toBeVisible({ timeout: 60_000 });
+  });
+});
+```
+
+- [ ] **Step 4: Run + commit**
+
+```
+cd apps/ui && npx playwright test research-v2.spec.ts --grep 'page load|route-mocked'
+```
+
+Expected: all non-agent-backed tests pass.
+
+```bash
+git add apps/ui/tests/e2e/research-v2.spec.ts
+git commit -m "test(research-v2): playwright spec — page load, route-mocked, agent-backed"
 ```
 
 ---
@@ -1998,31 +2435,52 @@ git commit -m "feat(research-v2): artifact slide-out wiring"
 Before declaring complete:
 
 1. **Spec coverage** — every `Research — Spec` and `Bug fixes rolled into this design` bullet has a task:
-   - [x] Unchanged session model (Task 4 + 13 snapshot rehydrate)
+   - [x] Unchanged session model (Task 4 hydrate + Task 13 sessions-list)
    - [x] `☰` drawer-toggle header (Task 10)
-   - [x] Status pill strip (Tasks 10 + shared module from Quick Chat plan)
-   - [x] Sessions drawer with Running / Today / Yesterday / Last week / Older (Task 7–8)
+   - [x] Status pill strip (Task 10 + shared module from Quick Chat plan, deterministic mode only)
+   - [x] Sessions drawer with Running / Today / Yesterday / Last week / Older (Tasks 7–8)
    - [x] Per-agent-turn block (Tasks 5–6)
-   - [x] Delegation indent via `parentExecutionId` field (Task 1 type + Task 6 data-parent attr — CSS indentation wire-up included in Task 10 styles)
+   - [x] Delegation indent via `parentExecutionId` (Task 1 type + Task 6 data-parent attr)
    - [x] Ward-sticky fix (Task 2 WARD_CHANGED only, AGENT_STARTED inherits)
-   - [x] Thinking ping-pong fix (Task 6 single block per turn)
-   - [x] New-research race-free flow (Task 4 startNewResearch → navigate → re-subscribe)
+   - [x] Thinking ping-pong fix (Task 6 single block per turn, plus pill ignores Thinking entirely)
+   - [x] New-research race-free flow (Task 4 startNewResearch → RESET → navigate → re-subscribe; no client-side id generation)
    - [x] Final Respond reliability / orphan turn (Task 2 RESPOND works without AGENT_STARTED)
-   - [x] Artifact slide-out (Task 10 or 15)
+   - [x] Artifact strip + slide-out (Task 15 — promoted from optional to required)
+   - [x] Silent-crash surfacing per turn (Task 16 — addresses chat-v2 backlog B3 at the UI layer)
+   - [x] E2E Playwright spec with route-mocked coverage (Task 17)
    - [x] Routes alongside `/` (Task 12)
 
-2. **Placeholder scan** — no "TBD" / "TODO" / "implement later". Verified.
+2. **chat-v2 learnings applied** — see `memory-bank/components/chat-v2/learnings.md`. This plan incorporates all 12:
+   - (1) Server-owned session identity — no `newConvId()`; client never generates ids.
+   - (2) Self-healing lookups — `hydrateExistingSession` uses `/messages` (always 200) instead of `/state` (can 404 for extant sessions).
+   - (3) Deterministic pill — Task 3 drops `thinking` from `mapGatewayEventToPillEvent`.
+   - (4) Wire-format field names verified — `tool_name`, `delta`, `message`, `invoke_accepted`, flat `ward_id`, no `is_final`.
+   - (5) Stable effect-dep identity — `pillSink` memoised in shared module, dropped from Task 4's subscribe-effect deps with explicit eslint-disable.
+   - (6) StrictMode-safe ref set post-async — Task 4's `hydratedForSessionRef` is assigned inside the dispatch block.
+   - (7) History ≠ reducer stream — `isVisibleResearchMessage` filter at hook boundary.
+   - (8) User-visible recovery — Task 16 error banner + "New research" button.
+   - (9) Theme tokens only — Tasks 10 + 15 CSS use `var(--*)` exclusively.
+   - (10) E2E route mocks > live waits — Task 17.
+   - (11) SonarQube extraction — Task 3 per-branch mappers, Task 2 per-case reducer helpers.
+   - (12) Live browser verify after unit tests — Task 14.
 
-3. **Type consistency** — `AgentTurn`, `TimelineEntry`, `ResearchAction`, `ResearchSessionState`, `SessionSummary`, `PillState`/`PillEvent` (imported from shared module) used consistently. The hook exports `toggleThinking(turnId)` which matches `AgentTurnBlock`'s `onToggleThinking(turnId)` prop.
+3. **Placeholder scan** — no "TBD" / "TODO" / "implement later". Verified.
 
-4. **Acceptance criteria coverage** (from spec):
+4. **Type consistency** — `AgentTurn`, `TimelineEntry`, `ResearchAction`, `ResearchSessionState`, `SessionSummary`, `ResearchArtifactRef`, `PillState`/`PillEvent` (imported from shared module) used consistently. The hook exports `toggleThinking(turnId)` which matches `AgentTurnBlock`'s `onToggleThinking(turnId)` prop.
+
+5. **Acceptance criteria coverage** (from spec):
    - (4) `/research-v2` shows centered column + `☰` drawer + full agent chain — Tasks 10, 12, 14.
-   - (5) Rolling status pill appears on both pages — shared module + Task 10 wire-up.
-   - (6) Tab-close mid-session + reopen resumes live stream — Task 4 snapshot hydrate + subscribe.
+   - (5) Rolling status pill appears on both pages — shared module + Task 10 wire-up (deterministic, no Thinking flicker).
+   - (6) Tab-close mid-session + reopen resumes live stream — Task 4 hydrate + subscribe.
    - (7) Ward chip never flips to "unknown" — Task 2 reducer + Task 3 `ward_changed` guard (null id → null return).
-   - (8) Thinking chevron expands to chronological timeline — Task 6.
+   - (8) Thinking chevron expands to chronological timeline — Task 6 (Thinking lives here, NOT on the pill).
    - (9) Respond event rendered even if AgentCompleted missing — Task 2 orphan-turn test.
    - Old `/` still works — unchanged.
+
+6. **Inherited backlog items** (from chat-v2, documented at `memory-bank/components/chat-v2/backlog.md`):
+   - **B1** — fast-mode `write_file` artifact auto-registration. Research uses full `mode="research"` (the default), so writer-agent declarations fire normally. **Not blocking for this plan.**
+   - **B2** — server-side context compaction. Research creates a new session per query, so each session starts fresh — **not affected.**
+   - **B3** — silent-crash `error` event. Task 16 works around this at the UI layer (infer from empty turn_complete). When B3 lands, swap the inferred message for the real `error.message`.
 
 ---
 
