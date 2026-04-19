@@ -331,6 +331,23 @@ export class HttpTransport implements Transport {
     return this.post<ChatSessionInit>("/api/chat/init", {});
   }
 
+  async deleteChatSession(): Promise<TransportResult<void>> {
+    if (!this.config) {
+      return { success: false, error: "Transport not initialized" };
+    }
+    try {
+      const response = await fetch(`${this.config.httpUrl}/api/chat/session`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        return { success: false, error: `HTTP ${response.status}: ${response.statusText}` };
+      }
+      return { success: true, data: undefined };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  }
+
   // =========================================================================
   // Settings Operations
   // =========================================================================

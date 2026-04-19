@@ -1,7 +1,7 @@
 import { useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Square } from "lucide-react";
+import { Square, Trash2 } from "lucide-react";
 import { ChatInput } from "../chat/ChatInput";
 import { StatusPill } from "../shared/statusPill";
 import { InlineActivityChip } from "./InlineActivityChip";
@@ -44,8 +44,11 @@ function EmptyState({ wardName }: { wardName: string | null }) {
   );
 }
 
+const CLEAR_CONFIRM =
+  "Clear this chat and start a new session? Past messages remain in Logs.";
+
 export function QuickChat() {
-  const { state, pillState, sendMessage, stopAgent } = useQuickChat();
+  const { state, pillState, sendMessage, stopAgent, clearSession } = useQuickChat();
   const endRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -53,6 +56,12 @@ export function QuickChat() {
   }, [state.messages.length]);
 
   const hasMessages = state.messages.length > 0;
+
+  const handleClear = () => {
+    if (window.confirm(CLEAR_CONFIRM)) {
+      void clearSession();
+    }
+  };
 
   return (
     <div className="quick-chat">
@@ -68,6 +77,16 @@ export function QuickChat() {
               <Square size={14} />
             </button>
           )}
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={handleClear}
+            title="Clear chat & start fresh"
+            aria-label="Clear chat"
+            disabled={!state.sessionId}
+          >
+            <Trash2 size={14} />
+          </button>
         </div>
       </div>
 

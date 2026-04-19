@@ -197,5 +197,28 @@ export function useQuickChat() {
     await transport.stopAgent(state.conversationId);
   }, [state.status, state.conversationId]);
 
-  return { state, pillState, sendMessage, stopAgent };
+  // --- Clear the reserved session and bootstrap a fresh one ---
+  const clearSession = useCallback(async () => {
+    const transport = await getTransport();
+    const deleted = await transport.deleteChatSession();
+    if (!deleted.success) {
+      dispatch({ type: "ERROR", message: deleted.error ?? "Failed to clear chat" });
+      return;
+    }
+    // Bootstrap again; the init endpoint self-heals into a new session.
+    const fresh = await bootstrapChatSession(transport);
+    if (!fresh) {
+      dispatch({ type: "ERROR", message: "Failed to initialise a new chat after clear" });
+      return;
+    }
+    dispatch({
+      type: "HYDRATE",
+      sessionId: fresh.sessionId,
+      conversationId: fresh.conversationId,
+      messages: fresh.messages,
+      wardName: null,
+    });
+  }, []);
+
+  return { state, pillState, sendMessage, stopAgent, clearSession };
 }

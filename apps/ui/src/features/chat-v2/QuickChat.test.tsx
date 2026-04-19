@@ -11,6 +11,7 @@ interface MockHookReturn {
   pillState: PillState;
   sendMessage: ReturnType<typeof vi.fn>;
   stopAgent: ReturnType<typeof vi.fn>;
+  clearSession: ReturnType<typeof vi.fn>;
 }
 
 const mockHookRef: { current: MockHookReturn } = {
@@ -29,6 +30,7 @@ function makeIdleHook(): MockHookReturn {
     pillState: { visible: false, narration: "", suffix: "", category: "neutral", starting: false, swapCounter: 0 },
     sendMessage: vi.fn(),
     stopAgent: vi.fn(),
+    clearSession: vi.fn(),
   };
 }
 
@@ -127,7 +129,7 @@ describe("<QuickChat>", () => {
       pillState: {
         visible: true,
         narration: "Recalling fundamentals",
-        suffix: "· recall",
+        suffix: "recall",
         category: "read",
         starting: false,
         swapCounter: 1,
@@ -136,5 +138,37 @@ describe("<QuickChat>", () => {
     renderPage();
     expect(screen.getByTestId("status-pill")).toBeTruthy();
     expect(screen.getByText("Recalling fundamentals")).toBeTruthy();
+  });
+
+  it("renders a Clear button in the top-right that fires clearSession on confirm", () => {
+    const clearSpy = vi.fn();
+    mockHookRef.current = { ...makeIdleHook(), clearSession: clearSpy };
+    const confirmStub = vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderPage();
+    const btn = screen.getByLabelText("Clear chat");
+    fireEvent.click(btn);
+    expect(confirmStub).toHaveBeenCalled();
+    expect(clearSpy).toHaveBeenCalled();
+    confirmStub.mockRestore();
+  });
+
+  it("Clear button does nothing when the confirm is declined", () => {
+    const clearSpy = vi.fn();
+    mockHookRef.current = { ...makeIdleHook(), clearSession: clearSpy };
+    const confirmStub = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderPage();
+    fireEvent.click(screen.getByLabelText("Clear chat"));
+    expect(clearSpy).not.toHaveBeenCalled();
+    confirmStub.mockRestore();
+  });
+
+  it("Clear button is disabled until sessionId resolves", () => {
+    mockHookRef.current = {
+      ...makeIdleHook(),
+      state: { ...makeIdleHook().state, sessionId: null },
+    };
+    renderPage();
+    const btn = screen.getByLabelText("Clear chat") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
   });
 });

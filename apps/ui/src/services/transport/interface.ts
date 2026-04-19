@@ -240,6 +240,17 @@ export interface Transport {
    */
   initChatSession(): Promise<TransportResult<ChatSessionInit>>;
 
+  /**
+   * Clear the reserved chat session slot.
+   *
+   * Archival, not destructive — the underlying DB rows (messages,
+   * executions) are retained and reachable via the Logs page. Only the
+   * `settings.chat` pointer is nulled so the next `initChatSession()`
+   * call creates a fresh session. Recovery path for context-window
+   * blowouts; also the "start over" action exposed in the UI.
+   */
+  deleteChatSession(): Promise<TransportResult<void>>;
+
   // =========================================================================
   // Settings Operations
   // =========================================================================

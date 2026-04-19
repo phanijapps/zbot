@@ -125,6 +125,39 @@ pub async fn init_chat_session(
     }))
 }
 
+/// DELETE /api/chat/session
+///
+/// Archives the current reserved chat session by clearing the
+/// `settings.chat` slot. The underlying DB rows are kept (users can
+/// still recover past conversations through the Logs page). The next
+/// call to `POST /api/chat/init` self-heals into a fresh session.
+///
+/// This is the recovery path for context-window blowouts — the reserved
+/// session has no automatic compaction yet, so heavy users eventually
+/// need to start over.
+pub async fn clear_chat_session(
+    State(state): State<AppState>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let settings = state
+        .settings
+        .get_execution_settings()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    // No-op if the slot is already empty — still return 204 for idempotency.
+    if settings.chat.session_id.is_none() && settings.chat.conversation_id.is_none() {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
+    let mut updated = settings.clone();
+    updated.chat = gateway_services::ChatConfig::default();
+    state
+        .settings
+        .update_execution_settings(updated)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// GET /api/sessions/:id/messages?limit=100
 ///
 /// Returns messages for a session, ordered by timestamp (oldest first).

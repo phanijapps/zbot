@@ -220,6 +220,7 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         )
         // Chat session endpoints
         .route("/api/chat/init", post(chat::init_chat_session))
+        .route("/api/chat/session", delete(chat::clear_chat_session))
         .route(
             "/api/sessions/:session_id/messages",
             get(chat::get_session_messages),
