@@ -1,0 +1,102 @@
+import type { QuickChatMessage, QuickChatState, QuickChatInlineChip } from "./types";
+import { EMPTY_QUICK_CHAT_STATE } from "./types";
+
+export type QuickChatAction =
+  | { type: "HYDRATE"; sessionId: string; conversationId: string; messages: QuickChatMessage[]; wardName: string | null }
+  | { type: "APPEND_USER"; message: QuickChatMessage }
+  | { type: "SESSION_BOUND"; sessionId: string }
+  | { type: "AGENT_STARTED"; agentId: string }
+  | { type: "TOKEN"; text: string }
+  | { type: "RESPOND"; text: string }
+  | { type: "ADD_CHIP"; chip: QuickChatInlineChip }
+  | { type: "TURN_COMPLETE" }
+  | { type: "ERROR"; message: string }
+  | { type: "RESET"; conversationId: string }
+  | { type: "WARD_CHANGED"; wardName: string }
+  | { type: "PREPEND_OLDER"; messages: QuickChatMessage[]; nextCursor: string | null };
+
+function upsertStreamingAssistant(
+  messages: QuickChatMessage[],
+  text: string,
+  replace: boolean,
+): QuickChatMessage[] {
+  const last = messages[messages.length - 1];
+  if (last && last.role === "assistant" && last.streaming) {
+    const updated: QuickChatMessage = {
+      ...last,
+      content: replace ? text : last.content + text,
+      streaming: !replace,
+    };
+    return [...messages.slice(0, -1), updated];
+  }
+  return [
+    ...messages,
+    {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: text,
+      timestamp: Date.now(),
+      streaming: !replace,
+    },
+  ];
+}
+
+function attachChipToLatestAssistant(
+  messages: QuickChatMessage[],
+  chip: QuickChatInlineChip,
+): QuickChatMessage[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant") {
+      const chips = [...(messages[i].chips ?? []), chip];
+      return [
+        ...messages.slice(0, i),
+        { ...messages[i], chips },
+        ...messages.slice(i + 1),
+      ];
+    }
+  }
+  return messages;
+}
+
+export function reduceQuickChat(state: QuickChatState, action: QuickChatAction): QuickChatState {
+  switch (action.type) {
+    case "HYDRATE":
+      return {
+        ...state,
+        sessionId: action.sessionId,
+        conversationId: action.conversationId,
+        messages: action.messages,
+        activeWardName: action.wardName,
+        status: "idle",
+      };
+    case "APPEND_USER":
+      return { ...state, messages: [...state.messages, action.message], status: "running" };
+    case "SESSION_BOUND":
+      return { ...state, sessionId: action.sessionId };
+    case "AGENT_STARTED":
+      return { ...state, status: "running" };
+    case "TOKEN":
+      return { ...state, messages: upsertStreamingAssistant(state.messages, action.text, false) };
+    case "RESPOND":
+      return { ...state, messages: upsertStreamingAssistant(state.messages, action.text, true) };
+    case "ADD_CHIP":
+      return { ...state, messages: attachChipToLatestAssistant(state.messages, action.chip) };
+    case "TURN_COMPLETE":
+      return { ...state, status: "idle" };
+    case "ERROR":
+      return { ...state, status: "error" };
+    case "RESET":
+      return { ...EMPTY_QUICK_CHAT_STATE, conversationId: action.conversationId };
+    case "WARD_CHANGED":
+      return { ...state, activeWardName: action.wardName };
+    case "PREPEND_OLDER":
+      return {
+        ...state,
+        messages: [...action.messages, ...state.messages],
+        olderCursor: action.nextCursor,
+        hasMoreOlder: action.nextCursor !== null,
+      };
+    default:
+      return state;
+  }
+}
