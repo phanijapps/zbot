@@ -1,41 +1,77 @@
-/* Status pill — theme-aware, fixed-width.
- * The left edge (dot) is colored per category; text + border follow the
- * app theme so the pill blends with the surface regardless of light/dark. */
+/* Status indicator — "inkwell strip"
+ *
+ * A flat card (not a pill) that matches the warm-paper theme. A left
+ * accent stripe carries the category color, the narration is italicised
+ * and continuously shimmers in a primary→foreground gradient so the eye
+ * catches the motion without needing a chrome-heavy container. The
+ * monospace suffix right-aligns to anchor the active tool/file.
+ */
 .status-pill {
-  /* Layout */
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  width: 420px;
+  gap: 10px;
+  width: 480px;
   max-width: calc(100% - 32px);
-  padding: 5px 14px;
-  border-radius: 16px;
-  /* Typography */
-  font-size: 12px;
-  line-height: 1.2;
-  /* Surface */
-  background: var(--background-elevated);
+  padding: 8px 14px 8px 18px;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.35;
+
+  background: var(--background-surface);
   border: 1px solid var(--border);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  animation: status-pill-slide-in 150ms ease-out;
-  /* `color` is set per data-category and drives the dot + accent. */
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  animation: status-pill-slide-in 180ms ease-out;
   color: var(--muted-foreground);
+  overflow: hidden;
 }
+
+/* Left accent stripe — category color. */
+.status-pill::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: currentColor;
+  animation: status-pill-stripe-glow 1.6s ease-in-out infinite;
+}
+
+/* The "ink running" dot — a tiny writing head that tracks the shimmer. */
 .status-pill__dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: currentColor;
-  animation: status-pill-pulse 1.5s infinite;
   flex-shrink: 0;
+  opacity: 0.8;
 }
+
+/* Narration — the headline. Italic + continuous shimmer gradient. */
 .status-pill__narration {
   flex: 1;
-  color: var(--foreground);
+  min-width: 0;
+  font-style: italic;
+  font-weight: 500;
+  background: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--foreground) 25%,
+    var(--primary) 50%,
+    var(--foreground) 75%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+          background-clip: text;
+  color: transparent;
+  animation: status-pill-ink-flow 2.4s linear infinite;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .status-pill__suffix {
   color: var(--muted-foreground);
   font-family: ui-monospace, monospace;
@@ -45,6 +81,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
 }
 
 .status-pill[data-category="read"]     { color: var(--blue); }
@@ -54,10 +92,27 @@
 .status-pill[data-category="neutral"]  { color: var(--muted-foreground); }
 
 @keyframes status-pill-slide-in {
-  from { opacity: 0; transform: translateX(12px); }
-  to   { opacity: 1; transform: translateX(0); }
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
-@keyframes status-pill-pulse {
-  0%, 100% { opacity: 0.9; }
-  50%       { opacity: 0.4; }
+
+/* Accent stripe pulses gently — a heartbeat, not a flashing alert. */
+@keyframes status-pill-stripe-glow {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+
+/* Ink shimmer — gradient sweeps right-to-left across the narration. */
+@keyframes status-pill-ink-flow {
+  0%   { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* Reduce motion for accessibility. */
+@media (prefers-reduced-motion: reduce) {
+  .status-pill,
+  .status-pill::before,
+  .status-pill__narration {
+    animation: none;
+  }
 }
