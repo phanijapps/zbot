@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useReducer, useRef, type Dispatch } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { getTransport, type Transport } from "@/services/transport";
-import type { ConversationEvent, SessionMessage, UnsubscribeFn } from "@/services/transport/types";
+import type {
+  Artifact,
+  ConversationEvent,
+  SessionMessage,
+  UnsubscribeFn,
+} from "@/services/transport/types";
 import { useStatusPill, type PillEventSink } from "../shared/statusPill";
-import { type ResearchMessage, EMPTY_RESEARCH_STATE } from "./types";
+import { type ResearchArtifactRef, type ResearchMessage, EMPTY_RESEARCH_STATE } from "./types";
 import { reduceResearch, type ResearchAction } from "./reducer";
 import { mapGatewayEventToResearchAction, mapGatewayEventToPillEvent } from "./event-map";
+import { fetchArtifactsOnce, startArtifactPolling } from "./artifact-poll";
 
 const ROOT_AGENT_ID = "root";
 const HISTORY_TAIL_LIMIT = 50;
@@ -98,11 +104,14 @@ export function useResearchSession() {
   const [state, dispatch] = useReducer(reduceResearch, EMPTY_RESEARCH_STATE);
   const { state: pillState, sink: pillSink } = useStatusPill();
 
-  // Idempotency for one-shot hydration; set AFTER async completes (StrictMode).
-  const hydratedForSessionRef = useRef<string | null>(null);
-  // Subscription ownership (R14a): sendMessage owns this, not an effect.
-  const subscribedConvIdRef = useRef<string | null>(null);
+  const hydratedForSessionRef = useRef<string | null>(null); // one-shot hydration guard (StrictMode)
+  const subscribedConvIdRef = useRef<string | null>(null); // R14a: sendMessage owns subscription
   const unsubscribeRef = useRef<UnsubscribeFn | null>(null);
+  // R14d: full Artifact[] from last poll (state only holds light refs); artifactsRef
+  // mirrors state.artifacts so the poll closure diffs without re-running every render.
+  const latestArtifactsRef = useRef<Artifact[]>([]);
+  const artifactsRef = useRef<ResearchArtifactRef[]>(state.artifacts);
+  artifactsRef.current = state.artifacts;
 
   // --- Hydrate an EXISTING session (only when URL carries one) ---
   useEffect(() => {
@@ -145,6 +154,15 @@ export function useResearchSession() {
       navigate(`/research-v2/${state.sessionId}`, { replace: true });
     }
   }, [state.sessionId, urlSessionId, navigate]);
+
+  // --- Poll artifacts while running; one final fetch on transition to complete (R14d) ---
+  useEffect(() => {
+    const sid = state.sessionId;
+    if (!sid) return;
+    if (state.status === "running") return startArtifactPolling(sid, artifactsRef, dispatch, latestArtifactsRef);
+    if (state.status === "complete") void fetchArtifactsOnce(sid, artifactsRef.current, dispatch, latestArtifactsRef);
+    return undefined;
+  }, [state.sessionId, state.status]);
 
   // --- Send a user message (subscribes BEFORE invoke, R14a) ---
   const sendMessage = useCallback(
@@ -215,5 +233,8 @@ export function useResearchSession() {
     dispatch({ type: "TOGGLE_THINKING", turnId });
   }, []);
 
-  return { state, pillState, sendMessage, stopAgent, startNewResearch, toggleThinking };
+  // R14d: ref → full Artifact lookup for ArtifactSlideOut (polling keeps latestArtifactsRef fresh).
+  const getFullArtifact = useCallback((id: string): Artifact | undefined => latestArtifactsRef.current.find((a) => a.id === id), []);
+
+  return { state, pillState, sendMessage, stopAgent, startNewResearch, toggleThinking, getFullArtifact };
 }

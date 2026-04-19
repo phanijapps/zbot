@@ -434,3 +434,52 @@
     opacity: 1;
   }
 }
+
+/* =============================================================================
+   ArtifactStrip (R14d) — chips sit above the composer.
+   ============================================================================= */
+
+.research-artifacts {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 8px 0;
+  max-width: 880px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.research-artifact-chip {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--foreground);
+  cursor: pointer;
+  white-space: nowrap;
+  font: inherit;
+  font-size: 12px;
+  transition: background 120ms ease;
+}
+.research-artifact-chip:hover {
+  background: var(--muted);
+}
+.research-artifact-chip:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.research-artifact-chip__icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted-foreground);
+}
+
+.research-artifact-chip__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}

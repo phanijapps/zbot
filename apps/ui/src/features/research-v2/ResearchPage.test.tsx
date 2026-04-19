@@ -11,13 +11,18 @@ type OpenWardResult =
   | { success: true; data: { path: string } }
   | { success: false; error: string };
 
-const { openWardMock, toastErrorMock } = vi.hoisted(() => ({
+const { openWardMock, toastErrorMock, listArtifactsMock } = vi.hoisted(() => ({
   openWardMock: vi.fn<(wardId: string) => Promise<OpenWardResult>>(),
   toastErrorMock: vi.fn(),
+  listArtifactsMock: vi.fn(),
 }));
 
 vi.mock("@/services/transport", () => ({
-  getTransport: async () => ({ openWard: openWardMock }),
+  getTransport: async () => ({
+    openWard: openWardMock,
+    listSessionArtifacts: listArtifactsMock,
+    getArtifactContentUrl: () => "about:blank",
+  }),
 }));
 
 vi.mock("sonner", () => ({
@@ -31,6 +36,7 @@ interface MockResearchHook {
   stopAgent: ReturnType<typeof vi.fn>;
   startNewResearch: ReturnType<typeof vi.fn>;
   toggleThinking: ReturnType<typeof vi.fn>;
+  getFullArtifact: ReturnType<typeof vi.fn>;
 }
 
 interface MockListHook {
@@ -72,6 +78,7 @@ function makeIdleResearch(): MockResearchHook {
     stopAgent: vi.fn(),
     startNewResearch: vi.fn(),
     toggleThinking: vi.fn(),
+    getFullArtifact: vi.fn(),
   };
 }
 
@@ -101,6 +108,8 @@ describe("<ResearchPage>", () => {
     openWardMock.mockClear();
     openWardMock.mockResolvedValue({ success: true, data: { path: "/vault/wards/x" } });
     toastErrorMock.mockClear();
+    listArtifactsMock.mockClear();
+    listArtifactsMock.mockResolvedValue({ success: true, data: [] });
   });
 
   it("renders the empty state when session has no content", () => {
@@ -338,5 +347,87 @@ describe("<ResearchPage>", () => {
     renderPage();
     expect(screen.getByText(/intent:/)).toBeTruthy();
     expect(screen.getByText("research")).toBeTruthy();
+  });
+
+  // ------- R14d: artifact strip + slide-out wiring -------
+
+  it("does not render the artifact strip when state.artifacts is empty", () => {
+    renderPage();
+    expect(screen.queryByRole("list", { name: /session artifacts/i })).toBeNull();
+  });
+
+  it("renders a chip per artifact when state.artifacts has entries", () => {
+    researchRef.current = {
+      ...makeIdleResearch(),
+      state: {
+        ...makeIdleResearch().state,
+        sessionId: "sess-1",
+        artifacts: [
+          { id: "a1", fileName: "plan.md", fileType: "md" },
+          { id: "a2", fileName: "data.csv", fileType: "csv" },
+        ],
+      },
+    };
+    renderPage();
+    expect(screen.getByRole("list", { name: /session artifacts/i })).toBeTruthy();
+    expect(screen.getByRole("listitem", { name: /Open artifact plan\.md/ })).toBeTruthy();
+    expect(screen.getByRole("listitem", { name: /Open artifact data\.csv/ })).toBeTruthy();
+  });
+
+  it("clicking a chip opens the slide-out for the matching artifact (cached path)", async () => {
+    const cached = {
+      id: "a1",
+      sessionId: "sess-1",
+      filePath: "/tmp/plan.md",
+      fileName: "plan.md",
+      fileType: "md",
+      fileSize: 100,
+      createdAt: "2026-04-19T00:00:00Z",
+    };
+    researchRef.current = {
+      ...makeIdleResearch(),
+      state: {
+        ...makeIdleResearch().state,
+        sessionId: "sess-1",
+        artifacts: [{ id: "a1", fileName: "plan.md", fileType: "md" }],
+      },
+      getFullArtifact: vi.fn().mockReturnValue(cached),
+    };
+    renderPage();
+    fireEvent.click(screen.getByRole("listitem", { name: /Open artifact plan\.md/ }));
+    await waitFor(() => {
+      expect(researchRef.current.getFullArtifact).toHaveBeenCalledWith("a1");
+    });
+    // Slide-out header shows the filename.
+    await waitFor(() => {
+      expect(screen.getAllByText(/plan\.md/).length).toBeGreaterThan(0);
+    });
+  });
+
+  it("falls back to listSessionArtifacts when the cache miss returns undefined", async () => {
+    const remote = {
+      id: "a1",
+      sessionId: "sess-1",
+      filePath: "/tmp/plan.md",
+      fileName: "plan.md",
+      fileType: "md",
+      fileSize: 100,
+      createdAt: "2026-04-19T00:00:00Z",
+    };
+    listArtifactsMock.mockResolvedValueOnce({ success: true, data: [remote] });
+    researchRef.current = {
+      ...makeIdleResearch(),
+      state: {
+        ...makeIdleResearch().state,
+        sessionId: "sess-1",
+        artifacts: [{ id: "a1", fileName: "plan.md", fileType: "md" }],
+      },
+      getFullArtifact: vi.fn().mockReturnValue(undefined),
+    };
+    renderPage();
+    fireEvent.click(screen.getByRole("listitem", { name: /Open artifact plan\.md/ }));
+    await waitFor(() => {
+      expect(listArtifactsMock).toHaveBeenCalledWith("sess-1");
+    });
   });
 });

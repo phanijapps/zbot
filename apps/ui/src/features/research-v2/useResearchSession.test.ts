@@ -13,7 +13,7 @@ import { renderHook, act } from "@testing-library/react";
 import { createElement, StrictMode, type PropsWithChildren } from "react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import type { Transport } from "@/services/transport";
-import type { ConversationEvent } from "@/services/transport/types";
+import type { Artifact, ConversationEvent } from "@/services/transport/types";
 
 // ---------------------------------------------------------------------------
 // Transport mock — per-test spies for order assertions
@@ -23,6 +23,7 @@ const subscribeConversation = vi.fn<Transport["subscribeConversation"]>();
 const executeAgent = vi.fn<Transport["executeAgent"]>();
 const stopAgent = vi.fn<Transport["stopAgent"]>();
 const getSessionMessages = vi.fn<Transport["getSessionMessages"]>();
+const listSessionArtifacts = vi.fn<Transport["listSessionArtifacts"]>();
 const unsubscribeSpy = vi.fn<() => void>();
 // Ordered log of all transport calls to assert subscribe-before-invoke.
 const callLog: string[] = [];
@@ -33,8 +34,11 @@ vi.mock("@/services/transport", () => ({
     executeAgent,
     stopAgent,
     getSessionMessages,
+    listSessionArtifacts,
   }),
 }));
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 // ---------------------------------------------------------------------------
 // Import AFTER the mock is registered.
@@ -82,6 +86,7 @@ beforeEach(() => {
   executeAgent.mockReset();
   stopAgent.mockReset();
   getSessionMessages.mockReset();
+  listSessionArtifacts.mockReset();
   unsubscribeSpy.mockReset();
 
   subscribeConversation.mockImplementation((convId: string) => {
@@ -94,6 +99,7 @@ beforeEach(() => {
   });
   stopAgent.mockResolvedValue({ success: true, data: undefined });
   getSessionMessages.mockResolvedValue({ success: true, data: [] });
+  listSessionArtifacts.mockResolvedValue({ success: true, data: [] });
 });
 
 afterEach(() => {
@@ -326,6 +332,152 @@ describe("useResearchSession — subscription ordering (R14a)", () => {
 
     expect(subscribeConversation).toHaveBeenCalledTimes(2);
     expect(executeAgent).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R14d — artifact polling
+// ---------------------------------------------------------------------------
+
+function makeArtifact(id: string): Artifact {
+  return {
+    id,
+    sessionId: "sess-existing-123",
+    filePath: `/tmp/${id}.md`,
+    fileName: `${id}.md`,
+    fileType: "md",
+    fileSize: 100,
+    createdAt: "2026-04-19T00:00:00Z",
+  };
+}
+
+/** Drives hydrate + sendMessage so state has sessionId AND status==="running". */
+async function bootRunningSession(initialPath: string) {
+  const harness = renderHook(() => useResearchSession(), {
+    wrapper: routerWrapper(initialPath),
+  });
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  await act(async () => {
+    await harness.result.current.sendMessage("poll me");
+  });
+  return harness;
+}
+
+describe("useResearchSession — artifact polling (R14d)", () => {
+  const EXISTING_SESSION = "sess-existing-123";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("polls listSessionArtifacts while status === running", async () => {
+    getSessionMessages.mockResolvedValue({ success: true, data: [] });
+    listSessionArtifacts.mockResolvedValue({ success: true, data: [makeArtifact("a1")] });
+
+    await bootRunningSession(`/research-v2/${EXISTING_SESSION}`);
+
+    // Immediate tick fired by the effect.
+    expect(listSessionArtifacts).toHaveBeenCalledWith(EXISTING_SESSION);
+    const firstCallCount = listSessionArtifacts.mock.calls.length;
+
+    // Advance 5 s twice → two more polls.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(listSessionArtifacts.mock.calls.length).toBeGreaterThanOrEqual(firstCallCount + 2);
+  });
+
+  it("dispatches SET_ARTIFACTS when the artifact list changes", async () => {
+    getSessionMessages.mockResolvedValue({ success: true, data: [] });
+    // First poll → empty. Second poll → one artifact appears.
+    listSessionArtifacts
+      .mockResolvedValueOnce({ success: true, data: [] })
+      .mockResolvedValue({ success: true, data: [makeArtifact("a1")] });
+
+    const { result } = await bootRunningSession(`/research-v2/${EXISTING_SESSION}`);
+
+    // The initial tick runs empty.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.state.artifacts).toHaveLength(0);
+
+    // Advance past one interval — next poll yields one artifact.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(result.current.state.artifacts).toHaveLength(1);
+    expect(result.current.state.artifacts[0].id).toBe("a1");
+  });
+
+  it("does NOT dispatch SET_ARTIFACTS when identical list is returned twice", async () => {
+    getSessionMessages.mockResolvedValue({ success: true, data: [] });
+    listSessionArtifacts.mockResolvedValue({ success: true, data: [makeArtifact("a1")] });
+
+    const { result } = await bootRunningSession(`/research-v2/${EXISTING_SESSION}`);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.state.artifacts).toHaveLength(1);
+
+    // Snapshot reference identity; another identical poll must NOT replace it.
+    const firstRef = result.current.state.artifacts;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(result.current.state.artifacts).toBe(firstRef);
+  });
+
+  it("polling stops when status leaves running (error transition)", async () => {
+    getSessionMessages.mockResolvedValue({ success: true, data: [] });
+    listSessionArtifacts.mockResolvedValue({ success: true, data: [] });
+
+    const { result } = await bootRunningSession(`/research-v2/${EXISTING_SESSION}`);
+    const callsWhileRunning = listSessionArtifacts.mock.calls.length;
+
+    // Drive the hook out of "running" via an ERROR event (no WS event maps to
+    // SESSION_COMPLETE — the "complete" branch is covered via reducer tests).
+    const onEvent = subscribeConversation.mock.calls[0][1].onEvent;
+    act(() => {
+      onEvent({
+        type: "error",
+        timestamp: Date.now(),
+        session_id: EXISTING_SESSION,
+        execution_id: "",
+        message: "done",
+      } as import("@/services/transport/types").ConversationEvent);
+    });
+    expect(result.current.state.status).toBe("error");
+
+    // Interval is cleared by the effect cleanup — advancing the clock is a no-op.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000);
+    });
+    expect(listSessionArtifacts.mock.calls.length).toBe(callsWhileRunning);
+  });
+
+  it("does NOT poll when sessionId is null", async () => {
+    // Fresh hook, no URL sessionId, no sendMessage → sessionId stays null.
+    renderHook(() => useResearchSession(), {
+      wrapper: routerWrapper(TEST_INITIAL_PATH),
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000);
+    });
+    expect(listSessionArtifacts).not.toHaveBeenCalled();
   });
 });
 

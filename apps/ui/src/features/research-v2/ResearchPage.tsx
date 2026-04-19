@@ -1,13 +1,14 @@
 // =============================================================================
 // ResearchPage — top-level page component for the research-v2 feature.
 //
-// Three vertical zones:
+// Vertical zones, top to bottom:
 //   1. Header  — drawer toggle · title · ward chip + new + stop
 //   2. Pill strip — StatusPill (centered)
 //   3. Body    — scrollable column (max 880 px, centred)
-//   4. Composer — ChatInput pinned at the bottom
+//   4. Artifact strip — live chips, hidden when state.artifacts is empty (R14d)
+//   5. Composer — ChatInput pinned at the bottom
 //
-// ArtifactSlideOut state is scaffolded here; artifact CARDS are added in R15.
+// Clicking a chip in the strip opens ArtifactSlideOut (shared with chat).
 // =============================================================================
 
 import { useCallback, useState } from "react";
@@ -18,12 +19,13 @@ import { ChatInput } from "../chat/ChatInput";
 import { ArtifactSlideOut } from "../chat/ArtifactSlideOut";
 import { StatusPill } from "../shared/statusPill";
 import { AgentTurnBlock } from "./AgentTurnBlock";
+import { ArtifactStrip } from "./ArtifactStrip";
 import { SessionsDrawer } from "./SessionsDrawer";
 import { useResearchSession } from "./useResearchSession";
 import { useSessionsList } from "./useSessionsList";
 import { rootTurns, childrenOf } from "./turn-tree";
 import { getTransport } from "@/services/transport";
-import type { ResearchSessionState } from "./types";
+import type { ResearchArtifactRef, ResearchSessionState } from "./types";
 import type { Artifact } from "@/services/transport/types";
 import "./research.css";
 
@@ -152,12 +154,37 @@ function MainColumn({ state, onToggleThinking }: MainColumnProps) {
 // --- Page --------------------------------------------------------------------
 
 export function ResearchPage() {
-  const { state, pillState, sendMessage, stopAgent, startNewResearch, toggleThinking } =
+  const { state, pillState, sendMessage, stopAgent, startNewResearch, toggleThinking, getFullArtifact } =
     useResearchSession();
   const { sessions, refresh: refreshSessions } = useSessionsList();
   const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [viewingArtifact, setViewingArtifact] = useState<Artifact | null>(null);
+
+  // R14d — Decision B: state.artifacts holds the lightweight refs (keeps
+  // reducer tests stable); the hook caches the full Artifact records from
+  // the poll and resolves by id here. Fallback path fetches once if the
+  // user clicks before the first poll completes (edge case).
+  const handleOpenArtifact = useCallback(
+    async (ref: ResearchArtifactRef) => {
+      const cached = getFullArtifact(ref.id);
+      if (cached) {
+        setViewingArtifact(cached);
+        return;
+      }
+      if (!state.sessionId) return;
+      const transport = await getTransport();
+      const result = await transport.listSessionArtifacts(state.sessionId);
+      if (!result.success || !result.data) {
+        toast.error(`Failed to open artifact: ${!result.success ? result.error : "not found"}`);
+        return;
+      }
+      const match = result.data.find((a) => a.id === ref.id);
+      if (match) setViewingArtifact(match);
+      else toast.error("Artifact not found");
+    },
+    [getFullArtifact, state.sessionId]
+  );
 
   const handleSelect = (id: string) => {
     setDrawerOpen(false);
@@ -209,6 +236,8 @@ export function ResearchPage() {
           <MainColumn state={state} onToggleThinking={toggleThinking} />
         </div>
       </div>
+
+      <ArtifactStrip artifacts={state.artifacts} onOpen={handleOpenArtifact} />
 
       <div className="research-page__composer">
         <ChatInput onSend={sendMessage} disabled={composerDisabled} />
