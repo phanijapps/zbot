@@ -80,4 +80,39 @@ describe("reduceQuickChat", () => {
     expect(s.messages).toHaveLength(1);
     expect(s.activeWardName).toBe("default");
   });
+
+  it("AGENT_STARTED flips status to running", () => {
+    const s = reduceQuickChat(EMPTY_QUICK_CHAT_STATE, {
+      type: "AGENT_STARTED", agentId: "quick-chat",
+    });
+    expect(s.status).toBe("running");
+  });
+
+  it("ERROR flips status to error", () => {
+    const s = reduceQuickChat(
+      { ...EMPTY_QUICK_CHAT_STATE, status: "running" },
+      { type: "ERROR", message: "network down" }
+    );
+    expect(s.status).toBe("error");
+  });
+
+  it("PREPEND_OLDER prepends messages and derives hasMoreOlder from cursor", () => {
+    const existing = [{ id: "new1", role: "user" as const, content: "latest", timestamp: 2 }];
+    const older = [{ id: "old1", role: "user" as const, content: "earlier", timestamp: 1 }];
+
+    const withMore = reduceQuickChat(
+      { ...EMPTY_QUICK_CHAT_STATE, messages: existing },
+      { type: "PREPEND_OLDER", messages: older, nextCursor: "cursor-xyz" }
+    );
+    expect(withMore.messages.map((m) => m.id)).toEqual(["old1", "new1"]);
+    expect(withMore.olderCursor).toBe("cursor-xyz");
+    expect(withMore.hasMoreOlder).toBe(true);
+
+    const exhausted = reduceQuickChat(
+      { ...EMPTY_QUICK_CHAT_STATE, messages: existing },
+      { type: "PREPEND_OLDER", messages: older, nextCursor: null }
+    );
+    expect(exhausted.hasMoreOlder).toBe(false);
+    expect(exhausted.olderCursor).toBeNull();
+  });
 });
