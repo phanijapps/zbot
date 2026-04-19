@@ -144,7 +144,18 @@ function handleAgentCompleted(
 ): ResearchSessionState {
   return updateTurn(state, action.turnId, (t) => {
     if (turnHasMeaningfulContent(t)) {
-      return { ...t, status: "completed", completedAt: action.completedAt };
+      // Promote streaming buffer to final respond when the agent ends without
+      // firing the `respond` tool (no turn_complete.final_message). Otherwise
+      // the streaming cursor keeps blinking after the turn is done.
+      const promotedRespond =
+        t.respond ?? (t.respondStreaming.length > 0 ? t.respondStreaming : null);
+      return {
+        ...t,
+        status: "completed",
+        completedAt: action.completedAt,
+        respond: promotedRespond,
+        respondStreaming: promotedRespond ? "" : t.respondStreaming,
+      };
     }
     // Silent-crash inference — workaround for chat-v2 backlog B3.
     return {

@@ -11,7 +11,7 @@
 // Clicking a chip in the strip opens ArtifactSlideOut (shared with chat).
 // =============================================================================
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FolderOpen, Menu, Plus, Square } from "lucide-react";
 import { toast } from "sonner";
@@ -20,6 +20,7 @@ import { ArtifactSlideOut } from "../chat/ArtifactSlideOut";
 import { StatusPill } from "../shared/statusPill";
 import { AgentTurnBlock } from "./AgentTurnBlock";
 import { ArtifactStrip } from "./ArtifactStrip";
+import { AssistantMessage, UserMessage } from "./ResearchMessages";
 import { SessionsDrawer } from "./SessionsDrawer";
 import { useResearchSession } from "./useResearchSession";
 import { useSessionsList } from "./useSessionsList";
@@ -28,6 +29,27 @@ import { getTransport } from "@/services/transport";
 import type { ResearchArtifactRef, ResearchSessionState } from "./types";
 import type { Artifact } from "@/services/transport/types";
 import "./research.css";
+
+// --- Title derivation --------------------------------------------------------
+
+const DEFAULT_RESEARCH_TITLE = "New research";
+const TITLE_FIRST_MSG_MAX = 60;
+
+/**
+ * Derive a user-facing session title.
+ * Priority: server-pushed title (session_title_changed event) → first user
+ * message (truncated) → the "New research" placeholder. Simple prompts
+ * ("what is 2 + 2") never trigger the backend title tool, so without the
+ * message fallback the header would stay on the placeholder forever.
+ */
+function deriveTitle(state: ResearchSessionState): string {
+  if (state.title && state.title.trim().length > 0) return state.title;
+  const firstUserMsg = state.messages.find((m) => m.role === "user")?.content ?? "";
+  const trimmed = firstUserMsg.trim();
+  if (trimmed.length === 0) return DEFAULT_RESEARCH_TITLE;
+  if (trimmed.length <= TITLE_FIRST_MSG_MAX) return trimmed;
+  return trimmed.slice(0, TITLE_FIRST_MSG_MAX - 1) + "…";
+}
 
 // --- Sub-components ----------------------------------------------------------
 
@@ -52,7 +74,9 @@ function ResearchHeader({ state, onOpenDrawer, onNew, onStop, onOpenWard }: Rese
         <Menu size={16} />
       </button>
 
-      <div className="research-page__title">zbot</div>
+      <div className="research-page__title" title={deriveTitle(state)}>
+        {deriveTitle(state)}
+      </div>
 
       <div className="research-page__header-actions">
         {state.wardId && state.wardName && (
@@ -132,11 +156,13 @@ function MainColumn({ state, onToggleThinking }: MainColumnProps) {
 
   return (
     <>
-      {state.messages.map((m) => (
-        <div key={m.id} className="research-page__user-bubble">
-          {m.content}
-        </div>
-      ))}
+      {state.messages.map((m) =>
+        m.role === "user" ? (
+          <UserMessage key={m.id} content={m.content} />
+        ) : (
+          <AssistantMessage key={m.id} content={m.content} />
+        ),
+      )}
       <IntentLine state={state} />
       {roots.map((turn) => (
         <AgentTurnBlock
@@ -160,6 +186,18 @@ export function ResearchPage() {
   const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [viewingArtifact, setViewingArtifact] = useState<Artifact | null>(null);
+
+  // Reflect the session title in the browser tab + refresh the drawer list
+  // when the server pushes a new title (so the sidebar row renames live).
+  const derivedTitle = deriveTitle(state);
+  useEffect(() => {
+    document.title = state.sessionId
+      ? `${derivedTitle} · z-Bot`
+      : "z-Bot - Web Dashboard";
+  }, [derivedTitle, state.sessionId]);
+  useEffect(() => {
+    if (state.title && state.sessionId) void refreshSessions();
+  }, [state.title, state.sessionId, refreshSessions]);
 
   // R14d — Decision B: state.artifacts holds the lightweight refs (keeps
   // reducer tests stable); the hook caches the full Artifact records from

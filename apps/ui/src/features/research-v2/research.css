@@ -124,6 +124,72 @@
   white-space: pre-wrap;
 }
 
+/* --- Assistant message (hydrated history) --------------------------------- */
+/* Live responses render inside turn blocks; this is only for the reload /
+   session-switch path where we only have messages[], not rebuilt turns. */
+.research-page__assistant {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--foreground);
+  align-self: stretch;
+}
+
+/* --- Message shells + adornments ----------------------------------------- */
+
+.research-msg {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  position: relative;
+}
+.research-msg--user {
+  justify-content: flex-end;
+}
+.research-msg--assistant {
+  justify-content: flex-start;
+}
+.research-msg__avatar {
+  flex-shrink: 0;
+  margin-top: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: var(--muted);
+  padding: 2px;
+}
+.research-msg__body {
+  flex: 1;
+  min-width: 0;
+}
+.research-msg__copy {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+  background: transparent;
+  color: var(--muted-foreground);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.research-msg:hover .research-msg__copy,
+.research-msg__copy:focus-visible {
+  opacity: 1;
+  border-color: var(--border);
+}
+.research-msg__copy:hover {
+  background: var(--muted);
+}
+.research-msg__copy:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
 /* --- Intent lines ---------------------------------------------------------- */
 
 .research-page__intent-muted {

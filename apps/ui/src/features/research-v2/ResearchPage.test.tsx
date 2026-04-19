@@ -223,7 +223,8 @@ describe("<ResearchPage>", () => {
     const newSpy = vi.fn();
     researchRef.current = { ...makeIdleResearch(), startNewResearch: newSpy };
     renderPage();
-    fireEvent.click(screen.getByText(/New research/));
+    // /New research/ also appears as the title placeholder — scope to the button.
+    fireEvent.click(screen.getByRole("button", { name: /New research/ }));
     expect(newSpy).toHaveBeenCalled();
   });
 
@@ -237,7 +238,8 @@ describe("<ResearchPage>", () => {
       },
     };
     renderPage();
-    expect(screen.getByText(/Q4 outlook/)).toBeTruthy();
+    // Bubble and derived title both carry the user message — 2 matches expected.
+    expect(screen.getAllByText(/Q4 outlook/).length).toBeGreaterThanOrEqual(1);
   });
 
   it("renders the status pill when pillState.visible is true", () => {

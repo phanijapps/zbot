@@ -34,8 +34,10 @@ function isVisibleResearchMessage(m: SessionMessage): boolean {
 function messageFromApi(m: SessionMessage): ResearchMessage {
   return {
     id: m.id,
-    // Assistant content renders via turn blocks; messages[] only holds prompts.
-    role: m.role === "user" ? "user" : "system",
+    // Live sessions render the agent's answer through turn blocks; hydrated
+    // history lacks turns to rebuild from, so the page renders these assistant
+    // messages directly as markdown (see ResearchPage.MainColumn).
+    role: m.role === "user" ? "user" : "assistant",
     content: m.content,
     timestamp: new Date(m.created_at).getTime(),
   };
@@ -57,10 +59,41 @@ async function hydrateExistingSession(
   return { messages };
 }
 
+/**
+ * When the agent calls the `respond` tool, the gateway broadcasts:
+ *   - `tool_call` with `tool_name: "respond"` and `args: { message: "..." }`
+ *   - `tool_result` with the acknowledgement
+ *   - `turn_complete` with `final_message: ""` (empty — the respond message
+ *     is NOT in final_message; Done.final_message is populated only from
+ *     streamed tokens, not from the respond tool).
+ *
+ * So the definitive source of the final answer is `tool_call.args.message`
+ * on the `respond` tool. Synthesize a RESPOND action for it.
+ */
+function respondActionFromToolCall(
+  event: Record<string, unknown>,
+): ResearchAction | null {
+  if (event["type"] !== "tool_call") return null;
+  const toolName = event["tool_name"] ?? event["tool"];
+  if (toolName !== "respond") return null;
+  const args = event["args"];
+  if (!args || typeof args !== "object") return null;
+  const message = (args as Record<string, unknown>)["message"];
+  if (typeof message !== "string" || message.length === 0) return null;
+  const execId = event["execution_id"];
+  const turnId = typeof execId === "string" && execId.length > 0 ? execId : "orphan";
+  return { type: "RESPOND", turnId, text: message };
+}
+
 function makeEventHandler(pillSink: PillEventSink, dispatch: Dispatch<ResearchAction>) {
   return (event: ConversationEvent) => {
     const action = mapGatewayEventToResearchAction(event);
     if (action) dispatch(action);
+    // Respond-tool path: synthesize RESPOND from tool_call.args.message
+    // because turn_complete.final_message arrives empty for tool-emitted
+    // responses (Done.final_message is populated only from streamed tokens).
+    const synthesized = respondActionFromToolCall(event as unknown as Record<string, unknown>);
+    if (synthesized) dispatch(synthesized);
     const pillEv = mapGatewayEventToPillEvent(event);
     if (pillEv) pillSink.push(pillEv);
   };

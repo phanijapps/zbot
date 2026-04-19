@@ -31,6 +31,10 @@ function mapStatus(s: string | undefined): SessionSummary["status"] {
 // ---------------------------------------------------------------------------
 
 const UNTITLED_LABEL = "New research";
+// `sess-chat-` is the conversation_id prefix minted by /api/chat/init for the
+// reserved chat-v2 session (see gateway/src/http/chat.rs). Used to filter
+// chat-v2 rows out of the research drawer.
+const CHAT_V2_SESSION_PREFIX = "sess-chat-";
 
 function formatClock(ms: number): string {
   const d = new Date(ms);
@@ -101,15 +105,17 @@ export function useSessionsList(
       const transport = await getTransport();
       const result = await transport.listLogSessions();
       if (result.success && Array.isArray(result.data)) {
-        // Filter out subagent executions — /api/logs/sessions emits one row per
-        // execution, including children (planner/coder/writer). Showing those
-        // in the drawer produces duplicate-looking entries under the same
-        // research question. Only root-level rows (no parent_session_id)
-        // represent user-visible research sessions.
-        const rootRows = result.data.filter(
-          (row) => !row.parent_session_id || row.parent_session_id.length === 0,
-        );
-        const mapped = rootRows
+        // Filter (1) subagent executions (/api/logs/sessions emits one row per
+        // execution including children), and (2) chat-v2's reserved session
+        // — `sess-chat-*` conversations — which otherwise "leak" into the
+        // research drawer. Chat-v2 sessions are minted by /api/chat/init with
+        // the `sess-chat-` prefix; real research sessions are plain `sess-*`.
+        const rootResearchRows = result.data.filter((row) => {
+          const isChild = row.parent_session_id && row.parent_session_id.length > 0;
+          const isChatV2 = row.conversation_id?.startsWith(CHAT_V2_SESSION_PREFIX);
+          return !isChild && !isChatV2;
+        });
+        const mapped = rootResearchRows
           .map((row) => rowToSummary(row))
           .filter((s): s is SessionSummary => s !== null);
         setSessions(mapped);

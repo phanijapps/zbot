@@ -55,7 +55,13 @@ export interface AgentTurn {
 
 export interface ResearchMessage {
   id: string;
-  role: "user" | "system";
+  /**
+   * - "user": user prompt, right-aligned bubble.
+   * - "assistant": agent response from history hydration; markdown-rendered.
+   *   Live sessions render the agent's answer through turn blocks instead,
+   *   so this role only appears after a reload/session-switch.
+   */
+  role: "user" | "assistant";
   content: string;
   timestamp: number;
 }

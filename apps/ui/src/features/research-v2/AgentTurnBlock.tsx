@@ -11,6 +11,7 @@ import {
 import type { AgentTurn, AgentTurnStatus } from "./types";
 import { ThinkingTimeline } from "./ThinkingTimeline";
 import { childrenOf } from "./turn-tree";
+import { AgentAvatar, CopyButton } from "./ResearchMessages";
 
 export interface AgentTurnBlockProps {
   turn: AgentTurn;
@@ -151,12 +152,23 @@ interface TurnMetaProps {
   color: string;
 }
 
+function AgentLabel({ agentId, color }: { agentId: string; color: string }) {
+  // TODO: pull the root agent's display name from settings when available;
+  // for now the root turn shows the brand icon instead of the raw id "root".
+  if (agentId === "root") {
+    return <AgentAvatar />;
+  }
+  return (
+    <span className="agent-turn-block__agent" style={{ color }}>
+      {agentId}
+    </span>
+  );
+}
+
 function TurnHeader({ turn, color }: TurnMetaProps) {
   return (
     <div className="agent-turn-block__header">
-      <span className="agent-turn-block__agent" style={{ color }}>
-        {turn.agentId}
-      </span>
+      <AgentLabel agentId={turn.agentId} color={color} />
       <span className="agent-turn-block__meta">
         <StatusIcon status={turn.status} />
         <span>{formatDuration(turn.startedAt, turn.completedAt)}</span>
@@ -176,6 +188,15 @@ function TurnHeader({ turn, color }: TurnMetaProps) {
 
 function respondIsStreaming(turn: AgentTurn): boolean {
   return turn.respond === null && turn.respondStreaming.length > 0;
+}
+
+/** What the copy button should copy. Prefer finalized respond, then the
+ *  streaming buffer; return null when there's nothing useful (error banner
+ *  has its own visible text; placeholder is "waiting…"). */
+function copyableRespondText(turn: AgentTurn): string | null {
+  if (turn.respond && turn.respond.length > 0) return turn.respond;
+  if (turn.respondStreaming && turn.respondStreaming.length > 0) return turn.respondStreaming;
+  return null;
 }
 
 interface NestedChildrenProps {
@@ -237,9 +258,15 @@ export function AgentTurnBlock({
       )}
 
       <div
-        className={`agent-turn-block__respond${respondIsStreaming(turn) ? " agent-turn-block__respond--streaming" : ""}`}
+        className={`agent-turn-block__respond research-msg research-msg--assistant${respondIsStreaming(turn) ? " agent-turn-block__respond--streaming" : ""}`}
       >
-        <RespondBody turn={turn} />
+        <AgentAvatar />
+        <div className="research-msg__body">
+          <RespondBody turn={turn} />
+        </div>
+        {copyableRespondText(turn) !== null && (
+          <CopyButton text={copyableRespondText(turn) as string} label="Copy response" />
+        )}
       </div>
 
       <NestedChildren
