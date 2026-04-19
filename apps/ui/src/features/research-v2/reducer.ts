@@ -24,7 +24,7 @@ export type ResearchAction =
       artifacts: ResearchArtifactRef[];
     }
   | { type: "APPEND_USER"; message: ResearchMessage }
-  | { type: "SESSION_BOUND"; sessionId: string; conversationId: string }
+  | { type: "SESSION_BOUND"; sessionId: string | null; conversationId: string }
   | { type: "TITLE_CHANGED"; title: string }
   | { type: "WARD_CHANGED"; wardId: string; wardName: string }
   | {
@@ -226,7 +226,17 @@ export function reduceResearch(
     case "APPEND_USER":
       return { ...state, messages: [...state.messages, action.message], status: "running" };
     case "SESSION_BOUND":
-      return { ...state, sessionId: action.sessionId, conversationId: action.conversationId };
+      // Idempotent on matching conv_id: the hook dispatches a pre-invoke
+      // SESSION_BOUND with a client-owned conversationId and sessionId:null;
+      // the server's invoke_accepted re-dispatches with the server-assigned
+      // sessionId. Preserving an existing sessionId when action.sessionId is
+      // null ensures the client-owned pre-invoke dispatch never clobbers the
+      // server-assigned id.
+      return {
+        ...state,
+        conversationId: action.conversationId,
+        sessionId: action.sessionId ?? state.sessionId,
+      };
     case "TITLE_CHANGED":
       return { ...state, title: action.title };
     case "WARD_CHANGED":
