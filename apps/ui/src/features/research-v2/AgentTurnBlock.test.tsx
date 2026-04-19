@@ -89,7 +89,7 @@ describe("<AgentTurnBlock>", () => {
     expect(block?.getAttribute("data-parent")).toBe("");
   });
 
-  it("renders nested child blocks inside the children container when children prop is provided", () => {
+  it("renders nested child blocks inside the children container when childTurns prop is provided", () => {
     const child: AgentTurn = {
       ...baseTurn,
       id: "child-1",
@@ -102,7 +102,7 @@ describe("<AgentTurnBlock>", () => {
       <AgentTurnBlock
         turn={baseTurn}
         onToggleThinking={() => {}}
-        children={[child]}
+        childTurns={[child]}
         allTurns={[baseTurn, child]}
       />
     );
@@ -114,7 +114,7 @@ describe("<AgentTurnBlock>", () => {
     expect(childBlock?.textContent).toContain("solution");
   });
 
-  it("does NOT render the children container when children is empty or omitted", () => {
+  it("does NOT render the children container when childTurns is empty or omitted", () => {
     const { container } = render(
       <AgentTurnBlock turn={baseTurn} onToggleThinking={() => {}} />
     );
@@ -143,7 +143,7 @@ describe("<AgentTurnBlock>", () => {
       <AgentTurnBlock
         turn={baseTurn}
         onToggleThinking={() => {}}
-        children={[child]}
+        childTurns={[child]}
         allTurns={all}
       />
     );

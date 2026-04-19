@@ -18,8 +18,13 @@ export interface AgentTurnBlockProps {
   /**
    * Direct children of `turn`. Optional — omit for leaf-only rendering.
    * Callers derive this with `childrenOf(turn, allTurns)`.
+   *
+   * Named `childTurns` (not `children`) to avoid shadowing React's implicit
+   * `children: ReactNode` prop — which would produce cryptic type errors for
+   * anyone writing `<AgentTurnBlock>text</AgentTurnBlock>` and mislead
+   * React DevTools.
    */
-  children?: AgentTurn[];
+  childTurns?: AgentTurn[];
   /**
    * Full flat turn list used to recurse past the first child level.
    * Choice A (see R14b spec): passing allTurns down keeps the component pure
@@ -166,25 +171,25 @@ function respondIsStreaming(turn: AgentTurn): boolean {
 }
 
 interface NestedChildrenProps {
-  children: AgentTurn[];
+  childTurns: AgentTurn[];
   allTurns: AgentTurn[];
   onToggleThinking(turnId: string): void;
 }
 
 /** Recursively renders child turns indented under their parent. */
-function NestedChildren({ children, allTurns, onToggleThinking }: NestedChildrenProps) {
-  if (children.length === 0) return null;
+function NestedChildren({ childTurns, allTurns, onToggleThinking }: NestedChildrenProps) {
+  if (childTurns.length === 0) return null;
   return (
     <div
       className="agent-turn-block__children"
       data-testid="nested-children"
     >
-      {children.map((child) => (
+      {childTurns.map((child) => (
         <AgentTurnBlock
           key={child.id}
           turn={child}
           onToggleThinking={onToggleThinking}
-          children={childrenOf(child, allTurns)}
+          childTurns={childrenOf(child, allTurns)}
           allTurns={allTurns}
         />
       ))}
@@ -195,11 +200,11 @@ function NestedChildren({ children, allTurns, onToggleThinking }: NestedChildren
 export function AgentTurnBlock({
   turn,
   onToggleThinking,
-  children,
+  childTurns,
   allTurns,
 }: AgentTurnBlockProps) {
   const color = agentColour(turn.agentId);
-  const childList = children ?? [];
+  const childList = childTurns ?? [];
   const fullList = allTurns ?? childList;
 
   return (
@@ -230,7 +235,7 @@ export function AgentTurnBlock({
       </div>
 
       <NestedChildren
-        children={childList}
+        childTurns={childList}
         allTurns={fullList}
         onToggleThinking={onToggleThinking}
       />

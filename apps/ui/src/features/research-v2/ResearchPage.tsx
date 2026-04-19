@@ -129,7 +129,7 @@ function MainColumn({ state, onToggleThinking }: MainColumnProps) {
           key={turn.id}
           turn={turn}
           onToggleThinking={onToggleThinking}
-          children={childrenOf(turn, state.turns)}
+          childTurns={childrenOf(turn, state.turns)}
           allTurns={state.turns}
         />
       ))}
