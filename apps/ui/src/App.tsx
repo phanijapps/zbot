@@ -32,6 +32,7 @@ import { MemoryPage } from "./features/memory";
 import { ObservatoryPage } from "./features/observatory";
 import { FastChat } from "./features/chat/FastChat";
 import { QuickChat } from "./features/chat-v2";
+import { ResearchPage } from "./features/research-v2";
 // ChatSlider removed — chat is now the home route, no longer in a slide-over
 import { ThemeToggle } from "./components/ThemeToggle";
 
@@ -187,6 +188,8 @@ function App() {
                   <Route path="/settings" element={<WebSettingsPanel />} />
                   <Route path="/chat" element={<FastChat />} />
                   <Route path="/chat-v2" element={<QuickChat />} />
+                  <Route path="/research-v2" element={<ResearchPage />} />
+                  <Route path="/research-v2/:sessionId" element={<ResearchPage />} />
                   <Route path="/providers" element={<Navigate to="/settings" replace />} />
                   <Route path="/skills" element={<Navigate to="/agents?tab=skills" replace />} />
                   <Route path="/hooks" element={<Navigate to="/agents?tab=schedules" replace />} />
@@ -230,7 +233,7 @@ const navGroups: NavGroup[] = [
     items: [
       { to: "/chat", label: "Chat", icon: MessageSquare },
       { to: "/chat-v2", label: "Quick Chat", icon: MessageSquare, matchPrefix: true, badge: "v2" },
-      { to: "/", label: "Research", icon: Search },
+      { to: "/research-v2", label: "Research", icon: Search, matchPrefix: true, badge: "v2" },
       { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { to: "/logs", label: "Logs", icon: Eye },
       { to: "/memory", label: "Memory", icon: Brain },
