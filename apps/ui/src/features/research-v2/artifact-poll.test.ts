@@ -1,5 +1,10 @@
 // =============================================================================
-// artifact-poll — R14d unit tests for the pure helpers.
+// artifact-poll — unit tests for the surviving pure helpers after R14f.
+//
+// The pre-R14f timer (`startArtifactPolling` + `sameArtifactIdSet` +
+// `ARTIFACT_POLL_INTERVAL_MS`) is gone — snapshotSession() fetches once on
+// open and again on agent_completed. The tests for the deleted helpers were
+// dropped alongside them.
 // =============================================================================
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -22,7 +27,7 @@ vi.mock("@/services/transport", () => ({
 vi.mock("sonner", () => ({ toast: { error: toastError } }));
 
 // Import AFTER mocks.
-import { fetchArtifactsOnce, sameArtifactIdSet, toArtifactRef } from "./artifact-poll";
+import { fetchArtifactsOnce, toArtifactRef } from "./artifact-poll";
 
 // --- Fixtures ---------------------------------------------------------------
 
@@ -68,38 +73,10 @@ describe("toArtifactRef", () => {
   });
 });
 
-// --- sameArtifactIdSet ------------------------------------------------------
-
-describe("sameArtifactIdSet", () => {
-  const A: ResearchArtifactRef = { id: "a", fileName: "a.md" };
-  const B: ResearchArtifactRef = { id: "b", fileName: "b.md" };
-  const C: ResearchArtifactRef = { id: "c", fileName: "c.md" };
-
-  it("true for two empty lists", () => {
-    expect(sameArtifactIdSet([], [])).toBe(true);
-  });
-
-  it("true for identical lists in the same order", () => {
-    expect(sameArtifactIdSet([A, B], [A, B])).toBe(true);
-  });
-
-  it("true for identical id-sets in different order", () => {
-    expect(sameArtifactIdSet([A, B], [B, A])).toBe(true);
-  });
-
-  it("false when lengths differ", () => {
-    expect(sameArtifactIdSet([A], [A, B])).toBe(false);
-  });
-
-  it("false when one id differs", () => {
-    expect(sameArtifactIdSet([A, B], [A, C])).toBe(false);
-  });
-});
-
 // --- fetchArtifactsOnce -----------------------------------------------------
 
 describe("fetchArtifactsOnce", () => {
-  it("dispatches SET_ARTIFACTS when the id set differs from currentRefs", async () => {
+  it("dispatches SET_ARTIFACTS with the mapped refs on success", async () => {
     const dispatch = vi.fn();
     const latest = { current: [] as Artifact[] };
     const next = [makeArtifact("a1"), makeArtifact("a2")];
@@ -112,25 +89,6 @@ describe("fetchArtifactsOnce", () => {
     expect(call.type).toBe("SET_ARTIFACTS");
     expect(call.artifacts.map((a: ResearchArtifactRef) => a.id)).toEqual(["a1", "a2"]);
     expect(latest.current).toEqual(next);
-  });
-
-  it("does NOT dispatch when the id set is unchanged", async () => {
-    const dispatch = vi.fn();
-    const latest = { current: [] as Artifact[] };
-    const current: ResearchArtifactRef[] = [
-      { id: "a1", fileName: "a1.md" },
-      { id: "a2", fileName: "a2.md" },
-    ];
-    listSessionArtifacts.mockResolvedValueOnce({
-      success: true,
-      data: [makeArtifact("a2"), makeArtifact("a1")],
-    });
-
-    await fetchArtifactsOnce("sess-1", current, dispatch, latest);
-
-    expect(dispatch).not.toHaveBeenCalled();
-    // Still updates the full-artifact cache.
-    expect(latest.current.map((a) => a.id).sort()).toEqual(["a1", "a2"]);
   });
 
   it("no-op on a failed transport call; no dispatch, no toast", async () => {

@@ -1,11 +1,10 @@
 // =============================================================================
-// useResearchSession — R14a tests
+// useResearchSession — R14a/R14f integration tests.
 //
-// The bug this suite guards against: in a brand-new research session the UI
-// only subscribed AFTER `state.conversationId` was set, and that was only set
-// by an event that required the subscription to be live → events landed in the
-// gap and the UI never updated. The fix (this suite): sendMessage subscribes
-// imperatively BEFORE the invoke, using a client-minted conv_id.
+// R14a: sendMessage subscribes BEFORE invoke with a client-minted conv_id.
+// R14f: snapshot-on-open replaces the previous hydrate-messages-only flow.
+// The artifact-polling timer that used to live here is gone; snapshotSession
+// pulls artifacts once on open and again on root `agent_completed`.
 // =============================================================================
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -13,7 +12,13 @@ import { renderHook, act } from "@testing-library/react";
 import { createElement, StrictMode, type PropsWithChildren } from "react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import type { Transport } from "@/services/transport";
-import type { Artifact, ConversationEvent } from "@/services/transport/types";
+import type {
+  Artifact,
+  ConversationEvent,
+  LogSession,
+  SessionMessage,
+  SessionStatus,
+} from "@/services/transport/types";
 
 // ---------------------------------------------------------------------------
 // Transport mock — per-test spies for order assertions
@@ -65,8 +70,8 @@ function routerWrapper(initialPath: string) {
         createElement(Route, {
           path: "/research-v2/:sessionId",
           element: children,
-        })
-      )
+        }),
+      ),
     );
   };
 }
@@ -77,8 +82,43 @@ function strictRouterWrapper(initialPath: string) {
     return createElement(
       StrictMode,
       null,
-      createElement(Inner, null, children as React.ReactElement)
+      createElement(Inner, null, children as React.ReactElement),
     );
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Log-row / message fixture factories
+// ---------------------------------------------------------------------------
+
+function makeRootRow(sessionId: string, overrides: Partial<LogSession> = {}): LogSession {
+  return {
+    session_id: `exec-${sessionId}`,
+    conversation_id: sessionId,
+    agent_id: "root",
+    agent_name: "root",
+    started_at: "2026-04-19T00:00:00.000Z",
+    ended_at: "2026-04-19T00:01:00.000Z",
+    status: "completed" as SessionStatus,
+    token_count: 0,
+    tool_call_count: 0,
+    error_count: 0,
+    child_session_ids: [],
+    title: "Hydrated",
+    parent_session_id: undefined,
+    ...overrides,
+  };
+}
+
+function makeUserMessage(sessionId: string): SessionMessage {
+  return {
+    id: "m-user-1",
+    execution_id: `exec-${sessionId}`,
+    agent_id: "root",
+    delegation_type: "root",
+    role: "user",
+    content: "old prompt",
+    created_at: "2026-04-10T00:00:00Z",
   };
 }
 
@@ -117,7 +157,7 @@ function lastSubscribedConvId(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// R14a — subscription ordering
 // ---------------------------------------------------------------------------
 
 describe("useResearchSession — subscription ordering (R14a)", () => {
@@ -250,33 +290,29 @@ describe("useResearchSession — subscription ordering (R14a)", () => {
 
   it("hydrate + sendMessage: subscribe fires with a fresh convId; invoke carries the sessionId", async () => {
     const EXISTING_SESSION = "sess-existing-123";
+    listLogSessions.mockResolvedValueOnce({
+      success: true,
+      data: [makeRootRow(EXISTING_SESSION)],
+    });
     getSessionMessages.mockResolvedValueOnce({
       success: true,
-      data: [
-        {
-          id: "m1",
-          role: "user",
-          content: "old prompt",
-          created_at: "2026-04-10T00:00:00Z",
-          execution_id: "exec-old",
-          agent_id: "root",
-          delegation_type: "root",
-        },
-      ],
+      data: [makeUserMessage(EXISTING_SESSION)],
     });
 
     const { result } = renderHook(() => useResearchSession(), {
       wrapper: routerWrapper(`/research-v2/${EXISTING_SESSION}`),
     });
 
-    // Let hydrate effect flush.
+    // Let hydrate effect flush — snapshotSession fan-out resolves in two ticks.
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
+      await Promise.resolve();
     });
+    expect(listLogSessions).toHaveBeenCalled();
     expect(getSessionMessages).toHaveBeenCalledWith(
       EXISTING_SESSION,
-      expect.objectContaining({ scope: "root" })
+      expect.objectContaining({ scope: "all" }),
     );
 
     await act(async () => {
@@ -340,13 +376,13 @@ describe("useResearchSession — subscription ordering (R14a)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// R14d — artifact polling
+// R14f — snapshot on open + re-snapshot on agent_completed
 // ---------------------------------------------------------------------------
 
-function makeArtifact(id: string): Artifact {
+function makeArtifact(id: string, sessionId = "sess-existing-123"): Artifact {
   return {
     id,
-    sessionId: "sess-existing-123",
+    sessionId,
     filePath: `/tmp/${id}.md`,
     fileName: `${id}.md`,
     fileType: "md",
@@ -355,133 +391,179 @@ function makeArtifact(id: string): Artifact {
   };
 }
 
-/** Drives hydrate + sendMessage so state has sessionId AND status==="running". */
-async function bootRunningSession(initialPath: string) {
-  const harness = renderHook(() => useResearchSession(), {
-    wrapper: routerWrapper(initialPath),
-  });
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-  await act(async () => {
-    await harness.result.current.sendMessage("poll me");
-  });
-  return harness;
-}
-
-describe("useResearchSession — artifact polling (R14d)", () => {
+describe("useResearchSession — snapshot flow (R14f)", () => {
   const EXISTING_SESSION = "sess-existing-123";
 
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("polls listSessionArtifacts while status === running", async () => {
-    getSessionMessages.mockResolvedValue({ success: true, data: [] });
-    listSessionArtifacts.mockResolvedValue({ success: true, data: [makeArtifact("a1")] });
-
-    await bootRunningSession(`/research-v2/${EXISTING_SESSION}`);
-
-    // Immediate tick fired by the effect.
-    expect(listSessionArtifacts).toHaveBeenCalledWith(EXISTING_SESSION);
-    const firstCallCount = listSessionArtifacts.mock.calls.length;
-
-    // Advance 5 s twice → two more polls.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
+  it("hydrates title + messages + artifacts via snapshotSession on open", async () => {
+    listLogSessions.mockResolvedValueOnce({
+      success: true,
+      data: [makeRootRow(EXISTING_SESSION, { title: "Hydrated title" })],
     });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
+    getSessionMessages.mockResolvedValueOnce({
+      success: true,
+      data: [makeUserMessage(EXISTING_SESSION)],
     });
-    expect(listSessionArtifacts.mock.calls.length).toBeGreaterThanOrEqual(firstCallCount + 2);
-  });
+    listSessionArtifacts.mockResolvedValue({
+      success: true,
+      data: [makeArtifact("a1", EXISTING_SESSION)],
+    });
 
-  it("dispatches SET_ARTIFACTS when the artifact list changes", async () => {
-    getSessionMessages.mockResolvedValue({ success: true, data: [] });
-    // First poll → empty. Second poll → one artifact appears.
-    listSessionArtifacts
-      .mockResolvedValueOnce({ success: true, data: [] })
-      .mockResolvedValue({ success: true, data: [makeArtifact("a1")] });
+    const { result } = renderHook(() => useResearchSession(), {
+      wrapper: routerWrapper(`/research-v2/${EXISTING_SESSION}`),
+    });
 
-    const { result } = await bootRunningSession(`/research-v2/${EXISTING_SESSION}`);
-
-    // The initial tick runs empty.
     await act(async () => {
       await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
     });
-    expect(result.current.state.artifacts).toHaveLength(0);
 
-    // Advance past one interval — next poll yields one artifact.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
-    });
+    expect(result.current.state.sessionId).toBe(EXISTING_SESSION);
+    expect(result.current.state.title).toBe("Hydrated title");
+    expect(result.current.state.messages).toHaveLength(1);
     expect(result.current.state.artifacts).toHaveLength(1);
     expect(result.current.state.artifacts[0].id).toBe("a1");
+    // Cache populated so ArtifactSlideOut can resolve by id.
+    expect(result.current.getFullArtifact("a1")?.fileName).toBe("a1.md");
   });
 
-  it("does NOT dispatch SET_ARTIFACTS when identical list is returned twice", async () => {
-    getSessionMessages.mockResolvedValue({ success: true, data: [] });
-    listSessionArtifacts.mockResolvedValue({ success: true, data: [makeArtifact("a1")] });
+  it("re-snapshots on root agent_completed to backfill WS-dropped state", async () => {
+    // Initial open: idle (a just-created fresh session that the user sends to).
+    // Previously-running snapshots don't re-subscribe (documented R14f limitation),
+    // so drive sendMessage to create the subscription and capture onEvent.
+    listLogSessions.mockResolvedValueOnce({
+      success: true,
+      data: [makeRootRow(EXISTING_SESSION, { title: "" })],
+    });
+    getSessionMessages.mockResolvedValueOnce({ success: true, data: [] });
+    listSessionArtifacts.mockResolvedValueOnce({ success: true, data: [] });
 
-    const { result } = await bootRunningSession(`/research-v2/${EXISTING_SESSION}`);
+    const { result } = renderHook(() => useResearchSession(), {
+      wrapper: routerWrapper(`/research-v2/${EXISTING_SESSION}`),
+    });
+
     await act(async () => {
       await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
     });
-    expect(result.current.state.artifacts).toHaveLength(1);
+    expect(result.current.state.title).toBe("");
 
-    // Snapshot reference identity; another identical poll must NOT replace it.
-    const firstRef = result.current.state.artifacts;
+    // Snapshot resolved to "complete" (rootRow.status defaulted to completed);
+    // sendMessage passes the running guard and subscribes.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
+      await result.current.sendMessage("hello");
     });
+    expect(subscribeConversation).toHaveBeenCalledTimes(1);
+    const onEvent = subscribeConversation.mock.calls[0][1].onEvent;
+
+    // Second snapshot returns the finalised title + artifact.
+    listLogSessions.mockResolvedValue({
+      success: true,
+      data: [
+        makeRootRow(EXISTING_SESSION, {
+          title: "Final title",
+          status: "completed" as SessionStatus,
+        }),
+      ],
+    });
+    getSessionMessages.mockResolvedValue({ success: true, data: [] });
+    listSessionArtifacts.mockResolvedValue({
+      success: true,
+      data: [makeArtifact("late-artifact", EXISTING_SESSION)],
+    });
+
+    // Root agent_completed: parent_execution_id is absent on root.
+    act(() => {
+      onEvent({
+        type: "agent_completed",
+        timestamp: Date.now(),
+        session_id: EXISTING_SESSION,
+        execution_id: `exec-${EXISTING_SESSION}`,
+        agent_id: "root",
+      } as ConversationEvent);
+    });
+
+    // Two ticks let the re-snapshot promise chain resolve.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
     });
-    expect(result.current.state.artifacts).toBe(firstRef);
+
+    expect(result.current.state.title).toBe("Final title");
+    expect(result.current.state.artifacts.map((a) => a.id)).toContain("late-artifact");
   });
 
-  it("polling stops when status leaves running (error transition)", async () => {
+  it("child agent_completed does NOT trigger a re-snapshot", async () => {
+    listLogSessions.mockResolvedValue({
+      success: true,
+      data: [makeRootRow(EXISTING_SESSION)],
+    });
     getSessionMessages.mockResolvedValue({ success: true, data: [] });
     listSessionArtifacts.mockResolvedValue({ success: true, data: [] });
 
-    const { result } = await bootRunningSession(`/research-v2/${EXISTING_SESSION}`);
-    const callsWhileRunning = listSessionArtifacts.mock.calls.length;
+    const { result } = renderHook(() => useResearchSession(), {
+      wrapper: routerWrapper(`/research-v2/${EXISTING_SESSION}`),
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await result.current.sendMessage("hello");
+    });
 
-    // Drive the hook out of "running" via an ERROR event (no WS event maps to
-    // SESSION_COMPLETE — the "complete" branch is covered via reducer tests).
+    const callsAfterOpen = listLogSessions.mock.calls.length;
     const onEvent = subscribeConversation.mock.calls[0][1].onEvent;
+
     act(() => {
       onEvent({
-        type: "error",
+        type: "agent_completed",
         timestamp: Date.now(),
         session_id: EXISTING_SESSION,
-        execution_id: "",
-        message: "done",
-      } as import("@/services/transport/types").ConversationEvent);
+        execution_id: "exec-child-1",
+        parent_execution_id: `exec-${EXISTING_SESSION}`,
+        agent_id: "writer-agent",
+      } as ConversationEvent);
     });
-    expect(result.current.state.status).toBe("error");
 
-    // Interval is cleared by the effect cleanup — advancing the clock is a no-op.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(15000);
+      await Promise.resolve();
+      await Promise.resolve();
     });
-    expect(listSessionArtifacts.mock.calls.length).toBe(callsWhileRunning);
+
+    // No extra snapshot calls — children don't retrigger reconcile.
+    expect(listLogSessions.mock.calls.length).toBe(callsAfterOpen);
   });
 
-  it("does NOT poll when sessionId is null", async () => {
-    // Fresh hook, no URL sessionId, no sendMessage → sessionId stays null.
-    renderHook(() => useResearchSession(), {
-      wrapper: routerWrapper(TEST_INITIAL_PATH),
+  it("no polling after the snapshot completes", async () => {
+    listLogSessions.mockResolvedValue({
+      success: true,
+      data: [makeRootRow(EXISTING_SESSION)],
     });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(15000);
-    });
-    expect(listSessionArtifacts).not.toHaveBeenCalled();
+    getSessionMessages.mockResolvedValue({ success: true, data: [] });
+    listSessionArtifacts.mockResolvedValue({ success: true, data: [] });
+
+    vi.useFakeTimers();
+    try {
+      renderHook(() => useResearchSession(), {
+        wrapper: routerWrapper(`/research-v2/${EXISTING_SESSION}`),
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const initialCalls = listSessionArtifacts.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      // Timer is gone — no additional artifact calls purely from time passing.
+      expect(listSessionArtifacts.mock.calls.length).toBe(initialCalls);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
-

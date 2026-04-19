@@ -1,20 +1,18 @@
 import { useCallback, useEffect, useReducer, useRef, type Dispatch } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { getTransport, type Transport } from "@/services/transport";
+import { getTransport } from "@/services/transport";
 import type {
   Artifact,
   ConversationEvent,
-  SessionMessage,
   UnsubscribeFn,
 } from "@/services/transport/types";
 import { useStatusPill, type PillEventSink } from "../shared/statusPill";
-import { type ResearchArtifactRef, type ResearchMessage, EMPTY_RESEARCH_STATE } from "./types";
+import { EMPTY_RESEARCH_STATE } from "./types";
 import { reduceResearch, type ResearchAction } from "./reducer";
 import { mapGatewayEventToResearchAction, mapGatewayEventToPillEvent } from "./event-map";
-import { fetchArtifactsOnce, startArtifactPolling } from "./artifact-poll";
+import { snapshotSession } from "./session-snapshot";
 
 const ROOT_AGENT_ID = "root";
-const HISTORY_TAIL_LIMIT = 50;
 // Client-owned conv_id prefix. Research has no `/api/chat/init`, so the UI
 // mints the id and subscribes to it BEFORE invoke — that ordering is what
 // lets the first token reach the UI (R14a).
@@ -23,128 +21,7 @@ const CONV_ID_PREFIX = "research-";
 // Omitting from useCallback deps is intentional; closure captures the latest
 // reference. Per-line eslint-disable is still required for the linter.
 
-// --- Pure helpers ---------------------------------------------------------
-
-function isVisibleResearchMessage(m: SessionMessage): boolean {
-  if (m.role !== "user" && m.role !== "assistant") return false;
-  // `[tool calls]` rows that carry a respond message in their toolCalls column
-  // get upgraded to the real message in messageFromApi — keep them visible.
-  // Pure tool-call placeholders without a respond get dropped.
-  if (m.role === "assistant" && m.content.trim() === "[tool calls]") {
-    return extractRespondMessage(m) !== null;
-  }
-  return true;
-}
-
-/**
- * Agents often stream 2–3 intermediate narrations per user turn
- * ("I'll help you…", "Step 1 requires…", "All 4 steps are complete…") that
- * get persisted as separate assistant rows. On hydrate we keep only the
- * LAST assistant per user turn — the true "final answer" in respond-tool
- * sessions, and the least-bad fallback otherwise. Tool-call placeholders
- * are already dropped by isVisibleResearchMessage.
- */
-function collapseAssistantsPerUserTurn(
-  msgs: SessionMessage[],
-): SessionMessage[] {
-  const out: SessionMessage[] = [];
-  let lastAssistant: SessionMessage | null = null;
-  for (const m of msgs) {
-    if (m.role === "user") {
-      if (lastAssistant) {
-        out.push(lastAssistant);
-        lastAssistant = null;
-      }
-      out.push(m);
-    } else {
-      lastAssistant = m;
-    }
-  }
-  if (lastAssistant) out.push(lastAssistant);
-  return out;
-}
-
-/**
- * `[tool calls]` is the content placeholder the backend writes when an
- * assistant message was a pure tool invocation. The actual respond message
- * (the final answer) lives in the parallel `toolCalls` column as a JSON
- * string whose entries carry `tool_name: "respond"` and `args.message`.
- * Upgrade the placeholder to the real message so hydrated history
- * surfaces the agent's final deliverable. Accepts both camelCase
- * `toolCalls` (current wire) and snake_case `tool_calls` (legacy).
- */
-function extractRespondMessage(m: SessionMessage): string | null {
-  const candidate =
-    (m as unknown as { toolCalls?: unknown }).toolCalls ?? m.tool_calls;
-  if (candidate == null) return null;
-  const raw = typeof candidate === "string" ? candidate : JSON.stringify(candidate);
-  try {
-    const parsed = JSON.parse(raw) as Array<{
-      tool_name?: string;
-      args?: { message?: string };
-    }>;
-    if (!Array.isArray(parsed)) return null;
-    for (const call of parsed) {
-      if (call?.tool_name === "respond" && typeof call.args?.message === "string") {
-        return call.args.message;
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function messageFromApi(m: SessionMessage): ResearchMessage {
-  const upgraded =
-    m.role === "assistant" && m.content.trim() === "[tool calls]"
-      ? extractRespondMessage(m)
-      : null;
-  return {
-    id: m.id,
-    // Live sessions render the agent's answer through turn blocks; hydrated
-    // history lacks turns to rebuild from, so the page renders these assistant
-    // messages directly as markdown (see ResearchPage.MainColumn).
-    role: m.role === "user" ? "user" : "assistant",
-    content: upgraded ?? m.content,
-    timestamp: new Date(m.created_at).getTime(),
-  };
-}
-
-// Fetch the tail of the session's root-scoped message history plus the
-// server-derived title. Uses `/messages?scope=root` (returns `200 []` for
-// extant-but-empty sessions) because `/api/sessions/:id/state` 404s
-// spuriously. Title is looked up in parallel from `/api/logs/sessions` —
-// the `session_title_changed` event can be dropped mid-run by the WS
-// reconnect flow, so we can't rely on it during live streaming.
-async function hydrateExistingSession(
-  transport: Transport,
-  sessionId: string
-): Promise<{ messages: ResearchMessage[]; title: string } | null> {
-  const [msgs, sessionsList] = await Promise.all([
-    transport.getSessionMessages(sessionId, { scope: "root" }),
-    transport.listLogSessions().catch(() => ({ success: false })),
-  ]);
-  if (!msgs.success || !msgs.data) return null;
-  const visible = msgs.data.filter(isVisibleResearchMessage);
-  const collapsed = collapseAssistantsPerUserTurn(visible);
-  const messages = collapsed
-    .slice(-HISTORY_TAIL_LIMIT)
-    .map(messageFromApi);
-  // Wire quirk: LogSession.conversation_id holds the real sess-* id;
-  // LogSession.session_id holds the execution id. Find any row for this
-  // session (root or child) and take its title — all children share it.
-  const title =
-    sessionsList &&
-    "success" in sessionsList &&
-    sessionsList.success &&
-    Array.isArray(sessionsList.data)
-      ? (sessionsList.data.find(
-          (s) => s.conversation_id === sessionId && typeof s.title === "string" && s.title.length > 0,
-        )?.title ?? "")
-      : "";
-  return { messages, title };
-}
+// --- Event synthesis (respond-tool + delegation_completed) ----------------
 
 /**
  * When the agent calls the `respond` tool, the gateway broadcasts:
@@ -189,22 +66,49 @@ function respondActionFromDelegationCompleted(
   return { type: "RESPOND", turnId: childExec, text: result };
 }
 
-function makeEventHandler(pillSink: PillEventSink, dispatch: Dispatch<ResearchAction>) {
+interface EventHandlerCtx {
+  pillSink: PillEventSink;
+  dispatch: Dispatch<ResearchAction>;
+  /** Called once per root `agent_completed` — used to re-snapshot. */
+  onRootAgentCompleted: (executionId: string) => void;
+}
+
+function makeEventHandler(ctx: EventHandlerCtx) {
   return (event: ConversationEvent) => {
     const action = mapGatewayEventToResearchAction(event);
-    if (action) dispatch(action);
+    if (action) ctx.dispatch(action);
     // Respond-tool path: synthesize RESPOND from tool_call.args.message
     // because turn_complete.final_message arrives empty for tool-emitted
     // responses (Done.final_message is populated only from streamed tokens).
     const raw = event as unknown as Record<string, unknown>;
     const synthesizedRespond = respondActionFromToolCall(raw);
-    if (synthesizedRespond) dispatch(synthesizedRespond);
+    if (synthesizedRespond) ctx.dispatch(synthesizedRespond);
     const synthesizedChildRespond = respondActionFromDelegationCompleted(raw);
-    if (synthesizedChildRespond) dispatch(synthesizedChildRespond);
+    if (synthesizedChildRespond) ctx.dispatch(synthesizedChildRespond);
     const pillEv = mapGatewayEventToPillEvent(event);
-    if (pillEv) pillSink.push(pillEv);
+    if (pillEv) ctx.pillSink.push(pillEv);
+    // R14f: re-snapshot on root agent_completed to backfill anything WS dropped
+    // (session title, artifacts, subagent completions, per-turn respond).
+    handleRootAgentCompleted(raw, ctx.onRootAgentCompleted);
   };
 }
+
+function handleRootAgentCompleted(
+  raw: Record<string, unknown>,
+  onRootAgentCompleted: (executionId: string) => void,
+): void {
+  if (raw["type"] !== "agent_completed") return;
+  const parent = raw["parent_execution_id"];
+  // Only root turns have a null/empty parent — children's completions don't
+  // need a reconcile because their own state was already snapshot-sourced.
+  const isRoot = parent == null || parent === "";
+  if (!isRoot) return;
+  const execId = raw["execution_id"];
+  if (typeof execId !== "string" || execId.length === 0) return;
+  onRootAgentCompleted(execId);
+}
+
+// --- Subscription refs ----------------------------------------------------
 
 interface SubscriptionRefs {
   subscribedConvIdRef: React.MutableRefObject<string | null>;
@@ -215,7 +119,7 @@ interface SubscriptionRefs {
 async function ensureSubscription(
   convId: string,
   onEvent: (event: ConversationEvent) => void,
-  refs: SubscriptionRefs
+  refs: SubscriptionRefs,
 ): Promise<void> {
   if (refs.subscribedConvIdRef.current === convId) return;
   const transport = await getTransport();
@@ -236,6 +140,43 @@ function teardownSubscription(refs: SubscriptionRefs): void {
   }
 }
 
+// --- Snapshot → HYDRATE dispatch -----------------------------------------
+
+async function hydrateFromSnapshot(
+  sessionId: string,
+  dispatch: Dispatch<ResearchAction>,
+  latestArtifactsRef: { current: Artifact[] },
+): Promise<void> {
+  const transport = await getTransport();
+  const snap = await snapshotSession(transport, sessionId);
+  if (!snap) {
+    dispatch({ type: "ERROR", message: "Failed to load session" });
+    return;
+  }
+  dispatch({
+    type: "HYDRATE",
+    sessionId,
+    conversationId: snap.conversationId,
+    title: snap.title,
+    status: snap.status,
+    wardId: snap.wardId,
+    wardName: snap.wardName,
+    messages: snap.messages,
+    turns: snap.turns,
+    artifacts: snap.artifacts,
+  });
+  // Mirror the artifact records in the ref so the slide-out can resolve
+  // id → Artifact without a second fetch. snapshotSession already pulled
+  // /artifacts once; reuse its decision here via a parallel call to keep the
+  // cache hot. On failure we just skip — slide-out will re-fetch on demand.
+  try {
+    const res = await transport.listSessionArtifacts(sessionId);
+    if (res.success && res.data) latestArtifactsRef.current = res.data;
+  } catch {
+    // Intentionally silent — the snapshot's refs are enough for rendering.
+  }
+}
+
 // --- Hook -----------------------------------------------------------------
 
 export function useResearchSession() {
@@ -247,40 +188,21 @@ export function useResearchSession() {
   const hydratedForSessionRef = useRef<string | null>(null); // one-shot hydration guard (StrictMode)
   const subscribedConvIdRef = useRef<string | null>(null); // R14a: sendMessage owns subscription
   const unsubscribeRef = useRef<UnsubscribeFn | null>(null);
-  // R14d: full Artifact[] from last poll (state only holds light refs); artifactsRef
-  // mirrors state.artifacts so the poll closure diffs without re-running every render.
+  // state holds light refs; latestArtifactsRef mirrors the full Artifact
+  // records so ArtifactSlideOut can resolve id → Artifact without refetching.
   const latestArtifactsRef = useRef<Artifact[]>([]);
-  const artifactsRef = useRef<ResearchArtifactRef[]>(state.artifacts);
-  artifactsRef.current = state.artifacts;
+  // Guard against redundant re-snapshots when agent_completed fires more than
+  // once for the same root execution (WS redelivery or duplicate dispatch).
+  const resnapshotForExecRef = useRef<string | null>(null);
 
   // --- Hydrate an EXISTING session (only when URL carries one) ---
   useEffect(() => {
     if (!urlSessionId || hydratedForSessionRef.current === urlSessionId) return;
     (async () => {
-      const transport = await getTransport();
-      const snapshot = await hydrateExistingSession(transport, urlSessionId);
-      if (hydratedForSessionRef.current === urlSessionId) return;
+      await hydrateFromSnapshot(urlSessionId, dispatch, latestArtifactsRef);
+      // Set AFTER the dispatch (chat-v2 learning #6) so StrictMode's first
+      // mount re-entering doesn't skip dispatch via a pre-completion flag.
       hydratedForSessionRef.current = urlSessionId;
-      if (!snapshot) {
-        dispatch({ type: "ERROR", message: "Failed to load session" });
-        return;
-      }
-      // TODO: populate wardId/wardName/turns/artifacts from /state when the
-      // spurious-404 issue documented in hydrateExistingSession() is fixed.
-      // Title is already recovered from /api/logs/sessions above since the
-      // `session_title_changed` WS event can be dropped mid-run.
-      dispatch({
-        type: "HYDRATE",
-        sessionId: urlSessionId,
-        conversationId: null,
-        title: snapshot.title,
-        status: "idle",
-        wardId: null,
-        wardName: null,
-        messages: snapshot.messages,
-        turns: [],
-        artifacts: [],
-      });
     })();
   }, [urlSessionId]);
 
@@ -296,15 +218,6 @@ export function useResearchSession() {
       navigate(`/research-v2/${state.sessionId}`, { replace: true });
     }
   }, [state.sessionId, urlSessionId, navigate]);
-
-  // --- Poll artifacts while running; one final fetch on transition to complete (R14d) ---
-  useEffect(() => {
-    const sid = state.sessionId;
-    if (!sid) return;
-    if (state.status === "running") return startArtifactPolling(sid, artifactsRef, dispatch, latestArtifactsRef);
-    if (state.status === "complete") void fetchArtifactsOnce(sid, artifactsRef.current, dispatch, latestArtifactsRef);
-    return undefined;
-  }, [state.sessionId, state.status]);
 
   // --- Send a user message (subscribes BEFORE invoke, R14a) ---
   const sendMessage = useCallback(
@@ -323,7 +236,14 @@ export function useResearchSession() {
       // Closure read: safe because only SESSION_BOUND (dispatched below) mutates state.conversationId.
       const convId = state.conversationId ?? `${CONV_ID_PREFIX}${crypto.randomUUID()}`;
       const refs: SubscriptionRefs = { subscribedConvIdRef, unsubscribeRef };
-      const onEvent = makeEventHandler(pillSink, dispatch);
+      const onRootAgentCompleted = (execId: string) => {
+        if (resnapshotForExecRef.current === execId) return;
+        resnapshotForExecRef.current = execId;
+        const sid = state.sessionId;
+        if (!sid) return;
+        void hydrateFromSnapshot(sid, dispatch, latestArtifactsRef);
+      };
+      const onEvent = makeEventHandler({ pillSink, dispatch, onRootAgentCompleted });
       try {
         await ensureSubscription(convId, onEvent, refs);
         // Pre-invoke SESSION_BOUND seeds state.conversationId. The server's
@@ -341,7 +261,7 @@ export function useResearchSession() {
           trimmed,
           state.sessionId ?? undefined,
           // mode undefined → executor defaults to SessionMode::Research
-          undefined
+          undefined,
         );
         if (!result.success) {
           dispatch({ type: "ERROR", message: result.error ?? "Failed to send" });
@@ -352,7 +272,7 @@ export function useResearchSession() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pillSink stable, see module-level note above.
-    [state.status, state.conversationId, state.sessionId]
+    [state.status, state.conversationId, state.sessionId],
   );
 
   const stopAgent = useCallback(async () => {
@@ -367,6 +287,7 @@ export function useResearchSession() {
     pillSink.push({ kind: "reset" });
     dispatch({ type: "RESET" });
     hydratedForSessionRef.current = null;
+    resnapshotForExecRef.current = null;
     navigate("/research-v2", { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pillSink stable, see module-level note above.
   }, [navigate]);
@@ -375,7 +296,8 @@ export function useResearchSession() {
     dispatch({ type: "TOGGLE_THINKING", turnId });
   }, []);
 
-  // R14d: ref → full Artifact lookup for ArtifactSlideOut (polling keeps latestArtifactsRef fresh).
+  // ref → full Artifact lookup for ArtifactSlideOut. The ref is populated by
+  // hydrateFromSnapshot (on open + on root agent_completed).
   const getFullArtifact = useCallback((id: string): Artifact | undefined => latestArtifactsRef.current.find((a) => a.id === id), []);
 
   return { state, pillState, sendMessage, stopAgent, startNewResearch, toggleThinking, getFullArtifact };
