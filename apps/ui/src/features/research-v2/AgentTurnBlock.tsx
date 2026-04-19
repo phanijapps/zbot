@@ -10,10 +10,25 @@ import {
 } from "lucide-react";
 import type { AgentTurn, AgentTurnStatus } from "./types";
 import { ThinkingTimeline } from "./ThinkingTimeline";
+import { childrenOf } from "./turn-tree";
 
 export interface AgentTurnBlockProps {
   turn: AgentTurn;
   onToggleThinking(turnId: string): void;
+  /**
+   * Direct children of `turn`. Optional — omit for leaf-only rendering.
+   * Callers derive this with `childrenOf(turn, allTurns)`.
+   */
+  children?: AgentTurn[];
+  /**
+   * Full flat turn list used to recurse past the first child level.
+   * Choice A (see R14b spec): passing allTurns down keeps the component pure
+   * and the tree shape derived at render. Alternative B (pre-computed nested
+   * children) would push recursion into the parent and make the block
+   * artificially dumb, but would couple parents to grand-children and make
+   * tests brittle. A wins on testability and separation of concerns.
+   */
+  allTurns?: AgentTurn[];
 }
 
 // Agent identity → accent colour. Theme tokens where possible.
@@ -150,8 +165,42 @@ function respondIsStreaming(turn: AgentTurn): boolean {
   return turn.respond === null && turn.respondStreaming.length > 0;
 }
 
-export function AgentTurnBlock({ turn, onToggleThinking }: AgentTurnBlockProps) {
+interface NestedChildrenProps {
+  children: AgentTurn[];
+  allTurns: AgentTurn[];
+  onToggleThinking(turnId: string): void;
+}
+
+/** Recursively renders child turns indented under their parent. */
+function NestedChildren({ children, allTurns, onToggleThinking }: NestedChildrenProps) {
+  if (children.length === 0) return null;
+  return (
+    <div
+      className="agent-turn-block__children"
+      data-testid="nested-children"
+    >
+      {children.map((child) => (
+        <AgentTurnBlock
+          key={child.id}
+          turn={child}
+          onToggleThinking={onToggleThinking}
+          children={childrenOf(child, allTurns)}
+          allTurns={allTurns}
+        />
+      ))}
+    </div>
+  );
+}
+
+export function AgentTurnBlock({
+  turn,
+  onToggleThinking,
+  children,
+  allTurns,
+}: AgentTurnBlockProps) {
   const color = agentColour(turn.agentId);
+  const childList = children ?? [];
+  const fullList = allTurns ?? childList;
 
   return (
     <div
@@ -179,6 +228,12 @@ export function AgentTurnBlock({ turn, onToggleThinking }: AgentTurnBlockProps) 
       >
         <RespondBody turn={turn} />
       </div>
+
+      <NestedChildren
+        children={childList}
+        allTurns={fullList}
+        onToggleThinking={onToggleThinking}
+      />
     </div>
   );
 }

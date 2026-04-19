@@ -211,6 +211,17 @@
   font-style: italic;
 }
 
+/* Nested subagent turns (R14b) — indented, dashed guide line. */
+.agent-turn-block__children {
+  margin-left: 20px;
+  padding-left: 12px;
+  border-left: 1px dashed var(--border);
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 /* =============================================================================
    ThinkingTimeline styles
    ============================================================================= */

@@ -179,6 +179,70 @@ describe("<ResearchPage>", () => {
     expect(screen.getByText(/analyzing intent/i)).toBeTruthy();
   });
 
+  it("renders nested subagent turns under their parent (depth 0 → 1 → 2)", () => {
+    const now = 1000;
+    const root = {
+      id: "root-1",
+      agentId: "planner",
+      parentExecutionId: null,
+      startedAt: now,
+      completedAt: now + 100,
+      status: "completed" as const,
+      wardId: "w1",
+      timeline: [],
+      tokenCount: 10,
+      respond: "root body",
+      respondStreaming: "",
+      thinkingExpanded: false,
+      errorMessage: null,
+    };
+    const child = {
+      ...root,
+      id: "child-1",
+      agentId: "solution",
+      parentExecutionId: "root-1",
+      startedAt: now + 200,
+      respond: "child body",
+    };
+    const grandchild = {
+      ...root,
+      id: "grand-1",
+      agentId: "builder",
+      parentExecutionId: "child-1",
+      startedAt: now + 400,
+      respond: "grand body",
+    };
+    researchRef.current = {
+      ...makeIdleResearch(),
+      state: {
+        ...makeIdleResearch().state,
+        sessionId: "sess-1",
+        turns: [root, child, grandchild],
+      },
+    };
+    const { container } = renderPage();
+
+    // Root is rendered as a top-level block (data-parent empty).
+    const rootBlock = container.querySelector('.agent-turn-block[data-parent=""]');
+    expect(rootBlock).toBeTruthy();
+
+    // The root block contains the nested children container.
+    const nestedContainer = rootBlock?.querySelector(".agent-turn-block__children");
+    expect(nestedContainer).toBeTruthy();
+
+    // Inside the nested container, the child block is present…
+    const childBlock = nestedContainer?.querySelector('[data-parent="root-1"]');
+    expect(childBlock).toBeTruthy();
+
+    // …and the child block contains ITS OWN nested container for the grandchild.
+    const grandBlock = childBlock?.querySelector('[data-parent="child-1"]');
+    expect(grandBlock).toBeTruthy();
+
+    // All three agent labels present.
+    const agentLabels = container.querySelectorAll(".agent-turn-block__agent");
+    expect(agentLabels).toHaveLength(3);
+  });
+
   it("shows intent classification line when set", () => {
     researchRef.current = {
       ...makeIdleResearch(),

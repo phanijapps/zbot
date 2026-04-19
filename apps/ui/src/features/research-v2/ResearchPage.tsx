@@ -20,6 +20,7 @@ import { AgentTurnBlock } from "./AgentTurnBlock";
 import { SessionsDrawer } from "./SessionsDrawer";
 import { useResearchSession } from "./useResearchSession";
 import { useSessionsList } from "./useSessionsList";
+import { rootTurns, childrenOf } from "./turn-tree";
 import type { ResearchSessionState } from "./types";
 import type { Artifact } from "@/services/transport/types";
 import "./research.css";
@@ -110,6 +111,11 @@ function MainColumn({ state, onToggleThinking }: MainColumnProps) {
 
   if (!hasContent) return <EmptyState />;
 
+  // Render root turns at depth 0; nested children are derived inside
+  // AgentTurnBlock via the allTurns prop. See turn-tree.ts and the R14b spec
+  // (option A) for why the tree shape is derived at render, not stored.
+  const roots = rootTurns(state.turns);
+
   return (
     <>
       {state.messages.map((m) => (
@@ -118,8 +124,14 @@ function MainColumn({ state, onToggleThinking }: MainColumnProps) {
         </div>
       ))}
       <IntentLine state={state} />
-      {state.turns.map((turn) => (
-        <AgentTurnBlock key={turn.id} turn={turn} onToggleThinking={onToggleThinking} />
+      {roots.map((turn) => (
+        <AgentTurnBlock
+          key={turn.id}
+          turn={turn}
+          onToggleThinking={onToggleThinking}
+          children={childrenOf(turn, state.turns)}
+          allTurns={state.turns}
+        />
       ))}
     </>
   );

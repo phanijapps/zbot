@@ -88,4 +88,69 @@ describe("<AgentTurnBlock>", () => {
     const block = container.querySelector(".agent-turn-block");
     expect(block?.getAttribute("data-parent")).toBe("");
   });
+
+  it("renders nested child blocks inside the children container when children prop is provided", () => {
+    const child: AgentTurn = {
+      ...baseTurn,
+      id: "child-1",
+      agentId: "solution",
+      parentExecutionId: "t1",
+      respond: "child respond",
+      startedAt: 1500,
+    };
+    const { container } = render(
+      <AgentTurnBlock
+        turn={baseTurn}
+        onToggleThinking={() => {}}
+        children={[child]}
+        allTurns={[baseTurn, child]}
+      />
+    );
+    const nested = container.querySelector('[data-testid="nested-children"]');
+    expect(nested).toBeTruthy();
+    // Nested child should be rendered inside the container with its parent id.
+    const childBlock = nested?.querySelector('[data-parent="t1"]');
+    expect(childBlock).toBeTruthy();
+    expect(childBlock?.textContent).toContain("solution");
+  });
+
+  it("does NOT render the children container when children is empty or omitted", () => {
+    const { container } = render(
+      <AgentTurnBlock turn={baseTurn} onToggleThinking={() => {}} />
+    );
+    expect(container.querySelector(".agent-turn-block__children")).toBeNull();
+  });
+
+  it("recursively renders grandchildren through allTurns (2 levels deep)", () => {
+    const child: AgentTurn = {
+      ...baseTurn,
+      id: "child-1",
+      agentId: "solution",
+      parentExecutionId: "t1",
+      startedAt: 1500,
+      respond: "child body",
+    };
+    const grandchild: AgentTurn = {
+      ...baseTurn,
+      id: "grand-1",
+      agentId: "builder",
+      parentExecutionId: "child-1",
+      startedAt: 1700,
+      respond: "grand body",
+    };
+    const all = [baseTurn, child, grandchild];
+    const { container } = render(
+      <AgentTurnBlock
+        turn={baseTurn}
+        onToggleThinking={() => {}}
+        children={[child]}
+        allTurns={all}
+      />
+    );
+    // Three agent-name labels (root + child + grandchild).
+    const agentLabels = container.querySelectorAll(".agent-turn-block__agent");
+    expect(agentLabels).toHaveLength(3);
+    const names = Array.from(agentLabels).map((el) => el.textContent);
+    expect(names).toEqual(expect.arrayContaining(["planner", "solution", "builder"]));
+  });
 });
