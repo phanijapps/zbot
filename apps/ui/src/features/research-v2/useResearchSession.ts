@@ -111,21 +111,39 @@ function messageFromApi(m: SessionMessage): ResearchMessage {
   };
 }
 
-// Fetch the tail of the session's root-scoped message history. Uses
-// `/messages?scope=root` (returns `200 []` for extant-but-empty sessions)
-// because `/api/sessions/:id/state` 404s spuriously.
+// Fetch the tail of the session's root-scoped message history plus the
+// server-derived title. Uses `/messages?scope=root` (returns `200 []` for
+// extant-but-empty sessions) because `/api/sessions/:id/state` 404s
+// spuriously. Title is looked up in parallel from `/api/logs/sessions` —
+// the `session_title_changed` event can be dropped mid-run by the WS
+// reconnect flow, so we can't rely on it during live streaming.
 async function hydrateExistingSession(
   transport: Transport,
   sessionId: string
-): Promise<{ messages: ResearchMessage[] } | null> {
-  const msgs = await transport.getSessionMessages(sessionId, { scope: "root" });
+): Promise<{ messages: ResearchMessage[]; title: string } | null> {
+  const [msgs, sessionsList] = await Promise.all([
+    transport.getSessionMessages(sessionId, { scope: "root" }),
+    transport.listLogSessions().catch(() => ({ success: false })),
+  ]);
   if (!msgs.success || !msgs.data) return null;
   const visible = msgs.data.filter(isVisibleResearchMessage);
   const collapsed = collapseAssistantsPerUserTurn(visible);
   const messages = collapsed
     .slice(-HISTORY_TAIL_LIMIT)
     .map(messageFromApi);
-  return { messages };
+  // Wire quirk: LogSession.conversation_id holds the real sess-* id;
+  // LogSession.session_id holds the execution id. Find any row for this
+  // session (root or child) and take its title — all children share it.
+  const title =
+    sessionsList &&
+    "success" in sessionsList &&
+    sessionsList.success &&
+    Array.isArray(sessionsList.data)
+      ? (sessionsList.data.find(
+          (s) => s.conversation_id === sessionId && typeof s.title === "string" && s.title.length > 0,
+        )?.title ?? "")
+      : "";
+  return { messages, title };
 }
 
 /**
@@ -247,13 +265,15 @@ export function useResearchSession() {
         dispatch({ type: "ERROR", message: "Failed to load session" });
         return;
       }
-      // TODO: populate title/wardId/wardName/turns/artifacts from /state when the
+      // TODO: populate wardId/wardName/turns/artifacts from /state when the
       // spurious-404 issue documented in hydrateExistingSession() is fixed.
+      // Title is already recovered from /api/logs/sessions above since the
+      // `session_title_changed` WS event can be dropped mid-run.
       dispatch({
         type: "HYDRATE",
         sessionId: urlSessionId,
         conversationId: null,
-        title: "",
+        title: snapshot.title,
         status: "idle",
         wardId: null,
         wardName: null,

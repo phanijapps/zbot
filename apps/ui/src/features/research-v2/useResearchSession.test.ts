@@ -24,6 +24,7 @@ const executeAgent = vi.fn<Transport["executeAgent"]>();
 const stopAgent = vi.fn<Transport["stopAgent"]>();
 const getSessionMessages = vi.fn<Transport["getSessionMessages"]>();
 const listSessionArtifacts = vi.fn<Transport["listSessionArtifacts"]>();
+const listLogSessions = vi.fn<Transport["listLogSessions"]>();
 const unsubscribeSpy = vi.fn<() => void>();
 // Ordered log of all transport calls to assert subscribe-before-invoke.
 const callLog: string[] = [];
@@ -35,6 +36,7 @@ vi.mock("@/services/transport", () => ({
     stopAgent,
     getSessionMessages,
     listSessionArtifacts,
+    listLogSessions,
   }),
 }));
 
@@ -87,6 +89,7 @@ beforeEach(() => {
   stopAgent.mockReset();
   getSessionMessages.mockReset();
   listSessionArtifacts.mockReset();
+  listLogSessions.mockReset();
   unsubscribeSpy.mockReset();
 
   subscribeConversation.mockImplementation((convId: string) => {
@@ -100,6 +103,7 @@ beforeEach(() => {
   stopAgent.mockResolvedValue({ success: true, data: undefined });
   getSessionMessages.mockResolvedValue({ success: true, data: [] });
   listSessionArtifacts.mockResolvedValue({ success: true, data: [] });
+  listLogSessions.mockResolvedValue({ success: true, data: [] });
 });
 
 afterEach(() => {
