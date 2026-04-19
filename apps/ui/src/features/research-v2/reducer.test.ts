@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { reduceResearch, type ResearchAction } from "./reducer";
+import { reduceResearch } from "./reducer";
 import { EMPTY_RESEARCH_STATE } from "./types";
 
 describe("reduceResearch", () => {
@@ -188,5 +188,46 @@ describe("reduceResearch", () => {
   it("PLAN_UPDATE stores the plan path", () => {
     const s = reduceResearch(EMPTY_RESEARCH_STATE, { type: "PLAN_UPDATE", planPath: "/p.md" });
     expect(s.planPath).toBe("/p.md");
+  });
+
+  it("duplicate AGENT_STARTED is idempotent — does not overwrite existing turn", () => {
+    let s = reduceResearch(EMPTY_RESEARCH_STATE, {
+      type: "AGENT_STARTED", turnId: "t1", agentId: "root",
+      parentExecutionId: null, wardId: null, startedAt: 1,
+    });
+    s = reduceResearch(s, {
+      type: "AGENT_STARTED", turnId: "t1", agentId: "planner",
+      parentExecutionId: "other-parent", wardId: "w-other", startedAt: 999,
+    });
+    expect(s.turns).toHaveLength(1);
+    expect(s.turns[0].agentId).toBe("root");
+    expect(s.turns[0].startedAt).toBe(1);
+  });
+
+  it("orphan TOOL_CALL (no prior AGENT_STARTED) creates a turn and appends the entry", () => {
+    const s = reduceResearch(EMPTY_RESEARCH_STATE, {
+      type: "TOOL_CALL",
+      turnId: "orphan",
+      entry: { id: "e1", at: 2, kind: "tool_call", text: "write_file", toolName: "write_file" },
+    });
+    expect(s.turns).toHaveLength(1);
+    expect(s.turns[0].id).toBe("orphan");
+    expect(s.turns[0].timeline).toHaveLength(1);
+  });
+
+  it("WARD_CHANGED after a turn exists updates state ward but NOT the historical turn's wardId", () => {
+    let s = reduceResearch(EMPTY_RESEARCH_STATE, {
+      type: "WARD_CHANGED", wardId: "w1", wardName: "W1",
+    });
+    s = reduceResearch(s, {
+      type: "AGENT_STARTED", turnId: "t1", agentId: "root",
+      parentExecutionId: null, wardId: null, startedAt: 1,
+    });
+    s = reduceResearch(s, {
+      type: "WARD_CHANGED", wardId: "w2", wardName: "W2",
+    });
+    expect(s.wardId).toBe("w2");
+    expect(s.wardName).toBe("W2");
+    expect(s.turns[0].wardId).toBe("w1"); // historical — not retroactive
   });
 });
