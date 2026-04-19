@@ -10,12 +10,23 @@ describe("mapGatewayEventToQuickChatAction", () => {
     expect(mapGatewayEventToQuickChatAction({ type: "respond", content: "done" } as any))
       .toEqual({ type: "RESPOND", text: "done" });
   });
-  it("maps WardChanged to WARD_CHANGED only when name present", () => {
+  it("maps WardChanged with flat ward_id (current wire format)", () => {
+    expect(mapGatewayEventToQuickChatAction({ type: "ward_changed", ward_id: "stock-analysis" } as any))
+      .toEqual({ type: "WARD_CHANGED", wardName: "stock-analysis" });
+  });
+  it("maps WardChanged with nested ward.name (forward-compat)", () => {
     expect(mapGatewayEventToQuickChatAction({ type: "ward_changed", ward: { name: "x" } } as any))
       .toEqual({ type: "WARD_CHANGED", wardName: "x" });
-    expect(mapGatewayEventToQuickChatAction({ type: "ward_changed" } as any)).toBeNull();
   });
-  it("maps SessionInitialized → SESSION_BOUND", () => {
+  it("returns null for WardChanged without id or name", () => {
+    expect(mapGatewayEventToQuickChatAction({ type: "ward_changed" } as any)).toBeNull();
+    expect(mapGatewayEventToQuickChatAction({ type: "ward_changed", ward_id: "" } as any)).toBeNull();
+  });
+  it("maps invoke_accepted → SESSION_BOUND (current wire format)", () => {
+    expect(mapGatewayEventToQuickChatAction({ type: "invoke_accepted", session_id: "sess-1" } as any))
+      .toEqual({ type: "SESSION_BOUND", sessionId: "sess-1" });
+  });
+  it("maps session_initialized → SESSION_BOUND (forward-compat)", () => {
     expect(mapGatewayEventToQuickChatAction({ type: "session_initialized", session_id: "sess-1" } as any))
       .toEqual({ type: "SESSION_BOUND", sessionId: "sess-1" });
   });
@@ -28,6 +39,49 @@ describe("mapGatewayEventToQuickChatAction", () => {
   });
   it("returns null for unmapped events", () => {
     expect(mapGatewayEventToQuickChatAction({ type: "iterations_extended" } as any)).toBeNull();
+  });
+
+  it("maps agent_started to AGENT_STARTED", () => {
+    expect(mapGatewayEventToQuickChatAction({ type: "agent_started", agent_id: "quick-chat" } as any))
+      .toEqual({ type: "AGENT_STARTED", agentId: "quick-chat" });
+  });
+
+  it("maps turn_complete to TURN_COMPLETE", () => {
+    expect(mapGatewayEventToQuickChatAction({ type: "turn_complete" } as any))
+      .toEqual({ type: "TURN_COMPLETE" });
+  });
+
+  it("maps error with message to ERROR", () => {
+    expect(mapGatewayEventToQuickChatAction({ type: "error", message: "network down" } as any))
+      .toEqual({ type: "ERROR", message: "network down" });
+  });
+
+  it("maps error without message to ERROR with default", () => {
+    expect(mapGatewayEventToQuickChatAction({ type: "error" } as any))
+      .toEqual({ type: "ERROR", message: "error" });
+  });
+
+  it("maps tool_call load_skill to skill chip", () => {
+    const a = mapGatewayEventToQuickChatAction({
+      type: "tool_call", tool: "load_skill", args: { skill: "web-read" },
+    } as any);
+    expect(a?.type).toBe("ADD_CHIP");
+    expect((a as any).chip.kind).toBe("skill");
+    expect((a as any).chip.label).toBe("loaded web-read");
+  });
+
+  it("maps tool_call memory.recall to recall chip", () => {
+    const a = mapGatewayEventToQuickChatAction({
+      type: "tool_call", tool: "memory", args: { action: "recall" },
+    } as any);
+    expect(a?.type).toBe("ADD_CHIP");
+    expect((a as any).chip.kind).toBe("recall");
+  });
+
+  it("returns null for tool_call memory with non-read action", () => {
+    expect(mapGatewayEventToQuickChatAction({
+      type: "tool_call", tool: "memory", args: { action: "save_fact" },
+    } as any)).toBeNull();
   });
 });
 
@@ -47,5 +101,16 @@ describe("mapGatewayEventToPillEvent", () => {
   it("maps agent_completed with is_final inferred from last=true flag", () => {
     expect(mapGatewayEventToPillEvent({ type: "agent_completed", agent_id: "quick-chat", last: true } as any))
       .toEqual({ kind: "agent_completed", agent_id: "quick-chat", is_final: true });
+  });
+  it("maps agent_completed with is_final=false when neither last nor is_final are set", () => {
+    expect(mapGatewayEventToPillEvent({ type: "agent_completed", agent_id: "quick-chat" } as any))
+      .toEqual({ kind: "agent_completed", agent_id: "quick-chat", is_final: false });
+  });
+  it("maps respond to respond pill event", () => {
+    expect(mapGatewayEventToPillEvent({ type: "respond", content: "done" } as any))
+      .toEqual({ kind: "respond" });
+  });
+  it("returns null for unmapped pill events", () => {
+    expect(mapGatewayEventToPillEvent({ type: "heartbeat" } as any)).toBeNull();
   });
 });

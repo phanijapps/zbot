@@ -19,10 +19,19 @@ function mapRespondEvent(ev: Record<string, unknown>): QuickChatAction | null {
 }
 
 function mapWardChangedEvent(ev: Record<string, unknown>): QuickChatAction | null {
+  // Gateway emits `ward_id: string` on the wire. Accept either the flat
+  // `ward_id` (current wire format) or a nested `ward.name` (reserved for a
+  // future enrichment that resolves display names server-side).
+  const flat = ev["ward_id"];
+  if (typeof flat === "string" && flat.length > 0) {
+    return { type: "WARD_CHANGED", wardName: flat };
+  }
   const ward = ev["ward"] as Record<string, unknown> | undefined;
   const name = ward?.["name"];
-  if (!name) return null;
-  return { type: "WARD_CHANGED", wardName: name as string };
+  if (typeof name === "string" && name.length > 0) {
+    return { type: "WARD_CHANGED", wardName: name };
+  }
+  return null;
 }
 
 function mapSessionInitializedEvent(ev: Record<string, unknown>): QuickChatAction | null {
@@ -73,6 +82,9 @@ export function mapGatewayEventToQuickChatAction(ev: ConversationEvent): QuickCh
     case "token":               return mapTokenEvent(raw);
     case "respond":             return mapRespondEvent(raw);
     case "ward_changed":        return mapWardChangedEvent(raw);
+    // Gateway emits `invoke_accepted` with session_id; `session_initialized`
+    // is reserved for a future event-stream revision.
+    case "invoke_accepted":
     case "session_initialized": return mapSessionInitializedEvent(raw);
     case "agent_started":       return { type: "AGENT_STARTED", agentId: (raw["agent_id"] ?? "") as string };
     case "turn_complete":       return { type: "TURN_COMPLETE" };
