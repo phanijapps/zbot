@@ -99,7 +99,10 @@ export async function snapshotSession(
   const messages = msgsRes.data;
   const turns = buildTurns(rootRow, sessionRows, messages);
   const artifacts = buildArtifacts(artifactsRes, messages);
-  const userMessages = buildUserMessages(messages);
+  // Only the root execution's user rows are real prompts; subagents carry
+  // system-injected "user" rows (ward_snapshot context, delegation preambles)
+  // that look like prompts but shouldn't render.
+  const userMessages = buildUserMessages(messages, rootRow.session_id);
   const title = pickTitle(sessionRows);
   const status = mapRootStatus(rootRow.status);
 
@@ -381,13 +384,25 @@ function dedupeRefs(refs: ResearchArtifactRef[]): ResearchArtifactRef[] {
 // User messages — role === "user" only; assistants render via turns.respond.
 // -----------------------------------------------------------------------------
 
-function buildUserMessages(messages: SessionMessage[]): ResearchMessage[] {
-  const users = messages.filter((m) => m.role === USER_ROLE && m.content !== TOOL_CALLS_PLACEHOLDER);
-  // Preserve server order; ResearchPage renders sequentially.
-  return users.map((m) => ({
-    id: m.id,
-    role: "user",
-    content: m.content,
-    timestamp: parseTimestamp(m.created_at),
-  }));
+const SYSTEM_INJECTED_MARKERS = ["<ward_snapshot", "[Delegation "];
+
+function isRealUserPrompt(m: SessionMessage, rootExecutionId: string): boolean {
+  if (m.role !== USER_ROLE) return false;
+  if (m.content === TOOL_CALLS_PLACEHOLDER) return false;
+  // Subagent executions carry system-injected user-role messages (ward
+  // snapshots, delegation context). Keep only rows from the root execution.
+  if (m.execution_id !== rootExecutionId) return false;
+  const trimmed = m.content.trimStart();
+  return !SYSTEM_INJECTED_MARKERS.some((prefix) => trimmed.startsWith(prefix));
+}
+
+function buildUserMessages(messages: SessionMessage[], rootExecutionId: string): ResearchMessage[] {
+  return messages
+    .filter((m) => isRealUserPrompt(m, rootExecutionId))
+    .map((m) => ({
+      id: m.id,
+      role: "user" as const,
+      content: m.content,
+      timestamp: parseTimestamp(m.created_at),
+    }));
 }
