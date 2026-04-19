@@ -38,9 +38,14 @@ export function useQuickChat() {
   const { state: pillState, sink: pillSink } = useStatusPill();
   const subscribedConvIdRef = useRef<string | null>(null);
 
-  // --- Hydrate from snapshot on mount or URL change ---
+  // --- Hydrate from snapshot on mount or when landing on an existing session ---
   useEffect(() => {
+    // Nothing to hydrate if there's no session in the URL yet.
     if (!urlSessionId) return;
+    // Skip the fetch when the URL was just auto-updated from a session we
+    // already have in memory (SESSION_BOUND → navigate). Otherwise we'd
+    // clobber the live user/assistant messages with a stale snapshot.
+    if (state.sessionId === urlSessionId) return;
     let cancelled = false;
     (async () => {
       const transport = await getTransport();
@@ -49,9 +54,20 @@ export function useQuickChat() {
         transport.getSessionMessages(urlSessionId, { scope: "root" }),
       ]);
       if (cancelled) return;
-      const wardName = stateResult.success && stateResult.data?.ward?.name ? stateResult.data.ward.name : null;
-      const history: QuickChatMessage[] = messagesResult.success && messagesResult.data
-        ? messagesResult.data.map(sessionMessageToQuickChat)
+      const stateOk = stateResult.success && stateResult.data;
+      const messagesOk = messagesResult.success && messagesResult.data;
+      // If BOTH lookups failed, the session isn't ready on the server yet —
+      // mark it bound so the WS subscription is ready to receive live events,
+      // but don't overwrite local messages with an empty history.
+      if (!stateOk && !messagesOk) {
+        dispatch({ type: "SESSION_BOUND", sessionId: urlSessionId });
+        return;
+      }
+      const wardName = stateOk && stateResult.data!.ward?.name
+        ? stateResult.data!.ward.name
+        : null;
+      const history: QuickChatMessage[] = messagesOk
+        ? messagesResult.data!.map(sessionMessageToQuickChat)
         : [];
       dispatch({
         type: "HYDRATE",
@@ -62,13 +78,14 @@ export function useQuickChat() {
       });
     })();
     return () => { cancelled = true; };
-    // Intentionally omit state.conversationId from deps — it doesn't change
-    // outside of RESET flows, and re-running hydrate on RESET would race with
-    // the navigate call in startNewChat.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlSessionId]);
 
   // --- Subscribe to WS event stream on current conversationId ---
+  // `pillSink` is deliberately excluded from deps: it has stable identity
+  // (memoised in useStatusPill) and listing it here would cause a
+  // teardown+resubscribe loop that drops events. The handler closes over
+  // the current sink; React guarantees that closure is fresh each render.
   useEffect(() => {
     const convId = state.conversationId;
     if (!convId || subscribedConvIdRef.current === convId) return;
@@ -90,7 +107,8 @@ export function useQuickChat() {
         subscribedConvIdRef.current = null;
       }
     };
-  }, [state.conversationId, pillSink]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.conversationId]);
 
   // --- Sync URL when backend emits SESSION_BOUND ---
   useEffect(() => {

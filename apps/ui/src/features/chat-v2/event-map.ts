@@ -7,15 +7,19 @@ import type { QuickChatAction } from "./reducer";
 // ---------------------------------------------------------------------------
 
 function mapTokenEvent(ev: Record<string, unknown>): QuickChatAction | null {
-  const content = ev["content"];
-  if (typeof content !== "string" || content.length === 0) return null;
-  return { type: "TOKEN", text: content };
+  // Gateway emits streaming tokens with `delta: string`; older/alternative
+  // shapes may use `content` (kept for forward-compat with replay streams).
+  const text = ev["delta"] ?? ev["content"];
+  if (typeof text !== "string" || text.length === 0) return null;
+  return { type: "TOKEN", text };
 }
 
 function mapRespondEvent(ev: Record<string, unknown>): QuickChatAction | null {
-  const content = ev["content"];
-  if (typeof content !== "string") return null;
-  return { type: "RESPOND", text: content };
+  // Gateway emits final responses with `message: string`; accept `content`
+  // as a fallback in case the wire format ever changes.
+  const text = ev["message"] ?? ev["content"];
+  if (typeof text !== "string") return null;
+  return { type: "RESPOND", text };
 }
 
 function mapWardChangedEvent(ev: Record<string, unknown>): QuickChatAction | null {
@@ -65,7 +69,9 @@ function mapMemoryToolCall(args: Record<string, unknown>): QuickChatAction | nul
 }
 
 function mapToolCallEvent(ev: Record<string, unknown>): QuickChatAction | null {
-  const tool = ev["tool"] as string;
+  // Gateway emits `tool_name: string`; some older paths use `tool`.
+  const tool = (ev["tool_name"] ?? ev["tool"]) as string | undefined;
+  if (typeof tool !== "string") return null;
   const args = (ev["args"] ?? {}) as Record<string, unknown>;
   switch (tool) {
     case "delegate_to_agent": return mapDelegateToolCall(args);
@@ -105,16 +111,19 @@ function mapPillThinking(ev: Record<string, unknown>): PillEvent | null {
 }
 
 function mapPillToolCall(ev: Record<string, unknown>): PillEvent | null {
-  const tool = ev["tool"];
+  const tool = (ev["tool_name"] ?? ev["tool"]) as string | undefined;
   if (typeof tool !== "string") return null;
   return { kind: "tool_call", tool, args: (ev["args"] ?? {}) as Record<string, unknown> };
 }
 
 function mapPillAgentCompleted(ev: Record<string, unknown>): PillEvent {
+  // Quick-chat is single-agent (optionally one subagent) so any
+  // AgentCompleted from the root execution hides the pill. A more general
+  // Research page would track pending delegations to decide is_final.
   return {
     kind: "agent_completed",
     agent_id: (ev["agent_id"] ?? "") as string,
-    is_final: Boolean(ev["last"]) || Boolean(ev["is_final"]),
+    is_final: true,
   };
 }
 

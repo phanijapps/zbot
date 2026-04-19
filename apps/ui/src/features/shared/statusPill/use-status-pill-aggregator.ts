@@ -1,4 +1,4 @@
-import { useEffect, useReducer } from "react";
+import { useMemo, useReducer } from "react";
 import { type PillState, EMPTY_PILL, NARRATION_MAX } from "./types";
 import { describeTool } from "./tool-phrase";
 
@@ -96,10 +96,9 @@ export interface PillEventSink {
 
 export function useStatusPill(): { state: PillState; sink: PillEventSink } {
   const [state, dispatch] = useReducer(reducePillState, EMPTY_PILL);
-  const sink: PillEventSink = { push: dispatch };
-  // Kept for potential future teardown needs in strict-mode.
-  useEffect(() => {
-    return () => { /* no-op */ };
-  }, []);
+  // `dispatch` is already stable across renders; memoising `sink` preserves
+  // its identity so consumers that pass it into effect-deps don't tear down
+  // and rebuild their subscriptions on every render.
+  const sink = useMemo<PillEventSink>(() => ({ push: dispatch }), []);
   return { state, sink };
 }
