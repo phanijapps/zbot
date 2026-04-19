@@ -26,6 +26,7 @@ import type {
   McpTestResult,
   ModelRegistryResponse,
   MessageResponse,
+  ChatSessionInit,
   SessionMessage,
   SessionMessagesQuery,
   ToolSettings,
@@ -229,6 +230,15 @@ export interface Transport {
 
   /** Stop an agent execution */
   stopAgent(conversationId: string): Promise<TransportResult<void>>;
+
+  /**
+   * Initialise (or retrieve) the reserved chat session.
+   *
+   * Idempotent. First caller gets `created: true`; every subsequent caller
+   * gets `created: false` with the same ids. Used by the persistent chat
+   * surfaces (`/chat` and `/chat-v2`) to avoid creating phantom sessions.
+   */
+  initChatSession(): Promise<TransportResult<ChatSessionInit>>;
 
   // =========================================================================
   // Settings Operations

@@ -52,15 +52,6 @@ describe("reduceQuickChat", () => {
     expect(s.messages[0].chips).toHaveLength(1);
   });
 
-  it("RESET clears messages but keeps new conversationId", () => {
-    const s = reduceQuickChat(EMPTY_QUICK_CHAT_STATE, {
-      type: "RESET", conversationId: "quick-chat-new",
-    });
-    expect(s.messages).toHaveLength(0);
-    expect(s.conversationId).toBe("quick-chat-new");
-    expect(s.sessionId).toBeNull();
-  });
-
   it("WARD_CHANGED updates active ward", () => {
     const s = reduceQuickChat(EMPTY_QUICK_CHAT_STATE, {
       type: "WARD_CHANGED", wardName: "stock-analysis",
@@ -96,23 +87,4 @@ describe("reduceQuickChat", () => {
     expect(s.status).toBe("error");
   });
 
-  it("PREPEND_OLDER prepends messages and derives hasMoreOlder from cursor", () => {
-    const existing = [{ id: "new1", role: "user" as const, content: "latest", timestamp: 2 }];
-    const older = [{ id: "old1", role: "user" as const, content: "earlier", timestamp: 1 }];
-
-    const withMore = reduceQuickChat(
-      { ...EMPTY_QUICK_CHAT_STATE, messages: existing },
-      { type: "PREPEND_OLDER", messages: older, nextCursor: "cursor-xyz" }
-    );
-    expect(withMore.messages.map((m) => m.id)).toEqual(["old1", "new1"]);
-    expect(withMore.olderCursor).toBe("cursor-xyz");
-    expect(withMore.hasMoreOlder).toBe(true);
-
-    const exhausted = reduceQuickChat(
-      { ...EMPTY_QUICK_CHAT_STATE, messages: existing },
-      { type: "PREPEND_OLDER", messages: older, nextCursor: null }
-    );
-    expect(exhausted.hasMoreOlder).toBe(false);
-    expect(exhausted.olderCursor).toBeNull();
-  });
 });

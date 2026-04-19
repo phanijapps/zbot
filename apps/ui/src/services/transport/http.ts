@@ -28,6 +28,7 @@ import type {
   CreateMcpRequest,
   McpTestResult,
   MessageResponse,
+  ChatSessionInit,
   SessionMessage,
   SessionMessagesQuery,
   ToolSettings,
@@ -324,6 +325,10 @@ export class HttpTransport implements Transport {
     const url = `/api/executions/v2/sessions/${encodeURIComponent(sessionId)}/messages${queryString ? `?${queryString}` : ''}`;
 
     return this.get<SessionMessage[]>(url);
+  }
+
+  async initChatSession(): Promise<TransportResult<ChatSessionInit>> {
+    return this.post<ChatSessionInit>("/api/chat/init", {});
   }
 
   // =========================================================================

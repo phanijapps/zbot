@@ -1,5 +1,4 @@
 import type { QuickChatMessage, QuickChatState, QuickChatInlineChip } from "./types";
-import { EMPTY_QUICK_CHAT_STATE } from "./types";
 
 export type QuickChatAction =
   | { type: "HYDRATE"; sessionId: string; conversationId: string; messages: QuickChatMessage[]; wardName: string | null }
@@ -11,9 +10,7 @@ export type QuickChatAction =
   | { type: "ADD_CHIP"; chip: QuickChatInlineChip }
   | { type: "TURN_COMPLETE" }
   | { type: "ERROR"; message: string }
-  | { type: "RESET"; conversationId: string }
-  | { type: "WARD_CHANGED"; wardName: string }
-  | { type: "PREPEND_OLDER"; messages: QuickChatMessage[]; nextCursor: string | null };
+  | { type: "WARD_CHANGED"; wardName: string };
 
 function upsertStreamingAssistant(
   messages: QuickChatMessage[],
@@ -85,17 +82,8 @@ export function reduceQuickChat(state: QuickChatState, action: QuickChatAction):
       return { ...state, status: "idle" };
     case "ERROR":
       return { ...state, status: "error" };
-    case "RESET":
-      return { ...EMPTY_QUICK_CHAT_STATE, conversationId: action.conversationId };
     case "WARD_CHANGED":
       return { ...state, activeWardName: action.wardName };
-    case "PREPEND_OLDER":
-      return {
-        ...state,
-        messages: [...action.messages, ...state.messages],
-        olderCursor: action.nextCursor,
-        hasMoreOlder: action.nextCursor !== null,
-      };
     default:
       return state;
   }

@@ -5,22 +5,12 @@ import { QuickChat } from "./QuickChat";
 import type { QuickChatState } from "./types";
 import type { PillState } from "../shared/statusPill";
 
-// jsdom doesn't implement scrollIntoView; polyfill as a no-op so auto-scroll
-// effects don't throw during render.
-beforeAll(() => {
-  if (!Element.prototype.scrollIntoView) {
-    Element.prototype.scrollIntoView = () => { /* no-op */ };
-  }
-});
-
 // A configurable hook mock so tests can drive different UI states.
 interface MockHookReturn {
   state: QuickChatState;
   pillState: PillState;
   sendMessage: ReturnType<typeof vi.fn>;
-  startNewChat: ReturnType<typeof vi.fn>;
   stopAgent: ReturnType<typeof vi.fn>;
-  loadOlder: ReturnType<typeof vi.fn>;
 }
 
 const mockHookRef: { current: MockHookReturn } = {
@@ -30,25 +20,29 @@ const mockHookRef: { current: MockHookReturn } = {
 function makeIdleHook(): MockHookReturn {
   return {
     state: {
-      sessionId: null,
-      conversationId: "c1",
+      sessionId: "sess-chat-xyz",
+      conversationId: "chat-xyz",
       messages: [],
       status: "idle",
       activeWardName: "stock-analysis",
-      olderCursor: null,
-      hasMoreOlder: false,
     },
     pillState: { visible: false, narration: "", suffix: "", category: "neutral", starting: false, swapCounter: 0 },
     sendMessage: vi.fn(),
-    startNewChat: vi.fn(),
     stopAgent: vi.fn(),
-    loadOlder: vi.fn(),
   };
 }
 
 vi.mock("./useQuickChat", () => ({
   useQuickChat: () => mockHookRef.current,
 }));
+
+// jsdom lacks scrollIntoView; polyfill as a no-op so the auto-scroll effect
+// doesn't throw during render.
+beforeAll(() => {
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => { /* no-op */ };
+  }
+});
 
 function renderPage() {
   return render(
@@ -65,37 +59,37 @@ describe("<QuickChat>", () => {
     mockHookRef.current = makeIdleHook();
   });
 
-  it("renders empty state with ward binding", () => {
+  it("renders the empty state with ward binding", () => {
     renderPage();
     expect(screen.getByText("Quick chat")).toBeTruthy();
     expect(screen.getByText(/bound to stock-analysis/)).toBeTruthy();
   });
 
-  it("shows New chat button", () => {
-    renderPage();
-    expect(screen.getByText(/New chat/)).toBeTruthy();
-  });
-
-  it("shows ward chip with active ward name", () => {
+  it("shows the ward chip when a ward is active", () => {
     renderPage();
     expect(screen.getAllByText("stock-analysis").length).toBeGreaterThan(0);
   });
 
-  it("shows 'no ward' chip when no ward is active", () => {
+  it("does NOT render a ward chip when no ward is active", () => {
     mockHookRef.current = {
       ...makeIdleHook(),
       state: { ...makeIdleHook().state, activeWardName: null },
     };
-    renderPage();
-    expect(screen.getByText("no ward")).toBeTruthy();
+    const { container } = renderPage();
+    expect(container.querySelector(".quick-chat__ward-chip")).toBeNull();
   });
 
-  it("renders conversation messages + inline chips when not empty", () => {
+  it("does NOT render a New chat button", () => {
+    renderPage();
+    expect(screen.queryByText(/New chat/i)).toBeNull();
+    expect(screen.queryByTitle(/New chat/i)).toBeNull();
+  });
+
+  it("renders conversation messages + inline chips when history is present", () => {
     mockHookRef.current = {
       ...makeIdleHook(),
       state: {
         ...makeIdleHook().state,
-        sessionId: "sess-1",
         messages: [
           { id: "u1", role: "user", content: "what was z.ai rate limit?", timestamp: 1 },
           {
@@ -114,7 +108,7 @@ describe("<QuickChat>", () => {
     expect(screen.getByText("recalled 1")).toBeTruthy();
   });
 
-  it("shows Stop button while running and triggers stopAgent on click", () => {
+  it("shows a Stop button while running and fires stopAgent on click", () => {
     const stopSpy = vi.fn();
     mockHookRef.current = {
       ...makeIdleHook(),
@@ -125,14 +119,6 @@ describe("<QuickChat>", () => {
     const stopBtn = screen.getByTitle("Stop");
     fireEvent.click(stopBtn);
     expect(stopSpy).toHaveBeenCalled();
-  });
-
-  it("fires startNewChat when New chat is clicked", () => {
-    const newChatSpy = vi.fn();
-    mockHookRef.current = { ...makeIdleHook(), startNewChat: newChatSpy };
-    renderPage();
-    fireEvent.click(screen.getByTitle("New chat"));
-    expect(newChatSpy).toHaveBeenCalled();
   });
 
   it("renders a visible status pill when pillState.visible is true", () => {
@@ -150,23 +136,5 @@ describe("<QuickChat>", () => {
     renderPage();
     expect(screen.getByTestId("status-pill")).toBeTruthy();
     expect(screen.getByText("Recalling fundamentals")).toBeTruthy();
-  });
-
-  it("renders 'Show earlier turns' when hasMoreOlder is true and fires loadOlder", () => {
-    const loadOlderSpy = vi.fn();
-    mockHookRef.current = {
-      ...makeIdleHook(),
-      state: {
-        ...makeIdleHook().state,
-        sessionId: "sess-1",
-        messages: [{ id: "u1", role: "user", content: "hi", timestamp: 1 }],
-        hasMoreOlder: true,
-      },
-      loadOlder: loadOlderSpy,
-    };
-    renderPage();
-    const btn = screen.getByText(/Show earlier turns/);
-    fireEvent.click(btn);
-    expect(loadOlderSpy).toHaveBeenCalled();
   });
 });

@@ -187,7 +187,6 @@ function App() {
                   <Route path="/settings" element={<WebSettingsPanel />} />
                   <Route path="/chat" element={<FastChat />} />
                   <Route path="/chat-v2" element={<QuickChat />} />
-                  <Route path="/chat-v2/:sessionId" element={<QuickChat />} />
                   <Route path="/providers" element={<Navigate to="/settings" replace />} />
                   <Route path="/skills" element={<Navigate to="/agents?tab=skills" replace />} />
                   <Route path="/hooks" element={<Navigate to="/agents?tab=schedules" replace />} />

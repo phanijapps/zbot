@@ -49,8 +49,11 @@ pub struct SessionMessageResponse {
 
 /// POST /api/chat/init
 ///
-/// Creates the persistent chat session if it doesn't exist.
-/// Returns existing session IDs if already created. Idempotent.
+/// Returns (or creates) the persistent chat session. Idempotent and
+/// self-healing: if the cached session id in settings points at a row
+/// that no longer exists in the database (orphaned slot), we rebuild
+/// both the session row and the cached ids. Fresh installs create a new
+/// session on first call.
 pub async fn init_chat_session(
     State(state): State<AppState>,
 ) -> Result<Json<ChatInitResponse>, (StatusCode, String)> {
@@ -58,43 +61,53 @@ pub async fn init_chat_session(
         .settings
         .get_execution_settings()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-
-    // If chat session already exists, return it
-    if let (Some(session_id), Some(conv_id)) =
-        (&settings.chat.session_id, &settings.chat.conversation_id)
-    {
-        return Ok(Json(ChatInitResponse {
-            session_id: session_id.clone(),
-            conversation_id: conv_id.clone(),
-            created: false,
-        }));
-    }
-
-    // Generate new IDs
-    let session_id = format!("sess-chat-{}", uuid::Uuid::new_v4());
-    let conversation_id = format!("chat-{}", uuid::Uuid::new_v4());
-
-    // Create the session record in the database so get_or_create_session finds it
     let runner = state.runtime.runner().ok_or_else(|| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
             "Runtime not available".to_string(),
         )
     })?;
+    let state_service = runner.state_service();
+
+    // Reuse the cached session only when its DB row actually exists.
+    if let (Some(session_id), Some(conv_id)) =
+        (&settings.chat.session_id, &settings.chat.conversation_id)
+    {
+        let row_present = matches!(state_service.get_session(session_id), Ok(Some(_)));
+        if row_present {
+            return Ok(Json(ChatInitResponse {
+                session_id: session_id.clone(),
+                conversation_id: conv_id.clone(),
+                created: false,
+            }));
+        }
+        tracing::warn!(
+            "chat session {} cached in settings but missing in DB — rebuilding",
+            session_id
+        );
+    }
+
+    let session_id = format!("sess-chat-{}", uuid::Uuid::new_v4());
+    let conversation_id = format!("chat-{}", uuid::Uuid::new_v4());
 
     let mut session =
         execution_state::Session::new_with_source("root", execution_state::TriggerSource::Web);
     session.id = session_id.clone();
-    if let Err(e) = runner.state_service().create_session_from(&session) {
-        tracing::warn!("Failed to create chat session in DB: {}", e);
-    }
+    state_service.create_session_from(&session).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create chat session: {}", e),
+        )
+    })?;
+    state_service
+        .set_session_mode(&session_id, "fast")
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to set chat mode: {}", e),
+            )
+        })?;
 
-    // Persist fast mode on the chat session so continuations/reconnects keep it
-    if let Err(e) = runner.state_service().set_session_mode(&session_id, "fast") {
-        tracing::warn!("Failed to set chat session mode: {}", e);
-    }
-
-    // Persist the chat session IDs in settings
     let mut updated_settings = settings.clone();
     updated_settings.chat = gateway_services::ChatConfig {
         session_id: Some(session_id.clone()),

@@ -1,22 +1,50 @@
-import { useCallback, useEffect, useReducer, useRef } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useCallback, useEffect, useReducer, useRef, type Dispatch } from "react";
 import { getTransport } from "@/services/transport";
-import type { SessionMessage } from "@/services/transport/types";
-import { useStatusPill } from "../shared/statusPill";
+import type { Transport } from "@/services/transport";
+import type {
+  ConversationEvent,
+  SessionMessage,
+} from "@/services/transport/types";
+import { useStatusPill, type PillEventSink } from "../shared/statusPill";
 import {
   type QuickChatMessage,
   EMPTY_QUICK_CHAT_STATE,
 } from "./types";
-import { reduceQuickChat } from "./reducer";
+import { reduceQuickChat, type QuickChatAction } from "./reducer";
 import {
   mapGatewayEventToQuickChatAction,
   mapGatewayEventToPillEvent,
 } from "./event-map";
 
-const QUICK_CHAT_AGENT_ID = "quick-chat";
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
 
-function newConvId(): string {
-  return `quick-chat-${crypto.randomUUID()}`;
+/** Agent id for Quick Chat. The reserved chat session is bound to root server-side. */
+const CHAT_AGENT_ID = "root";
+
+/** Pinned execution mode — skips intent analysis / planning / research pipeline. */
+const CHAT_MODE = "fast";
+
+/** How many root-scoped messages to fetch on hydrate. */
+const HISTORY_TAIL_LIMIT = 50;
+
+// ---------------------------------------------------------------------------
+// Pure helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Filter server-side messages to the ones the user actually cares about.
+ *
+ * The root-scope feed carries intermediate rows — `role: "tool"` results,
+ * and assistant placeholders whose content is the literal `"[tool calls]"`
+ * marker emitted when the model calls a tool. Those belong in the
+ * Thinking timeline (future work), not the chat bubbles.
+ */
+function isVisibleChatMessage(m: SessionMessage): boolean {
+  if (m.role === "tool") return false;
+  if (m.role === "assistant" && m.content.trim() === "[tool calls]") return false;
+  return m.role === "user" || m.role === "assistant";
 }
 
 function sessionMessageToQuickChat(m: SessionMessage): QuickChatMessage {
@@ -28,81 +56,103 @@ function sessionMessageToQuickChat(m: SessionMessage): QuickChatMessage {
   };
 }
 
-export function useQuickChat() {
-  const { sessionId: urlSessionId } = useParams<{ sessionId: string }>();
-  const navigate = useNavigate();
-  const [state, dispatch] = useReducer(reduceQuickChat, {
-    ...EMPTY_QUICK_CHAT_STATE,
-    conversationId: newConvId(),
+/** Idempotent bootstrap: init the reserved session and pull the history tail. */
+async function bootstrapChatSession(
+  transport: Transport
+): Promise<{
+  sessionId: string;
+  conversationId: string;
+  messages: QuickChatMessage[];
+} | null> {
+  const init = await transport.initChatSession();
+  if (!init.success || !init.data) return null;
+
+  const { sessionId, conversationId, created } = init.data;
+
+  // New sessions have no history to fetch — skip the round-trip.
+  if (created) {
+    return { sessionId, conversationId, messages: [] };
+  }
+
+  const history = await transport.getSessionMessages(sessionId, {
+    scope: "root",
   });
+  const messages =
+    history.success && history.data
+      ? history.data
+          .filter(isVisibleChatMessage)
+          .slice(-HISTORY_TAIL_LIMIT)
+          .map(sessionMessageToQuickChat)
+      : [];
+
+  return { sessionId, conversationId, messages };
+}
+
+/** Build the WS event handler once; closure captures the stable pill sink. */
+function makeEventHandler(
+  pillSink: PillEventSink,
+  dispatch: Dispatch<QuickChatAction>
+) {
+  return (event: ConversationEvent) => {
+    const action = mapGatewayEventToQuickChatAction(event);
+    if (action) dispatch(action);
+    const pillEv = mapGatewayEventToPillEvent(event);
+    if (pillEv) pillSink.push(pillEv);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
+
+export function useQuickChat() {
+  const [state, dispatch] = useReducer(reduceQuickChat, EMPTY_QUICK_CHAT_STATE);
   const { state: pillState, sink: pillSink } = useStatusPill();
+
+  // Bootstrap idempotency guard. Set AFTER the async work resolves, not
+  // before, so StrictMode's synthetic unmount doesn't leave us in a "bootstrap
+  // started but never completed" state. The server-side init is idempotent
+  // (same session ids on every call), so two concurrent calls in dev are
+  // harmless — this ref only guarantees we dispatch HYDRATE once.
+  const bootstrappedRef = useRef(false);
   const subscribedConvIdRef = useRef<string | null>(null);
 
-  // --- Hydrate from snapshot on mount or when landing on an existing session ---
+  // --- Bootstrap: init reserved session + hydrate history ---
   useEffect(() => {
-    // Nothing to hydrate if there's no session in the URL yet.
-    if (!urlSessionId) return;
-    // Skip the fetch when the URL was just auto-updated from a session we
-    // already have in memory (SESSION_BOUND → navigate). Otherwise we'd
-    // clobber the live user/assistant messages with a stale snapshot.
-    if (state.sessionId === urlSessionId) return;
-    let cancelled = false;
+    if (bootstrappedRef.current) return;
     (async () => {
       const transport = await getTransport();
-      const [stateResult, messagesResult] = await Promise.all([
-        transport.getSessionState(urlSessionId),
-        transport.getSessionMessages(urlSessionId, { scope: "root" }),
-      ]);
-      if (cancelled) return;
-      const stateOk = stateResult.success && stateResult.data;
-      const messagesOk = messagesResult.success && messagesResult.data;
-      // If BOTH lookups failed, the session isn't ready on the server yet —
-      // mark it bound so the WS subscription is ready to receive live events,
-      // but don't overwrite local messages with an empty history.
-      if (!stateOk && !messagesOk) {
-        dispatch({ type: "SESSION_BOUND", sessionId: urlSessionId });
+      const result = await bootstrapChatSession(transport);
+      if (bootstrappedRef.current) return;
+      bootstrappedRef.current = true;
+      if (!result) {
+        dispatch({ type: "ERROR", message: "Failed to initialise chat" });
         return;
       }
-      const wardName = stateOk && stateResult.data!.ward?.name
-        ? stateResult.data!.ward.name
-        : null;
-      const history: QuickChatMessage[] = messagesOk
-        ? messagesResult.data!.map(sessionMessageToQuickChat)
-        : [];
       dispatch({
         type: "HYDRATE",
-        sessionId: urlSessionId,
-        conversationId: state.conversationId,
-        messages: history,
-        wardName,
+        sessionId: result.sessionId,
+        conversationId: result.conversationId,
+        messages: result.messages,
+        wardName: null, // populated by later WardChanged events
       });
     })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlSessionId]);
+  }, []);
 
-  // --- Subscribe to WS event stream on current conversationId ---
-  // `pillSink` is deliberately excluded from deps: it has stable identity
-  // (memoised in useStatusPill) and listing it here would cause a
-  // teardown+resubscribe loop that drops events. The handler closes over
-  // the current sink; React guarantees that closure is fresh each render.
+  // --- Subscribe to WS events for the persisted conversationId ---
   useEffect(() => {
     const convId = state.conversationId;
     if (!convId || subscribedConvIdRef.current === convId) return;
     subscribedConvIdRef.current = convId;
+    const onEvent = makeEventHandler(pillSink, dispatch);
     const unsubscribe = Promise.resolve().then(async () => {
       const transport = await getTransport();
-      return transport.subscribeConversation(convId, {
-        onEvent: (event) => {
-          const action = mapGatewayEventToQuickChatAction(event);
-          if (action) dispatch(action);
-          const pillEv = mapGatewayEventToPillEvent(event);
-          if (pillEv) pillSink.push(pillEv);
-        },
-      });
+      return transport.subscribeConversation(convId, { onEvent });
     });
     return () => {
-      unsubscribe.then((fn) => fn && fn()).catch(() => { /* no-op */ });
+      unsubscribe.then((fn) => fn && fn()).catch(() => {
+        /* no-op */
+      });
       if (subscribedConvIdRef.current === convId) {
         subscribedConvIdRef.current = null;
       }
@@ -110,58 +160,42 @@ export function useQuickChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.conversationId]);
 
-  // --- Sync URL when backend emits SESSION_BOUND ---
-  useEffect(() => {
-    if (state.sessionId && urlSessionId !== state.sessionId) {
-      navigate(`/chat-v2/${state.sessionId}`, { replace: true });
-    }
-  }, [state.sessionId, urlSessionId, navigate]);
+  // --- Send a user message against the reserved session ---
+  const sendMessage = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed || state.status === "running") return;
+      if (!state.sessionId || !state.conversationId) return;
+      dispatch({
+        type: "APPEND_USER",
+        message: {
+          id: crypto.randomUUID(),
+          role: "user",
+          content: trimmed,
+          timestamp: Date.now(),
+        },
+      });
+      const transport = await getTransport();
+      const result = await transport.executeAgent(
+        CHAT_AGENT_ID,
+        state.conversationId,
+        trimmed,
+        state.sessionId,
+        CHAT_MODE
+      );
+      if (!result.success) {
+        dispatch({ type: "ERROR", message: result.error ?? "Failed to send" });
+      }
+    },
+    [state.status, state.conversationId, state.sessionId]
+  );
 
-  // --- Send message ---
-  const sendMessage = useCallback(async (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed || state.status === "running") return;
-    dispatch({
-      type: "APPEND_USER",
-      message: {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: trimmed,
-        timestamp: Date.now(),
-      },
-    });
-    const transport = await getTransport();
-    const result = await transport.executeAgent(
-      QUICK_CHAT_AGENT_ID,
-      state.conversationId,
-      trimmed,
-      state.sessionId ?? undefined,
-      "chat"
-    );
-    if (!result.success) {
-      dispatch({ type: "ERROR", message: result.error ?? "Failed to send" });
-    }
-  }, [state.status, state.conversationId, state.sessionId]);
-
-  // --- Start new chat (discard current, fresh conv, navigate back to empty) ---
-  const startNewChat = useCallback(() => {
-    pillSink.push({ kind: "reset" });
-    dispatch({ type: "RESET", conversationId: newConvId() });
-    navigate("/chat-v2", { replace: true });
-  }, [navigate, pillSink]);
-
-  // --- Stop running agent ---
+  // --- Stop a running turn ---
   const stopAgent = useCallback(async () => {
-    if (state.status !== "running") return;
+    if (state.status !== "running" || !state.conversationId) return;
     const transport = await getTransport();
     await transport.stopAgent(state.conversationId);
   }, [state.status, state.conversationId]);
 
-  // --- Lazy-load older turns (no-op for v1; backend doesn't expose pagination yet) ---
-  const loadOlder = useCallback(async () => {
-    // v1 loads the full root message list in one HYDRATE call; hasMoreOlder
-    // stays false. Wire up pagination when the backend supports `before` cursor.
-  }, []);
-
-  return { state, pillState, sendMessage, startNewChat, stopAgent, loadOlder };
+  return { state, pillState, sendMessage, stopAgent };
 }

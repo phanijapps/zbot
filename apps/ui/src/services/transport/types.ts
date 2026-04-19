@@ -113,6 +113,21 @@ export interface SessionMessage {
 }
 
 /**
+ * Response from POST /api/chat/init.
+ *
+ * `created` is `true` only when the server actually created the reserved
+ * chat session on this call. Subsequent calls from any client return the
+ * same `sessionId` / `conversationId` with `created: false`. The flag is
+ * informational — callers can log "first ever" or skip a history fetch
+ * when it's a brand-new session.
+ */
+export interface ChatSessionInit {
+  sessionId: string;
+  conversationId: string;
+  created: boolean;
+}
+
+/**
  * Scope for session messages query.
  */
 export type MessageScope = 'all' | 'root' | 'execution' | 'delegates';

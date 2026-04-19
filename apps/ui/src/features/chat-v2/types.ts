@@ -19,21 +19,19 @@ export interface QuickChatMessage {
 export type QuickChatStatus = "idle" | "running" | "error";
 
 export interface QuickChatState {
+  /** Set by HYDRATE after the reserved chat session is bootstrapped. */
   sessionId: string | null;
-  conversationId: string;                // always set; new on "New chat"
+  /** Stable WS routing id for the reserved chat session. */
+  conversationId: string | null;
   messages: QuickChatMessage[];
   status: QuickChatStatus;
   activeWardName: string | null;
-  olderCursor: string | null;            // for lazy-load "Show N earlier turns"
-  hasMoreOlder: boolean;
 }
 
 export const EMPTY_QUICK_CHAT_STATE: QuickChatState = {
   sessionId: null,
-  conversationId: "",
+  conversationId: null,
   messages: [],
   status: "idle",
   activeWardName: null,
-  olderCursor: null,
-  hasMoreOlder: false,
 };
