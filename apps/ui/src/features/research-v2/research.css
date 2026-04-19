@@ -347,6 +347,35 @@
   align-items: center;
   font-size: 12px;
   margin-bottom: 6px;
+  gap: 8px;
+}
+.subagent-card__toggle {
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  color: inherit;
+  text-align: left;
+}
+.subagent-card__toggle:hover {
+  opacity: 0.85;
+}
+.subagent-card__toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.subagent-card__chevron {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted-foreground);
+}
+.subagent-card[data-expanded="false"] {
+  padding: 6px 12px;
+}
+.subagent-card[data-expanded="false"] .subagent-card__header {
+  margin-bottom: 0;
 }
 .subagent-card__agent {
   font-family: ui-monospace, monospace;

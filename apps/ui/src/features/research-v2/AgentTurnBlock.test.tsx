@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { AgentTurnBlock } from "./AgentTurnBlock";
 import type { AgentTurn } from "./types";
 
@@ -57,11 +57,38 @@ describe("<AgentTurnBlock> (root)", () => {
         allTurns={[root, child]}
       />,
     );
+    // Card header is always visible.
     expect(screen.getByText("planner-agent")).toBeTruthy();
+    // Completed card is collapsed by default — Request/Response hidden.
+    expect(screen.queryByText("Request")).toBeNull();
+    // Expand via the header toggle.
+    fireEvent.click(screen.getByRole("button", { name: /expand subagent/i }));
     expect(screen.getByText("Request")).toBeTruthy();
     expect(screen.getByText("Response")).toBeTruthy();
     expect(screen.getByText("Make a plan.")).toBeTruthy();
     expect(screen.getByText("Plan done.")).toBeTruthy();
+  });
+
+  it("subagent card stays expanded by default while running", () => {
+    const root = makeRoot();
+    const child = makeChild({
+      id: "exec-running",
+      request: "Work on it.",
+      status: "running",
+      respond: null,
+      respondStreaming: "",
+      completedAt: null,
+    });
+    render(
+      <AgentTurnBlock
+        turn={root}
+        childTurns={[child]}
+        allTurns={[root, child]}
+      />,
+    );
+    // No click required — running cards default to expanded.
+    expect(screen.getByText("Request")).toBeTruthy();
+    expect(screen.getByText("Work on it.")).toBeTruthy();
   });
 
   it("subagent running → Response body shows 'waiting…' instead of content", () => {

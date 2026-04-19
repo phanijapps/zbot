@@ -1,8 +1,11 @@
 import type React from "react";
+import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Square,
   AlertCircle,
   Loader2,
@@ -110,6 +113,23 @@ function respondIsStreaming(turn: AgentTurn): boolean {
   return turn.respond === null && turn.respondStreaming.length > 0;
 }
 
+/** Collapse a subagent card when it transitions out of the "running" state.
+ *  Keeps the effect local to the card so there's no reducer bookkeeping.
+ *  User-toggled expand wins until the status changes again. */
+function useSubagentStatusTransition(
+  status: AgentTurnStatus,
+  setExpanded: (v: boolean) => void,
+): AgentTurnStatus {
+  const [prev, setPrev] = useState<AgentTurnStatus>(status);
+  useEffect(() => {
+    if (prev !== status) {
+      setExpanded(status === "running");
+      setPrev(status);
+    }
+  }, [status, prev, setExpanded]);
+  return prev;
+}
+
 /** What the copy button should copy. Prefer finalized respond, then the
  *  streaming buffer; return null when there's nothing useful. */
 function copyableRespondText(turn: AgentTurn): string | null {
@@ -141,13 +161,28 @@ function SubagentResponseBody({ turn }: SubagentCardProps): React.ReactElement {
 function SubagentCard({ turn }: SubagentCardProps) {
   const color = agentColour(turn.agentId);
   const respondText = copyableRespondText(turn);
+  // Default: expanded while running, collapsed once done. User can override
+  // either way by clicking the header. Reset on status transition.
+  const [expanded, setExpanded] = useState(turn.status === "running");
+  const prevStatus = useSubagentStatusTransition(turn.status, setExpanded);
+  void prevStatus;
   return (
     <div
       className="subagent-card"
       style={{ borderLeft: `3px solid ${color}` }}
       data-parent={turn.parentExecutionId ?? ""}
+      data-expanded={expanded}
     >
-      <div className="subagent-card__header">
+      <button
+        type="button"
+        className="subagent-card__header subagent-card__toggle"
+        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+        aria-label={expanded ? "Collapse subagent" : "Expand subagent"}
+      >
+        <span className="subagent-card__chevron" aria-hidden="true">
+          {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </span>
         <span className="subagent-card__agent" style={{ color }}>
           {turn.agentId}
         </span>
@@ -155,20 +190,22 @@ function SubagentCard({ turn }: SubagentCardProps) {
           <StatusIcon status={turn.status} />
           <span>{formatDuration(turn.startedAt, turn.completedAt)}</span>
         </span>
-      </div>
-      {turn.request && (
+      </button>
+      {expanded && turn.request && (
         <div className="subagent-card__section">
           <div className="subagent-card__label">Request</div>
           <div className="subagent-card__text">{turn.request}</div>
         </div>
       )}
-      <div className="subagent-card__section">
-        <div className="subagent-card__label">Response</div>
-        <div className="subagent-card__text">
-          <SubagentResponseBody turn={turn} />
+      {expanded && (
+        <div className="subagent-card__section">
+          <div className="subagent-card__label">Response</div>
+          <div className="subagent-card__text">
+            <SubagentResponseBody turn={turn} />
+          </div>
         </div>
-      </div>
-      {respondText !== null && (
+      )}
+      {expanded && respondText !== null && (
         <CopyButton text={respondText} label="Copy response" />
       )}
     </div>

@@ -326,8 +326,13 @@ describe("<ResearchPage>", () => {
     const builder = container.querySelector('.subagent-card[data-parent="child-1"]');
     expect(builder).toBeTruthy();
 
-    // All three respond bodies are visible.
+    // Root's respond is always visible on the root assistant block.
     expect(container.textContent).toContain("root body");
+    // Subagent cards are auto-collapsed on completion; expand them and
+    // verify their responses then become visible.
+    for (const btn of Array.from(container.querySelectorAll("button.subagent-card__toggle"))) {
+      fireEvent.click(btn);
+    }
     expect(container.textContent).toContain("child body");
     expect(container.textContent).toContain("grand body");
   });
