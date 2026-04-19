@@ -1,0 +1,399 @@
+/* =============================================================================
+   research.css — ResearchPage + all research-v2 sub-component styles.
+   Theme tokens only — no hardcoded colours.
+   ============================================================================= */
+
+/* --- Page shell ------------------------------------------------------------ */
+
+.research-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* --- Header ---------------------------------------------------------------- */
+
+.research-page__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.research-page__title {
+  flex: 1;
+  text-align: center;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.research-page__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.research-page__ward-chip {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: var(--primary-muted);
+  color: var(--primary);
+}
+
+/* --- Pill strip ------------------------------------------------------------ */
+
+.research-page__pill-strip {
+  display: flex;
+  justify-content: center;
+  padding: 8px 20px 0;
+  min-height: 36px;
+}
+
+/* --- Scrollable body ------------------------------------------------------- */
+
+.research-page__body {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.research-page__column {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* --- Empty state ----------------------------------------------------------- */
+
+.research-page__empty {
+  text-align: center;
+  padding: 80px 0;
+}
+
+.research-page__empty h1 {
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.research-page__empty p {
+  color: var(--muted-foreground);
+}
+
+/* --- User query bubble ----------------------------------------------------- */
+
+.research-page__user-bubble {
+  align-self: flex-end;
+  max-width: 80%;
+  padding: 10px 14px;
+  background: var(--primary-muted);
+  border-radius: 14px 14px 2px 14px;
+  font-size: 14px;
+  color: var(--foreground);
+  white-space: pre-wrap;
+}
+
+/* --- Intent lines ---------------------------------------------------------- */
+
+.research-page__intent-muted {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.research-page__intent-classification {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+/* --- Composer -------------------------------------------------------------- */
+
+.research-page__composer {
+  border-top: 1px solid var(--border);
+  padding: 12px 20px;
+  max-width: 880px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* =============================================================================
+   AgentTurnBlock styles
+   ============================================================================= */
+
+.agent-turn-block {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--background-surface);
+  border: 1px solid var(--border);
+}
+
+.agent-turn-block__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.agent-turn-block__agent {
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+}
+
+.agent-turn-block__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+}
+
+.agent-turn-block__running {
+  color: var(--success);
+}
+
+.agent-turn-block__chevron {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  padding: 0;
+}
+
+.agent-turn-block__chevron svg {
+  transition: transform 150ms ease;
+}
+
+.agent-turn-block__timeline {
+  padding-left: 16px;
+  border-left: 1px dashed var(--border);
+  margin: 8px 0;
+}
+
+.agent-turn-block__respond {
+  font-size: 14px;
+  line-height: 1.6;
+  margin-top: 4px;
+  color: var(--foreground);
+}
+
+.agent-turn-block__respond--streaming {
+  opacity: 0.85;
+}
+
+.agent-turn-block__streaming {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.agent-turn-block__placeholder {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.agent-turn-block__error {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--destructive);
+  background: var(--destructive-muted);
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-style: italic;
+}
+
+/* =============================================================================
+   ThinkingTimeline styles
+   ============================================================================= */
+
+.thinking-timeline {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.thinking-timeline__item {
+  font-size: 12px;
+  display: grid;
+  grid-template-columns: 68px 1fr;
+  gap: 8px;
+  padding: 2px 0;
+  color: var(--muted-foreground);
+}
+
+.thinking-timeline__item--tool_call {
+  color: var(--blue);
+}
+
+.thinking-timeline__item--tool_result {
+  color: var(--muted-foreground);
+}
+
+.thinking-timeline__time {
+  font-family: ui-monospace, monospace;
+  color: var(--muted-foreground);
+}
+
+.thinking-timeline__preview {
+  font-family: ui-monospace, monospace;
+  color: var(--muted-foreground);
+}
+
+.thinking-timeline__label {
+  color: var(--muted-foreground);
+}
+
+.thinking-timeline__empty {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+/* =============================================================================
+   Sessions drawer
+   ============================================================================= */
+
+.sessions-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 280px;
+  background: var(--background);
+  border-right: 1px solid var(--border);
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.2);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  animation: sessions-drawer-in 150ms ease-out;
+}
+
+.sessions-drawer__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.25);
+  z-index: 40;
+  border: none;
+  cursor: default;
+}
+
+.sessions-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+/* --- Sessions list --------------------------------------------------------- */
+
+.sessions-list {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.sessions-list__new {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.sessions-list__group-title {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 8px 4px 4px;
+}
+
+.sessions-list__row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  grid-template-areas:
+    "dot title time"
+    "dot ward  time";
+  gap: 4px 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--foreground);
+}
+
+.sessions-list__row:hover {
+  background: var(--background-elevated);
+}
+
+.sessions-list__row--active {
+  background: var(--primary-muted);
+}
+
+.sessions-list__dot {
+  grid-area: dot;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.sessions-list__title {
+  grid-area: title;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessions-list__ward {
+  grid-area: ward;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.sessions-list__time {
+  grid-area: time;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.sessions-list__empty {
+  padding: 20px;
+  color: var(--muted-foreground);
+  text-align: center;
+  font-size: 12px;
+}
+
+@keyframes sessions-drawer-in {
+  from {
+    transform: translateX(-10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
