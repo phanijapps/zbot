@@ -1,5 +1,5 @@
 // Category of the currently-displayed action — drives color.
-export type PillCategory = "read" | "write" | "delegate" | "respond" | "neutral";
+export type PillCategory = "read" | "write" | "delegate" | "respond" | "neutral" | "error";
 
 // Computed display state for the pill.
 export interface PillState {

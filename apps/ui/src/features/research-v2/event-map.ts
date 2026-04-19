@@ -171,6 +171,21 @@ function mapPillToolCall(e: Record<string, unknown>): PillEvent | null {
   return { kind: "tool_call", tool, args: (e["args"] ?? {}) as Record<string, unknown> };
 }
 
+function mapPillToolResult(e: Record<string, unknown>): PillEvent | null {
+  // Pill only cares about tool results that *failed* — surface the error so
+  // the user sees it without opening the logs.
+  const err = e["error"];
+  if (typeof err !== "string" || err.length === 0) return null;
+  const toolRaw = e["tool_name"] ?? e["tool"];
+  const tool = typeof toolRaw === "string" ? toolRaw : undefined;
+  return { kind: "error", message: err, source: "tool", tool };
+}
+
+function mapPillError(e: Record<string, unknown>): PillEvent {
+  const message = (e["message"] as string) ?? "unknown error";
+  return { kind: "error", message, source: "llm" };
+}
+
 export function mapGatewayEventToPillEvent(ev: ConversationEvent): PillEvent | null {
   const e = ev as unknown as Record<string, unknown>;
   const type = e["type"] as string;
@@ -178,7 +193,9 @@ export function mapGatewayEventToPillEvent(ev: ConversationEvent): PillEvent | n
     case "agent_started":   return { kind: "agent_started", agent_id: (e["agent_id"] as string) ?? "" };
     case "agent_completed": return { kind: "agent_completed", agent_id: (e["agent_id"] as string) ?? "", is_final: true };
     case "tool_call":       return mapPillToolCall(e);
+    case "tool_result":     return mapPillToolResult(e);
     case "respond":         return { kind: "respond" };
+    case "error":           return mapPillError(e);
     default:                return null;
   }
 }

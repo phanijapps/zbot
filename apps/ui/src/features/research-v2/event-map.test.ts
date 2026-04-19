@@ -185,4 +185,34 @@ describe("mapGatewayEventToPillEvent", () => {
   it("heartbeat / unknown return null", () => {
     expect(mapGatewayEventToPillEvent({ type: "heartbeat" } as any)).toBeNull();
   });
+
+  it("gateway `error` maps to pill error with source=llm", () => {
+    expect(mapGatewayEventToPillEvent({ type: "error", message: "rate limited" } as any))
+      .toEqual({ kind: "error", message: "rate limited", source: "llm" });
+  });
+
+  it("gateway `error` with missing message falls back to 'unknown error'", () => {
+    expect(mapGatewayEventToPillEvent({ type: "error" } as any))
+      .toEqual({ kind: "error", message: "unknown error", source: "llm" });
+  });
+
+  it("tool_result with error field maps to pill error (source=tool)", () => {
+    expect(
+      mapGatewayEventToPillEvent({
+        type: "tool_result",
+        tool_name: "read_file",
+        error: "file not found",
+      } as any),
+    ).toEqual({ kind: "error", message: "file not found", source: "tool", tool: "read_file" });
+  });
+
+  it("tool_result without error returns null (no pill event)", () => {
+    expect(mapGatewayEventToPillEvent({ type: "tool_result", tool_name: "read_file", result: "ok" } as any))
+      .toBeNull();
+  });
+
+  it("tool_result with empty-string error returns null", () => {
+    expect(mapGatewayEventToPillEvent({ type: "tool_result", tool_name: "read_file", error: "" } as any))
+      .toBeNull();
+  });
 });

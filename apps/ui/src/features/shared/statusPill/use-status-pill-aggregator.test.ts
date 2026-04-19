@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { reducePillState } from "./use-status-pill-aggregator";
-import { EMPTY_PILL } from "./types";
+import { EMPTY_PILL, NARRATION_MAX } from "./types";
 
 describe("reducePillState", () => {
   it("starts hidden", () => {
@@ -49,6 +49,97 @@ describe("reducePillState", () => {
 
   it("resets via reset event", () => {
     const s1 = reducePillState(EMPTY_PILL, { kind: "agent_started", agent_id: "root" });
+    const s2 = reducePillState(s1, { kind: "reset" });
+    expect(s2).toEqual(EMPTY_PILL);
+  });
+
+  it("LLM error event → narration 'LLM error', suffix=message, category 'error'", () => {
+    const s = reducePillState(EMPTY_PILL, {
+      kind: "error",
+      message: "rate limited",
+      source: "llm",
+    });
+    expect(s.visible).toBe(true);
+    expect(s.starting).toBe(false);
+    expect(s.narration).toBe("LLM error");
+    expect(s.suffix).toBe("rate limited");
+    expect(s.category).toBe("error");
+  });
+
+  it("Tool error event with tool name → narration 'Tool error: {tool}'", () => {
+    const s = reducePillState(EMPTY_PILL, {
+      kind: "error",
+      message: "file not found",
+      source: "tool",
+      tool: "read_file",
+    });
+    expect(s.narration).toBe("Tool error: read_file");
+    expect(s.suffix).toBe("file not found");
+    expect(s.category).toBe("error");
+  });
+
+  it("Tool error event without tool name → narration 'Tool error'", () => {
+    const s = reducePillState(EMPTY_PILL, {
+      kind: "error",
+      message: "timeout",
+      source: "tool",
+    });
+    expect(s.narration).toBe("Tool error");
+    expect(s.suffix).toBe("timeout");
+  });
+
+  it("Error suffix is truncated to NARRATION_MAX", () => {
+    const long = "x".repeat(200);
+    const s = reducePillState(EMPTY_PILL, {
+      kind: "error",
+      message: long,
+      source: "llm",
+    });
+    expect(s.suffix.length).toBeLessThanOrEqual(NARRATION_MAX);
+    expect(s.suffix.endsWith("…")).toBe(true);
+  });
+
+  it("agent_started clears a sticky error state back to Thinking…/neutral", () => {
+    const s1 = reducePillState(EMPTY_PILL, { kind: "error", message: "boom", source: "llm" });
+    expect(s1.category).toBe("error");
+    const s2 = reducePillState(s1, { kind: "agent_started", agent_id: "root" });
+    expect(s2.category).toBe("neutral");
+    expect(s2.narration).toBe("Thinking…");
+    expect(s2.suffix).toBe("");
+    expect(s2.starting).toBe(true);
+  });
+
+  it("error state SURVIVES a subsequent tool_call (sticky)", () => {
+    const s1 = reducePillState(EMPTY_PILL, {
+      kind: "error",
+      message: "network down",
+      source: "llm",
+    });
+    const s2 = reducePillState(s1, { kind: "tool_call", tool: "write_file", args: { path: "a.py" } });
+    expect(s2.category).toBe("error");
+    expect(s2.narration).toBe("LLM error");
+    expect(s2.suffix).toBe("network down");
+  });
+
+  it("error state SURVIVES a subsequent respond (sticky)", () => {
+    const s1 = reducePillState(EMPTY_PILL, { kind: "error", message: "boom", source: "llm" });
+    const s2 = reducePillState(s1, { kind: "respond" });
+    expect(s2.category).toBe("error");
+    expect(s2.narration).toBe("LLM error");
+  });
+
+  it("error state SURVIVES a subsequent agent_completed (sticky)", () => {
+    const s1 = reducePillState(EMPTY_PILL, { kind: "error", message: "boom", source: "llm" });
+    const s2 = reducePillState(s1, {
+      kind: "agent_completed",
+      agent_id: "root",
+      is_final: true,
+    });
+    expect(s2.category).toBe("error");
+  });
+
+  it("reset clears a sticky error state", () => {
+    const s1 = reducePillState(EMPTY_PILL, { kind: "error", message: "boom", source: "llm" });
     const s2 = reducePillState(s1, { kind: "reset" });
     expect(s2).toEqual(EMPTY_PILL);
   });

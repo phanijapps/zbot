@@ -115,6 +115,7 @@
 .status-pill[data-category="delegate"] { color: var(--purple); }
 .status-pill[data-category="respond"]  { color: var(--success); }
 .status-pill[data-category="neutral"]  { color: var(--muted-foreground); }
+.status-pill[data-category="error"]    { color: var(--destructive, #ef4444); }
 
 /* --- Animations ---------------------------------------------------------- */
 @keyframes status-pill-slide-in {
