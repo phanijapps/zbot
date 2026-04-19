@@ -1,0 +1,121 @@
+// =============================================================================
+// Research UI — State types
+//
+// Consumed by reducer.ts, event-map.ts, useResearchSession.ts, and the
+// component tree (AgentTurnBlock, SessionsList, ResearchPage).
+//
+// Field names match the gateway wire format — especially camelCase here
+// vs snake_case on the wire; mapping happens in event-map.ts.
+// =============================================================================
+
+export type AgentTurnStatus = "running" | "completed" | "stopped" | "error";
+
+/** One entry in the chronological Thinking timeline inside an agent turn. */
+export interface TimelineEntry {
+  id: string;
+  at: number; // ms epoch
+  kind: "thinking" | "tool_call" | "tool_result" | "error" | "note";
+  text: string;
+  /** tool_call: canonical tool name. */
+  toolName?: string;
+  /** tool_call: ~60 char JSON preview of args. */
+  toolArgsPreview?: string;
+  /** tool_result: ~60 char preview of result value. */
+  toolResultPreview?: string;
+}
+
+/** One agent turn (root or delegated). Block rendering unit in the UI. */
+export interface AgentTurn {
+  /** execution_id from the gateway. */
+  id: string;
+  agentId: string;
+  /** Present for delegated turns; null for root turns. */
+  parentExecutionId: string | null;
+  startedAt: number;
+  completedAt: number | null;
+  status: AgentTurnStatus;
+  /** Ward at the time this turn started (sticky — see WARD_CHANGED handling). */
+  wardId: string | null;
+  timeline: TimelineEntry[];
+  tokenCount: number;
+  /** Final respond() content (markdown). Null until Respond event arrives. */
+  respond: string | null;
+  /** Token-stream buffer; flushed when Respond arrives. */
+  respondStreaming: string;
+  /** Per-turn UI toggle for the Thinking chevron. */
+  thinkingExpanded: boolean;
+  /**
+   * Populated when the turn crashed silently (Task 16): TURN_COMPLETE arrived
+   * with no respond and no meaningful timeline entries. A workaround for
+   * chat-v2 backlog B3 (gateway doesn't emit a proper `error` event). When
+   * the backlog lands, replace the inferred text with the real error.message.
+   */
+  errorMessage: string | null;
+}
+
+export interface ResearchMessage {
+  id: string;
+  role: "user" | "system";
+  content: string;
+  timestamp: number;
+}
+
+export type ResearchStatus = "idle" | "running" | "complete" | "stopped" | "error";
+
+/** Session-summary row used by the sessions drawer. */
+export interface SessionSummary {
+  id: string;
+  title: string;
+  status: "running" | "complete" | "crashed" | "paused";
+  wardName: string | null;
+  updatedAt: number; // ms epoch
+}
+
+/** Lightweight artifact reference used in ResearchSessionState. */
+export interface ResearchArtifactRef {
+  id: string;
+  fileName: string;
+  fileType?: string;
+  fileSize?: number;
+  label?: string;
+}
+
+export interface ResearchSessionState {
+  /** Server-assigned. Null until init / SESSION_BOUND lands. */
+  sessionId: string | null;
+  /** Server-assigned WS routing id. Null until SESSION_BOUND lands. */
+  conversationId: string | null;
+  title: string;
+  status: ResearchStatus;
+  /** STICKY — only WARD_CHANGED updates this; AGENT_STARTED inherits. */
+  wardId: string | null;
+  /** STICKY display name for the ward chip. */
+  wardName: string | null;
+  /** User-authored prompts only. Assistant content renders via turns[]. */
+  messages: ResearchMessage[];
+  /** Chronological agent turns. Delegations are flat here; nesting via parentExecutionId. */
+  turns: AgentTurn[];
+  /** True between IntentAnalysisStarted and Complete/Skipped. */
+  intentAnalyzing: boolean;
+  /** From IntentAnalysisComplete. */
+  intentClassification: string | null;
+  /** From PlanUpdate. */
+  planPath: string | null;
+  /** Files the agent wrote during this session, newest-last. */
+  artifacts: ResearchArtifactRef[];
+}
+
+export const EMPTY_RESEARCH_STATE: ResearchSessionState = {
+  sessionId: null,
+  conversationId: null,
+  title: "",
+  status: "idle",
+  wardId: null,
+  wardName: null,
+  messages: [],
+  turns: [],
+  intentAnalyzing: false,
+  intentClassification: null,
+  planPath: null,
+  artifacts: [],
+};
