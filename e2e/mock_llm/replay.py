@@ -34,6 +34,8 @@ class ReplayStore:
     def __init__(self, strict_hashing: bool = False) -> None:
         self._records: dict[str, list[LLMResponseRecord]] = {}
         self._cursor: dict[str, int] = {}
+        self._ordered: list[LLMResponseRecord] = []
+        self._ordered_cursor = 0
         self._drift: list[DriftRecord] = []
         self._strict = strict_hashing
         self._received_count = 0
@@ -51,12 +53,37 @@ class ReplayStore:
                 continue
             rec = LLMResponseRecord(**json.loads(line))
             store._records.setdefault(rec.execution_id, []).append(rec)
+            store._ordered.append(rec)
         for exec_id in store._records:
             store._cursor[exec_id] = 0
         return store
 
     def total_requests(self) -> int:
         return sum(len(v) for v in self._records.values())
+
+    def next_any(self) -> MatchResult:
+        """FIFO fallback when the caller doesn't supply an execution id.
+
+        Used in Mode Full where zerod sends a plain OpenAI chat body with
+        no zbot metadata. Records are yielded in fixture (JSONL) order,
+        which matches the original execution order end-to-end.
+        """
+        self._received_count += 1
+        if self._ordered_cursor >= len(self._ordered):
+            self._drift.append(DriftRecord(
+                exec_id="<fifo>", iteration=self._ordered_cursor,
+                reason="exhausted",
+            ))
+            return MatchResult(ok=False, reason="exhausted")
+        rec = self._ordered[self._ordered_cursor]
+        self._ordered_cursor += 1
+        # Keep per-exec cursor in sync so per_execution_progress stays sane.
+        recs = self._records.get(rec.execution_id, [])
+        if recs:
+            idx = self._cursor.get(rec.execution_id, 0)
+            if idx < len(recs) and recs[idx] is rec:
+                self._cursor[rec.execution_id] = idx + 1
+        return MatchResult(ok=True, response=rec.response)
 
     def next_response(self, *, exec_id: str, messages_hash: str) -> MatchResult:
         self._received_count += 1
