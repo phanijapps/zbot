@@ -166,37 +166,11 @@
   min-width: 0;
   width: 100%;
 }
-.research-msg__copy {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  background: transparent;
-  color: var(--muted-foreground);
-  border: 1px solid transparent;
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 120ms ease, background 120ms ease, border-color 120ms ease;
-}
-/* Assistant copy sits under the message, left-aligned. */
-.research-msg--assistant .research-msg__copy {
+/* Assistant copy sits under the message, left-aligned. Shared .copy-btn
+ * styles live in features/shared/copyButton/copy-button.css. */
+.research-msg--assistant .copy-btn {
   align-self: flex-start;
   margin-left: 0;
-}
-.research-msg:hover .research-msg__copy,
-.research-msg__copy:focus-visible {
-  opacity: 1;
-  border-color: var(--border);
-}
-.research-msg__copy:hover {
-  background: var(--muted);
-}
-.research-msg__copy:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
 }
 
 /* --- Intent lines ---------------------------------------------------------- */

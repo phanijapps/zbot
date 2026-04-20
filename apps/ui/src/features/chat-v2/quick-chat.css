@@ -63,7 +63,10 @@
   flex-direction: column;
   gap: 18px;
 }
-.quick-chat__msg--user { display: flex; justify-content: flex-end; }
+.quick-chat__msg { display: flex; align-items: flex-start; gap: 8px; }
+.quick-chat__msg--user { justify-content: flex-end; }
+/* Assistant copy sits below the message body, left-aligned. */
+.quick-chat__msg--assistant .copy-btn { align-self: flex-start; }
 .quick-chat__user-bubble {
   max-width: 80%;
   padding: 10px 14px;

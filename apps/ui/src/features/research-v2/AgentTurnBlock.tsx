@@ -228,6 +228,7 @@ function SubagentCard({ turn }: SubagentCardProps) {
       style={{ borderLeft: `3px solid ${color}` }}
       data-parent={turn.parentExecutionId ?? ""}
       data-expanded={expanded}
+      data-copy-host="true"
     >
       <button
         type="button"
@@ -287,6 +288,7 @@ function RootTurn({ turn, childTurns, allTurns }: RootTurnProps) {
     <div
       className={`research-msg research-msg--assistant${respondIsStreaming(turn) ? " research-msg--streaming" : ""}`}
       data-parent=""
+      data-copy-host="true"
     >
       <div className="root-turn__avatar-row">
         <AgentAvatar />

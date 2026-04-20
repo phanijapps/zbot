@@ -8,6 +8,7 @@ import { ArtifactSlideOut } from "../chat/ArtifactSlideOut";
 import { getArtifactIcon } from "../chat/artifact-utils";
 import { InlineActivityChip } from "./InlineActivityChip";
 import { useQuickChat } from "./useQuickChat";
+import { CopyButton } from "../shared/copyButton";
 import type { QuickChatArtifactRef, QuickChatMessage } from "./types";
 import type { Artifact } from "@/services/transport/types";
 import "./quick-chat.css";
@@ -26,11 +27,16 @@ function AssistantBubble({ message }: { message: QuickChatMessage }) {
 }
 
 function MessageRow({ message }: { message: QuickChatMessage }) {
+  const label = message.role === "user" ? "Copy question" : "Copy answer";
   return (
-    <div className={`quick-chat__msg quick-chat__msg--${message.role}`}>
+    <div
+      className={`quick-chat__msg quick-chat__msg--${message.role}`}
+      data-copy-host="true"
+    >
       {message.role === "user"
         ? <div className="quick-chat__user-bubble">{message.content}</div>
         : <AssistantBubble message={message} />}
+      <CopyButton text={message.content} label={label} />
     </div>
   );
 }
