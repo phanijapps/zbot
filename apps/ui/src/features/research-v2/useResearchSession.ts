@@ -7,7 +7,7 @@ import type {
   UnsubscribeFn,
 } from "@/services/transport/types";
 import { useStatusPill, type PillEventSink } from "../shared/statusPill";
-import { EMPTY_RESEARCH_STATE } from "./types";
+import { EMPTY_RESEARCH_STATE, type ResearchSessionState } from "./types";
 import { reduceResearch, type ResearchAction } from "./reducer";
 import { mapGatewayEventToResearchAction, mapGatewayEventToPillEvent } from "./event-map";
 import { snapshotSession } from "./session-snapshot";
@@ -177,6 +177,47 @@ async function hydrateFromSnapshot(
   }
 }
 
+// --- R14h: reconnect recovery helper --------------------------------------
+//
+// Finds a running /api/logs/sessions row whose started_at is within a
+// window of our sendMessage timestamp and dispatches SESSION_BOUND so
+// R14g can take over. No-op if:
+//   - state.sessionId is already set (normal flow)
+//   - state.status is not "running" (nothing to recover)
+//   - we never sent anything (lastSendMsRef is null)
+
+const RECONNECT_RECOVERY_WINDOW_MS = 15_000;
+
+async function recoverSessionIdIfNeeded(
+  state: ResearchSessionState,
+  lastSendMsRef: { current: number | null },
+  dispatch: Dispatch<ResearchAction>,
+): Promise<void> {
+  if (state.sessionId || state.status !== "running") return;
+  const sendAt = lastSendMsRef.current;
+  if (sendAt == null) return;
+  const transport = await getTransport();
+  const res = await transport.listLogSessions();
+  if (!res.success || !res.data) return;
+  // Wire quirk: LogSession.conversation_id is the real sess-*; session_id
+  // is the execution id. Find a root row (no parent) with status "running"
+  // that started close to our send time.
+  const match = res.data.find((row) => {
+    if (row.parent_session_id && row.parent_session_id.length > 0) return false;
+    if (row.status !== "running") return false;
+    const t = Date.parse(row.started_at);
+    if (Number.isNaN(t)) return false;
+    const delta = Math.abs(t - sendAt);
+    return delta <= RECONNECT_RECOVERY_WINDOW_MS;
+  });
+  if (!match) return;
+  dispatch({
+    type: "SESSION_BOUND",
+    sessionId: match.conversation_id,
+    conversationId: match.conversation_id,
+  });
+}
+
 // --- Hook -----------------------------------------------------------------
 
 export function useResearchSession() {
@@ -195,6 +236,10 @@ export function useResearchSession() {
   // conversation_id field. Transport's seq-based dedup handles any overlap.
   const subscribedSessionIdRef = useRef<string | null>(null);
   const unsubscribeSessionRef = useRef<UnsubscribeFn | null>(null);
+  // R14h: sendMessage timestamp. On reconnect/recovery, we match the
+  // server-assigned session_id by finding a running /api/logs/sessions row
+  // whose started_at is within ±10s of this stamp. Without it we'd guess.
+  const lastSendMsRef = useRef<number | null>(null);
   // state holds light refs; latestArtifactsRef mirrors the full Artifact
   // records so ArtifactSlideOut can resolve id → Artifact without refetching.
   const latestArtifactsRef = useRef<Artifact[]>([]);
@@ -271,18 +316,45 @@ export function useResearchSession() {
     }
   }, [state.sessionId, urlSessionId, navigate]);
 
+  // --- R14h: reconnect recovery. ----------------------------------------
+  // Scenario: ping-timeout WS reconnect during an active send. invoke_accepted
+  // was sent into the dead window and is lost forever (not replayed on
+  // reconnect). state.sessionId stays null → R14g can't subscribe → UI stuck.
+  // Recovery: watch for WS reconnects; if status=running with sessionId null
+  // and we have a recent sendMessage, match a running /api/logs/sessions row
+  // by started_at window and bind its session id into state.
+  useEffect(() => {
+    let cancelled = false;
+    let unsubscribeConnState: UnsubscribeFn | null = null;
+    void (async () => {
+      const transport = await getTransport();
+      if (cancelled) return;
+      unsubscribeConnState = transport.onConnectionStateChange((connState) => {
+        if (connState.status !== "connected") return;
+        void recoverSessionIdIfNeeded(state, lastSendMsRef, dispatch);
+      });
+    })();
+    return () => {
+      cancelled = true;
+      unsubscribeConnState?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.sessionId, state.status]);
+
   // --- Send a user message (subscribes BEFORE invoke, R14a) ---
   const sendMessage = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
       if (!trimmed || state.status === "running") return;
+      const sendAt = Date.now();
+      lastSendMsRef.current = sendAt;
       dispatch({
         type: "APPEND_USER",
         message: {
           id: crypto.randomUUID(),
           role: "user",
           content: trimmed,
-          timestamp: Date.now(),
+          timestamp: sendAt,
         },
       });
       // Closure read: safe because only SESSION_BOUND (dispatched below) mutates state.conversationId.

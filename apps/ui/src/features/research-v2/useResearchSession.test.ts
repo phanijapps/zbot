@@ -42,6 +42,8 @@ vi.mock("@/services/transport", () => ({
     getSessionMessages,
     listSessionArtifacts,
     listLogSessions,
+    // R14h recovery uses this to re-check session_id on reconnect.
+    onConnectionStateChange: () => () => undefined,
   }),
 }));
 
