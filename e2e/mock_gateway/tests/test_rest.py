@@ -41,6 +41,12 @@ def test_session_messages_returns_derived_rows(client):
     assert len(messages) >= 1
 
 
+def test_executions_v2_messages_mirrors_sessions_messages(client):
+    r = client.get(f"/api/executions/v2/sessions/{SIMPLE_QA_SESSION_ID}/messages?scope=all")
+    assert r.status_code == 200
+    assert len(r.json()) >= 1
+
+
 def test_artifacts_returns_empty_for_simple_qa(client):
     r = client.get(f"/api/sessions/{SIMPLE_QA_SESSION_ID}/artifacts")
     assert r.status_code == 200

@@ -97,6 +97,12 @@ def create_rest_app(fixture_dir: Path) -> FastAPI:
             raise HTTPException(404, detail="session not found")
         return _derive_messages(fixture)
 
+    @app.get("/api/executions/v2/sessions/{sid}/messages")
+    def executions_v2_session_messages(sid: str, scope: str = "all") -> list[dict]:
+        if sid != fixture.session_id:
+            raise HTTPException(404, detail="session not found")
+        return _derive_messages(fixture)
+
     @app.get("/api/sessions/{sid}/artifacts")
     def session_artifacts(sid: str) -> list[dict]:
         if sid != fixture.session_id:
