@@ -1,5 +1,4 @@
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Markdown } from "../shared/markdown";
 
 export interface AgentResponseProps {
   /** Markdown content from the agent */
@@ -40,9 +39,7 @@ export function AgentResponse({ content, timestamp }: AgentResponseProps) {
       <div>
         <div className="msg-block__time">{formatTime(timestamp)}</div>
         <div className="msg-block__content">
-          <div className={PROSE_CLASSES}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-          </div>
+          <Markdown className={PROSE_CLASSES}>{content}</Markdown>
         </div>
       </div>
     </div>

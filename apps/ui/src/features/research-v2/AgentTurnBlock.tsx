@@ -1,7 +1,6 @@
 import type React from "react";
 import { useEffect, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Markdown } from "../shared/markdown";
 import {
   CheckCircle2,
   ChevronDown,
@@ -130,9 +129,7 @@ function ErrorBanner({ message }: { message: string }) {
 }
 
 function RespondMarkdown({ content }: { content: string }) {
-  return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-  );
+  return <Markdown>{content}</Markdown>;
 }
 
 function StreamingBuffer({ text }: { text: string }) {
@@ -140,11 +137,7 @@ function StreamingBuffer({ text }: { text: string }) {
   // as the final respond, just styled with a "streaming" class for cursor/
   // opacity). Without this, code fences and lists flash as raw text until the
   // turn completes.
-  return (
-    <div className="agent-turn-block__streaming">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-    </div>
-  );
+  return <Markdown className="agent-turn-block__streaming">{text}</Markdown>;
 }
 
 function WaitingPlaceholder() {

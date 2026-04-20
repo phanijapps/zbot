@@ -8,6 +8,7 @@ import { X, Download } from "lucide-react";
 import { getTransport } from "@/services/transport";
 import type { Artifact } from "@/services/transport/types";
 import { getArtifactIcon, formatFileSize, formatJson, CsvTable } from "./artifact-utils";
+import { Markdown } from "../shared/markdown";
 
 interface ArtifactSlideOutProps {
   artifact: Artifact;
@@ -90,7 +91,8 @@ export function ArtifactSlideOut({ artifact, onClose }: ArtifactSlideOutProps) {
 function renderContent(artifact: Artifact, content: string | null, contentUrl: string) {
   const ft = artifact.fileType || "";
 
-  if (ft === "md" || ft === "txt") return <pre className="artifact-slideout__pre">{content}</pre>;
+  if (ft === "md") return <Markdown className="artifact-slideout__md">{content ?? ""}</Markdown>;
+  if (ft === "txt") return <pre className="artifact-slideout__pre">{content}</pre>;
   if (ft === "html" || ft === "htm") return <iframe srcDoc={content || ""} style={{ width: "100%", height: "100%", border: "none" }} sandbox="allow-scripts" title="Artifact preview" />;
   if (ft === "csv") return <CsvTable content={content || ""} />;
   if (ft === "json") return <pre className="artifact-slideout__pre">{formatJson(content || "")}</pre>;

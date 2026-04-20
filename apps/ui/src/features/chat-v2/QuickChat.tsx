@@ -1,7 +1,6 @@
 import { useRef, useEffect, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { Square, Trash2 } from "lucide-react";
+import { Markdown } from "../shared/markdown";
 import { ChatInput } from "../chat/ChatInput";
 import { StatusPill } from "../shared/statusPill";
 import { ArtifactSlideOut } from "../chat/ArtifactSlideOut";
@@ -16,7 +15,7 @@ import "./quick-chat.css";
 function AssistantBubble({ message }: { message: QuickChatMessage }) {
   return (
     <div className="quick-chat__assistant">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+      <Markdown>{message.content}</Markdown>
       {message.chips && message.chips.length > 0 && (
         <div className="quick-chat__chips">
           {message.chips.map((c) => <InlineActivityChip key={c.id} chip={c} />)}

@@ -8,9 +8,8 @@
 // reused by AgentTurnBlock for the live Respond body.
 // =============================================================================
 
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { CopyButton } from "../shared/copyButton";
+import { Markdown } from "../shared/markdown";
 
 export { CopyButton } from "../shared/copyButton";
 
@@ -54,9 +53,9 @@ export function AssistantMessage({ content }: AssistantMessageProps) {
     <div className="research-msg research-msg--assistant" data-copy-host="true">
       <div className="research-msg__card">
         <AgentAvatar />
-        <div className="research-msg__body research-page__assistant">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-        </div>
+        <Markdown className="research-msg__body research-page__assistant">
+          {content}
+        </Markdown>
       </div>
       <CopyButton text={content} label="Copy answer" />
     </div>

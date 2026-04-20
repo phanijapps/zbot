@@ -6,8 +6,7 @@
 
 import { useState, useMemo, useCallback } from "react";
 import { ChevronDown, Loader2 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Markdown } from "../shared/markdown";
 
 // ============================================================================
 // Types
@@ -169,22 +168,18 @@ export function TruncatedContent({
   // Don't show expand button if not truncated
   if (!truncation.isTruncated) {
     return (
-      <div className={`prose prose-sm dark:prose-invert max-w-none ${className}`}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {content}
-        </ReactMarkdown>
-      </div>
+      <Markdown className={`prose prose-sm dark:prose-invert max-w-none ${className}`}>
+        {content}
+      </Markdown>
     );
   }
 
   return (
     <div className={className}>
       {/* Content */}
-      <div className="prose prose-sm dark:prose-invert max-w-none text-sm prose-headings:mt-3 prose-headings:mb-2 prose-p:my-1 prose-pre:bg-[var(--muted)] prose-pre:border prose-pre:border-[var(--border)] prose-code:text-[var(--primary)] prose-code:bg-[var(--muted)] prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {displayContent}
-        </ReactMarkdown>
-      </div>
+      <Markdown className="prose prose-sm dark:prose-invert max-w-none text-sm prose-headings:mt-3 prose-headings:mb-2 prose-p:my-1 prose-pre:bg-[var(--muted)] prose-pre:border prose-pre:border-[var(--border)] prose-code:text-[var(--primary)] prose-code:bg-[var(--muted)] prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none">
+        {displayContent}
+      </Markdown>
 
       {/* Expand button - only shown when collapsed */}
       {!isExpanded && (
