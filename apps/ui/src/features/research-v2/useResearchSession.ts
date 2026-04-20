@@ -71,6 +71,10 @@ interface EventHandlerCtx {
   dispatch: Dispatch<ResearchAction>;
   /** Called once per root `agent_completed` — used to re-snapshot. */
   onRootAgentCompleted: (executionId: string) => void;
+  /** Called (debounced) when a self-heal reconcile should run — e.g. a
+   *  delegate_to_agent tool call fired, or a delegation_completed arrived,
+   *  both of which indicate child-turn state needs a pull from REST. */
+  onReconcileHint: () => void;
 }
 
 function makeEventHandler(ctx: EventHandlerCtx) {
@@ -90,7 +94,29 @@ function makeEventHandler(ctx: EventHandlerCtx) {
     // R14f: re-snapshot on root agent_completed to backfill anything WS dropped
     // (session title, artifacts, subagent completions, per-turn respond).
     handleRootAgentCompleted(raw, ctx.onRootAgentCompleted);
+    // R14i: self-heal reconcile on delegation markers. delegation_started can
+    // land BEFORE our session-scope subscription acks (seq race). The
+    // delegate_to_agent tool_call always arrives via the conv-id subscription,
+    // so use it as a reliable trigger to pull a fresh snapshot and backfill
+    // any child turn we may have missed. delegation_completed triggers the
+    // same hint so a second subagent in the same session also heals.
+    handleReconcileHint(raw, ctx.onReconcileHint);
   };
+}
+
+function handleReconcileHint(
+  raw: Record<string, unknown>,
+  onReconcileHint: () => void,
+): void {
+  const type = raw["type"];
+  if (type === "delegation_started" || type === "delegation_completed") {
+    onReconcileHint();
+    return;
+  }
+  if (type === "tool_call") {
+    const tool = raw["tool_name"] ?? raw["tool"];
+    if (tool === "delegate_to_agent") onReconcileHint();
+  }
 }
 
 function handleRootAgentCompleted(
@@ -218,6 +244,40 @@ async function recoverSessionIdIfNeeded(
   });
 }
 
+// --- R14i: debounced reconcile --------------------------------------------
+//
+// Delegation lifecycle events can race the session-scope subscription ack:
+// delegation_started may arrive BEFORE the server knows the subscription
+// exists, so it's filtered and dropped. The same goes for the first few
+// events after each subagent spawn. Rather than polling, react to signals:
+// delegate_to_agent tool_call (always flows via conv-id scope), and
+// delegation_started / delegation_completed when they do arrive, trigger a
+// snapshot. Debounced to 800 ms so a burst collapses to one /api call.
+
+const RECONCILE_DEBOUNCE_MS = 800;
+
+function scheduleReconcile(
+  sessionId: string,
+  dispatch: Dispatch<ResearchAction>,
+  latestArtifactsRef: { current: Artifact[] },
+  timerRef: { current: ReturnType<typeof setTimeout> | null },
+): void {
+  if (timerRef.current !== null) clearTimeout(timerRef.current);
+  timerRef.current = setTimeout(() => {
+    timerRef.current = null;
+    void hydrateFromSnapshot(sessionId, dispatch, latestArtifactsRef);
+  }, RECONCILE_DEBOUNCE_MS);
+}
+
+function makeDebouncedReconcile(
+  sessionId: string,
+  dispatch: Dispatch<ResearchAction>,
+  latestArtifactsRef: { current: Artifact[] },
+): () => void {
+  const timer: { current: ReturnType<typeof setTimeout> | null } = { current: null };
+  return () => scheduleReconcile(sessionId, dispatch, latestArtifactsRef, timer);
+}
+
 // --- Hook -----------------------------------------------------------------
 
 export function useResearchSession() {
@@ -240,6 +300,10 @@ export function useResearchSession() {
   // server-assigned session_id by finding a running /api/logs/sessions row
   // whose started_at is within ±10s of this stamp. Without it we'd guess.
   const lastSendMsRef = useRef<number | null>(null);
+  // R14i: debounce timer shared across the two subscription sites so hints
+  // landing in rapid succession (e.g. delegation_started + tool_call +
+  // delegation_completed in the same second) collapse to one reconcile.
+  const reconcileTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // state holds light refs; latestArtifactsRef mirrors the full Artifact
   // records so ArtifactSlideOut can resolve id → Artifact without refetching.
   const latestArtifactsRef = useRef<Artifact[]>([]);
@@ -285,7 +349,10 @@ export function useResearchSession() {
       resnapshotForExecRef.current = execId;
       void hydrateFromSnapshot(sid, dispatch, latestArtifactsRef);
     };
-    const onEvent = makeEventHandler({ pillSink, dispatch, onRootAgentCompleted });
+    const onReconcileHint = makeDebouncedReconcile(sid, dispatch, latestArtifactsRef);
+    const onEvent = makeEventHandler({
+      pillSink, dispatch, onRootAgentCompleted, onReconcileHint,
+    });
     // Tear down any prior session-id subscription, then register the new one.
     teardownSubscription({
       subscribedConvIdRef: subscribedSessionIdRef,
@@ -376,7 +443,17 @@ export function useResearchSession() {
         if (!sid) return;
         void hydrateFromSnapshot(sid, dispatch, latestArtifactsRef);
       };
-      const onEvent = makeEventHandler({ pillSink, dispatch, onRootAgentCompleted });
+      // Reconcile hint reads the latest sessionId each fire via a getter so
+      // pre-invoke-accepted delegations still trigger a snapshot once the
+      // session id lands.
+      const onReconcileHint = () => {
+        const sid = state.sessionId;
+        if (!sid) return;
+        scheduleReconcile(sid, dispatch, latestArtifactsRef, reconcileTimerRef);
+      };
+      const onEvent = makeEventHandler({
+        pillSink, dispatch, onRootAgentCompleted, onReconcileHint,
+      });
       try {
         await ensureSubscription(convId, onEvent, refs);
         // Pre-invoke SESSION_BOUND seeds state.conversationId. The server's
