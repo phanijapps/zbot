@@ -255,6 +255,52 @@ impl AppState {
         if let Err(e) = embedding_service.ensure_indexed_blocking() {
             tracing::warn!("EmbeddingService ensure_indexed_blocking failed: {e}");
         }
+
+        // Fix 2: synchronously align the vec0 tables' dim with the live
+        // `EmbeddingService` BEFORE we start accepting WebSocket invokes.
+        //
+        // Without this, the daemon accepts a user prompt while the
+        // async reconciler in `reconcile_embeddings_at_boot` is still
+        // running. The first `memory.recall` then hits either:
+        //   - a dim mismatch (tables at 384, client embeds at 1024), or
+        //   - a brand-new `*__new` rename window left by the async path.
+        //
+        // Drop-and-recreate synchronously + mark_indexed(current_dim).
+        // Table content is repopulated from source rows at the next sleep
+        // cycle; recall returns empty in the interim instead of erroring.
+        //
+        // `current_dim == 0` is the `EmbeddingBackend::Unconfigured`
+        // sentinel — the user hasn't picked a backend yet. Leave the
+        // marker-derived tables in place (the default 384 layout from
+        // `KnowledgeDatabase::new` is still usable for FTS-only recall)
+        // and let the async reconciler reindex once the user reconfigures.
+        if embedding_service.needs_reindex() {
+            let current_dim = embedding_service.dimensions();
+            if current_dim == 0 {
+                tracing::info!(
+                    "Embedding backend unconfigured at boot — skipping sync vec0 reconcile"
+                );
+            } else {
+                tracing::warn!(
+                    dim = current_dim,
+                    "Embedding dim mismatch at boot — rebuilding vec0 tables synchronously"
+                );
+                if let Err(e) = knowledge_db.reconcile_vec_tables_dim(current_dim) {
+                    tracing::error!(
+                        "Synchronous vec0 reconcile failed ({e}); recall may be degraded until the async reindex completes"
+                    );
+                } else if let Err(e) = embedding_service.mark_indexed(current_dim) {
+                    tracing::warn!(
+                        "mark_indexed failed after sync reconcile: {e}; async reindex will retry"
+                    );
+                } else {
+                    tracing::info!(
+                        dim = current_dim,
+                        "Synchronous vec0 reconcile complete; content repopulates at next sleep cycle"
+                    );
+                }
+            }
+        }
         // Hand downstream (distillation, recall, memory_fact_store, etc.) a
         // LiveEmbeddingClient wrapper so they follow ArcSwap backend changes
         // instead of caching the boot-time client (which would still be the

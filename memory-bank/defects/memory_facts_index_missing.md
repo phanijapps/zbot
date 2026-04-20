@@ -161,3 +161,112 @@ backward compatibility.
   already working; fixing the underlying tool is independent.
 - `memory-bank/components/memory-layer/data-model.md:565-580` — vec0
   table definition.
+
+## Resolution
+
+Landed on branch `feature/ui-chat-research-redesign`. Four defences, one
+per scenario from the "three scenarios" table above plus an observability
+addition.
+
+### Fix 1 — fail loud on missing vec0 tables at boot
+
+`initialize_vec_tables_with_dim` in
+`gateway/gateway-database/src/knowledge_schema.rs` now runs
+`verify_vec_tables_present` after the `CREATE VIRTUAL TABLE` batch.
+It counts rows in `sqlite_master` for the five expected vec0 names and
+returns an `rusqlite::Error` with a descriptive message when the count
+is short. `KnowledgeDatabase::new(...).expect("Failed to initialize
+knowledge database")` at `gateway/src/state.rs:186` then panics the
+daemon at boot with the full context instead of silently leaving the
+tables absent.
+
+**Addresses Scenario C** (sqlite-vec fails to load on a given connection
+→ `CREATE VIRTUAL TABLE ... USING vec0(...)` silent no-op). Previously
+the daemon booted successfully and then blew up on the first
+`memory.recall` with the opaque `no such table: memory_facts_index`
+error. Now it fails at boot with the real root cause ("sqlite-vec
+extension likely failed to load").
+
+### Fix 2 — align indexed dim with settings BEFORE any recall can fire
+
+`gateway/src/state.rs` now synchronously reconciles the vec0 table
+dim against the live `EmbeddingService.dimensions()` in `AppState::new`,
+before the server starts accepting WebSocket invokes. When
+`embedding_service.needs_reindex()` is true and the backend is configured
+(dim != 0), we drop-and-recreate all five vec0 tables at the current dim
+via `KnowledgeDatabase::reconcile_vec_tables_dim(current_dim)`, then call
+`mark_indexed(current_dim)` so the marker matches the tables. Content
+is repopulated by the reindex pipeline at the next sleep cycle; recall
+returns empty in the interim instead of erroring on a dim mismatch.
+
+The unconfigured-backend branch (`dim == 0`) is a no-op so fresh installs
+that haven't picked an embedding backend yet keep the marker-derived
+384-dim tables (still usable for FTS-only fallback).
+
+**Addresses Scenario A** (fresh install, reconcile not yet run — tables
+at 384, client embeds at 1024). The race window between
+`AppState::new()` and `reconcile_embeddings_at_boot` is eliminated for
+the dim-mismatch case.
+
+### Fix 3 — defensive guard in `memory.recall`
+
+`runtime/agent-tools/src/tools/memory.rs::action_recall` now catches
+fact-store errors matching:
+- `no such table: memory_facts_index` (and the other four vec0 table
+  names)
+- `embedding dim mismatch`
+
+On match it returns a structured `{ recalled: [], results: [], count: 0,
+degraded: true, reason: <brief> }` JSON instead of propagating
+`ZeroError::Tool`. A `tracing::warn!` fires once per session (dedup via
+`OnceLock<Mutex<HashSet<session_id>>>`) so the news ticker isn't spammed.
+
+The classification is handled by a pure function
+(`classify_recall_degradation`) that's unit-tested in isolation —
+genuine tool errors (arg validation, provider outages) still propagate
+normally.
+
+**Addresses Scenarios A/B/C at the outer edge** — no matter which root
+cause left the index in a bad state, the agent keeps running and the
+session transcript stays clean.
+
+### Fix 4 — `tables_present` / `tables_missing` in `/api/embeddings/health`
+
+`gateway/src/http/embeddings.rs::HealthResponse` gained
+`tables_present: Vec<String>` and `tables_missing: Vec<String>` lists
+populated from the same `sqlite_master` query as Fix 1 (via a shared
+`list_vec_table_presence` helper re-exported from `gateway-database`).
+The UI can warn proactively when any of the five vec0 tables is
+absent, even when the dim marker claims the install is healthy.
+
+### Tests added
+
+- `gateway-database/src/knowledge_schema.rs::tests` — three new unit
+  tests: `initialize_vec_tables_errors_when_sqlite_vec_not_loaded`,
+  `list_vec_table_presence_reports_all_five_when_initialized`,
+  `list_vec_table_presence_reports_missing_when_dropped`.
+- `gateway-database/src/knowledge_db.rs::tests` — one new unit test:
+  `reconcile_vec_tables_dim_drops_and_recreates_at_new_dim`
+  (seeds marker=384, constructs DB, calls reconcile(1024), asserts all
+  five vec0 tables now carry `FLOAT[1024]`).
+- `agent-tools/src/tools/memory.rs::tests` — seven new tests: four for
+  the classifier (matches each known pattern + rejects unrelated
+  errors), two for the once-per-session dedup, and one integration
+  test driving `action_recall` against a `BrokenStore` that returns a
+  `no such table` error to confirm the degraded JSON is returned
+  instead of a fatal tool error.
+
+### Files changed
+
+- `gateway/gateway-database/src/knowledge_schema.rs` — `REQUIRED_VEC_TABLES`
+  const, `verify_vec_tables_present`, `list_vec_table_presence`,
+  `drop_and_recreate_vec_tables_at_dim` + 3 tests.
+- `gateway/gateway-database/src/knowledge_db.rs` — `reconcile_vec_tables_dim`
+  + 1 test.
+- `gateway/gateway-database/src/lib.rs` — re-exports.
+- `gateway/src/state.rs` — Fix 2 boot-time reconcile block.
+- `gateway/src/http/embeddings.rs` — Fix 4 `tables_present` /
+  `tables_missing` fields.
+- `runtime/agent-tools/src/tools/memory.rs` — Fix 3 `action_recall`
+  guard + `classify_recall_degradation` + `should_log_degradation` + 7
+  tests.

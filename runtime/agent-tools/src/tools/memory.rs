@@ -3,11 +3,11 @@
 // Persistent key-value storage for agents + structured fact storage via DB
 // ============================================================================
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use fs2::FileExt;
 
@@ -313,7 +313,7 @@ impl Tool for MemoryTool {
                 }
             }
             "save_fact" => self.action_save_fact(ctx.as_ref(), &agent_id, &args).await,
-            "recall" => self.action_recall(&agent_id, &args).await,
+            "recall" => self.action_recall(ctx.as_ref(), &agent_id, &args).await,
             "get_fact" => self.action_get_fact(ctx.as_ref(), &args).await,
             _ => Err(ZeroError::Tool(format!("Unknown action: {}", action))),
         }
@@ -527,9 +527,7 @@ impl MemoryTool {
         // Ctx category is session state — writes gate through a separate
         // path because the permission rules + storage sentinels differ.
         if category == "ctx" {
-            return self
-                .action_save_ctx_fact(ctx, agent_id, key, content)
-                .await;
+            return self.action_save_ctx_fact(ctx, agent_id, key, content).await;
         }
 
         if content.len() > 500 {
@@ -583,7 +581,19 @@ impl MemoryTool {
     /// applies category weights (corrections > strategies > user prefs > ...) to
     /// surface the most important facts first. Falls back to flat scoring if
     /// the store doesn't support prioritization.
-    async fn action_recall(&self, agent_id: &str, args: &Value) -> Result<Value> {
+    ///
+    /// Defensive guard: when the underlying store returns a vec0-degraded
+    /// error (missing `memory_facts_index` table, or `embedding dim
+    /// mismatch`), this returns a structured `{ recalled: [], degraded:
+    /// true, reason: … }` instead of propagating a fatal tool error. The
+    /// agent keeps going with empty recall rather than wedging on a
+    /// sticky red "Tool error" in the news ticker.
+    async fn action_recall(
+        &self,
+        ctx: &dyn ToolContext,
+        agent_id: &str,
+        args: &Value,
+    ) -> Result<Value> {
         let query = args
             .get("query")
             .and_then(|v| v.as_str())
@@ -593,10 +603,36 @@ impl MemoryTool {
 
         // Use DB-backed fact store if available — prioritized recall
         match &self.fact_store {
-            Some(store) => store
-                .recall_facts_prioritized(agent_id, query, limit)
-                .await
-                .map_err(ZeroError::Tool),
+            Some(store) => {
+                let result = store.recall_facts_prioritized(agent_id, query, limit).await;
+                match result {
+                    Ok(v) => Ok(v),
+                    Err(e) => {
+                        if let Some(reason) = classify_recall_degradation(&e) {
+                            let sid = ctx.session_id();
+                            if should_log_degradation(sid) {
+                                tracing::warn!(
+                                    session_id = sid,
+                                    reason = reason,
+                                    error = %e,
+                                    "memory.recall degraded — vec0 index unavailable; returning empty result"
+                                );
+                            }
+                            Ok(json!({
+                                "query": query,
+                                "results": [],
+                                "recalled": [],
+                                "count": 0,
+                                "degraded": true,
+                                "reason": reason,
+                                "source": "memory_db",
+                            }))
+                        } else {
+                            Err(ZeroError::Tool(e))
+                        }
+                    }
+                }
+            }
             None => {
                 // Fallback: search KV store with category-aware ordering
                 let kv_path = self.resolve_memory_path(agent_id, "agent", None)?;
@@ -691,8 +727,7 @@ impl MemoryTool {
         // Pure-function permission check. Returns the session id on
         // success so we can pass it to the store; on failure it carries
         // the user-facing error message.
-        let sid =
-            check_ctx_write_permission(is_delegated, key).map_err(ZeroError::Tool)?;
+        let sid = check_ctx_write_permission(is_delegated, key).map_err(ZeroError::Tool)?;
 
         // Ward comes from current context; ctx facts are stored per-ward
         // so cleanup on ward deletion is straightforward.
@@ -867,6 +902,56 @@ fn check_ctx_write_permission(
 }
 
 // ============================================================================
+// RECALL DEGRADATION CLASSIFIER (Fix 3)
+// ============================================================================
+
+/// Inspect a fact-store error and return a short reason string when it
+/// matches a known vec0 "index not ready" / "dim mismatch" pattern.
+///
+/// Returns `None` for errors we want to propagate as genuine tool errors
+/// (e.g. arg validation, provider outages). Pure function — no state —
+/// tested in isolation.
+fn classify_recall_degradation(msg: &str) -> Option<&'static str> {
+    if msg.contains("no such table: memory_facts_index")
+        || msg.contains("no such table: kg_name_index")
+        || msg.contains("no such table: session_episodes_index")
+        || msg.contains("no such table: wiki_articles_index")
+        || msg.contains("no such table: procedures_index")
+    {
+        return Some("vec0 index table missing — recall disabled until reindex");
+    }
+    if msg.contains("embedding dim mismatch") {
+        return Some("embedding dim mismatch — recall disabled until reindex");
+    }
+    None
+}
+
+/// Track which session ids have already been notified about degraded
+/// recall. Prevents the news ticker from being spammed with identical
+/// warnings every time root calls `memory.recall` during a long session.
+fn degradation_log_cache() -> &'static Mutex<HashSet<String>> {
+    static CACHE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Returns `true` iff this is the first time we've seen `session_id`
+/// report a degraded recall this process-lifetime. Subsequent calls
+/// with the same id return `false` so the warn log stays once-per-session.
+fn should_log_degradation(session_id: &str) -> bool {
+    // Ignore empty session ids — those are short-lived test/setup
+    // contexts where per-session dedup isn't meaningful.
+    if session_id.is_empty() {
+        return true;
+    }
+    let Ok(mut guard) = degradation_log_cache().lock() else {
+        // Poisoned lock shouldn't happen but, if it does, bias toward
+        // logging so the operator sees the signal.
+        return true;
+    };
+    guard.insert(session_id.to_string())
+}
+
+// ============================================================================
 // TESTS
 // ============================================================================
 
@@ -1003,8 +1088,7 @@ mod tests {
 
     #[test]
     fn test_ctx_perm_root_allowed_on_state() {
-        let sid =
-            check_ctx_write_permission(false, "ctx.sess-abc.state.exec-1").unwrap();
+        let sid = check_ctx_write_permission(false, "ctx.sess-abc.state.exec-1").unwrap();
         assert_eq!(sid, "sess-abc");
     }
 
@@ -1035,8 +1119,7 @@ mod tests {
 
     #[test]
     fn test_ctx_perm_subagent_allowed_on_state() {
-        let sid =
-            check_ctx_write_permission(true, "ctx.sess-abc.state.exec-1").unwrap();
+        let sid = check_ctx_write_permission(true, "ctx.sess-abc.state.exec-1").unwrap();
         assert_eq!(sid, "sess-abc");
     }
 
@@ -1044,8 +1127,7 @@ mod tests {
     fn test_ctx_perm_subagent_rejected_on_unknown_sub_key() {
         // Anything not root-owned and not state.* is outside the
         // namespace shape subagents are allowed to invent.
-        let err =
-            check_ctx_write_permission(true, "ctx.sess-abc.scratchpad").unwrap_err();
+        let err = check_ctx_write_permission(true, "ctx.sess-abc.scratchpad").unwrap_err();
         assert!(err.contains("state"), "error was: {}", err);
     }
 
@@ -1082,6 +1164,173 @@ mod tests {
         let path = dir.path().join("nonexistent").join("memory.json");
         let store = tool.load_store_at_path(&path).unwrap();
         assert!(store.entries.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // Fix 3: recall degradation classifier + once-per-session dedup log
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn classifier_recognises_missing_memory_facts_index() {
+        let e = "Knowledge DB operation failed: no such table: memory_facts_index";
+        assert!(classify_recall_degradation(e).is_some());
+    }
+
+    #[test]
+    fn classifier_recognises_missing_kg_name_index() {
+        let e = "Knowledge DB operation failed: no such table: kg_name_index";
+        assert!(classify_recall_degradation(e).is_some());
+    }
+
+    #[test]
+    fn classifier_recognises_dim_mismatch() {
+        let e = "vector_index error: embedding dim mismatch: got 1024, expected 384";
+        assert!(classify_recall_degradation(e).is_some());
+    }
+
+    #[test]
+    fn classifier_ignores_unrelated_errors() {
+        assert!(classify_recall_degradation("network timeout").is_none());
+        assert!(classify_recall_degradation("permission denied").is_none());
+        assert!(classify_recall_degradation("Missing 'query' for recall").is_none());
+    }
+
+    #[test]
+    fn log_dedup_once_per_session() {
+        let sid = "sess-logdedup-fixture-unique-1";
+        assert!(should_log_degradation(sid), "first call must log");
+        assert!(!should_log_degradation(sid), "second call must dedup");
+        assert!(!should_log_degradation(sid), "third call must dedup");
+    }
+
+    #[test]
+    fn log_dedup_distinct_sessions_each_log() {
+        let a = "sess-logdedup-fixture-unique-a";
+        let b = "sess-logdedup-fixture-unique-b";
+        assert!(should_log_degradation(a));
+        assert!(should_log_degradation(b));
+    }
+
+    #[test]
+    fn log_dedup_always_logs_empty_session_id() {
+        // Empty session id means setup/test — don't rely on dedup there.
+        assert!(should_log_degradation(""));
+        assert!(should_log_degradation(""));
+    }
+
+    // Integration: action_recall returns degraded result when the fact
+    // store surfaces a "no such table" error — no fatal tool error.
+    #[tokio::test]
+    async fn action_recall_returns_degraded_result_on_missing_index() {
+        use async_trait::async_trait;
+        use zero_core::MemoryFactStore;
+
+        struct BrokenStore;
+
+        #[async_trait]
+        impl MemoryFactStore for BrokenStore {
+            async fn save_fact(
+                &self,
+                _agent_id: &str,
+                _category: &str,
+                _key: &str,
+                _content: &str,
+                _confidence: f64,
+                _session_id: Option<&str>,
+            ) -> std::result::Result<Value, String> {
+                Ok(json!({}))
+            }
+
+            async fn recall_facts(
+                &self,
+                _agent_id: &str,
+                _query: &str,
+                _limit: usize,
+            ) -> std::result::Result<Value, String> {
+                Err("Knowledge DB operation failed: no such table: memory_facts_index".to_string())
+            }
+
+            async fn recall_facts_prioritized(
+                &self,
+                _agent_id: &str,
+                _query: &str,
+                _limit: usize,
+            ) -> std::result::Result<Value, String> {
+                Err("Knowledge DB operation failed: no such table: memory_facts_index".to_string())
+            }
+        }
+
+        // Minimal ToolContext stub with the session_id() accessor we use
+        // for dedup. Everything else returns a reasonable default.
+        use zero_core::{CallbackContext, Content, EventActions, ReadonlyContext, ToolContext};
+
+        struct Ctx;
+
+        impl ReadonlyContext for Ctx {
+            fn invocation_id(&self) -> &str {
+                "test"
+            }
+            fn agent_name(&self) -> &str {
+                "test"
+            }
+            fn user_id(&self) -> &str {
+                "test"
+            }
+            fn app_name(&self) -> &str {
+                "test"
+            }
+            fn session_id(&self) -> &str {
+                "sess-fix3-integration"
+            }
+            fn branch(&self) -> &str {
+                "test"
+            }
+            fn user_content(&self) -> &Content {
+                use std::sync::LazyLock;
+                static C: LazyLock<Content> = LazyLock::new(|| Content {
+                    role: "user".to_string(),
+                    parts: vec![],
+                });
+                &C
+            }
+        }
+
+        impl CallbackContext for Ctx {
+            fn get_state(&self, _key: &str) -> Option<Value> {
+                None
+            }
+            fn set_state(&self, _key: String, _value: Value) {}
+        }
+
+        impl ToolContext for Ctx {
+            fn function_call_id(&self) -> String {
+                "test".to_string()
+            }
+            fn actions(&self) -> EventActions {
+                EventActions::default()
+            }
+            fn set_actions(&self, _actions: EventActions) {}
+        }
+
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
+        let store: Arc<dyn MemoryFactStore> = Arc::new(BrokenStore);
+        let tool = MemoryTool::new(fs, Some(store));
+        let args = json!({ "query": "anything" });
+        let ctx = Ctx;
+
+        let result = tool.action_recall(&ctx, "root", &args).await.unwrap();
+
+        assert_eq!(result["degraded"], json!(true));
+        assert_eq!(result["count"], json!(0));
+        assert!(
+            result["reason"]
+                .as_str()
+                .unwrap_or("")
+                .contains("vec0 index table missing"),
+            "got: {result}"
+        );
+        assert_eq!(result["results"], json!([]));
     }
 
     #[test]

@@ -309,10 +309,7 @@ impl MemoryRepository {
     /// List primitive facts for a ward (function signatures extracted
     /// from the ward's source files by the AST post-write hook).
     /// Ordered by key for deterministic snapshot rendering.
-    pub fn list_primitives_for_ward(
-        &self,
-        ward_id: &str,
-    ) -> Result<Vec<MemoryFact>, String> {
+    pub fn list_primitives_for_ward(&self, ward_id: &str) -> Result<Vec<MemoryFact>, String> {
         self.db.with_connection(|conn| {
             let sql = format!(
                 "SELECT {FACT_COLUMNS}
@@ -817,10 +814,7 @@ impl MemoryRepository {
         for (idx, sf) in fts_results.iter().enumerate() {
             let rank = (idx + 1) as f64;
             let contribution = 1.0 / (RRF_K + rank);
-            score_map.insert(
-                sf.fact.id.clone(),
-                (contribution, sf.fact.clone(), "fts"),
-            );
+            score_map.insert(sf.fact.id.clone(), (contribution, sf.fact.clone(), "fts"));
         }
 
         for (idx, sf) in vec_results.into_iter().enumerate() {
