@@ -1,7 +1,7 @@
 """Synthetic fixture generator emits schema-valid bundles."""
 import json
 from pathlib import Path
-import pytest
+
 from e2e.fixtures.seed_synthetic import build_simple_qa_fixture
 from e2e.fixtures.types import SessionFixture, WSEventRecord
 

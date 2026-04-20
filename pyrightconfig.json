@@ -1,0 +1,8 @@
+{
+  "include": ["e2e", "scripts"],
+  "extraPaths": ["."],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "venvPath": "/tmp",
+  "reportMissingImports": "warning"
+}

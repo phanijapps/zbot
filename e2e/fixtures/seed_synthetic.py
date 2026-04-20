@@ -8,8 +8,10 @@ import json
 from pathlib import Path
 from typing import Iterable
 
+from pydantic import BaseModel
+
 from e2e.fixtures.types import (
-    Artifact, Execution, LLMResponseRecord, SessionFixture,
+    Execution, LLMResponseRecord, SessionFixture,
     ToolResultRecord, WSEventRecord,
 )
 
@@ -25,13 +27,11 @@ def _hash(obj: object) -> str:
     ).hexdigest()
 
 
-def _write_jsonl(path: Path, records: Iterable[object]) -> None:
+def _write_jsonl(path: Path, records: Iterable[BaseModel | dict]) -> None:
     with path.open("w") as f:
         for r in records:
-            if hasattr(r, "model_dump"):
-                f.write(json.dumps(r.model_dump()) + "\n")
-            else:
-                f.write(json.dumps(r) + "\n")
+            payload = r.model_dump() if isinstance(r, BaseModel) else r
+            f.write(json.dumps(payload) + "\n")
 
 
 def build_simple_qa_fixture(out_dir: Path) -> None:
