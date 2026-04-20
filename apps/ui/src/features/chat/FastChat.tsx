@@ -11,6 +11,7 @@ import { ChatInput } from "./ChatInput";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { useFastChat, type FastMessage } from "./fast-chat-hooks";
 import { getArtifactIcon } from "./artifact-utils";
+import { CopyButton } from "../shared/copyButton";
 
 // ============================================================================
 // Prose classes (same as AgentResponse)
@@ -172,10 +173,11 @@ function MessageBubble({ message, showThinking }: { message: FastMessage; showTh
 
   if (message.role === "user") {
     return (
-      <div className="fast-chat__msg fast-chat__msg--user">
+      <div className="fast-chat__msg fast-chat__msg--user" data-copy-host="true">
         <div className="fast-chat__bubble fast-chat__bubble--user">
           {message.content}
         </div>
+        <CopyButton text={message.content} label="Copy question" />
       </div>
     );
   }
@@ -201,7 +203,7 @@ function MessageBubble({ message, showThinking }: { message: FastMessage; showTh
 
   // assistant
   return (
-    <div className="fast-chat__msg fast-chat__msg--assistant">
+    <div className="fast-chat__msg fast-chat__msg--assistant" data-copy-host="true">
       <div className="fast-chat__bubble fast-chat__bubble--agent">
         <div className={PROSE_CLASSES}>
           <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -209,6 +211,7 @@ function MessageBubble({ message, showThinking }: { message: FastMessage; showTh
           </ReactMarkdown>
         </div>
       </div>
+      <CopyButton text={message.content} label="Copy answer" />
     </div>
   );
 }

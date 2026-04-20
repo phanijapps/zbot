@@ -4736,9 +4736,13 @@
 .fast-chat__actions { display: flex; gap: var(--spacing-1); }
 .fast-chat__messages { flex: 1; overflow-y: auto; padding: var(--spacing-4); display: flex; flex-direction: column; gap: var(--spacing-3); }
 .fast-chat__empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--muted-foreground); }
-.fast-chat__msg { display: flex; }
+.fast-chat__msg { display: flex; align-items: flex-start; gap: var(--spacing-2); }
 .fast-chat__msg--user { justify-content: flex-end; }
-.fast-chat__msg--assistant, .fast-chat__msg--tool { justify-content: flex-start; }
+.fast-chat__msg--tool { justify-content: flex-start; }
+/* Assistant rows stack the bubble + copy button vertically so the copy
+ * button sits at the bottom-left, under the message content. */
+.fast-chat__msg--assistant { flex-direction: column; align-items: flex-start; gap: var(--spacing-1); }
+.fast-chat__msg--assistant .copy-btn { align-self: flex-start; }
 .fast-chat__bubble { max-width: 80%; padding: var(--spacing-2) var(--spacing-3); border-radius: var(--radius-lg); font-size: var(--text-sm); line-height: 1.5; }
 .fast-chat__bubble--user { background: var(--primary); color: var(--primary-foreground); border-bottom-right-radius: var(--radius-sm); }
 .fast-chat__bubble--agent { background: var(--card); border: 1px solid var(--border); border-bottom-left-radius: var(--radius-sm); }
