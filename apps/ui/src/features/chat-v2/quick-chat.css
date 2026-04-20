@@ -82,7 +82,19 @@
   font-size: 14px;
   white-space: pre-wrap;
 }
-.quick-chat__assistant { font-size: 14px; line-height: 1.6; }
+/* Assistant bubble — matches FastChat's rounded card styling. */
+.quick-chat__assistant {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: 14px 14px 14px 2px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--foreground);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.quick-chat__assistant > p:first-child { margin-top: 0; }
+.quick-chat__assistant > p:last-child { margin-bottom: 0; }
 .quick-chat__chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .quick-chat__chip {
   display: inline-flex;
