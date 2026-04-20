@@ -24,7 +24,10 @@ pub struct WriteFileTool {
 
 impl WriteFileTool {
     pub fn new(fs: Arc<dyn FileSystemContext>) -> Self {
-        Self { fs, fact_store: None }
+        Self {
+            fs,
+            fact_store: None,
+        }
     }
 
     /// Attach a fact store so the AST post-hook can upsert primitives.

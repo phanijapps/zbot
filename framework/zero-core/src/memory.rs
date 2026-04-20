@@ -65,11 +65,7 @@ pub trait MemoryFactStore: Send + Sync {
     ///
     /// Default implementation returns `Ok(None)` for stores that don't
     /// support ctx storage.
-    async fn get_ctx_fact(
-        &self,
-        _ward_id: &str,
-        _key: &str,
-    ) -> Result<Option<Value>, String> {
+    async fn get_ctx_fact(&self, _ward_id: &str, _key: &str) -> Result<Option<Value>, String> {
         Ok(None)
     }
 

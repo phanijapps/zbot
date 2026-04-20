@@ -79,12 +79,7 @@ pub async fn intent_snapshot(
 ///
 /// Called after the planner agent returns a plan. Stores the full plan
 /// text so subagents can fetch it without locating the file on disk.
-pub async fn plan_snapshot(
-    store: &Arc<dyn MemoryFactStore>,
-    sid: &str,
-    ward: &str,
-    plan_md: &str,
-) {
+pub async fn plan_snapshot(store: &Arc<dyn MemoryFactStore>, sid: &str, ward: &str, plan_md: &str) {
     let key = format!("ctx.{}.plan", sid);
     if let Err(e) = store
         .save_ctx_fact(sid, ward, &key, plan_md, "root", true)
@@ -147,10 +142,7 @@ pub async fn state_handoff(
     if let Some(n) = step {
         content.push_str(&format!("step: {}\n", n));
     }
-    content.push_str(&format!(
-        "completed_at: {}\n",
-        completed_at.to_rfc3339()
-    ));
+    content.push_str(&format!("completed_at: {}\n", completed_at.to_rfc3339()));
     if !artifacts.is_empty() {
         content.push_str("artifacts:\n");
         for a in artifacts {
@@ -352,7 +344,10 @@ mod tests {
         let (_, _, key, content, owner, pinned) = &calls[0];
         assert_eq!(key, "ctx.sess-4.state.exec-xyz");
         assert_eq!(owner, "subagent:code-agent");
-        assert!(!*pinned, "state_handoff must be unpinned so reruns overwrite");
+        assert!(
+            !*pinned,
+            "state_handoff must be unpinned so reruns overwrite"
+        );
         assert!(content.contains("execution_id: exec-xyz"));
         assert!(content.contains("agent_id: code-agent"));
         assert!(content.contains("step: 3"));

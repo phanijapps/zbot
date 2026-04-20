@@ -35,7 +35,9 @@ fn extractor_script_path() -> Option<&'static Path> {
         .get_or_init(|| {
             let path = std::env::temp_dir().join("zbot_extract_primitives.py");
             // Best-effort write: if it fails, we log and the hook becomes a no-op.
-            match std::fs::File::create(&path).and_then(|mut f| f.write_all(EXTRACTOR_SCRIPT.as_bytes())) {
+            match std::fs::File::create(&path)
+                .and_then(|mut f| f.write_all(EXTRACTOR_SCRIPT.as_bytes()))
+            {
                 Ok(_) => path,
                 Err(e) => {
                     tracing::warn!(
@@ -63,10 +65,7 @@ struct Primitive {
 
 /// File extensions the hook handles. Python only in v1.
 fn is_supported_language(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|s| s.to_str()),
-        Some("py")
-    )
+    matches!(path.extension().and_then(|s| s.to_str()), Some("py"))
 }
 
 /// Run the extractor against a file path and return the parsed primitives.

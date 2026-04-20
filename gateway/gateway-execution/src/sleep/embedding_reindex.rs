@@ -522,7 +522,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reindex_all_processes_three_targets() {
+    async fn reindex_all_processes_every_target() {
         let (_tmp, db) = fresh_db();
         seed_memory_facts(&db, 2);
         let client: Arc<dyn Trait> = Arc::new(MockClient::new(384));
@@ -574,14 +574,23 @@ mod tests {
     }
 
     #[test]
-    fn reindex_targets_has_three_entries() {
-        assert_eq!(REINDEX_TARGETS.len(), 3);
-        assert!(REINDEX_TARGETS
-            .iter()
-            .any(|t| t.table == "memory_facts_index"));
-        assert!(REINDEX_TARGETS.iter().any(|t| t.table == "kg_name_index"));
-        assert!(REINDEX_TARGETS
-            .iter()
-            .any(|t| t.table == "session_episodes_index"));
+    fn reindex_targets_covers_all_vec0_tables() {
+        // Each entry must map 1:1 with a vec0 virtual table created by
+        // `initialize_vec_tables_with_dim` in gateway-database. Update
+        // both when adding a new embedded source.
+        let expected = [
+            "memory_facts_index",
+            "kg_name_index",
+            "session_episodes_index",
+            "wiki_articles_index",
+            "procedures_index",
+        ];
+        assert_eq!(REINDEX_TARGETS.len(), expected.len());
+        for table in expected {
+            assert!(
+                REINDEX_TARGETS.iter().any(|t| t.table == table),
+                "missing reindex target for vec0 table: {table}"
+            );
+        }
     }
 }
