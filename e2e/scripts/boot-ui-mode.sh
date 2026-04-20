@@ -58,9 +58,17 @@ if ! curl -sf "http://127.0.0.1:$GATEWAY_PORT/api/health" >/dev/null; then
   exit 70
 fi
 
+if [[ ! -f "$REPO/apps/ui/dist/index.html" ]]; then
+  (cd "$REPO/apps/ui" && npm run build > "$RUN_DIR/ui-build.log" 2>&1) || {
+    echo "UI build failed; log tail:" >&2
+    tail -30 "$RUN_DIR/ui-build.log" >&2
+    bash "$(dirname "$0")/teardown.sh" "$RUN_DIR" || true
+    exit 71
+  }
+fi
 (
   cd "$REPO/apps/ui"
-  npm run dev -- --port "$UI_PORT" \
+  npx vite preview --port "$UI_PORT" --strictPort \
     > "$RUN_DIR/ui.log" 2>&1
 ) &
 echo $! > "$RUN_DIR/ui.pid"
@@ -72,7 +80,7 @@ for _ in $(seq 1 40); do
   sleep 0.5
 done
 if ! curl -sf "http://127.0.0.1:$UI_PORT/" >/dev/null; then
-  echo "UI dev server failed to start; log:" >&2
+  echo "UI preview server failed to start; log tail:" >&2
   tail -30 "$RUN_DIR/ui.log" >&2
   bash "$(dirname "$0")/teardown.sh" "$RUN_DIR" || true
   exit 71
