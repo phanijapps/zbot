@@ -23,7 +23,10 @@ Quick reference for all system components. Check this before planning changes.
 | Chat Experience | [chat-experience/overview.md](chat-experience/overview.md) | 3-panel chat UI: center (message → phases → response), sidebar (intent, ward, facts, subagents, plan). Session State API for reconnection. |
 | Chat v2 | [chat-v2/overview.md](chat-v2/overview.md) | `/chat-v2` page. Shares the reserved session with `/chat` (same `settings.chat` slot, `mode=fast`). Two-row status pill, artifact strip + slide-out, Clear button. |
 | — Learnings | [chat-v2/learnings.md](chat-v2/learnings.md) | Hard-earned rules from the build — **apply these to any new UI plan** (server-owned identity, deterministic pill, wire-format field drift, StrictMode-safe bootstrap, etc.). |
-| — Backlog | [chat-v2/backlog.md](chat-v2/backlog.md) | Pending: artifact auto-registration, context compaction, silent-crash surfacing, multi-tab sync, history pagination. |
+| — Backlog | [chat-v2/backlog.md](chat-v2/backlog.md) | Pending: artifact auto-registration, context compaction, silent-crash surfacing, multi-tab sync, history pagination, E2E mock-LLM harness. |
+| Research v2 | [research-v2/overview.md](research-v2/overview.md) | `/research-v2` page. One session per user prompt, drawer of past sessions, nested subagent cards with Request/Response + inline LiveTicker, live artifacts strip, clickable ward chip. Dual WS subscription (conv_id + session_id) with reconnect recovery and event-driven reconcile. |
+| — Learnings | [research-v2/learnings.md](research-v2/learnings.md) | Hard rules learned during R14a–R14j (respond lives in toolCalls, delegation events carry no conv_id, session-scope filters child events, subscription ack races early events, ping-timeout reconnect loses invoke_accepted, LogSession.conversation_id is the sess-*, etc.). |
+| — Backlog | [research-v2/backlog.md](research-v2/backlog.md) | Pending: LiveTicker UX (too brief in fast sessions), memory_facts_index defect, E2E harness, title fallback, delete cascade on child rows, retire old `/` page. |
 
 ## LLM Client
 
