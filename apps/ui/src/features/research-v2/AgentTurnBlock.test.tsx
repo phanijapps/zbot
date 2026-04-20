@@ -123,4 +123,44 @@ describe("<AgentTurnBlock> (root)", () => {
     render(<AgentTurnBlock turn={makeRoot()} onToggleThinking={spy} />);
     expect(spy).not.toHaveBeenCalled();
   });
+
+  it("root turn with status=error + errorMessage renders the error banner (R16)", () => {
+    render(
+      <AgentTurnBlock
+        turn={makeRoot({
+          status: "error",
+          errorMessage: "Turn ended with no output (provider error)",
+          respond: null,
+          respondStreaming: "",
+        })}
+      />,
+    );
+    const banner = screen.getByTestId("turn-error-banner");
+    expect(banner).toBeTruthy();
+    expect(banner.textContent).toContain("Turn ended with no output");
+  });
+
+  it("subagent card with status=error renders ErrorBanner when expanded (R16)", () => {
+    const root = makeRoot();
+    const child = makeChild({
+      id: "exec-err",
+      request: "Do the thing.",
+      status: "error",
+      errorMessage: "Subagent crashed mid-task",
+      respond: null,
+      respondStreaming: "",
+      completedAt: 3000,
+    });
+    render(
+      <AgentTurnBlock
+        turn={root}
+        childTurns={[child]}
+        allTurns={[root, child]}
+      />,
+    );
+    // Error cards are auto-collapsed on completion — expand to see banner.
+    fireEvent.click(screen.getByRole("button", { name: /expand subagent/i }));
+    expect(screen.getByTestId("turn-error-banner")).toBeTruthy();
+    expect(screen.getByText(/Subagent crashed mid-task/)).toBeTruthy();
+  });
 });

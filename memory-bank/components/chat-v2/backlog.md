@@ -98,3 +98,22 @@ Pill has `aria-live="polite"` + `aria-atomic="true"` which re-announces on every
 - ~~client-side conversationId generation~~ — replaced with server-owned ids.
 - ~~URL-encoded `/chat-v2/:sessionId`~~ — dropped; session is implicit.
 - ~~"New chat" button~~ — dropped; replaced with the Clear trash-icon.
+
+---
+
+## B4. E2E test harness with scripted mock gateway — deferred
+
+Full requirements captured in
+`docs/superpowers/specs/2026-04-20-e2e-mock-llm-harness-requirements.md`.
+
+Summary: Playwright-driven e2e harness for `/chat-v2` and `/research-v2`
+against a scripted mock gateway (HTTP + WS, wire-format fidelity with
+`gateway-ws-protocol`). Deterministic scenarios — happy paths,
+multi-subagent flows, ping-timeout reconnects, sequence-gap at
+subscribe ack, dropped title events, second-tab live. Each bug the
+R14 work caught becomes a failing-then-green scenario so regressions
+fail CI before manual QA.
+
+Deferred while we finish R16–R20 of the original research-ui plan.
+Pick up when we stop shipping UI features weekly and want stable
+regression coverage.
