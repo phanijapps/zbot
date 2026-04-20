@@ -65,7 +65,13 @@
 }
 .quick-chat__msg { display: flex; align-items: flex-start; gap: 8px; }
 .quick-chat__msg--user { justify-content: flex-end; }
-/* Assistant copy sits below the message body, left-aligned. */
+/* Assistant rows stack the body + copy button vertically so the copy
+ * button sits at the bottom-left, under the message content. */
+.quick-chat__msg--assistant {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
 .quick-chat__msg--assistant .copy-btn { align-self: flex-start; }
 .quick-chat__user-bubble {
   max-width: 80%;
