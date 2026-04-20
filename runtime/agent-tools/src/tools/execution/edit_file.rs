@@ -176,17 +176,16 @@ impl Tool for EditFileTool {
 
         // Post-hook: AST extract primitives so the next subagent sees
         // the updated signatures. Fire-and-forget, .py files only.
-        if let Some(fs) = self.fact_store.clone() {
-            if let Some(ward_id) = ctx
+        if let Some(fs) = self.fact_store.clone()
+            && let Some(ward_id) = ctx
                 .get_state("ward_id")
                 .and_then(|v| v.as_str().map(String::from))
-            {
-                let abs = full_path.clone();
-                let rel = path.to_string();
-                tokio::spawn(async move {
-                    ast_hook::run(&ward_id, &abs, &rel, &fs).await;
-                });
-            }
+        {
+            let abs = full_path.clone();
+            let rel = path.to_string();
+            tokio::spawn(async move {
+                ast_hook::run(&ward_id, &abs, &rel, &fs).await;
+            });
         }
 
         Ok(json!({

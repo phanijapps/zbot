@@ -883,7 +883,7 @@ fn check_ctx_write_permission(
         "memory",
     ];
 
-    if ROOT_OWNED.iter().any(|&r| sub_key == r) {
+    if ROOT_OWNED.contains(&sub_key) {
         return Err(format!(
             "Subagent cannot write to root-owned ctx key '{}'. Root owns: {}. Subagents may only write 'ctx.<sid>.state.<...>'.",
             key,
