@@ -141,7 +141,15 @@ def create_rest_app(fixture_dir: Path) -> FastAPI:
     def session_artifacts(sid: str) -> list[dict]:
         if sid != fixture.session_id:
             raise HTTPException(404, detail="session not found")
-        return [a.model_dump() for a in fixture.artifacts]
+        return [
+            {
+                "id": a.id,
+                "fileName": a.file_name,
+                "fileType": a.file_type,
+                "fileSize": a.file_size,
+            }
+            for a in fixture.artifacts
+        ]
 
     @app.post("/api/wards/{wid}/open")
     def open_ward(wid: str) -> JSONResponse:
