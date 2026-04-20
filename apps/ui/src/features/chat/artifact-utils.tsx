@@ -1,6 +1,6 @@
 // ============================================================================
 // ARTIFACT UTILITIES
-// Shared helpers used by ArtifactSlideOut, ArtifactsPanel, FastChat,
+// Shared helpers used by ArtifactSlideOut, ArtifactsPanel, QuickChat,
 // and IntelligenceFeed.
 // ============================================================================
 
