@@ -42,13 +42,48 @@ def _session_to_log_row(fixture: SessionFixture) -> list[dict]:
     return rows
 
 
-def _derive_messages(fixture: SessionFixture) -> list[dict]:
-    """Synthesise the REST messages shape from the fixture.
+def _load_llm_responses(fixture_dir: Path) -> list[dict]:
+    path = fixture_dir / "llm-responses.jsonl"
+    if not path.exists():
+        return []
+    records = []
+    for line in path.read_text().splitlines():
+        if line.strip():
+            records.append(json.loads(line))
+    return records
 
-    For now: one user message + one assistant stub per execution. Real
-    recordings will populate this from the sqlite DB in record-fixture.py.
+
+def _extract_tool_calls(llm_record: dict) -> list[dict]:
+    """Pull the assistant tool_calls out of a recorded OpenAI response."""
+    response = llm_record.get("response", {})
+    choices = response.get("choices", [])
+    if not choices:
+        return []
+    message = choices[0].get("message", {})
+    raw_tool_calls = message.get("tool_calls") or []
+    out = []
+    for i, tc in enumerate(raw_tool_calls):
+        fn = tc.get("function", {})
+        name = fn.get("name", "")
+        try:
+            args = json.loads(fn.get("arguments", "{}"))
+        except json.JSONDecodeError:
+            args = {}
+        out.append({
+            "tool_name": name,
+            "args": args,
+            "tool_id": tc.get("id") or f"call_{i}",
+        })
+    return out
+
+
+def _derive_messages(fixture: SessionFixture, fixture_dir: Path) -> list[dict]:
+    """Synthesise the REST messages shape from the fixture's recorded
+    llm-responses.jsonl, so the UI renders the same tool-calls that the
+    WS stream would produce on a fresh live run.
     """
-    out = [
+    llm_records = _load_llm_responses(fixture_dir)
+    out: list[dict] = [
         {
             "id": "msg-user-0",
             "execution_id": fixture.executions[0].execution_id,
@@ -57,20 +92,19 @@ def _derive_messages(fixture: SessionFixture) -> list[dict]:
             "created_at": "2026-04-20T00:00:00+00:00",
         }
     ]
+    records_by_exec: dict[str, list[dict]] = {}
+    for rec in llm_records:
+        records_by_exec.setdefault(rec.get("execution_id", ""), []).append(rec)
     for e in fixture.executions:
+        recs = records_by_exec.get(e.execution_id, [])
+        tool_calls = _extract_tool_calls(recs[-1]) if recs else []
         out.append({
             "id": f"msg-assistant-{e.execution_id}",
             "execution_id": e.execution_id,
             "role": "assistant",
-            "content": "[tool calls]",
+            "content": "[tool calls]" if tool_calls else "",
             "created_at": "2026-04-20T00:00:05+00:00",
-            "toolCalls": json.dumps([
-                {
-                    "tool_name": "respond",
-                    "args": {"message": "stub answer"},
-                    "tool_id": "call_1",
-                }
-            ]),
+            "toolCalls": json.dumps(tool_calls),
         })
     return out
 
@@ -95,13 +129,13 @@ def create_rest_app(fixture_dir: Path) -> FastAPI:
     def session_messages(sid: str, scope: str = "all") -> list[dict]:
         if sid != fixture.session_id:
             raise HTTPException(404, detail="session not found")
-        return _derive_messages(fixture)
+        return _derive_messages(fixture, fixture_dir)
 
     @app.get("/api/executions/v2/sessions/{sid}/messages")
     def executions_v2_session_messages(sid: str, scope: str = "all") -> list[dict]:
         if sid != fixture.session_id:
             raise HTTPException(404, detail="session not found")
-        return _derive_messages(fixture)
+        return _derive_messages(fixture, fixture_dir)
 
     @app.get("/api/sessions/{sid}/artifacts")
     def session_artifacts(sid: str) -> list[dict]:

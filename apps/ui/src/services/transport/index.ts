@@ -156,7 +156,7 @@ export async function initializeTransport(config?: Partial<TransportConfig>): Pr
   globalTransport = createTransport();
 
   const finalConfig = {
-    ...DEFAULT_CONFIG,
+    ...getConfig(),
     ...config,
   };
 

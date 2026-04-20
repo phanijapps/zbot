@@ -95,6 +95,7 @@ def create_app(
     app.state.fixture = fixture
     app.state.cadence = cadence
 
+    @app.websocket("/")
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket) -> None:
         await websocket.accept()

@@ -16,17 +16,28 @@ if [[ ! -d "$FIXTURE_DIR" ]]; then
   exit 65
 fi
 
+# One shared venv for all mock servers. Gitignored via e2e/.gitignore.
+VENV="$REPO/e2e/.venv"
+if [[ ! -x "$VENV/bin/python" ]]; then
+  python3 -m venv "$VENV" >&2
+  "$VENV/bin/pip" install --quiet --upgrade pip >&2
+  "$VENV/bin/pip" install --quiet \
+    -r "$REPO/e2e/mock_gateway/requirements.txt" \
+    -r "$REPO/e2e/mock_llm/requirements.txt" >&2
+fi
+PY="$VENV/bin/python"
+
 RUN_DIR="$(mktemp -d -t zbot-e2e-ui-XXXXXXXX)"
 echo "$RUN_DIR" > /tmp/zbot-e2e-latest-run-dir
 
-pick_port() { python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1])"; }
+pick_port() { "$PY" -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1])"; }
 
 GATEWAY_PORT=$(pick_port)
 UI_PORT=$(pick_port)
 
 (
   cd "$REPO"
-  PYTHONPATH=. python3 -m e2e.mock_gateway \
+  PYTHONPATH=. "$PY" -m e2e.mock_gateway \
     --fixture "$FIXTURE_DIR" \
     --port "$GATEWAY_PORT" \
     --cadence compressed \
@@ -41,7 +52,8 @@ for _ in $(seq 1 20); do
   sleep 0.5
 done
 if ! curl -sf "http://127.0.0.1:$GATEWAY_PORT/api/health" >/dev/null; then
-  echo "mock-gateway failed to start; log in $RUN_DIR/mock-gateway.log" >&2
+  echo "mock-gateway failed to start; log:" >&2
+  cat "$RUN_DIR/mock-gateway.log" >&2
   bash "$(dirname "$0")/teardown.sh" "$RUN_DIR" || true
   exit 70
 fi
@@ -60,7 +72,8 @@ for _ in $(seq 1 40); do
   sleep 0.5
 done
 if ! curl -sf "http://127.0.0.1:$UI_PORT/" >/dev/null; then
-  echo "UI dev server failed to start; log in $RUN_DIR/ui.log" >&2
+  echo "UI dev server failed to start; log:" >&2
+  tail -30 "$RUN_DIR/ui.log" >&2
   bash "$(dirname "$0")/teardown.sh" "$RUN_DIR" || true
   exit 71
 fi
