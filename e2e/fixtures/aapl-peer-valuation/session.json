@@ -1,0 +1,81 @@
+{
+  "session_id": "sess-f0e9b78c-3637-4725-a351-c3c9e7b877af",
+  "title": "AAPL Peer Valuation Analysis",
+  "executions": [
+    {
+      "execution_id": "exec-aa77cc67-c1fc-4520-a9dd-9c370e33717f",
+      "agent_id": "root",
+      "parent_execution_id": null,
+      "started_at_offset_ms": 0,
+      "ended_at_offset_ms": 1107124
+    },
+    {
+      "execution_id": "exec-bf0bb6d7-b108-47ec-81a9-5fc9ca748e5f",
+      "agent_id": "planner-agent",
+      "parent_execution_id": "exec-aa77cc67-c1fc-4520-a9dd-9c370e33717f",
+      "started_at_offset_ms": 33623,
+      "ended_at_offset_ms": 128721
+    },
+    {
+      "execution_id": "exec-3c233085-2272-48dc-b5e6-24d13d6cdf16",
+      "agent_id": "builder-agent",
+      "parent_execution_id": "exec-aa77cc67-c1fc-4520-a9dd-9c370e33717f",
+      "started_at_offset_ms": 140154,
+      "ended_at_offset_ms": 291739
+    },
+    {
+      "execution_id": "exec-ba27e7ed-4048-42ae-b605-cc3ad10f3495",
+      "agent_id": "builder-agent",
+      "parent_execution_id": "exec-aa77cc67-c1fc-4520-a9dd-9c370e33717f",
+      "started_at_offset_ms": 307434,
+      "ended_at_offset_ms": 427865
+    },
+    {
+      "execution_id": "exec-ec3c2aad-9fb8-450d-a376-4abe4deb053e",
+      "agent_id": "research-agent",
+      "parent_execution_id": "exec-aa77cc67-c1fc-4520-a9dd-9c370e33717f",
+      "started_at_offset_ms": 439174,
+      "ended_at_offset_ms": 647673
+    },
+    {
+      "execution_id": "exec-38c2ad28-fa50-4e63-9e00-4a36903e31c6",
+      "agent_id": "builder-agent",
+      "parent_execution_id": "exec-aa77cc67-c1fc-4520-a9dd-9c370e33717f",
+      "started_at_offset_ms": 661508,
+      "ended_at_offset_ms": 1037834
+    },
+    {
+      "execution_id": "exec-81f11dfb-750f-4aa5-8333-0761ff87fd16",
+      "agent_id": "writing-agent",
+      "parent_execution_id": "exec-aa77cc67-c1fc-4520-a9dd-9c370e33717f",
+      "started_at_offset_ms": 1056970,
+      "ended_at_offset_ms": 1088958
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "art-c9a2950a-8993-4794-b223-8da648025ab7",
+      "file_name": "qualitative_research.json",
+      "file_type": "json",
+      "file_size": 3357
+    },
+    {
+      "id": "art-3cf52255-6bfa-4694-aefe-c698412f6fbb",
+      "file_name": "sentiment_utils.py",
+      "file_type": "py",
+      "file_size": 1054
+    },
+    {
+      "id": "art-e0bc0e2a-8445-48ee-98b8-ef53cec1a1d2",
+      "file_name": "research_qualitative.py",
+      "file_type": "py",
+      "file_size": 3631
+    },
+    {
+      "id": "art-581db2b2-88ea-4b4e-8c0e-0506f8cf0a7c",
+      "file_name": "aapl-valuation-report.md",
+      "file_type": "md",
+      "file_size": 5715
+    }
+  ]
+}

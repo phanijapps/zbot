@@ -1,19 +1,30 @@
 #!/usr/bin/env python3
 """Extract an e2e fixture bundle from a live session.
 
+Two source modes:
+  --gateway-url http://...    talk to a live daemon
+  --db /path/to/conversations.db  read sqlite directly (no daemon needed)
+
 Usage:
+    # From a live daemon
     PYTHONPATH=. python3 e2e/scripts/record-fixture.py \
         --session-id sess-xxx --out e2e/fixtures/aapl-peer-valuation \
         --gateway-url http://127.0.0.1:18791
 
+    # From a stopped daemon's sqlite DB
+    PYTHONPATH=. python3 e2e/scripts/record-fixture.py \
+        --session-id sess-xxx --out e2e/fixtures/aapl-peer-valuation \
+        --db ~/Documents/zbot/data/conversations.db
+
 Emits session.json, llm-responses.jsonl, tool-results.jsonl, ws-events.jsonl.
 
-ws-events.jsonl is reconstructed from execution_logs if a live WS
-capture isn't available. Pass --live-ws <port> to capture instead.
+ws-events.jsonl is reconstructed from execution metadata (lossy). Real
+WS fidelity requires a live-ws capture, which is Phase 2 follow-up.
 """
 import argparse
 import hashlib
 import json
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -53,6 +64,93 @@ def fetch_artifacts(gateway_url: str, session_id: str) -> list[dict]:
     r.raise_for_status()
     payload = r.json()
     return payload if isinstance(payload, list) else payload.get("data", [])
+
+
+def _db_connect(db_path: Path) -> sqlite3.Connection:
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def db_session_rows(con: sqlite3.Connection, session_id: str) -> list[dict]:
+    """Return log-session-shaped rows for a session's executions.
+
+    API quirk preserved: log row's `session_id` field holds the execution
+    id; `conversation_id` holds the real session_id.
+    """
+    session = con.execute(
+        "SELECT id, title FROM sessions WHERE id = ?", (session_id,),
+    ).fetchone()
+    if session is None:
+        return []
+    execs = con.execute(
+        """SELECT id, agent_id, parent_execution_id, status, started_at,
+                  completed_at, tokens_in, tokens_out
+             FROM agent_executions
+            WHERE session_id = ?
+            ORDER BY started_at""",
+        (session_id,),
+    ).fetchall()
+    rows: list[dict] = []
+    for e in execs:
+        rows.append({
+            "session_id": e["id"],
+            "conversation_id": session_id,
+            "agent_id": e["agent_id"],
+            "agent_name": e["agent_id"],
+            "title": session["title"] or "Untitled",
+            "started_at": e["started_at"],
+            "ended_at": e["completed_at"] or e["started_at"],
+            "status": e["status"],
+            "token_count": (e["tokens_in"] or 0) + (e["tokens_out"] or 0),
+            "tool_call_count": 0,
+            "error_count": 0,
+            "duration_ms": 0,
+            "parent_session_id": e["parent_execution_id"],
+            "child_session_ids": [],
+        })
+    return rows
+
+
+def db_messages(con: sqlite3.Connection, session_id: str) -> list[dict]:
+    rows = con.execute(
+        """SELECT id, execution_id, role, content, created_at,
+                  tool_calls, tool_results, tool_call_id
+             FROM messages
+            WHERE session_id = ?
+            ORDER BY created_at""",
+        (session_id,),
+    ).fetchall()
+    out: list[dict] = []
+    for m in rows:
+        out.append({
+            "id": m["id"],
+            "execution_id": m["execution_id"],
+            "role": m["role"],
+            "content": m["content"] or "",
+            "created_at": m["created_at"],
+            "toolCalls": m["tool_calls"],
+            "tool_results": m["tool_results"],
+            "tool_call_id": m["tool_call_id"],
+        })
+    return out
+
+
+def db_artifacts(con: sqlite3.Connection, session_id: str) -> list[dict]:
+    rows = con.execute(
+        """SELECT id, file_name, file_type, file_size
+             FROM artifacts WHERE session_id = ?""",
+        (session_id,),
+    ).fetchall()
+    return [
+        {
+            "id": r["id"],
+            "file_name": r["file_name"] or "",
+            "file_type": r["file_type"] or "",
+            "file_size": r["file_size"] or 0,
+        }
+        for r in rows
+    ]
 
 
 def _parse_ts(s: str) -> float:
@@ -231,15 +329,32 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--session-id", required=True)
     p.add_argument("--out", type=Path, required=True)
-    p.add_argument("--gateway-url", default="http://127.0.0.1:18791")
+    p.add_argument("--gateway-url", default=None,
+                   help="Live daemon URL (mutually exclusive with --db)")
+    p.add_argument("--db", type=Path, default=None,
+                   help="Path to conversations.db (read directly, no daemon)")
     args = p.parse_args()
 
+    if bool(args.db) == bool(args.gateway_url):
+        raise SystemExit("exactly one of --db or --gateway-url is required")
+
     args.out.mkdir(parents=True, exist_ok=True)
-    rows = fetch_session_rows(args.gateway_url, args.session_id)
+
+    if args.db:
+        con = _db_connect(args.db)
+        try:
+            rows = db_session_rows(con, args.session_id)
+            messages = db_messages(con, args.session_id)
+            artifacts = db_artifacts(con, args.session_id)
+        finally:
+            con.close()
+    else:
+        rows = fetch_session_rows(args.gateway_url, args.session_id)
+        messages = fetch_messages(args.gateway_url, args.session_id)
+        artifacts = fetch_artifacts(args.gateway_url, args.session_id)
+
     if not rows:
         raise SystemExit(f"no rows for session {args.session_id}")
-    messages = fetch_messages(args.gateway_url, args.session_id)
-    artifacts = fetch_artifacts(args.gateway_url, args.session_id)
 
     fixture = build_session_fixture(rows, artifacts, args.session_id)
     (args.out / "session.json").write_text(fixture.model_dump_json(indent=2))
