@@ -138,10 +138,11 @@ describe("<ResearchPage>", () => {
     window.confirm = vi.fn(() => true);
   });
 
-  it("renders the empty state when session has no content", () => {
+  it("renders the HeroInput landing when session has no content", () => {
     renderPage();
-    expect(screen.getByText("Research")).toBeTruthy();
-    expect(screen.getByText(/full agent chain/)).toBeTruthy();
+    // HeroInput surfaces the z-Bot brand + the prompt placeholder.
+    expect(screen.getByText("z-Bot")).toBeTruthy();
+    expect(screen.getByPlaceholderText(/What would you like to work on/i)).toBeTruthy();
   });
 
   it("has a drawer-toggle button that is accessible by label", () => {
