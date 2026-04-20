@@ -77,6 +77,7 @@ function ResearchHeader({ state, onOpenDrawer, onNew, onStop, onOpenWard }: Rese
 
       <div className="research-page__title" title={deriveTitle(state)}>
         {deriveTitle(state)}
+        {state.sessionId && <IntentInfoButton sessionId={state.sessionId} />}
       </div>
 
       <div className="research-page__header-actions">
@@ -122,12 +123,6 @@ function IntentLine({ state }: { state: ResearchSessionState }) {
           <>
             {" · ward: "}
             <strong>{state.wardName}</strong>
-          </>
-        )}
-        {state.sessionId && (
-          <>
-            {" "}
-            <IntentInfoButton sessionId={state.sessionId} />
           </>
         )}
       </div>

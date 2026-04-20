@@ -317,17 +317,23 @@ impl<D: DbProvider> LogService<D> {
 
         match session {
             Some(mut session) => {
+                // `session.session_id` now holds the resolved execution id
+                // (exec-*); downstream lookups must use that, not the
+                // caller-supplied value which may be the sess-* conversation
+                // id depending on where the request originated.
+                let exec_id = session.session_id.as_str();
+
                 // Get logs
-                let logs = self.repo.get_session_logs(session_id)?;
+                let logs = self.repo.get_session_logs(exec_id)?;
 
                 // Get children
-                if let Ok(children) = self.repo.get_child_sessions(session_id) {
+                if let Ok(children) = self.repo.get_child_sessions(exec_id) {
                     session.child_session_ids = children;
                 }
 
                 // Enrich title from first user message
-                if let Ok(titles) = self.repo.get_session_titles(&[session_id.to_string()]) {
-                    if let Some(title) = titles.get(session_id) {
+                if let Ok(titles) = self.repo.get_session_titles(&[exec_id.to_string()]) {
+                    if let Some(title) = titles.get(exec_id) {
                         session.title = Some(title.clone());
                     }
                 }
