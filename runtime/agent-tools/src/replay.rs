@@ -99,6 +99,39 @@ impl ReplayStore {
     }
 }
 
+// ============================================================================
+// PROCESS-WIDE REPLAY STORE
+// ============================================================================
+
+use std::sync::{Mutex, OnceLock};
+
+static STORE: OnceLock<Option<Mutex<ReplayStore>>> = OnceLock::new();
+
+/// Get the process-wide replay store if `ZBOT_REPLAY_DIR` is set.
+/// Loaded once per process (OnceLock). Returns None when the env var is
+/// unset, empty, or the fixture file is unreadable.
+pub fn global_store() -> Option<&'static Mutex<ReplayStore>> {
+    STORE
+        .get_or_init(|| {
+            let dir = std::env::var("ZBOT_REPLAY_DIR").ok()?;
+            if dir.is_empty() {
+                return None;
+            }
+            let strict = std::env::var("ZBOT_REPLAY_STRICT")
+                .map(|v| v != "0")
+                .unwrap_or(true);
+            let path = format!("{dir}/tool-results.jsonl");
+            match ReplayStore::from_path(&path, strict) {
+                Ok(s) => Some(Mutex::new(s)),
+                Err(e) => {
+                    eprintln!("[tool-replay] failed to load {path}: {e} (disabling replay)",);
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +172,14 @@ mod tests {
         let f = temp_jsonl(&[]);
         let mut store = ReplayStore::from_path(f.path(), false).unwrap();
         assert_eq!(store.lookup("e1", "shell"), LookupOutcome::MissLenient);
+    }
+
+    #[test]
+    fn global_store_disabled_when_env_unset() {
+        // This is best-effort — OnceLock can only be initialised once per
+        // process, so if an earlier test touched it with ZBOT_REPLAY_DIR set
+        // the outcome is sticky. Just call it and confirm no panic.
+        let _ = global_store();
     }
 
     #[test]

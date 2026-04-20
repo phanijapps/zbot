@@ -1318,6 +1318,45 @@ impl AgentExecutor {
         tool_name: &str,
         arguments: &Value,
     ) -> Result<ToolExecutionResult, String> {
+        // --- Replay intercept ---------------------------------------------------
+        // When ZBOT_REPLAY_DIR is set, look up a recorded result and return it
+        // instead of running the real tool. Strict mode (default) panics on miss;
+        // lenient mode falls through to real execution.
+        if let Some(store) = agent_tools::replay::global_store() {
+            let exec_id =
+                zero_core::ReadonlyContext::invocation_id(shared_ctx.as_ref()).to_string();
+            if let Ok(mut guard) = store.lock() {
+                match guard.lookup(&exec_id, tool_name) {
+                    agent_tools::replay::LookupOutcome::Hit(result) => {
+                        return Ok(ToolExecutionResult {
+                            output: result,
+                            actions: EventActions::default(),
+                        });
+                    }
+                    agent_tools::replay::LookupOutcome::Drift {
+                        expected_tool,
+                        got_tool,
+                    } => {
+                        panic!(
+                            "[tool-replay] drift on exec {exec_id}: expected '{expected_tool}' got '{got_tool}'"
+                        );
+                    }
+                    agent_tools::replay::LookupOutcome::MissStrict {
+                        exec_id: miss_id,
+                        tool_index,
+                    } => {
+                        panic!(
+                            "[tool-replay] strict miss on exec {miss_id} tool_index {tool_index}"
+                        );
+                    }
+                    agent_tools::replay::LookupOutcome::MissLenient => {
+                        // fall through to real execution
+                    }
+                }
+            }
+        }
+        // --- end replay intercept -----------------------------------------------
+
         // First try built-in tools
         if let Some(tool) = self.tool_registry.find(tool_name) {
             // Use shared context that persists across all tool calls in this execution.
