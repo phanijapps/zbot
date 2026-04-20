@@ -9,5 +9,7 @@
   ],
   "pythonVersion": "3.11",
   "typeCheckingMode": "basic",
-  "reportMissingImports": "warning"
+  "reportMissingImports": "warning",
+  "reportUnusedFunction": "none",
+  "reportUnusedVariable": "none"
 }
