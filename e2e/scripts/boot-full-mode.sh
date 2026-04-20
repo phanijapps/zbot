@@ -93,9 +93,7 @@ fi
 
 (
   cd "$REPO/apps/ui"
-  VITE_HTTP_URL="http://127.0.0.1:$GATEWAY_HTTP_PORT" \
-  VITE_WS_URL="ws://127.0.0.1:$GATEWAY_WS_PORT" \
-    npm run dev -- --port "$UI_PORT" \
+  npm run dev -- --port "$UI_PORT" \
     > "$RUN_DIR/ui.log" 2>&1
 ) &
 echo $! > "$RUN_DIR/ui.pid"

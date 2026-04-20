@@ -51,7 +51,12 @@ export function bootFullMode(opts: {
   });
 
   const handle: FullHarnessHandle = {
-    uiUrl(path: string) { return new URL(path, summary.ui_url).toString(); },
+    uiUrl(path: string) {
+      const url = new URL(path, summary.ui_url);
+      url.searchParams.set("gateway_http", summary.gateway_http_url);
+      url.searchParams.set("gateway_ws", summary.gateway_ws_url);
+      return url.toString();
+    },
     gatewayUrl(path: string) {
       return new URL(path, summary.gateway_http_url).toString();
     },

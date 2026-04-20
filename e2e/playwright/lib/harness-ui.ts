@@ -48,7 +48,17 @@ export function bootUIMode(opts: {
   });
 
   const handle: UIHarnessHandle = {
-    uiUrl(path: string) { return new URL(path, summary.ui_url).toString(); },
+    uiUrl(path: string) {
+      // UI reads the gateway from ?gateway_http= + ?gateway_ws= query params
+      // (apps/ui/src/services/transport/index.ts:102-103). Append them to
+      // every navigation so the UI talks to mock-gateway, not localhost:18791.
+      const url = new URL(path, summary.ui_url);
+      const httpBase = summary.mock_gateway_url;
+      const wsBase = httpBase.replace(/^http/, "ws");
+      url.searchParams.set("gateway_http", httpBase);
+      url.searchParams.set("gateway_ws", wsBase);
+      return url.toString();
+    },
     mockGatewayUrl(path: string) {
       return new URL(path, summary.mock_gateway_url).toString();
     },
