@@ -301,6 +301,15 @@ export function useResearchSession() {
       });
       subscribedSessionIdRef.current = sid;
       unsubscribeSessionRef.current = unsub;
+      // Race catch-up: session-scope subscription takes a round-trip to ack
+      // (server response arrives at some seq N > 0). Any session-level events
+      // that fired between invoke_accepted and our ack — typically
+      // delegation_started and the first subagent agent_started — are dropped
+      // forever. Pull a snapshot immediately to backfill those turns from
+      // /api/logs/sessions. Reducer actions are idempotent so any overlap
+      // with live events is harmless.
+      if (cancelled) return;
+      void hydrateFromSnapshot(sid, dispatch, latestArtifactsRef);
     })();
     return () => {
       cancelled = true;
