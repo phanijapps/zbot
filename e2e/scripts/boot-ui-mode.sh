@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Bring up mock-gateway + UI dev server for Mode UI. Prints a JSON
+# summary to stdout with the URLs, or exits non-zero on failure.
+set -euo pipefail
+
+FIXTURE="${1:-}"
+if [[ -z "$FIXTURE" ]]; then
+  echo "usage: boot-ui-mode.sh <fixture-name>" >&2
+  exit 64
+fi
+
+REPO="$(git rev-parse --show-toplevel)"
+FIXTURE_DIR="$REPO/e2e/fixtures/$FIXTURE"
+if [[ ! -d "$FIXTURE_DIR" ]]; then
+  echo "fixture not found: $FIXTURE_DIR" >&2
+  exit 65
+fi
+
+RUN_DIR="$(mktemp -d -t zbot-e2e-ui-XXXXXXXX)"
+echo "$RUN_DIR" > /tmp/zbot-e2e-latest-run-dir
+
+pick_port() { python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1])"; }
+
+GATEWAY_PORT=$(pick_port)
+UI_PORT=$(pick_port)
+
+(
+  cd "$REPO"
+  PYTHONPATH=. python3 -m e2e.mock_gateway \
+    --fixture "$FIXTURE_DIR" \
+    --port "$GATEWAY_PORT" \
+    --cadence compressed \
+    > "$RUN_DIR/mock-gateway.log" 2>&1
+) &
+echo $! > "$RUN_DIR/mock-gateway.pid"
+
+for _ in $(seq 1 20); do
+  if curl -sf "http://127.0.0.1:$GATEWAY_PORT/api/health" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.5
+done
+if ! curl -sf "http://127.0.0.1:$GATEWAY_PORT/api/health" >/dev/null; then
+  echo "mock-gateway failed to start; log in $RUN_DIR/mock-gateway.log" >&2
+  bash "$(dirname "$0")/teardown.sh" "$RUN_DIR" || true
+  exit 70
+fi
+
+(
+  cd "$REPO/apps/ui"
+  VITE_HTTP_URL="http://127.0.0.1:$GATEWAY_PORT" \
+  VITE_WS_URL="ws://127.0.0.1:$GATEWAY_PORT" \
+    npm run dev -- --port "$UI_PORT" \
+    > "$RUN_DIR/ui.log" 2>&1
+) &
+echo $! > "$RUN_DIR/ui.pid"
+
+for _ in $(seq 1 40); do
+  if curl -sf "http://127.0.0.1:$UI_PORT/" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.5
+done
+if ! curl -sf "http://127.0.0.1:$UI_PORT/" >/dev/null; then
+  echo "UI dev server failed to start; log in $RUN_DIR/ui.log" >&2
+  bash "$(dirname "$0")/teardown.sh" "$RUN_DIR" || true
+  exit 71
+fi
+
+cat <<EOF
+{"run_dir":"$RUN_DIR","mock_gateway_url":"http://127.0.0.1:$GATEWAY_PORT","ui_url":"http://127.0.0.1:$UI_PORT","fixture":"$FIXTURE"}
+EOF
