@@ -233,6 +233,7 @@ const navGroups: NavGroup[] = [
     items: [
       { to: "/chat", label: "Chat", icon: MessageSquare },
       { to: "/chat-v2", label: "Quick Chat", icon: MessageSquare, matchPrefix: true, badge: "v2" },
+      { to: "/", label: "Research", icon: Search },
       { to: "/research-v2", label: "Research", icon: Search, matchPrefix: true, badge: "v2" },
       { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { to: "/logs", label: "Logs", icon: Eye },

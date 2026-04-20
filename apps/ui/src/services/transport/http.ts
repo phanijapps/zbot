@@ -1096,6 +1096,7 @@ export class HttpTransport implements Transport {
    * and legacy event systems for backwards compatibility.
    */
   private handleWebSocketMessage(data: StreamEvent): void {
+    console.debug('[WS] message:', data.type, data.session_id ?? '', data.conversation_id ?? '');
     // Try new subscription system first
     if (this.handleSubscriptionMessage(data)) return;
     if (this.handleGlobalMessage(data)) return;
