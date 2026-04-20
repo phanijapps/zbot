@@ -159,3 +159,51 @@ pub async fn get_session_state(
         )),
     }
 }
+
+/// DELETE /api/sessions/:id — hard-delete session and per-session data.
+///
+/// Cascades to `messages`, `agent_executions`, `execution_logs`, `artifacts`
+/// (DB rows only — files on disk stay), `distillation_runs`, `bridge_outbox`,
+/// and `recall_log`. Preserves `memory_facts`, `memory_facts_index` (vec0),
+/// and the knowledge graph so cross-session memory survives a single-session
+/// cleanup.
+///
+/// Returns 204 on success, 404 if the session doesn't exist, 500 on DB error.
+pub async fn delete_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<SessionErrorResponse>)> {
+    // Presence check — distinguish 404 from silent no-op on bogus ids.
+    match state.state_service.get_session(&session_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(SessionErrorResponse {
+                    error: format!("Session not found: {}", session_id),
+                }),
+            ));
+        }
+        Err(e) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SessionErrorResponse {
+                    error: format!("Lookup failed: {}", e),
+                }),
+            ));
+        }
+    }
+
+    match state.state_service.delete_session_cascade(&session_id) {
+        Ok(rows) => {
+            tracing::info!(session_id = %session_id, rows, "deleted session cascade");
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(SessionErrorResponse {
+                error: format!("Delete failed: {}", e),
+            }),
+        )),
+    }
+}

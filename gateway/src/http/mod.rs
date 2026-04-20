@@ -235,6 +235,8 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/sessions/archive", post(sessions::archive_sessions))
         .route("/api/sessions/restore/:id", post(sessions::restore_session))
         .route("/api/sessions/:id/state", get(sessions::get_session_state))
+        // Hard-delete a session with memory-preserving cascade (R18)
+        .route("/api/sessions/:id", delete(sessions::delete_session))
         // Artifact endpoints
         .route(
             "/api/sessions/:session_id/artifacts",

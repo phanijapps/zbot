@@ -299,6 +299,15 @@ export interface Transport {
   /** Delete a log session */
   deleteLogSession(sessionId: string): Promise<TransportResult<void>>;
 
+  /**
+   * Hard-delete a session and its per-session data (messages, executions,
+   * execution logs, artifact pointers, distillation run, bridge outbox
+   * rows, and recall log). Memory facts, vec0 embeddings, and the
+   * knowledge graph are preserved. Files on disk in ward directories
+   * are not touched.
+   */
+  deleteSession(sessionId: string): Promise<TransportResult<void>>;
+
   /** Cleanup old logs */
   cleanupOldLogs(olderThanDays: number): Promise<TransportResult<{ deletedCount: number }>>;
 

@@ -439,6 +439,10 @@ export class HttpTransport implements Transport {
     return this.delete(`/api/logs/sessions/${encodeURIComponent(sessionId)}`);
   }
 
+  async deleteSession(sessionId: string): Promise<TransportResult<void>> {
+    return this.delete(`/api/sessions/${encodeURIComponent(sessionId)}`);
+  }
+
   async cleanupOldLogs(olderThanDays: number): Promise<TransportResult<{ deletedCount: number }>> {
     if (!this.config) {
       return { success: false, error: "Transport not initialized" };
