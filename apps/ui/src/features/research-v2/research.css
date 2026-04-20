@@ -555,10 +555,10 @@
 
 .sessions-list__row {
   display: grid;
-  grid-template-columns: 10px 1fr auto;
+  grid-template-columns: 10px 1fr auto auto;
   grid-template-areas:
-    "dot title time"
-    "dot ward  time";
+    "dot title time delete"
+    "dot ward  time delete";
   gap: 4px 8px;
   align-items: center;
   padding: 6px 8px;
@@ -576,6 +576,34 @@
 
 .sessions-list__row--active {
   background: var(--primary-muted);
+}
+
+.sessions-list__row-delete {
+  grid-area: delete;
+  margin-left: auto;
+  opacity: 0;
+  background: transparent;
+  border: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.sessions-list__row:hover .sessions-list__row-delete,
+.sessions-list__row-delete:focus-visible {
+  opacity: 1;
+}
+
+.sessions-list__row-delete:hover {
+  color: var(--destructive);
+  background: var(--muted);
+}
+
+.sessions-list__row-delete:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 .sessions-list__dot {

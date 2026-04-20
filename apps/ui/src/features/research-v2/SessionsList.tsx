@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import type { SessionSummary } from "./types";
 
 // -------------------------------------------------------------------------
@@ -68,6 +68,7 @@ export interface SessionsListProps {
   currentId: string | null;
   onSelect(id: string): void;
   onNew(): void;
+  onDelete(id: string): void;
   renderDensity: "expanded" | "condensed";
 }
 
@@ -75,15 +76,24 @@ interface SessionsListRowProps {
   session: SessionSummary;
   isActive: boolean;
   onSelect(id: string): void;
+  onDelete(id: string): void;
 }
 
-function SessionsListRow({ session, isActive, onSelect }: SessionsListRowProps) {
+function SessionsListRow({ session, isActive, onSelect, onDelete }: SessionsListRowProps) {
   const dot = STATUS_DOT[session.status];
+  const label = session.title || session.id;
   return (
-    <button
-      type="button"
+    <div
       className={`sessions-list__row${isActive ? " sessions-list__row--active" : ""}`}
+      role="button"
+      tabIndex={0}
       onClick={() => onSelect(session.id)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(session.id);
+        }
+      }}
     >
       <span
         className="sessions-list__dot"
@@ -96,7 +106,20 @@ function SessionsListRow({ session, isActive, onSelect }: SessionsListRowProps) 
         <span className="sessions-list__ward">{session.wardName}</span>
       )}
       <span className="sessions-list__time">{relativeTime(session.updatedAt)}</span>
-    </button>
+      <button
+        type="button"
+        className="sessions-list__row-delete"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete(session.id);
+        }}
+        aria-label={`Delete session ${label}`}
+        title="Delete session"
+        data-testid={`sessions-list-delete-${session.id}`}
+      >
+        <Trash2 size={12} />
+      </button>
+    </div>
   );
 }
 
@@ -105,9 +128,10 @@ interface SessionsListGroupProps {
   sessions: SessionSummary[];
   currentId: string | null;
   onSelect(id: string): void;
+  onDelete(id: string): void;
 }
 
-function SessionsListGroup({ bucket, sessions, currentId, onSelect }: SessionsListGroupProps) {
+function SessionsListGroup({ bucket, sessions, currentId, onSelect, onDelete }: SessionsListGroupProps) {
   if (sessions.length === 0) return null;
   return (
     <div className="sessions-list__group">
@@ -118,6 +142,7 @@ function SessionsListGroup({ bucket, sessions, currentId, onSelect }: SessionsLi
           session={s}
           isActive={s.id === currentId}
           onSelect={onSelect}
+          onDelete={onDelete}
         />
       ))}
     </div>
@@ -129,6 +154,7 @@ export function SessionsList({
   currentId,
   onSelect,
   onNew,
+  onDelete,
   renderDensity,
 }: SessionsListProps) {
   const groups = groupSessions(sessions);
@@ -151,6 +177,7 @@ export function SessionsList({
           sessions={groups[bucket]}
           currentId={currentId}
           onSelect={onSelect}
+          onDelete={onDelete}
         />
       ))}
 

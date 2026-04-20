@@ -91,13 +91,23 @@ export interface UseSessionsListReturn {
   sessions: SessionSummary[];
   loading: boolean;
   refresh: () => Promise<void>;
+  deleteSession: (sessionId: string) => Promise<void>;
 }
 
+// Extracted to keep `deleteSession` under SonarQube cognitive-complexity budget
+// and to centralize the exact confirmation copy (R19 spec).
+const DELETE_CONFIRM_TEXT =
+  "Delete this session permanently?\n\n" +
+  "This removes the conversation, executions, and artifact pointers " +
+  "for this session. Memory facts, embeddings, and knowledge graph " +
+  "entries are preserved. Files on disk are not deleted.";
+
 export function useSessionsList(
-  _opts: UseSessionsListOptions = {},
+  opts: UseSessionsListOptions = {},
 ): UseSessionsListReturn {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(false);
+  const { onAfterDelete } = opts;
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -125,9 +135,21 @@ export function useSessionsList(
     }
   }, []);
 
+  const deleteSession = useCallback(async (sessionId: string) => {
+    if (!window.confirm(DELETE_CONFIRM_TEXT)) return;
+    const transport = await getTransport();
+    const result = await transport.deleteSession(sessionId);
+    if (!result.success) {
+      console.error("Failed to delete session:", result.error);
+      return;
+    }
+    await refresh();
+    onAfterDelete?.(sessionId);
+  }, [refresh, onAfterDelete]);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  return { sessions, loading, refresh };
+  return { sessions, loading, refresh, deleteSession };
 }

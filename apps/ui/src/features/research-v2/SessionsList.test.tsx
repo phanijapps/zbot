@@ -43,76 +43,84 @@ describe("groupSessions", () => {
   });
 });
 
+interface RenderOpts {
+  sessions?: SessionSummary[];
+  currentId?: string | null;
+  onSelect?: (id: string) => void;
+  onNew?: () => void;
+  onDelete?: (id: string) => void;
+}
+
+function renderList(opts: RenderOpts = {}) {
+  return render(
+    <SessionsList
+      sessions={opts.sessions ?? fixture}
+      currentId={opts.currentId ?? null}
+      onSelect={opts.onSelect ?? (() => {})}
+      onNew={opts.onNew ?? (() => {})}
+      onDelete={opts.onDelete ?? (() => {})}
+      renderDensity="expanded"
+    />
+  );
+}
+
 describe("<SessionsList>", () => {
   it("renders group headers and rows", () => {
-    render(
-      <SessionsList
-        sessions={fixture}
-        currentId={null}
-        onSelect={() => {}}
-        onNew={() => {}}
-        renderDensity="expanded"
-      />
-    );
+    renderList();
     expect(screen.getByText("Running")).toBeTruthy();
     expect(screen.getByText("Today done")).toBeTruthy();
   });
 
   it("fires onSelect with the session id on row click", () => {
     const fn = vi.fn();
-    render(
-      <SessionsList
-        sessions={fixture}
-        currentId={null}
-        onSelect={fn}
-        onNew={() => {}}
-        renderDensity="expanded"
-      />
-    );
+    renderList({ onSelect: fn });
     fireEvent.click(screen.getByText("Running one"));
     expect(fn).toHaveBeenCalledWith("s1");
   });
 
   it("fires onNew from the New button", () => {
     const fn = vi.fn();
-    render(
-      <SessionsList
-        sessions={fixture}
-        currentId={null}
-        onSelect={() => {}}
-        onNew={fn}
-        renderDensity="expanded"
-      />
-    );
+    renderList({ onNew: fn });
     fireEvent.click(screen.getByTestId("sessions-list-new"));
     expect(fn).toHaveBeenCalled();
   });
 
   it("shows an empty-state message when no sessions", () => {
-    render(
-      <SessionsList
-        sessions={[]}
-        currentId={null}
-        onSelect={() => {}}
-        onNew={() => {}}
-        renderDensity="expanded"
-      />
-    );
+    renderList({ sessions: [] });
     expect(screen.getByText(/no research sessions yet/i)).toBeTruthy();
   });
 
   it("marks the current row with --active class", () => {
-    const { container } = render(
-      <SessionsList
-        sessions={fixture}
-        currentId="s2"
-        onSelect={() => {}}
-        onNew={() => {}}
-        renderDensity="expanded"
-      />
-    );
+    const { container } = renderList({ currentId: "s2" });
     const active = container.querySelector(".sessions-list__row--active");
     expect(active).not.toBeNull();
     expect(active?.textContent).toContain("Today done");
+  });
+
+  // ---------------------------------------------------------------------------
+  // R19 — per-row Delete button
+  // ---------------------------------------------------------------------------
+
+  it("renders a Delete button for each session row", () => {
+    renderList();
+    for (const s of fixture) {
+      expect(screen.getByTestId(`sessions-list-delete-${s.id}`)).toBeTruthy();
+    }
+  });
+
+  it("Delete click fires onDelete with the session id", () => {
+    const onDelete = vi.fn();
+    renderList({ onDelete });
+    fireEvent.click(screen.getByTestId("sessions-list-delete-s1"));
+    expect(onDelete).toHaveBeenCalledWith("s1");
+  });
+
+  it("Delete click does NOT trigger onSelect (stopPropagation)", () => {
+    const onDelete = vi.fn();
+    const onSelect = vi.fn();
+    renderList({ onDelete, onSelect });
+    fireEvent.click(screen.getByTestId("sessions-list-delete-s1"));
+    expect(onDelete).toHaveBeenCalledWith("s1");
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

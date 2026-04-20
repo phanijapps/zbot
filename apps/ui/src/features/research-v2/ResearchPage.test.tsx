@@ -11,10 +11,15 @@ type OpenWardResult =
   | { success: true; data: { path: string } }
   | { success: false; error: string };
 
-const { openWardMock, toastErrorMock, listArtifactsMock } = vi.hoisted(() => ({
+type DeleteSessionResult =
+  | { success: true; data?: void }
+  | { success: false; error: string };
+
+const { openWardMock, toastErrorMock, listArtifactsMock, deleteSessionMock } = vi.hoisted(() => ({
   openWardMock: vi.fn<(wardId: string) => Promise<OpenWardResult>>(),
   toastErrorMock: vi.fn(),
   listArtifactsMock: vi.fn(),
+  deleteSessionMock: vi.fn<(sessionId: string) => Promise<DeleteSessionResult>>(),
 }));
 
 vi.mock("@/services/transport", () => ({
@@ -22,6 +27,7 @@ vi.mock("@/services/transport", () => ({
     openWard: openWardMock,
     listSessionArtifacts: listArtifactsMock,
     getArtifactContentUrl: () => "about:blank",
+    deleteSession: deleteSessionMock,
   }),
 }));
 
@@ -43,10 +49,20 @@ interface MockListHook {
   sessions: Array<{ id: string; title: string; status: "running" | "complete" | "crashed" | "paused"; wardName: string | null; updatedAt: number }>;
   loading: boolean;
   refresh: ReturnType<typeof vi.fn>;
+  deleteSession: ReturnType<typeof vi.fn>;
+}
+
+interface UseSessionsListOptionsMock {
+  onAfterDelete?: (id: string) => void;
 }
 
 const researchRef: { current: MockResearchHook } = { current: makeIdleResearch() };
-const listRef: { current: MockListHook } = { current: { sessions: [], loading: false, refresh: vi.fn() } };
+const listRef: { current: MockListHook } = {
+  current: { sessions: [], loading: false, refresh: vi.fn(), deleteSession: vi.fn() },
+};
+// Captured so tests can simulate "server delete completed, fire onAfterDelete"
+// without coupling to the real useSessionsList implementation.
+const lastListOptsRef: { current: UseSessionsListOptionsMock } = { current: {} };
 
 function makeIdleResearch(): MockResearchHook {
   const state: ResearchSessionState = {
@@ -87,7 +103,10 @@ vi.mock("./useResearchSession", () => ({
 }));
 
 vi.mock("./useSessionsList", () => ({
-  useSessionsList: () => listRef.current,
+  useSessionsList: (opts?: UseSessionsListOptionsMock) => {
+    lastListOptsRef.current = opts ?? {};
+    return listRef.current;
+  },
 }));
 
 function renderPage() {
@@ -104,12 +123,19 @@ function renderPage() {
 describe("<ResearchPage>", () => {
   beforeEach(() => {
     researchRef.current = makeIdleResearch();
-    listRef.current = { sessions: [], loading: false, refresh: vi.fn() };
+    listRef.current = { sessions: [], loading: false, refresh: vi.fn(), deleteSession: vi.fn() };
+    lastListOptsRef.current = {};
     openWardMock.mockClear();
     openWardMock.mockResolvedValue({ success: true, data: { path: "/vault/wards/x" } });
     toastErrorMock.mockClear();
     listArtifactsMock.mockClear();
     listArtifactsMock.mockResolvedValue({ success: true, data: [] });
+    deleteSessionMock.mockClear();
+    deleteSessionMock.mockResolvedValue({ success: true });
+    // window.confirm is a browser-level primitive — force-accept so the
+    // onAfterDelete code path is exercised without hitting jsdom's "confirm
+    // is not implemented" stub.
+    window.confirm = vi.fn(() => true);
   });
 
   it("renders the empty state when session has no content", () => {
@@ -432,5 +458,35 @@ describe("<ResearchPage>", () => {
     await waitFor(() => {
       expect(listArtifactsMock).toHaveBeenCalledWith("sess-1");
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // R19 — onAfterDelete → startNewResearch wiring
+  // ---------------------------------------------------------------------------
+
+  it("onAfterDelete fires startNewResearch when the current session is the one deleted", () => {
+    const startNewResearch = vi.fn();
+    researchRef.current = {
+      ...makeIdleResearch(),
+      state: { ...makeIdleResearch().state, sessionId: "sess-1" },
+      startNewResearch,
+    };
+    renderPage();
+    // ResearchPage handed the hook an onAfterDelete — simulate the hook calling
+    // it (what a real transport.deleteSession + refresh() would do).
+    lastListOptsRef.current.onAfterDelete?.("sess-1");
+    expect(startNewResearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("onAfterDelete does NOT fire startNewResearch for a different session id", () => {
+    const startNewResearch = vi.fn();
+    researchRef.current = {
+      ...makeIdleResearch(),
+      state: { ...makeIdleResearch().state, sessionId: "sess-1" },
+      startNewResearch,
+    };
+    renderPage();
+    lastListOptsRef.current.onAfterDelete?.("sess-999");
+    expect(startNewResearch).not.toHaveBeenCalled();
   });
 });

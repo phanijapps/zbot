@@ -182,7 +182,11 @@ function MainColumn({ state, onToggleThinking }: MainColumnProps) {
 export function ResearchPage() {
   const { state, pillState, sendMessage, stopAgent, startNewResearch, toggleThinking, getFullArtifact } =
     useResearchSession();
-  const { sessions, refresh: refreshSessions } = useSessionsList();
+  const { sessions, refresh: refreshSessions, deleteSession } = useSessionsList({
+    onAfterDelete: (deletedId) => {
+      if (state.sessionId === deletedId) startNewResearch();
+    },
+  });
   const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [viewingArtifact, setViewingArtifact] = useState<Artifact | null>(null);
@@ -267,6 +271,7 @@ export function ResearchPage() {
         currentId={state.sessionId}
         onSelect={handleSelect}
         onNew={handleNew}
+        onDelete={deleteSession}
       />
 
       <div className="research-page__body">
