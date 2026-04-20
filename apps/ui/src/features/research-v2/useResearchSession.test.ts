@@ -322,9 +322,10 @@ describe("useResearchSession — subscription ordering (R14a)", () => {
     });
 
     // R14g: two subscriptions now — one on the client-minted convId (for
-    // conv-id-routed events) and one on sessionId (scope="session", for
-    // session-routed events like delegation_started, title changes, subagent
-    // lifecycle). Transport seq dedup handles any overlap.
+    // conv-id-routed events) and one on sessionId (scope="all" so child
+    // tool_calls / thinking reach the top pill + inline tickers; server
+    // routes by session_id regardless of scope). Transport seq dedup handles
+    // any overlap.
     expect(subscribeConversation).toHaveBeenCalledTimes(2);
     const subscribedKeys = subscribeConversation.mock.calls.map((c) => c[0]);
     const convId = subscribedKeys.find((k) => k.startsWith("research-"));
@@ -463,7 +464,7 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
       await result.current.sendMessage("hello");
     });
     // R14g: dual subscription — the client-minted convId from sendMessage PLUS
-    // the session-id subscription (scope="session") that kicks in once status
+    // the session-id subscription (scope="all") that kicks in once status
     // flips to "running". Both feed the same handler.
     expect(subscribeConversation).toHaveBeenCalledTimes(2);
     // Grab the convId handler for event injection (both share the same ctx).

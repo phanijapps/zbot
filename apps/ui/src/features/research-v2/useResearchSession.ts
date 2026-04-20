@@ -362,8 +362,14 @@ export function useResearchSession() {
     void (async () => {
       const transport = await getTransport();
       if (cancelled) return;
+      // scope="all" rather than "session" so child tool_calls / thinking
+      // reach us. The server-side session scope filter drops events whose
+      // execution_id isn't a root (see gateway/websocket/subscriptions.rs
+      // should_send_to_scope) — that's what was making the top pill go
+      // silent once a subagent took over. All events for this session
+      // are still routed here because the server keys by session_id.
       const unsub = transport.subscribeConversation(sid, {
-        scope: "session",
+        scope: "all",
         onEvent,
       });
       subscribedSessionIdRef.current = sid;

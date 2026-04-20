@@ -309,6 +309,31 @@
   font-style: italic;
 }
 
+/* --- Live ticker (per-turn) ---------------------------------------------- */
+/* Shows the latest timeline entry (thinking/tool_call/tool_result) while
+ * the turn is running. Truncates with ellipsis, takes the middle slot of
+ * the subagent card header between the agent name and the status meta. */
+.live-ticker {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-style: italic;
+  font-weight: normal;
+  padding: 0 4px;
+}
+
+/* Root avatar row carries the inline ticker next to the bot icon. */
+.root-turn__avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 /* --- Root block: nested subagent cards ---------------------------------- */
 
 .root-turn__subagents {
@@ -343,11 +368,19 @@
 }
 .subagent-card__header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   font-size: 12px;
   margin-bottom: 6px;
   gap: 8px;
+  min-width: 0;
+}
+/* Left-align name + ticker, push meta to the right. */
+.subagent-card__agent {
+  flex-shrink: 0;
+}
+.subagent-card__meta {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .subagent-card__toggle {
   width: 100%;

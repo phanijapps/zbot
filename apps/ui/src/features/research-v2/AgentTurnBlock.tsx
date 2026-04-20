@@ -13,6 +13,62 @@ import {
 import type { AgentTurn, AgentTurnStatus } from "./types";
 import { childrenOf } from "./turn-tree";
 import { AgentAvatar, CopyButton } from "./ResearchMessages";
+import { describeTool } from "../shared/statusPill/tool-phrase";
+
+/**
+ * Per-turn inline live ticker — shows the latest timeline entry while the
+ * turn is running. Picks from the same data the reducer collects for thinking
+ * / tool_call / tool_result events, keyed by execution_id. Hidden once the
+ * turn leaves the running state (status flips to completed/error/stopped).
+ * Used in both SubagentCard headers and the root block.
+ *
+ * Complements the top global StatusPill: the pill is "last event across all
+ * agents", this ticker is per-agent and survives even after the top pill
+ * switches narration to a different agent.
+ */
+const TICKER_MAX_LEN = 60;
+
+function truncate(text: string, max: number): string {
+  return text.length <= max ? text : text.slice(0, max - 1) + "…";
+}
+
+function describeTimelineEntry(turn: AgentTurn): string | null {
+  const last = turn.timeline[turn.timeline.length - 1];
+  if (!last) {
+    return turn.status === "running" ? "waiting…" : null;
+  }
+  if (last.kind === "thinking" || last.kind === "note") {
+    return truncate(last.text, TICKER_MAX_LEN);
+  }
+  if (last.kind === "tool_call" && last.toolName) {
+    const phrase = describeTool(last.toolName, {});
+    const head = phrase.narration || last.toolName;
+    const args = last.toolArgsPreview ? ` ${truncate(last.toolArgsPreview, 30)}` : "";
+    return truncate(`${head}${args}`, TICKER_MAX_LEN);
+  }
+  if (last.kind === "tool_result") {
+    return "↳ done";
+  }
+  if (last.kind === "error") {
+    return truncate(`⚠ ${last.text}`, TICKER_MAX_LEN);
+  }
+  return truncate(last.text, TICKER_MAX_LEN);
+}
+
+interface LiveTickerProps {
+  turn: AgentTurn;
+}
+
+function LiveTicker({ turn }: LiveTickerProps) {
+  if (turn.status !== "running") return null;
+  const text = describeTimelineEntry(turn);
+  if (!text) return null;
+  return (
+    <span className="live-ticker" title={text} aria-live="polite">
+      {text}
+    </span>
+  );
+}
 
 export interface AgentTurnBlockProps {
   turn: AgentTurn;
@@ -186,6 +242,7 @@ function SubagentCard({ turn }: SubagentCardProps) {
         <span className="subagent-card__agent" style={{ color }}>
           {turn.agentId}
         </span>
+        <LiveTicker turn={turn} />
         <span className="subagent-card__meta">
           <StatusIcon status={turn.status} />
           <span>{formatDuration(turn.startedAt, turn.completedAt)}</span>
@@ -231,7 +288,10 @@ function RootTurn({ turn, childTurns, allTurns }: RootTurnProps) {
       className={`research-msg research-msg--assistant${respondIsStreaming(turn) ? " research-msg--streaming" : ""}`}
       data-parent=""
     >
-      <AgentAvatar />
+      <div className="root-turn__avatar-row">
+        <AgentAvatar />
+        <LiveTicker turn={turn} />
+      </div>
       <div className="research-msg__body">
         {childTurns.length > 0 && (
           <div className="root-turn__subagents">

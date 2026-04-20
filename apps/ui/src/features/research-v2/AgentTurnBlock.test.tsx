@@ -109,7 +109,9 @@ describe("<AgentTurnBlock> (root)", () => {
       />,
     );
     expect(screen.getByText("Pending task.")).toBeTruthy();
-    expect(screen.getByText(/waiting/i)).toBeTruthy();
+    // Both the header live-ticker and the response placeholder show
+    // "waiting…" when a running subagent has no timeline entries yet.
+    expect(screen.getAllByText(/waiting/i).length).toBeGreaterThanOrEqual(1);
   });
 
   it("does not render a copy-response button when respond/streaming are empty", () => {
@@ -138,6 +140,52 @@ describe("<AgentTurnBlock> (root)", () => {
     const banner = screen.getByTestId("turn-error-banner");
     expect(banner).toBeTruthy();
     expect(banner.textContent).toContain("Turn ended with no output");
+  });
+
+  it("LiveTicker renders the latest timeline entry while running (R14j)", () => {
+    const root = makeRoot();
+    const child = makeChild({
+      id: "exec-running",
+      request: "Work.",
+      status: "running",
+      respond: null,
+      respondStreaming: "",
+      completedAt: null,
+      timeline: [
+        { id: "e1", at: 1, kind: "thinking", text: "preparing data" },
+        { id: "e2", at: 2, kind: "tool_call", text: "read_file", toolName: "read_file", toolArgsPreview: "plan.md" },
+      ],
+    });
+    render(
+      <AgentTurnBlock
+        turn={root}
+        childTurns={[child]}
+        allTurns={[root, child]}
+      />,
+    );
+    // The ticker shows the latest entry — tool_call for read_file.
+    expect(screen.getByText(/read_file/)).toBeTruthy();
+  });
+
+  it("LiveTicker hides once the turn leaves 'running' (R14j)", () => {
+    const root = makeRoot();
+    const child = makeChild({
+      id: "exec-done",
+      request: "Task.",
+      status: "completed",
+      respond: "done",
+      completedAt: 3000,
+      timeline: [{ id: "e1", at: 1, kind: "thinking", text: "thought something" }],
+    });
+    render(
+      <AgentTurnBlock
+        turn={root}
+        childTurns={[child]}
+        allTurns={[root, child]}
+      />,
+    );
+    // Ticker is hidden on completion (collapsed card header shows only name + meta).
+    expect(screen.queryByText(/thought something/)).toBeNull();
   });
 
   it("subagent card with status=error renders ErrorBanner when expanded (R16)", () => {
