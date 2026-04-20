@@ -18,3 +18,22 @@ Run:
     cd playwright && npx playwright test full-mode/
 
 See `fixtures/README.md` for how to add a new scenario.
+
+## Running a single spec
+
+    cd e2e/playwright
+    npx playwright test ui-mode/simple-qa.ui.spec.ts
+
+## Debugging
+
+- Boot scripts print JSON with run_dir; logs are under `<run_dir>/*.log`.
+- Mock servers expose `/__replay/status` for drift reports.
+- `test-results/` holds traces, screenshots, and videos on failure.
+
+## Adding scenarios
+
+See `fixtures/README.md`.
+
+## Architecture
+
+See `docs/superpowers/specs/2026-04-20-e2e-mock-harness-design.md`.
