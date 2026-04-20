@@ -21,6 +21,7 @@ import { StatusPill } from "../shared/statusPill";
 import { AgentTurnBlock } from "./AgentTurnBlock";
 import { ArtifactStrip } from "./ArtifactStrip";
 import { AssistantMessage, UserMessage } from "./ResearchMessages";
+import { IntentInfoButton } from "./IntentInfoButton";
 import { SessionsDrawer } from "./SessionsDrawer";
 import { useResearchSession } from "./useResearchSession";
 import { useSessionsList } from "./useSessionsList";
@@ -121,6 +122,12 @@ function IntentLine({ state }: { state: ResearchSessionState }) {
           <>
             {" · ward: "}
             <strong>{state.wardName}</strong>
+          </>
+        )}
+        {state.sessionId && (
+          <>
+            {" "}
+            <IntentInfoButton sessionId={state.sessionId} />
           </>
         )}
       </div>
