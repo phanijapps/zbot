@@ -6,7 +6,7 @@ against the real daemon (Task 24 full-mode spec).
 """
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import ClassVar, Optional
 
 
 class ScopeKind(str, Enum):
@@ -19,6 +19,9 @@ class ScopeKind(str, Enum):
 class Scope:
     kind: ScopeKind
     target_id: Optional[str] = None
+
+    ALL: "ClassVar[Scope]"
+    SESSION: "ClassVar[Scope]"
 
     @staticmethod
     def execution(target_id: str) -> "Scope":
