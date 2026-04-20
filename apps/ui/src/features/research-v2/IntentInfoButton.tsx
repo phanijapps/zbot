@@ -48,6 +48,18 @@ export function IntentInfoButton({ sessionId }: IntentInfoButtonProps) {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [open]);
 
+  // Reset cached intent, loading, and error when the session changes.
+  // Without this, navigating to a different session keeps the previously
+  // fetched analysis because the component stays mounted across URL
+  // transitions (same parent ResearchPage) and the open/toggle path only
+  // fetches when `intent === null`.
+  useEffect(() => {
+    setIntent(null);
+    setError(null);
+    setLoading(false);
+    setOpen(false);
+  }, [sessionId]);
+
   const fetchIntent = useCallback(async () => {
     setLoading(true);
     setError(null);
