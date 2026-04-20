@@ -36,6 +36,7 @@ export type {
   CreateMcpRequest,
   McpTestResult,
   MessageResponse,
+  ChatSessionInit,
   SessionMessage,
   MessageScope,
   SessionMessagesQuery,

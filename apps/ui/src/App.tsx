@@ -31,6 +31,8 @@ import { WebOpsDashboard } from "./features/ops/WebOpsDashboard";
 import { MemoryPage } from "./features/memory";
 import { ObservatoryPage } from "./features/observatory";
 import { FastChat } from "./features/chat/FastChat";
+import { QuickChat } from "./features/chat-v2";
+import { ResearchPage } from "./features/research-v2";
 // ChatSlider removed — chat is now the home route, no longer in a slide-over
 import { ThemeToggle } from "./components/ThemeToggle";
 
@@ -185,6 +187,9 @@ function App() {
                   <Route path="/integrations" element={<WebIntegrationsPanel />} />
                   <Route path="/settings" element={<WebSettingsPanel />} />
                   <Route path="/chat" element={<FastChat />} />
+                  <Route path="/chat-v2" element={<QuickChat />} />
+                  <Route path="/research-v2" element={<ResearchPage />} />
+                  <Route path="/research-v2/:sessionId" element={<ResearchPage />} />
                   <Route path="/providers" element={<Navigate to="/settings" replace />} />
                   <Route path="/skills" element={<Navigate to="/agents?tab=skills" replace />} />
                   <Route path="/hooks" element={<Navigate to="/agents?tab=schedules" replace />} />
@@ -213,6 +218,8 @@ interface NavItem {
   to: string;
   label: string;
   icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
+  matchPrefix?: boolean;
+  badge?: string;
 }
 
 interface NavGroup {
@@ -225,7 +232,8 @@ const navGroups: NavGroup[] = [
     // Main group - no label
     items: [
       { to: "/chat", label: "Chat", icon: MessageSquare },
-      { to: "/", label: "Research", icon: Search },
+      { to: "/chat-v2", label: "Quick Chat", icon: MessageSquare, matchPrefix: true, badge: "v2" },
+      { to: "/research-v2", label: "Research", icon: Search, matchPrefix: true, badge: "v2" },
       { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { to: "/logs", label: "Logs", icon: Eye },
       { to: "/memory", label: "Memory", icon: Brain },
@@ -264,7 +272,7 @@ function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
                 <div className="sidebar__group-label">{group.label}</div>
               )}
               {group.items.map((item) => (
-                <NavLink key={item.to} to={item.to} label={item.label} icon={item.icon} />
+                <NavLink key={item.to} to={item.to} label={item.label} icon={item.icon} matchPrefix={item.matchPrefix} badge={item.badge} />
               ))}
             </div>
           ))}
@@ -294,11 +302,15 @@ interface NavLinkProps {
   to: string;
   label: string;
   icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
+  matchPrefix?: boolean;
+  badge?: string;
 }
 
-function NavLink({ to, label, icon: Icon }: NavLinkProps) {
+function NavLink({ to, label, icon: Icon, matchPrefix, badge }: NavLinkProps) {
   const location = useLocation();
-  const isActive = location.pathname === to;
+  const isActive = matchPrefix
+    ? location.pathname.startsWith(to)
+    : location.pathname === to;
 
   return (
     <Link
@@ -306,7 +318,12 @@ function NavLink({ to, label, icon: Icon }: NavLinkProps) {
       className={`nav-link ${isActive ? 'nav-link--active' : ''}`}
     >
       <Icon className="nav-link__icon" />
-      <span className="nav-link__label">{label}</span>
+      <span className="nav-link__label">
+        {label}
+        {badge != null && (
+          <span className="nav-link__badge">{badge}</span>
+        )}
+      </span>
     </Link>
   );
 }

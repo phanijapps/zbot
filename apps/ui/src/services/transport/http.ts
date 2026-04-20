@@ -28,6 +28,7 @@ import type {
   CreateMcpRequest,
   McpTestResult,
   MessageResponse,
+  ChatSessionInit,
   SessionMessage,
   SessionMessagesQuery,
   ToolSettings,
@@ -326,6 +327,27 @@ export class HttpTransport implements Transport {
     return this.get<SessionMessage[]>(url);
   }
 
+  async initChatSession(): Promise<TransportResult<ChatSessionInit>> {
+    return this.post<ChatSessionInit>("/api/chat/init", {});
+  }
+
+  async deleteChatSession(): Promise<TransportResult<void>> {
+    if (!this.config) {
+      return { success: false, error: "Transport not initialized" };
+    }
+    try {
+      const response = await fetch(`${this.config.httpUrl}/api/chat/session`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        return { success: false, error: `HTTP ${response.status}: ${response.statusText}` };
+      }
+      return { success: true, data: undefined };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  }
+
   // =========================================================================
   // Settings Operations
   // =========================================================================
@@ -415,6 +437,10 @@ export class HttpTransport implements Transport {
 
   async deleteLogSession(sessionId: string): Promise<TransportResult<void>> {
     return this.delete(`/api/logs/sessions/${encodeURIComponent(sessionId)}`);
+  }
+
+  async deleteSession(sessionId: string): Promise<TransportResult<void>> {
+    return this.delete(`/api/sessions/${encodeURIComponent(sessionId)}`);
   }
 
   async cleanupOldLogs(olderThanDays: number): Promise<TransportResult<{ deletedCount: number }>> {
@@ -1429,6 +1455,13 @@ export class HttpTransport implements Transport {
   async getWardContent(wardId: string): Promise<TransportResult<WardContent>> {
     return this.get<WardContent>(
       `/api/wards/${encodeURIComponent(wardId)}/content`
+    );
+  }
+
+  async openWard(wardId: string): Promise<TransportResult<{ path: string }>> {
+    return this.post<{ path: string }>(
+      `/api/wards/${encodeURIComponent(wardId)}/open`,
+      {},
     );
   }
 

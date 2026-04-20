@@ -28,6 +28,7 @@ mod setup;
 mod skills;
 mod tools;
 mod upload;
+mod ward_actions;
 mod ward_content;
 mod webhooks;
 
@@ -213,6 +214,11 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
             "/api/wards/:ward_id/content",
             get(ward_content::get_ward_content),
         )
+        // Ward actions — opens folder in native OS file browser (R14c)
+        .route(
+            "/api/wards/:ward_id/open",
+            post(ward_actions::open_ward_folder),
+        )
         // Upload endpoint
         .route(
             "/api/upload",
@@ -220,6 +226,7 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         )
         // Chat session endpoints
         .route("/api/chat/init", post(chat::init_chat_session))
+        .route("/api/chat/session", delete(chat::clear_chat_session))
         .route(
             "/api/sessions/:session_id/messages",
             get(chat::get_session_messages),
@@ -228,6 +235,8 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/sessions/archive", post(sessions::archive_sessions))
         .route("/api/sessions/restore/:id", post(sessions::restore_session))
         .route("/api/sessions/:id/state", get(sessions::get_session_state))
+        // Hard-delete a session with memory-preserving cascade (R18)
+        .route("/api/sessions/:id", delete(sessions::delete_session))
         // Artifact endpoints
         .route(
             "/api/sessions/:session_id/artifacts",

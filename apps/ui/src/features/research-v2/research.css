@@ -1,0 +1,701 @@
+/* =============================================================================
+   research.css — ResearchPage + all research-v2 sub-component styles.
+   Theme tokens only — no hardcoded colours.
+   ============================================================================= */
+
+/* --- Page shell ------------------------------------------------------------ */
+
+.research-page {
+  /* R14b: subagent nesting */
+  --turn-indent: 20px;
+  --turn-gap: 12px;
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* --- Header ---------------------------------------------------------------- */
+
+.research-page__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.research-page__title {
+  flex: 1;
+  text-align: center;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.research-page__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.research-page__ward-chip {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: var(--primary-muted);
+  color: var(--primary);
+}
+
+/* Clickable button variant — opens the ward folder in the OS file browser (R14c). */
+.research-page__ward-chip--clickable {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  transition: background 120ms ease;
+  font: inherit;
+  color: inherit;
+}
+.research-page__ward-chip--clickable:hover {
+  background: var(--muted);
+}
+.research-page__ward-chip--clickable:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* --- Pill strip ------------------------------------------------------------ */
+
+.research-page__pill-strip {
+  display: flex;
+  justify-content: center;
+  padding: 8px 20px 0;
+  min-height: 36px;
+}
+
+/* --- Scrollable body ------------------------------------------------------- */
+
+.research-page__body {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.research-page__column {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* --- Empty state ----------------------------------------------------------- */
+
+.research-page__empty {
+  text-align: center;
+  padding: 80px 0;
+}
+
+.research-page__empty h1 {
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.research-page__empty p {
+  color: var(--muted-foreground);
+}
+
+/* --- User query bubble ----------------------------------------------------- */
+
+.research-page__user-bubble {
+  align-self: flex-end;
+  max-width: 80%;
+  padding: 10px 14px;
+  background: var(--primary-muted);
+  border-radius: 14px 14px 2px 14px;
+  font-size: 14px;
+  color: var(--foreground);
+  white-space: pre-wrap;
+}
+
+/* --- Assistant message (hydrated history) --------------------------------- */
+/* Live responses render inside turn blocks; this is only for the reload /
+   session-switch path where we only have messages[], not rebuilt turns. */
+.research-page__assistant {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--foreground);
+  align-self: stretch;
+}
+
+/* --- Message shells + adornments ----------------------------------------- */
+
+.research-msg {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  position: relative;
+}
+/* User message stays right-aligned and horizontally packed. */
+.research-msg--user {
+  justify-content: flex-end;
+}
+/* Assistant message stacks: avatar on top, message below, copy tucked
+ * under the body on the left. Gives the response room to breathe. */
+.research-msg--assistant {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.research-msg__avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--muted);
+  padding: 3px;
+}
+.research-msg__body {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+}
+.research-msg__copy {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  color: var(--muted-foreground);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+/* Assistant copy sits under the message, left-aligned. */
+.research-msg--assistant .research-msg__copy {
+  align-self: flex-start;
+  margin-left: 0;
+}
+.research-msg:hover .research-msg__copy,
+.research-msg__copy:focus-visible {
+  opacity: 1;
+  border-color: var(--border);
+}
+.research-msg__copy:hover {
+  background: var(--muted);
+}
+.research-msg__copy:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* --- Intent lines ---------------------------------------------------------- */
+
+.research-page__intent-muted {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.research-page__intent-classification {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+/* --- Composer -------------------------------------------------------------- */
+
+.research-page__composer {
+  border-top: 1px solid var(--border);
+  padding: 12px 20px;
+  max-width: 880px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* =============================================================================
+   AgentTurnBlock styles
+   ============================================================================= */
+
+.agent-turn-block {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--background-surface);
+  border: 1px solid var(--border);
+}
+
+.agent-turn-block__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.agent-turn-block__agent {
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+}
+
+.agent-turn-block__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+}
+
+.agent-turn-block__running {
+  color: var(--success);
+}
+
+.agent-turn-block__chevron {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  padding: 0;
+}
+
+.agent-turn-block__chevron svg {
+  transition: transform 150ms ease;
+}
+
+.agent-turn-block__timeline {
+  padding-left: 16px;
+  border-left: 1px dashed var(--border);
+  margin: 8px 0;
+}
+
+.agent-turn-block__respond {
+  font-size: 14px;
+  line-height: 1.6;
+  margin-top: 4px;
+  color: var(--foreground);
+}
+
+.agent-turn-block__respond--streaming {
+  opacity: 0.85;
+}
+
+.agent-turn-block__streaming {
+  opacity: 0.85;
+}
+.agent-turn-block__streaming > *:last-child::after {
+  content: "▊";
+  color: var(--primary);
+  margin-left: 2px;
+  animation: agent-turn-block-cursor 1s steps(2, end) infinite;
+}
+@keyframes agent-turn-block-cursor {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.agent-turn-block__placeholder {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+/* --- Root block: nested subagent cards ---------------------------------- */
+
+.root-turn__subagents {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+/* --- Subagent cards (request + response) --------------------------------- */
+
+.subagent-card {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--background-surface);
+  border: 1px solid var(--border);
+  position: relative;
+}
+.subagent-card-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.subagent-card-tree__nested {
+  margin-left: var(--turn-indent);
+  padding-left: 12px;
+  border-left: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--turn-gap);
+  margin-top: 6px;
+}
+.subagent-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  margin-bottom: 6px;
+  gap: 8px;
+}
+.subagent-card__toggle {
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  color: inherit;
+  text-align: left;
+}
+.subagent-card__toggle:hover {
+  opacity: 0.85;
+}
+.subagent-card__toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.subagent-card__chevron {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted-foreground);
+}
+.subagent-card[data-expanded="false"] {
+  padding: 6px 12px;
+}
+.subagent-card[data-expanded="false"] .subagent-card__header {
+  margin-bottom: 0;
+}
+.subagent-card__agent {
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+}
+.subagent-card__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+}
+.subagent-card__section {
+  margin-top: 6px;
+}
+.subagent-card__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted-foreground);
+  margin-bottom: 2px;
+}
+.subagent-card__text {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--foreground);
+}
+.subagent-card .research-msg__copy {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  opacity: 0;
+}
+.subagent-card:hover .research-msg__copy {
+  opacity: 1;
+}
+
+.agent-turn-block__error {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--destructive);
+  background: var(--destructive-muted);
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-style: italic;
+}
+
+/* Nested subagent turns (R14b) — indented, dashed guide line. */
+.agent-turn-block__children {
+  margin-left: var(--turn-indent);
+  padding-left: var(--turn-gap);
+  border-left: 1px dashed var(--border);
+  margin-top: var(--turn-gap);
+  display: flex;
+  flex-direction: column;
+  gap: var(--turn-gap);
+}
+
+/* =============================================================================
+   ThinkingTimeline styles
+   ============================================================================= */
+
+.thinking-timeline {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.thinking-timeline__item {
+  font-size: 12px;
+  display: grid;
+  grid-template-columns: 68px 1fr;
+  gap: 8px;
+  padding: 2px 0;
+  color: var(--muted-foreground);
+}
+
+.thinking-timeline__item--tool_call {
+  color: var(--blue);
+}
+
+.thinking-timeline__item--tool_result {
+  color: var(--muted-foreground);
+}
+
+.thinking-timeline__time {
+  font-family: ui-monospace, monospace;
+  color: var(--muted-foreground);
+}
+
+.thinking-timeline__preview {
+  font-family: ui-monospace, monospace;
+  color: var(--muted-foreground);
+}
+
+.thinking-timeline__label {
+  color: var(--muted-foreground);
+}
+
+.thinking-timeline__empty {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+/* =============================================================================
+   Sessions drawer
+   ============================================================================= */
+
+.sessions-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 280px;
+  background: var(--background);
+  border-right: 1px solid var(--border);
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.2);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  animation: sessions-drawer-in 150ms ease-out;
+}
+
+.sessions-drawer__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.25);
+  z-index: 40;
+  border: none;
+  cursor: default;
+}
+
+.sessions-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+/* --- Sessions list --------------------------------------------------------- */
+
+.sessions-list {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.sessions-list__new {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.sessions-list__group-title {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 8px 4px 4px;
+}
+
+.sessions-list__row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto auto;
+  grid-template-areas:
+    "dot title time delete"
+    "dot ward  time delete";
+  gap: 4px 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--foreground);
+}
+
+.sessions-list__row:hover {
+  background: var(--background-elevated);
+}
+
+.sessions-list__row--active {
+  background: var(--primary-muted);
+}
+
+.sessions-list__row-delete {
+  grid-area: delete;
+  margin-left: auto;
+  opacity: 0;
+  background: transparent;
+  border: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.sessions-list__row:hover .sessions-list__row-delete,
+.sessions-list__row-delete:focus-visible {
+  opacity: 1;
+}
+
+.sessions-list__row-delete:hover {
+  color: var(--destructive);
+  background: var(--muted);
+}
+
+.sessions-list__row-delete:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.sessions-list__dot {
+  grid-area: dot;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.sessions-list__title {
+  grid-area: title;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessions-list__ward {
+  grid-area: ward;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.sessions-list__time {
+  grid-area: time;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.sessions-list__empty {
+  padding: 20px;
+  color: var(--muted-foreground);
+  text-align: center;
+  font-size: 12px;
+}
+
+@keyframes sessions-drawer-in {
+  from {
+    transform: translateX(-10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* =============================================================================
+   ArtifactStrip (R14d) — chips sit above the composer.
+   ============================================================================= */
+
+.research-artifacts {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 8px 0;
+  max-width: 880px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.research-artifact-chip {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--foreground);
+  cursor: pointer;
+  white-space: nowrap;
+  font: inherit;
+  font-size: 12px;
+  transition: background 120ms ease;
+}
+.research-artifact-chip:hover {
+  background: var(--muted);
+}
+.research-artifact-chip:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.research-artifact-chip__icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted-foreground);
+}
+
+.research-artifact-chip__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}

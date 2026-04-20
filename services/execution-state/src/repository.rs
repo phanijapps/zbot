@@ -388,6 +388,76 @@ impl<D: StateDbProvider> StateRepository<D> {
         })
     }
 
+    /// Delete a session and all per-session rows in a single transaction.
+    ///
+    /// **Deletes**: `sessions`, `messages`, `agent_executions`, `execution_logs`,
+    /// `artifacts` (DB pointers only — files on disk in ward dirs are kept),
+    /// `distillation_runs`, `bridge_outbox`, `recall_log`.
+    ///
+    /// **Preserves**: `memory_facts`, `memory_facts_index` (vec0 embeddings),
+    /// knowledge graph tables (`kg_entities`, `kg_relationships`, etc.), and
+    /// all files on disk under `~/Documents/zbot/wards/...`. Users rely on
+    /// cross-session memory surviving a single-session cleanup.
+    ///
+    /// All child tables use `session_id` as their FK column. `execution_logs`
+    /// also carries a `parent_session_id` column for parent-session linkage,
+    /// but `session_id` is the owner column so we only match on that. The
+    /// `agent_executions.child_session_id` column is NOT matched here — the
+    /// caller is expected to invoke this method per session (child sessions
+    /// are separate calls made by the UI).
+    ///
+    /// Runs every `DELETE` inside one transaction via `unchecked_transaction()`
+    /// (the `with_connection` trait hands us `&Connection`, not `&mut`). Any
+    /// error aborts the transaction and rolls back cleanly.
+    ///
+    /// Returns the total number of rows deleted across all cascaded tables
+    /// (informational; primarily for logging and tests). Deleting a non-existent
+    /// session returns `Ok(0)` — callers that need a presence check should
+    /// query first.
+    pub fn delete_session_cascade(&self, session_id: &str) -> Result<usize, String> {
+        self.db.with_connection(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let mut total = 0usize;
+            // Child tables keyed by session_id. Order doesn't matter inside a
+            // transaction; we still delete child rows before the sessions row
+            // so FK checks (if enabled) stay happy step-by-step.
+            total += tx.execute(
+                "DELETE FROM messages WHERE session_id = ?",
+                params![session_id],
+            )?;
+            total += tx.execute(
+                "DELETE FROM agent_executions WHERE session_id = ?",
+                params![session_id],
+            )?;
+            total += tx.execute(
+                "DELETE FROM execution_logs WHERE session_id = ?",
+                params![session_id],
+            )?;
+            total += tx.execute(
+                "DELETE FROM artifacts WHERE session_id = ?",
+                params![session_id],
+            )?;
+            total += tx.execute(
+                "DELETE FROM distillation_runs WHERE session_id = ?",
+                params![session_id],
+            )?;
+            total += tx.execute(
+                "DELETE FROM bridge_outbox WHERE session_id = ?",
+                params![session_id],
+            )?;
+            total += tx.execute(
+                "DELETE FROM recall_log WHERE session_id = ?",
+                params![session_id],
+            )?;
+            total += tx.execute("DELETE FROM sessions WHERE id = ?", params![session_id])?;
+            // Intentionally NOT touched: memory_facts, memory_facts_index,
+            // kg_entities, kg_relationships, kg_causal_edges. Those are
+            // cross-session state the user expects to survive this delete.
+            tx.commit()?;
+            Ok(total)
+        })
+    }
+
     /// Delete sessions older than a given timestamp.
     /// Returns the number of deleted sessions.
     pub fn delete_old_sessions(&self, older_than: &str) -> Result<u64, String> {
@@ -1287,6 +1357,405 @@ mod tests {
 
         repo.delete_session(&session.id).unwrap();
         assert!(repo.get_session(&session.id).unwrap().is_none());
+    }
+
+    // ========================================================================
+    // Cascade Delete Tests (R18)
+    //
+    // The base TestDbProvider only creates sessions/agent_executions/messages.
+    // `delete_session_cascade` touches seven child tables plus a memory_facts
+    // table that MUST survive — so these tests use a richer in-memory schema.
+    // ========================================================================
+
+    /// In-memory DB provider with every table `delete_session_cascade` reads
+    /// or asserts on. Deliberately mirrors the production column names from
+    /// `gateway/gateway-database/src/schema.rs` so the real cascade SQL runs.
+    struct CascadeDbProvider {
+        conn: Mutex<Connection>,
+    }
+
+    impl CascadeDbProvider {
+        fn new() -> Self {
+            let conn = Connection::open_in_memory().expect("in-memory db");
+            conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'running',
+                    source TEXT NOT NULL DEFAULT 'web',
+                    root_agent_id TEXT NOT NULL,
+                    title TEXT,
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    total_tokens_in INTEGER NOT NULL DEFAULT 0,
+                    total_tokens_out INTEGER NOT NULL DEFAULT 0,
+                    metadata TEXT,
+                    pending_delegations INTEGER DEFAULT 0,
+                    continuation_needed INTEGER DEFAULT 0,
+                    ward_id TEXT,
+                    parent_session_id TEXT,
+                    thread_id TEXT,
+                    connector_id TEXT,
+                    respond_to TEXT,
+                    mode TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_executions (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    parent_execution_id TEXT,
+                    delegation_type TEXT NOT NULL DEFAULT 'root',
+                    task TEXT,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    started_at TEXT,
+                    completed_at TEXT,
+                    tokens_in INTEGER NOT NULL DEFAULT 0,
+                    tokens_out INTEGER NOT NULL DEFAULT 0,
+                    checkpoint TEXT,
+                    error TEXT,
+                    log_path TEXT,
+                    child_session_id TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS messages (
+                    id TEXT PRIMARY KEY,
+                    execution_id TEXT,
+                    session_id TEXT,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    token_count INTEGER DEFAULT 0,
+                    tool_calls TEXT,
+                    tool_results TEXT,
+                    tool_call_id TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS execution_logs (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    conversation_id TEXT,
+                    agent_id TEXT NOT NULL,
+                    parent_session_id TEXT,
+                    timestamp TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    metadata TEXT,
+                    duration_ms INTEGER
+                );
+
+                CREATE TABLE IF NOT EXISTS artifacts (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    ward_id TEXT,
+                    execution_id TEXT,
+                    agent_id TEXT,
+                    file_path TEXT NOT NULL,
+                    file_name TEXT NOT NULL,
+                    file_type TEXT,
+                    file_size INTEGER,
+                    label TEXT,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS distillation_runs (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS bridge_outbox (
+                    id TEXT PRIMARY KEY,
+                    adapter_id TEXT NOT NULL,
+                    capability TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    session_id TEXT,
+                    thread_id TEXT,
+                    agent_id TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS recall_log (
+                    session_id TEXT NOT NULL,
+                    fact_key TEXT NOT NULL,
+                    recalled_at TEXT NOT NULL,
+                    PRIMARY KEY (session_id, fact_key)
+                );
+
+                CREATE TABLE IF NOT EXISTS memory_facts (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    agent_id TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    ward_id TEXT NOT NULL DEFAULT '__global__',
+                    created_at TEXT NOT NULL
+                );
+
+                -- Knowledge graph tables — presence only, to prove the
+                -- cascade doesn't reference or touch them.
+                CREATE TABLE IF NOT EXISTS kg_entities (
+                    id TEXT PRIMARY KEY,
+                    agent_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS kg_relationships (
+                    id TEXT PRIMARY KEY,
+                    agent_id TEXT NOT NULL,
+                    source_entity_id TEXT NOT NULL,
+                    target_entity_id TEXT NOT NULL,
+                    relationship TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                "#,
+            )
+            .expect("create cascade schema");
+            Self {
+                conn: Mutex::new(conn),
+            }
+        }
+    }
+
+    impl StateDbProvider for CascadeDbProvider {
+        fn with_connection<F, R>(&self, f: F) -> Result<R, String>
+        where
+            F: FnOnce(&Connection) -> Result<R, rusqlite::Error>,
+        {
+            let conn = self.conn.lock().map_err(|e| e.to_string())?;
+            f(&conn).map_err(|e| e.to_string())
+        }
+    }
+
+    fn cascade_repo() -> (Arc<CascadeDbProvider>, StateRepository<CascadeDbProvider>) {
+        let db = Arc::new(CascadeDbProvider::new());
+        let repo = StateRepository::new(db.clone());
+        (db, repo)
+    }
+
+    fn count_rows(db: &CascadeDbProvider, table: &str, col: &str, val: &str) -> i64 {
+        let sql = format!("SELECT COUNT(*) FROM {} WHERE {} = ?", table, col);
+        db.with_connection(|conn| conn.query_row(&sql, params![val], |row| row.get::<_, i64>(0)))
+            .unwrap()
+    }
+
+    fn seed_cascade_fixture(
+        db: &CascadeDbProvider,
+        repo: &StateRepository<CascadeDbProvider>,
+        sid: &str,
+    ) {
+        // 1 session (via the real repository so all columns align).
+        let mut session = Session::new_with_source("root", TriggerSource::Web);
+        session.id = sid.to_string();
+        repo.create_session(&session).unwrap();
+
+        // Child rows have ids prefixed with the session id so multiple calls
+        // to this helper within one test don't collide on PRIMARY KEY.
+        let exec_id = format!("exec-{}", sid);
+        let msg_id = format!("msg-{}", sid);
+        let log_id = format!("log-{}", sid);
+        let art_id = format!("art-{}", sid);
+        let dr_id = format!("dr-{}", sid);
+        let ob_id = format!("ob-{}", sid);
+
+        // 1 execution + 1 message + 1 execution_log + 1 artifact
+        // + 1 distillation_run + 1 bridge_outbox + 1 recall_log.
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO agent_executions (id, session_id, agent_id, delegation_type, status) \
+                 VALUES (?1, ?2, ?3, 'root', 'running')",
+                params![exec_id, sid, "root"],
+            )?;
+            conn.execute(
+                "INSERT INTO messages (id, execution_id, session_id, role, content, created_at) \
+                 VALUES (?1, ?2, ?3, 'user', 'hello', '2026-04-19T00:00:00Z')",
+                params![msg_id, exec_id, sid],
+            )?;
+            conn.execute(
+                "INSERT INTO execution_logs (id, session_id, agent_id, timestamp, level, category, message) \
+                 VALUES (?1, ?2, 'root', '2026-04-19T00:00:00Z', 'info', 'test', 'log')",
+                params![log_id, sid],
+            )?;
+            conn.execute(
+                "INSERT INTO artifacts (id, session_id, file_path, file_name, created_at) \
+                 VALUES (?1, ?2, '/tmp/note.md', 'note.md', '2026-04-19T00:00:00Z')",
+                params![art_id, sid],
+            )?;
+            conn.execute(
+                "INSERT INTO distillation_runs (id, session_id, status, created_at) \
+                 VALUES (?1, ?2, 'completed', '2026-04-19T00:00:00Z')",
+                params![dr_id, sid],
+            )?;
+            conn.execute(
+                "INSERT INTO bridge_outbox (id, adapter_id, capability, payload, status, session_id, created_at) \
+                 VALUES (?1, 'adp', 'cap', '{}', 'pending', ?2, '2026-04-19T00:00:00Z')",
+                params![ob_id, sid],
+            )?;
+            conn.execute(
+                "INSERT INTO recall_log (session_id, fact_key, recalled_at) VALUES (?1, 'k', '2026-04-19T00:00:00Z')",
+                params![sid],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn seed_memory_fact(db: &CascadeDbProvider, id: &str, content: &str) {
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO memory_facts (id, agent_id, scope, category, key, content, created_at) \
+                 VALUES (?1, 'root', 'agent', 'note', 'k', ?2, '2026-04-19T00:00:00Z')",
+                params![id, content],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn seed_kg_entity(db: &CascadeDbProvider, id: &str, name: &str) {
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO kg_entities (id, agent_id, name, created_at) \
+                 VALUES (?1, 'root', ?2, '2026-04-19T00:00:00Z')",
+                params![id, name],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn seed_kg_relationship(db: &CascadeDbProvider, id: &str, src: &str, dst: &str) {
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO kg_relationships (id, agent_id, source_entity_id, target_entity_id, relationship, created_at) \
+                 VALUES (?1, 'root', ?2, ?3, 'related_to', '2026-04-19T00:00:00Z')",
+                params![id, src, dst],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn delete_session_cascade_removes_per_session_rows() {
+        let (db, repo) = cascade_repo();
+        let sid = "sess-cascade-1";
+        seed_cascade_fixture(&db, &repo, sid);
+
+        // Sanity: everything we seeded is there.
+        assert_eq!(count_rows(&db, "sessions", "id", sid), 1);
+        assert_eq!(count_rows(&db, "messages", "session_id", sid), 1);
+        assert_eq!(count_rows(&db, "agent_executions", "session_id", sid), 1);
+        assert_eq!(count_rows(&db, "execution_logs", "session_id", sid), 1);
+        assert_eq!(count_rows(&db, "artifacts", "session_id", sid), 1);
+        assert_eq!(count_rows(&db, "distillation_runs", "session_id", sid), 1);
+        assert_eq!(count_rows(&db, "bridge_outbox", "session_id", sid), 1);
+        assert_eq!(count_rows(&db, "recall_log", "session_id", sid), 1);
+
+        let deleted = repo.delete_session_cascade(sid).unwrap();
+        // 1 session + 1 per each of the 7 child tables = 8.
+        assert_eq!(deleted, 8, "expected 8 rows deleted, got {deleted}");
+
+        // Every per-session table is empty for this id.
+        assert_eq!(count_rows(&db, "sessions", "id", sid), 0);
+        assert_eq!(count_rows(&db, "messages", "session_id", sid), 0);
+        assert_eq!(count_rows(&db, "agent_executions", "session_id", sid), 0);
+        assert_eq!(count_rows(&db, "execution_logs", "session_id", sid), 0);
+        assert_eq!(count_rows(&db, "artifacts", "session_id", sid), 0);
+        assert_eq!(count_rows(&db, "distillation_runs", "session_id", sid), 0);
+        assert_eq!(count_rows(&db, "bridge_outbox", "session_id", sid), 0);
+        assert_eq!(count_rows(&db, "recall_log", "session_id", sid), 0);
+
+        assert!(repo.get_session(sid).unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_session_cascade_preserves_memory_facts() {
+        let (db, repo) = cascade_repo();
+        let sid = "sess-cascade-2";
+        seed_cascade_fixture(&db, &repo, sid);
+        seed_memory_fact(&db, "fact-1", "persistent fact");
+        seed_memory_fact(&db, "fact-2", "another fact");
+
+        repo.delete_session_cascade(sid).unwrap();
+
+        // Memory facts survive — cross-session state users rely on.
+        assert_eq!(
+            count_rows(&db, "memory_facts", "content", "persistent fact"),
+            1,
+            "memory_facts was touched by the cascade — that's the invariant violation we're guarding against"
+        );
+        assert_eq!(
+            count_rows(&db, "memory_facts", "content", "another fact"),
+            1
+        );
+    }
+
+    #[test]
+    fn delete_session_cascade_preserves_knowledge_graph() {
+        let (db, repo) = cascade_repo();
+        let sid = "sess-cascade-3";
+        seed_cascade_fixture(&db, &repo, sid);
+        seed_kg_entity(&db, "ent-1", "FooCorp");
+        seed_kg_entity(&db, "ent-2", "BarCorp");
+        seed_kg_relationship(&db, "rel-1", "ent-1", "ent-2");
+
+        repo.delete_session_cascade(sid).unwrap();
+
+        assert_eq!(count_rows(&db, "kg_entities", "id", "ent-1"), 1);
+        assert_eq!(count_rows(&db, "kg_entities", "id", "ent-2"), 1);
+        assert_eq!(count_rows(&db, "kg_relationships", "id", "rel-1"), 1);
+    }
+
+    #[test]
+    fn delete_session_cascade_on_missing_session_returns_ok_zero() {
+        let (_db, repo) = cascade_repo();
+        let rows = repo.delete_session_cascade("sess-does-not-exist").unwrap();
+        assert_eq!(rows, 0, "missing session should be a no-op, not an error");
+    }
+
+    #[test]
+    fn delete_session_cascade_only_deletes_target_session() {
+        // Two sessions side-by-side; deleting one must not touch the other.
+        let (db, repo) = cascade_repo();
+        seed_cascade_fixture(&db, &repo, "sess-keep");
+        seed_cascade_fixture(&db, &repo, "sess-kill");
+
+        let deleted = repo.delete_session_cascade("sess-kill").unwrap();
+        assert_eq!(deleted, 8);
+
+        // Survivor is fully intact.
+        assert_eq!(count_rows(&db, "sessions", "id", "sess-keep"), 1);
+        assert_eq!(count_rows(&db, "messages", "session_id", "sess-keep"), 1);
+        assert_eq!(
+            count_rows(&db, "agent_executions", "session_id", "sess-keep"),
+            1
+        );
+        assert_eq!(
+            count_rows(&db, "execution_logs", "session_id", "sess-keep"),
+            1
+        );
+        assert_eq!(count_rows(&db, "artifacts", "session_id", "sess-keep"), 1);
+        assert_eq!(
+            count_rows(&db, "distillation_runs", "session_id", "sess-keep"),
+            1
+        );
+        assert_eq!(
+            count_rows(&db, "bridge_outbox", "session_id", "sess-keep"),
+            1
+        );
+        assert_eq!(count_rows(&db, "recall_log", "session_id", "sess-keep"), 1);
+
+        // Target is fully gone.
+        assert_eq!(count_rows(&db, "sessions", "id", "sess-kill"), 0);
+        assert_eq!(count_rows(&db, "messages", "session_id", "sess-kill"), 0);
     }
 
     // ========================================================================

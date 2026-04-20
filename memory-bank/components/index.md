@@ -21,6 +21,9 @@ Quick reference for all system components. Check this before planning changes.
 | Component | Location | Description |
 |-----------|----------|-------------|
 | Chat Experience | [chat-experience/overview.md](chat-experience/overview.md) | 3-panel chat UI: center (message → phases → response), sidebar (intent, ward, facts, subagents, plan). Session State API for reconnection. |
+| Chat v2 | [chat-v2/overview.md](chat-v2/overview.md) | `/chat-v2` page. Shares the reserved session with `/chat` (same `settings.chat` slot, `mode=fast`). Two-row status pill, artifact strip + slide-out, Clear button. |
+| — Learnings | [chat-v2/learnings.md](chat-v2/learnings.md) | Hard-earned rules from the build — **apply these to any new UI plan** (server-owned identity, deterministic pill, wire-format field drift, StrictMode-safe bootstrap, etc.). |
+| — Backlog | [chat-v2/backlog.md](chat-v2/backlog.md) | Pending: artifact auto-registration, context compaction, silent-crash surfacing, multi-tab sync, history pagination. |
 
 ## LLM Client
 

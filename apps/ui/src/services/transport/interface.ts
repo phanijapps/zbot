@@ -26,6 +26,7 @@ import type {
   McpTestResult,
   ModelRegistryResponse,
   MessageResponse,
+  ChatSessionInit,
   SessionMessage,
   SessionMessagesQuery,
   ToolSettings,
@@ -230,6 +231,26 @@ export interface Transport {
   /** Stop an agent execution */
   stopAgent(conversationId: string): Promise<TransportResult<void>>;
 
+  /**
+   * Initialise (or retrieve) the reserved chat session.
+   *
+   * Idempotent. First caller gets `created: true`; every subsequent caller
+   * gets `created: false` with the same ids. Used by the persistent chat
+   * surfaces (`/chat` and `/chat-v2`) to avoid creating phantom sessions.
+   */
+  initChatSession(): Promise<TransportResult<ChatSessionInit>>;
+
+  /**
+   * Clear the reserved chat session slot.
+   *
+   * Archival, not destructive — the underlying DB rows (messages,
+   * executions) are retained and reachable via the Logs page. Only the
+   * `settings.chat` pointer is nulled so the next `initChatSession()`
+   * call creates a fresh session. Recovery path for context-window
+   * blowouts; also the "start over" action exposed in the UI.
+   */
+  deleteChatSession(): Promise<TransportResult<void>>;
+
   // =========================================================================
   // Settings Operations
   // =========================================================================
@@ -277,6 +298,15 @@ export interface Transport {
 
   /** Delete a log session */
   deleteLogSession(sessionId: string): Promise<TransportResult<void>>;
+
+  /**
+   * Hard-delete a session and its per-session data (messages, executions,
+   * execution logs, artifact pointers, distillation run, bridge outbox
+   * rows, and recall log). Memory facts, vec0 embeddings, and the
+   * knowledge graph are preserved. Files on disk in ward directories
+   * are not touched.
+   */
+  deleteSession(sessionId: string): Promise<TransportResult<void>>;
 
   /** Cleanup old logs */
   cleanupOldLogs(olderThanDays: number): Promise<TransportResult<{ deletedCount: number }>>;
@@ -426,6 +456,13 @@ export interface Transport {
 
   /** Get full content (facts, wiki, procedures, episodes) for a single ward */
   getWardContent(wardId: string): Promise<TransportResult<WardContent>>;
+
+  /**
+   * Open the ward's vault folder in the OS native file browser
+   * (POST /api/wards/:ward_id/open). Returns the resolved absolute path on
+   * success; fails with 404 if the ward directory doesn't exist on disk.
+   */
+  openWard(wardId: string): Promise<TransportResult<{ path: string }>>;
 
   /** Unified hybrid search across memory types (POST /api/memory/search) */
   searchMemoryHybrid(req: HybridSearchRequest): Promise<TransportResult<HybridSearchResponse>>;

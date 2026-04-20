@@ -325,6 +325,18 @@ impl<D: StateDbProvider> StateService<D> {
         self.repo.delete_session(session_id)
     }
 
+    /// Delete a session and all tables that hold per-session data.
+    ///
+    /// Preserves cross-session data: `memory_facts`, `memory_facts_index`, and
+    /// the knowledge graph tables. This is the hard-delete used by the
+    /// research sessions drawer's per-row Delete action.
+    ///
+    /// Returns the number of rows deleted across all cascaded tables
+    /// (informational; primarily for logging and tests).
+    pub fn delete_session_cascade(&self, session_id: &str) -> Result<usize, String> {
+        self.repo.delete_session_cascade(session_id)
+    }
+
     /// Delete sessions older than a given timestamp.
     pub fn delete_old_sessions(&self, older_than: &str) -> Result<u64, String> {
         self.repo.delete_old_sessions(older_than)
