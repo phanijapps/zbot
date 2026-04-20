@@ -176,7 +176,10 @@ impl SessionStateBuilder {
         Ok(Some(SessionState {
             session: SessionMeta {
                 id: session.session_id.clone(),
-                title: session.title.clone().or_else(|| Self::extract_title(logs)),
+                title: session
+                    .title
+                    .clone()
+                    .or_else(|| Self::extract_title(logs, intent_analysis.as_ref())),
                 status: session.status.as_str().to_string(),
                 started_at: session.started_at.clone(),
                 duration_ms: session.duration_ms,
@@ -212,23 +215,52 @@ impl SessionStateBuilder {
     // EXTRACTION HELPERS
     // ========================================================================
 
-    /// Extract session title from set_session_title tool call.
-    fn extract_title(logs: &[ExecutionLog]) -> Option<String> {
+    /// Title-length cap for the intent-analysis fallback. Matches the spirit
+    /// of `SetSessionTitleTool`'s 120-char ceiling but keeps UI rows short.
+    const INTENT_TITLE_MAX_CHARS: usize = 80;
+
+    /// Extract session title. Prefers the explicit `set_session_title` tool
+    /// call. Falls back to the intent analysis `primary_intent` so sessions
+    /// where the agent skips step 2 of first_turn_protocol still land with
+    /// a meaningful title instead of null.
+    fn extract_title(logs: &[ExecutionLog], intent: Option<&serde_json::Value>) -> Option<String> {
         for log in logs {
             if log.category == LogCategory::ToolCall {
                 if let Some(meta) = &log.metadata {
                     let tool = meta.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
                     if tool == "set_session_title" {
-                        return meta
+                        if let Some(title) = meta
                             .get("args")
                             .and_then(|a| a.get("title").or_else(|| a.get("name")))
                             .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
+                            .map(|s| s.to_string())
+                        {
+                            return Some(title);
+                        }
                     }
                 }
             }
         }
-        None
+        Self::title_from_intent(intent)
+    }
+
+    fn title_from_intent(intent: Option<&serde_json::Value>) -> Option<String> {
+        let primary = intent?
+            .get("primary_intent")
+            .and_then(|v| v.as_str())?
+            .trim();
+        if primary.is_empty() {
+            return None;
+        }
+        let truncated: String = primary.chars().take(Self::INTENT_TITLE_MAX_CHARS).collect();
+        if truncated.len() < primary.len() {
+            Some(format!(
+                "{}…",
+                truncated.trim_end_matches(|c: char| c.is_whitespace() || c == ',')
+            ))
+        } else {
+            Some(truncated)
+        }
     }
 
     /// Sum token counts from the messages table for this execution.
