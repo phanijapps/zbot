@@ -124,15 +124,34 @@
   white-space: pre-wrap;
 }
 
-/* --- Assistant message (hydrated history) --------------------------------- */
-/* Live responses render inside turn blocks; this is only for the reload /
-   session-switch path where we only have messages[], not rebuilt turns. */
+/* --- Assistant turn bubble ----------------------------------------------- */
+/* Wraps the entire assistant turn: z-bot avatar, any subagent cards, and
+ * the final respond body — all inside one rounded card. Matches the
+ * FastChat / QuickChat pattern but scaled up for the multi-section
+ * research turn (tighter bottom-left corner echoes a left-origin tail).
+ * The copy button stays outside the card so it can float below it. */
+.research-msg__card {
+  align-self: stretch;
+  max-width: 80%;
+  padding: 14px 16px;
+  border-radius: 14px 14px 14px 2px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Inner body no longer carries bubble styling — it's just the prose
+ * container now. */
 .research-page__assistant {
   font-size: 14px;
   line-height: 1.6;
   color: var(--foreground);
   align-self: stretch;
 }
+.research-page__assistant > :first-child { margin-top: 0; }
+.research-page__assistant > :last-child { margin-bottom: 0; }
 
 /* --- Message shells + adornments ----------------------------------------- */
 

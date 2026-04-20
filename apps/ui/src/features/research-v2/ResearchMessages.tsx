@@ -52,9 +52,11 @@ interface AssistantMessageProps {
 export function AssistantMessage({ content }: AssistantMessageProps) {
   return (
     <div className="research-msg research-msg--assistant" data-copy-host="true">
-      <AgentAvatar />
-      <div className="research-msg__body research-page__assistant">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      <div className="research-msg__card">
+        <AgentAvatar />
+        <div className="research-msg__body research-page__assistant">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+        </div>
       </div>
       <CopyButton text={content} label="Copy answer" />
     </div>

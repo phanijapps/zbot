@@ -290,19 +290,23 @@ function RootTurn({ turn, childTurns, allTurns }: RootTurnProps) {
       data-parent=""
       data-copy-host="true"
     >
-      <div className="root-turn__avatar-row">
-        <AgentAvatar />
-        <LiveTicker turn={turn} />
-      </div>
-      <div className="research-msg__body">
-        {childTurns.length > 0 && (
-          <div className="root-turn__subagents">
-            {childTurns.map((child) => (
-              <SubagentCardTree key={child.id} turn={child} allTurns={allTurns} />
-            ))}
+      <div className="research-msg__card">
+        <div className="root-turn__avatar-row">
+          <AgentAvatar />
+          <LiveTicker turn={turn} />
+        </div>
+        <div className="research-msg__body">
+          {childTurns.length > 0 && (
+            <div className="root-turn__subagents">
+              {childTurns.map((child) => (
+                <SubagentCardTree key={child.id} turn={child} allTurns={allTurns} />
+              ))}
+            </div>
+          )}
+          <div className="research-page__assistant">
+            <RespondBody turn={turn} />
           </div>
-        )}
-        <RespondBody turn={turn} />
+        </div>
       </div>
       {respondText !== null && (
         <CopyButton text={respondText} label="Copy response" />
