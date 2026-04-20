@@ -239,6 +239,9 @@
   font-size: 13px;
   line-height: 1.5;
   color: var(--foreground);
+  /* Escape the centered/bolded title styling that wraps the host button. */
+  text-align: left;
+  font-weight: 400;
 }
 .intent-info__header {
   display: flex;
