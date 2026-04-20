@@ -64,9 +64,12 @@ interface ResearchHeaderProps {
   onNew(): void;
   onStop(): void;
   onOpenWard(wardId: string): void;
+  /** Hide the "New research" button on the landing page since the hero
+   *  already provides the new-session entry point. */
+  showNewButton?: boolean;
 }
 
-function ResearchHeader({ state, onOpenDrawer, onNew, onStop, onOpenWard }: ResearchHeaderProps) {
+function ResearchHeader({ state, onOpenDrawer, onNew, onStop, onOpenWard, showNewButton = true }: ResearchHeaderProps) {
   return (
     <div className="research-page__header">
       <button
@@ -97,9 +100,11 @@ function ResearchHeader({ state, onOpenDrawer, onNew, onStop, onOpenWard }: Rese
             <span>{state.wardName}</span>
           </button>
         )}
-        <button type="button" className="btn btn--ghost btn--sm" onClick={onNew}>
-          <Plus size={14} /> New research
-        </button>
+        {showNewButton && (
+          <button type="button" className="btn btn--ghost btn--sm" onClick={onNew}>
+            <Plus size={14} /> New research
+          </button>
+        )}
         {state.status === "running" && (
           <button
             type="button"
@@ -268,6 +273,11 @@ export function ResearchPage() {
   }, []);
 
   const composerDisabled = state.status === "running";
+  // Landing state: no user message, no agent turns, no bound session. Hero
+  // takes over the column; the bottom composer + the header's "New
+  // research" button are hidden so the landing experience is uncluttered.
+  const isLanding =
+    state.messages.length === 0 && state.turns.length === 0 && state.sessionId === null;
 
   return (
     <div className="research-page">
@@ -277,11 +287,14 @@ export function ResearchPage() {
         onNew={handleNew}
         onStop={stopAgent}
         onOpenWard={handleOpenWard}
+        showNewButton={!isLanding}
       />
 
-      <div className="research-page__pill-strip">
-        <StatusPill state={pillState} />
-      </div>
+      {!isLanding && (
+        <div className="research-page__pill-strip">
+          <StatusPill state={pillState} />
+        </div>
+      )}
 
       <SessionsDrawer
         open={drawerOpen}
@@ -299,11 +312,14 @@ export function ResearchPage() {
         </div>
       </div>
 
-      <ArtifactStrip artifacts={state.artifacts} onOpen={handleOpenArtifact} />
-
-      <div className="research-page__composer">
-        <ChatInput onSend={sendMessage} disabled={composerDisabled} />
-      </div>
+      {!isLanding && (
+        <>
+          <ArtifactStrip artifacts={state.artifacts} onOpen={handleOpenArtifact} />
+          <div className="research-page__composer">
+            <ChatInput onSend={sendMessage} disabled={composerDisabled} />
+          </div>
+        </>
+      )}
 
       {viewingArtifact && (
         <ArtifactSlideOut
