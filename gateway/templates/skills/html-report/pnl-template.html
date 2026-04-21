@@ -147,9 +147,9 @@
   <script>
     function toggleTheme() {
       const html = document.documentElement;
-      const current = html.getAttribute('data-theme');
-      if (current) html.setAttribute('data-theme', current === 'dark' ? 'light' : 'dark');
-      else html.setAttribute('data-theme', window.matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark');
+      const current = html.dataset.theme;
+      if (current) html.dataset.theme = current === 'dark' ? 'light' : 'dark';
+      else html.dataset.theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark';
     }
   </script>
 </body>
