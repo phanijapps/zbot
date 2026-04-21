@@ -30,6 +30,7 @@ const stopAgent = vi.fn<Transport["stopAgent"]>();
 const getSessionMessages = vi.fn<Transport["getSessionMessages"]>();
 const listSessionArtifacts = vi.fn<Transport["listSessionArtifacts"]>();
 const listLogSessions = vi.fn<Transport["listLogSessions"]>();
+const getSessionState = vi.fn<Transport["getSessionState"]>();
 const unsubscribeSpy = vi.fn<() => void>();
 // Ordered log of all transport calls to assert subscribe-before-invoke.
 const callLog: string[] = [];
@@ -42,6 +43,7 @@ vi.mock("@/services/transport", () => ({
     getSessionMessages,
     listSessionArtifacts,
     listLogSessions,
+    getSessionState,
     // R14h recovery uses this to re-check session_id on reconnect.
     onConnectionStateChange: () => () => undefined,
   }),
@@ -132,6 +134,7 @@ beforeEach(() => {
   getSessionMessages.mockReset();
   listSessionArtifacts.mockReset();
   listLogSessions.mockReset();
+  getSessionState.mockReset();
   unsubscribeSpy.mockReset();
 
   subscribeConversation.mockImplementation((convId: string) => {
@@ -146,6 +149,22 @@ beforeEach(() => {
   getSessionMessages.mockResolvedValue({ success: true, data: [] });
   listSessionArtifacts.mockResolvedValue({ success: true, data: [] });
   listLogSessions.mockResolvedValue({ success: true, data: [] });
+  // Default: benign snapshot state — tests that care about ward info override.
+  getSessionState.mockResolvedValue({
+    success: true,
+    data: {
+      session: { id: "", title: null, status: "completed", startedAt: "", durationMs: 0, tokenCount: 0, model: null },
+      userMessage: null,
+      phase: "completed",
+      response: null,
+      intentAnalysis: null,
+      ward: null,
+      recalledFacts: [],
+      plan: [],
+      subagents: [],
+      isLive: false,
+    },
+  });
 });
 
 afterEach(() => {
