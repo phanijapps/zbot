@@ -13,6 +13,10 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
+      // Emit LCOV even when tests fail. Vitest's default is to skip coverage
+      // on failure, which hides the coverage of the passing tests and starves
+      // SonarCloud of data. We'd rather see partial coverage than none.
+      reportOnFailure: true,
       exclude: [
         'node_modules/',
         'src/test/',
