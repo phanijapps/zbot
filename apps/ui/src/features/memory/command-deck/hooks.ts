@@ -83,7 +83,7 @@ export function useWardContent(wardId: string | null): UseWardContentResult {
       setLoading(false);
       return;
     }
-    void refresh();
+    refresh().catch(() => {});
   }, [wardId, refresh]);
 
   return { data, loading, error, refresh };

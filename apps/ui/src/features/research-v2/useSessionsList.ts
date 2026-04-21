@@ -148,7 +148,7 @@ export function useSessionsList(
   }, [refresh, onAfterDelete]);
 
   useEffect(() => {
-    void refresh();
+    refresh().catch(() => {});
   }, [refresh]);
 
   return { sessions, loading, refresh, deleteSession };

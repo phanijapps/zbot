@@ -113,7 +113,7 @@ export function QuickChat() {
 
   const handleClear = () => {
     if (window.confirm(CLEAR_CONFIRM)) {
-      void clearSession();
+      clearSession().catch(() => {});
     }
   };
 
