@@ -132,8 +132,8 @@ impl ModelRegistry {
                 video_generation: false,
             },
             context: ContextWindow {
-                input: 256_000,
-                output: Some(128_000),
+                input: 200_000,
+                output: Some(64_000),
             },
             embedding: None,
         };
@@ -293,7 +293,19 @@ mod tests {
         assert_eq!(profile.provider, "unknown");
         assert!(profile.capabilities.tools);
         assert!(!profile.capabilities.vision);
-        assert_eq!(profile.context.input, 256_000);
+        assert_eq!(profile.context.input, 200_000);
+    }
+
+    #[test]
+    fn fallback_profile_uses_200k_in_64k_out_with_tools() {
+        let registry = ModelRegistry::load(&[], &PathBuf::from("/nonexistent"));
+        let profile = registry.get("some-unknown-model-id");
+        assert_eq!(profile.context.input, 200_000);
+        assert_eq!(profile.context.output, Some(64_000));
+        assert!(profile.capabilities.tools);
+        assert!(!profile.capabilities.vision);
+        assert!(!profile.capabilities.thinking);
+        assert!(!profile.capabilities.embeddings);
     }
 
     #[test]

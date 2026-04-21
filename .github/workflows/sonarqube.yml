@@ -16,12 +16,30 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       # Install cargo-llvm-cov if not present (self-hosted runner may not have it)
       - name: Ensure cargo-llvm-cov is installed
         run: cargo llvm-cov --version || cargo install cargo-llvm-cov --locked
 
       - name: Generate Rust coverage (LCOV)
-        run: cargo llvm-cov --workspace --lcov --output-path rust-lcov.info || true
+        run: cargo llvm-cov --workspace --lcov --output-path rust-lcov.info
+
+      - name: Install UI dependencies
+        working-directory: apps/ui
+        run: npm ci
+
+      - name: Generate UI coverage (LCOV)
+        working-directory: apps/ui
+        run: npm run test:coverage
+
+      # vitest emits SF: paths relative to apps/ui; rewrite to repo-root so
+      # SonarCloud can match them against sonar.sources.
+      - name: Rewrite UI LCOV paths to repo root
+        run: sed -i 's|^SF:|SF:apps/ui/|' apps/ui/coverage/lcov.info
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6

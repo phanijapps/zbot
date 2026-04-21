@@ -48,6 +48,23 @@ use knowledge_graph::GraphStorage;
 pub type WorkspaceCache = Arc<tokio::sync::RwLock<Option<HashMap<String, serde_json::Value>>>>;
 
 /// Create an empty workspace cache.
+/// Resolve the effective thinking flag for an agent execution.
+///
+/// Previously this consulted `ModelRegistry.has_capability(model, Thinking)`
+/// and silently disabled thinking on models the registry didn't know about.
+/// That blocked users from using `thinkingEnabled=true` against any model
+/// they typed into Settings > Advanced that wasn't in the curated registry
+/// — effectively gating a user-visible setting on a local allowlist.
+///
+/// Current behaviour: trust the user-declared flag verbatim. If the
+/// provider rejects the reasoning payload, the LLM client returns an
+/// error that bubbles to the UI through the normal tool_error path.
+/// The `_model` parameter is kept for future telemetry / logging without
+/// changing the public signature.
+pub fn resolve_thinking_flag(user_flag: bool, _model: &str) -> bool {
+    user_flag
+}
+
 pub fn new_workspace_cache() -> WorkspaceCache {
     Arc::new(tokio::sync::RwLock::new(None))
 }
@@ -308,26 +325,10 @@ impl ExecutorBuilder {
             }
         }
 
-        // Validate thinking capability against model registry
-        let thinking_enabled = if agent.thinking_enabled {
-            if let Some(ref registry) = self.model_registry {
-                if !registry
-                    .has_capability(&agent.model, gateway_services::models::Capability::Thinking)
-                {
-                    tracing::warn!(
-                        model = %agent.model,
-                        "thinking_enabled but model lacks thinking capability — disabling"
-                    );
-                    false
-                } else {
-                    true
-                }
-            } else {
-                true
-            }
-        } else {
-            false
-        };
+        // User-driven: trust agent.thinking_enabled. If the provider
+        // rejects the reasoning payload, the LLM client surfaces the error
+        // through the normal tool_error path.
+        let thinking_enabled = resolve_thinking_flag(agent.thinking_enabled, &agent.model);
 
         // Create LLM client using provider config
         let llm_config = LlmConfig::new(
