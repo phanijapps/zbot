@@ -19,10 +19,24 @@
 pub use agent_runtime::middleware::{
     // Sub-module namespaces — preserves `zero_middleware::traits::...`
     // paths used in some historical doc comments.
-    config, context_editing, pipeline, summarization, token_counter, traits,
+    config,
+    context_editing,
+    pipeline,
+    summarization,
+    token_counter,
+    traits,
     // Flat re-exports — this mirrors what `framework/zero-app::prelude`
     // re-exports from this crate, so external consumers keep working.
-    ContextEditingConfig, ContextEditingMiddleware, EventMiddleware, KeepPolicy, MiddlewareConfig,
-    MiddlewareContext, MiddlewareEffect, MiddlewarePipeline, PreProcessMiddleware,
-    SummarizationConfig, SummarizationMiddleware, TriggerCondition,
+    ContextEditingConfig,
+    ContextEditingMiddleware,
+    EventMiddleware,
+    KeepPolicy,
+    MiddlewareConfig,
+    MiddlewareContext,
+    MiddlewareEffect,
+    MiddlewarePipeline,
+    PreProcessMiddleware,
+    SummarizationConfig,
+    SummarizationMiddleware,
+    TriggerCondition,
 };
