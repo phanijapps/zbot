@@ -792,6 +792,19 @@ mod tests {
         (dir, paths)
     }
 
+    /// Poll `check` until it returns true or `deadline` elapses. Keeps health-loop
+    /// tests stable on slow CI runners without coupling them to a specific tick count.
+    async fn wait_until<F: FnMut() -> bool>(deadline: std::time::Duration, mut check: F) -> bool {
+        let start = std::time::Instant::now();
+        while start.elapsed() < deadline {
+            if check() {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        check()
+    }
+
     #[tokio::test]
     async fn from_config_with_no_settings_returns_unconfigured_noop() {
         let (_tmp, paths) = test_paths();
@@ -1196,9 +1209,12 @@ mod tests {
         let handle = svc
             .clone()
             .start_health_loop_with_interval(std::time::Duration::from_millis(50));
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let flipped = wait_until(std::time::Duration::from_secs(3), || {
+            matches!(svc.health(), Health::Ready)
+        })
+        .await;
         assert!(
-            matches!(svc.health(), Health::Ready),
+            flipped,
             "expected Ready after healthy ping, got {:?}",
             svc.health()
         );
@@ -1221,9 +1237,12 @@ mod tests {
         let handle = svc
             .clone()
             .start_health_loop_with_interval(std::time::Duration::from_millis(50));
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        let flipped = wait_until(std::time::Duration::from_secs(3), || {
+            matches!(svc.health(), Health::OllamaUnreachable)
+        })
+        .await;
         assert!(
-            matches!(svc.health(), Health::OllamaUnreachable),
+            flipped,
             "expected OllamaUnreachable, got {:?}",
             svc.health()
         );
