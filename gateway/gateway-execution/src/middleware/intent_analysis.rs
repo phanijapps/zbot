@@ -191,14 +191,27 @@ pub fn format_intent_injection(
         }
     }
 
-    // Ward
+    // Ward — phrased as a directive, not a suggestion. The agent has
+    // historically paraphrased the ward name to match task-specific
+    // terminology (e.g. "geopolitical-analysis" → "india-pok-analysis")
+    // which violates the reusable-domain rule. Show the exact tool call.
     let wr = &analysis.ward_recommendation;
+    let action_verb = if wr.action == "use_existing" {
+        "use"
+    } else {
+        "create"
+    };
     out.push_str(&format!(
-        "\n**Workspace:** ward `{}` ({}) — {}\n",
-        wr.ward_name, wr.action, wr.reason
+        "\n**Required workspace:** Your first tool call MUST be \
+         `ward(action=\"{}\", name=\"{}\")`. The ward name `{}` is mandatory — \
+         do not rename it to a task-specific alternative. Reason: {}\n",
+        action_verb, wr.ward_name, wr.ward_name, wr.reason
     ));
     if let Some(ref sub) = wr.subdirectory {
-        out.push_str(&format!("  Subdirectory: `{}`\n", sub));
+        out.push_str(&format!(
+            "  Place task-specific work under subdirectory `{}/` within that ward.\n",
+            sub
+        ));
     }
 
     // Available resources

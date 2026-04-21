@@ -30,6 +30,7 @@ const stopAgent = vi.fn<Transport["stopAgent"]>();
 const getSessionMessages = vi.fn<Transport["getSessionMessages"]>();
 const listSessionArtifacts = vi.fn<Transport["listSessionArtifacts"]>();
 const listLogSessions = vi.fn<Transport["listLogSessions"]>();
+const getSessionState = vi.fn<Transport["getSessionState"]>();
 const unsubscribeSpy = vi.fn<() => void>();
 // Ordered log of all transport calls to assert subscribe-before-invoke.
 const callLog: string[] = [];
@@ -42,6 +43,7 @@ vi.mock("@/services/transport", () => ({
     getSessionMessages,
     listSessionArtifacts,
     listLogSessions,
+    getSessionState,
     // R14h recovery uses this to re-check session_id on reconnect.
     onConnectionStateChange: () => () => undefined,
   }),
@@ -58,7 +60,7 @@ import { useResearchSession } from "./useResearchSession";
 // Harness
 // ---------------------------------------------------------------------------
 
-const TEST_INITIAL_PATH = "/research-v2";
+const TEST_INITIAL_PATH = "/research";
 
 function routerWrapper(initialPath: string) {
   return function Wrapper({ children }: PropsWithChildren) {
@@ -68,9 +70,9 @@ function routerWrapper(initialPath: string) {
       createElement(
         Routes,
         null,
-        createElement(Route, { path: "/research-v2", element: children }),
+        createElement(Route, { path: "/research", element: children }),
         createElement(Route, {
-          path: "/research-v2/:sessionId",
+          path: "/research/:sessionId",
           element: children,
         }),
       ),
@@ -132,6 +134,7 @@ beforeEach(() => {
   getSessionMessages.mockReset();
   listSessionArtifacts.mockReset();
   listLogSessions.mockReset();
+  getSessionState.mockReset();
   unsubscribeSpy.mockReset();
 
   subscribeConversation.mockImplementation((convId: string) => {
@@ -146,6 +149,22 @@ beforeEach(() => {
   getSessionMessages.mockResolvedValue({ success: true, data: [] });
   listSessionArtifacts.mockResolvedValue({ success: true, data: [] });
   listLogSessions.mockResolvedValue({ success: true, data: [] });
+  // Default: benign snapshot state — tests that care about ward info override.
+  getSessionState.mockResolvedValue({
+    success: true,
+    data: {
+      session: { id: "", title: null, status: "completed", startedAt: "", durationMs: 0, tokenCount: 0, model: null },
+      userMessage: null,
+      phase: "completed",
+      response: null,
+      intentAnalysis: null,
+      ward: null,
+      recalledFacts: [],
+      plan: [],
+      subagents: [],
+      isLive: false,
+    },
+  });
 });
 
 afterEach(() => {
@@ -302,7 +321,7 @@ describe("useResearchSession — subscription ordering (R14a)", () => {
     });
 
     const { result } = renderHook(() => useResearchSession(), {
-      wrapper: routerWrapper(`/research-v2/${EXISTING_SESSION}`),
+      wrapper: routerWrapper(`/research/${EXISTING_SESSION}`),
     });
 
     // Let hydrate effect flush — snapshotSession fan-out resolves in two ticks.
@@ -322,9 +341,10 @@ describe("useResearchSession — subscription ordering (R14a)", () => {
     });
 
     // R14g: two subscriptions now — one on the client-minted convId (for
-    // conv-id-routed events) and one on sessionId (scope="session", for
-    // session-routed events like delegation_started, title changes, subagent
-    // lifecycle). Transport seq dedup handles any overlap.
+    // conv-id-routed events) and one on sessionId (scope="all" so child
+    // tool_calls / thinking reach the top pill + inline tickers; server
+    // routes by session_id regardless of scope). Transport seq dedup handles
+    // any overlap.
     expect(subscribeConversation).toHaveBeenCalledTimes(2);
     const subscribedKeys = subscribeConversation.mock.calls.map((c) => c[0]);
     const convId = subscribedKeys.find((k) => k.startsWith("research-"));
@@ -417,7 +437,7 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
     });
 
     const { result } = renderHook(() => useResearchSession(), {
-      wrapper: routerWrapper(`/research-v2/${EXISTING_SESSION}`),
+      wrapper: routerWrapper(`/research/${EXISTING_SESSION}`),
     });
 
     await act(async () => {
@@ -447,7 +467,7 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
     listSessionArtifacts.mockResolvedValueOnce({ success: true, data: [] });
 
     const { result } = renderHook(() => useResearchSession(), {
-      wrapper: routerWrapper(`/research-v2/${EXISTING_SESSION}`),
+      wrapper: routerWrapper(`/research/${EXISTING_SESSION}`),
     });
 
     await act(async () => {
@@ -463,7 +483,7 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
       await result.current.sendMessage("hello");
     });
     // R14g: dual subscription — the client-minted convId from sendMessage PLUS
-    // the session-id subscription (scope="session") that kicks in once status
+    // the session-id subscription (scope="all") that kicks in once status
     // flips to "running". Both feed the same handler.
     expect(subscribeConversation).toHaveBeenCalledTimes(2);
     // Grab the convId handler for event injection (both share the same ctx).
@@ -518,7 +538,7 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
     listSessionArtifacts.mockResolvedValue({ success: true, data: [] });
 
     const { result } = renderHook(() => useResearchSession(), {
-      wrapper: routerWrapper(`/research-v2/${EXISTING_SESSION}`),
+      wrapper: routerWrapper(`/research/${EXISTING_SESSION}`),
     });
     await act(async () => {
       await Promise.resolve();
@@ -563,7 +583,7 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
     vi.useFakeTimers();
     try {
       renderHook(() => useResearchSession(), {
-        wrapper: routerWrapper(`/research-v2/${EXISTING_SESSION}`),
+        wrapper: routerWrapper(`/research/${EXISTING_SESSION}`),
       });
       await act(async () => {
         await Promise.resolve();

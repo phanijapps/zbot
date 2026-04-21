@@ -33,6 +33,9 @@ pub use episode_repository::{EpisodeRepository, SessionEpisode};
 pub use goal_repository::{Goal, GoalRepository};
 pub use kg_episode_repository::{EpisodeSource, KgEpisode, KgEpisodeRepository};
 pub use knowledge_db::KnowledgeDatabase;
+pub use knowledge_schema::{
+    drop_and_recreate_vec_tables_at_dim, list_vec_table_presence, REQUIRED_VEC_TABLES,
+};
 pub use memory_fact_store::GatewayMemoryFactStore;
 pub use memory_repository::{MemoryFact, MemoryRepository, ScoredFact};
 pub use procedure_repository::{Procedure, ProcedureRepository};

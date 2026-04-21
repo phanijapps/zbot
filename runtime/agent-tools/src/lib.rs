@@ -9,6 +9,7 @@
 //! This crate provides concrete tool implementations that use
 //! the abstractions defined in zero-core.
 
+pub mod replay;
 mod tools;
 
 pub use tools::{

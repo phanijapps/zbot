@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, Navigate, Link, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, Link, useLocation, useParams } from "react-router-dom";
 import { Toaster } from "sonner";
 import {
   Bot,
@@ -18,11 +18,11 @@ import {
   Brain,
   Network,
   MessageSquare,
+  Menu,
   Search,
 } from "lucide-react";
 import { initializeTransport, getTransport } from "@/services/transport";
 import { SetupWizard, SetupGuard } from "./features/setup";
-import { WebChatPanel } from "./features/agent/WebChatPanel";
 import { WebAgentsPanel } from "./features/agent/WebAgentsPanel";
 import { WebSettingsPanel } from "./features/settings/WebSettingsPanel";
 import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPanel";
@@ -30,7 +30,6 @@ import { WebLogsPanel } from "./features/logs/WebLogsPanel";
 import { WebOpsDashboard } from "./features/ops/WebOpsDashboard";
 import { MemoryPage } from "./features/memory";
 import { ObservatoryPage } from "./features/observatory";
-import { FastChat } from "./features/chat/FastChat";
 import { QuickChat } from "./features/chat-v2";
 import { ResearchPage } from "./features/research-v2";
 // ChatSlider removed — chat is now the home route, no longer in a slide-over
@@ -48,6 +47,12 @@ interface ConnectionStatus {
 // ============================================================================
 // App Component
 // ============================================================================
+
+/** Legacy redirect: /research-v2/:sessionId → /research/:sessionId. */
+function ResearchV2Redirect() {
+  const { sessionId } = useParams<{ sessionId: string }>();
+  return <Navigate to={`/research/${sessionId ?? ""}`} replace />;
+}
 
 function App() {
   const [isInitializing, setIsInitializing] = useState(true);
@@ -178,7 +183,7 @@ function App() {
             <SetupGuard>
               <WebAppShell connectionStatus={connectionStatus}>
                 <Routes>
-                  <Route path="/" element={<WebChatPanel />} />
+                  <Route path="/" element={<Navigate to="/research" replace />} />
                   <Route path="/dashboard" element={<WebOpsDashboard />} />
                   <Route path="/logs" element={<WebLogsPanel />} />
                   <Route path="/memory" element={<MemoryPage />} />
@@ -186,10 +191,14 @@ function App() {
                   <Route path="/agents" element={<WebAgentsPanel />} />
                   <Route path="/integrations" element={<WebIntegrationsPanel />} />
                   <Route path="/settings" element={<WebSettingsPanel />} />
-                  <Route path="/chat" element={<FastChat />} />
-                  <Route path="/chat-v2" element={<QuickChat />} />
-                  <Route path="/research-v2" element={<ResearchPage />} />
-                  <Route path="/research-v2/:sessionId" element={<ResearchPage />} />
+                  <Route path="/chat" element={<QuickChat />} />
+                  {/* Legacy bookmark redirect. */}
+                  <Route path="/chat-v2" element={<Navigate to="/chat" replace />} />
+                  <Route path="/research" element={<ResearchPage />} />
+                  <Route path="/research/:sessionId" element={<ResearchPage />} />
+                  {/* Legacy bookmark redirects. */}
+                  <Route path="/research-v2" element={<Navigate to="/research" replace />} />
+                  <Route path="/research-v2/:sessionId" element={<ResearchV2Redirect />} />
                   <Route path="/providers" element={<Navigate to="/settings" replace />} />
                   <Route path="/skills" element={<Navigate to="/agents?tab=skills" replace />} />
                   <Route path="/hooks" element={<Navigate to="/agents?tab=schedules" replace />} />
@@ -232,8 +241,7 @@ const navGroups: NavGroup[] = [
     // Main group - no label
     items: [
       { to: "/chat", label: "Chat", icon: MessageSquare },
-      { to: "/chat-v2", label: "Quick Chat", icon: MessageSquare, matchPrefix: true, badge: "v2" },
-      { to: "/research-v2", label: "Research", icon: Search, matchPrefix: true, badge: "v2" },
+      { to: "/research", label: "Research", icon: Search, matchPrefix: true },
       { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { to: "/logs", label: "Logs", icon: Eye },
       { to: "/memory", label: "Memory", icon: Brain },
@@ -256,8 +264,29 @@ const navGroups: NavGroup[] = [
 ];
 
 function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const location = useLocation();
+  // Close the mobile drawer whenever the route changes.
+  useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
   return (
-    <div className="app-shell">
+    <div className={`app-shell${mobileNavOpen ? " app-shell--nav-open" : ""}`}>
+      <button
+        type="button"
+        className="app-shell__nav-toggle"
+        aria-label={mobileNavOpen ? "Close navigation" : "Open navigation"}
+        aria-expanded={mobileNavOpen}
+        onClick={() => setMobileNavOpen((v) => !v)}
+      >
+        <Menu size={20} />
+      </button>
+      {mobileNavOpen && (
+        <button
+          type="button"
+          className="app-shell__nav-backdrop"
+          aria-label="Close navigation"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      )}
       <nav className="sidebar">
         <div className="sidebar__header">
           <div className="sidebar__logo">

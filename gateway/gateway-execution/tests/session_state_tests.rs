@@ -265,6 +265,122 @@ fn test_title_from_tool_call() {
 }
 
 #[test]
+fn test_title_falls_back_to_intent_primary_when_tool_skipped() {
+    let (builder, db, log_service, _conversations) = setup();
+    let sid = uid();
+    let conv_id = sid.clone();
+    let agent = "root";
+
+    insert_session_row(&db, &conv_id, "completed", agent);
+
+    log_service
+        .log_session_start(&sid, &conv_id, agent, None)
+        .unwrap();
+
+    // Record an intent-analysis log but NO set_session_title tool call.
+    log_service
+        .log(
+            api_logs::ExecutionLog::new(
+                &sid,
+                &conv_id,
+                agent,
+                api_logs::LogLevel::Info,
+                api_logs::LogCategory::Intent,
+                "Intent: Short research task",
+            )
+            .with_metadata(serde_json::json!({
+                "primary_intent": "Short research task",
+                "hidden_intents": [],
+                "recommended_skills": [],
+                "recommended_agents": ["research-agent"],
+                "ward_recommendation": {
+                    "action": "use_existing",
+                    "ward_name": "scratch",
+                    "reason": "test",
+                },
+                "execution_strategy": { "approach": "simple", "explanation": "" },
+            })),
+        )
+        .unwrap();
+
+    log_service
+        .log_session_end(
+            &sid,
+            &conv_id,
+            agent,
+            api_logs::SessionStatus::Completed,
+            None,
+        )
+        .unwrap();
+
+    let state = builder.build(&sid).unwrap().expect("session should exist");
+    assert_eq!(state.session.title.as_deref(), Some("Short research task"));
+}
+
+#[test]
+fn test_title_tool_call_wins_over_intent_fallback() {
+    let (builder, db, log_service, _conversations) = setup();
+    let sid = uid();
+    let conv_id = sid.clone();
+    let agent = "root";
+
+    insert_session_row(&db, &conv_id, "completed", agent);
+
+    log_service
+        .log_session_start(&sid, &conv_id, agent, None)
+        .unwrap();
+
+    log_service
+        .log(
+            api_logs::ExecutionLog::new(
+                &sid,
+                &conv_id,
+                agent,
+                api_logs::LogLevel::Info,
+                api_logs::LogCategory::Intent,
+                "Intent: ignored",
+            )
+            .with_metadata(serde_json::json!({
+                "primary_intent": "Intent primary should not be used",
+                "hidden_intents": [],
+                "recommended_skills": [],
+                "recommended_agents": [],
+                "ward_recommendation": {
+                    "action": "use_existing",
+                    "ward_name": "scratch",
+                    "reason": "",
+                },
+                "execution_strategy": { "approach": "simple", "explanation": "" },
+            })),
+        )
+        .unwrap();
+
+    log_service
+        .log_tool_call(
+            &sid,
+            &conv_id,
+            agent,
+            "set_session_title",
+            "tc-1",
+            &serde_json::json!({"title": "Chosen title"}),
+        )
+        .unwrap();
+
+    log_service
+        .log_session_end(
+            &sid,
+            &conv_id,
+            agent,
+            api_logs::SessionStatus::Completed,
+            None,
+        )
+        .unwrap();
+
+    let state = builder.build(&sid).unwrap().expect("session should exist");
+    assert_eq!(state.session.title.as_deref(), Some("Chosen title"));
+}
+
+#[test]
 fn test_response_skips_tool_calls_message() {
     let (builder, db, log_service, conversations) = setup();
     let sid = uid();

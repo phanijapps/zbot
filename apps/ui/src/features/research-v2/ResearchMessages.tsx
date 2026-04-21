@@ -8,51 +8,10 @@
 // reused by AgentTurnBlock for the live Respond body.
 // =============================================================================
 
-import { useCallback, useState } from "react";
-import { Check, Copy } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { CopyButton } from "../shared/copyButton";
+import { Markdown } from "../shared/markdown";
 
-const COPY_FEEDBACK_MS = 1500;
-
-function useCopyToClipboard(): {
-  copied: boolean;
-  onCopy: (text: string) => Promise<void>;
-} {
-  const [copied, setCopied] = useState(false);
-  const onCopy = useCallback(async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
-    } catch {
-      // Clipboard can fail on http:// origins — silently ignore; user can
-      // always select the text manually.
-    }
-  }, []);
-  return { copied, onCopy };
-}
-
-interface CopyButtonProps {
-  text: string;
-  label?: string;
-}
-
-export function CopyButton({ text, label = "Copy message" }: CopyButtonProps) {
-  const { copied, onCopy } = useCopyToClipboard();
-  return (
-    <button
-      type="button"
-      className="research-msg__copy"
-      data-testid="research-msg-copy"
-      onClick={() => void onCopy(text)}
-      aria-label={copied ? "Copied" : label}
-      title={copied ? "Copied" : label}
-    >
-      {copied ? <Check size={12} /> : <Copy size={12} />}
-    </button>
-  );
-}
+export { CopyButton } from "../shared/copyButton";
 
 /** Small brand avatar — z-bot icon. Swapped via CSS for dark/light themes. */
 export function AgentAvatar() {
@@ -74,7 +33,7 @@ interface UserMessageProps {
 
 export function UserMessage({ content }: UserMessageProps) {
   return (
-    <div className="research-msg research-msg--user">
+    <div className="research-msg research-msg--user" data-copy-host="true">
       <div className="research-msg__bubble research-page__user-bubble">
         {content}
       </div>
@@ -91,10 +50,12 @@ interface AssistantMessageProps {
  *  AgentTurnBlock's Respond body (which uses the same avatar + copy slot). */
 export function AssistantMessage({ content }: AssistantMessageProps) {
   return (
-    <div className="research-msg research-msg--assistant">
-      <AgentAvatar />
-      <div className="research-msg__body research-page__assistant">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+    <div className="research-msg research-msg--assistant" data-copy-host="true">
+      <div className="research-msg__card">
+        <AgentAvatar />
+        <Markdown className="research-msg__body research-page__assistant">
+          {content}
+        </Markdown>
       </div>
       <CopyButton text={content} label="Copy answer" />
     </div>

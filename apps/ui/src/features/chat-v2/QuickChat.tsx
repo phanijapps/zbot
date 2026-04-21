@@ -1,13 +1,13 @@
 import { useRef, useEffect, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { Square, Trash2 } from "lucide-react";
+import { Markdown } from "../shared/markdown";
 import { ChatInput } from "../chat/ChatInput";
 import { StatusPill } from "../shared/statusPill";
 import { ArtifactSlideOut } from "../chat/ArtifactSlideOut";
 import { getArtifactIcon } from "../chat/artifact-utils";
 import { InlineActivityChip } from "./InlineActivityChip";
 import { useQuickChat } from "./useQuickChat";
+import { CopyButton } from "../shared/copyButton";
 import type { QuickChatArtifactRef, QuickChatMessage } from "./types";
 import type { Artifact } from "@/services/transport/types";
 import "./quick-chat.css";
@@ -15,7 +15,7 @@ import "./quick-chat.css";
 function AssistantBubble({ message }: { message: QuickChatMessage }) {
   return (
     <div className="quick-chat__assistant">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+      <Markdown>{message.content}</Markdown>
       {message.chips && message.chips.length > 0 && (
         <div className="quick-chat__chips">
           {message.chips.map((c) => <InlineActivityChip key={c.id} chip={c} />)}
@@ -26,11 +26,16 @@ function AssistantBubble({ message }: { message: QuickChatMessage }) {
 }
 
 function MessageRow({ message }: { message: QuickChatMessage }) {
+  const label = message.role === "user" ? "Copy question" : "Copy answer";
   return (
-    <div className={`quick-chat__msg quick-chat__msg--${message.role}`}>
+    <div
+      className={`quick-chat__msg quick-chat__msg--${message.role}`}
+      data-copy-host="true"
+    >
       {message.role === "user"
         ? <div className="quick-chat__user-bubble">{message.content}</div>
         : <AssistantBubble message={message} />}
+      <CopyButton text={message.content} label={label} />
     </div>
   );
 }

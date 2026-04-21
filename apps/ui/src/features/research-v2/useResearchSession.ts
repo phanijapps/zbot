@@ -79,12 +79,13 @@ interface EventHandlerCtx {
 
 function makeEventHandler(ctx: EventHandlerCtx) {
   return (event: ConversationEvent) => {
+    const raw = event as unknown as Record<string, unknown>;
+    console.debug("[research-v2] event:", raw["type"], "sid:", raw["session_id"], "cid:", raw["conversation_id"], "eid:", raw["execution_id"]);
     const action = mapGatewayEventToResearchAction(event);
     if (action) ctx.dispatch(action);
     // Respond-tool path: synthesize RESPOND from tool_call.args.message
     // because turn_complete.final_message arrives empty for tool-emitted
     // responses (Done.final_message is populated only from streamed tokens).
-    const raw = event as unknown as Record<string, unknown>;
     const synthesizedRespond = respondActionFromToolCall(raw);
     if (synthesizedRespond) ctx.dispatch(synthesizedRespond);
     const synthesizedChildRespond = respondActionFromDelegationCompleted(raw);
@@ -362,8 +363,14 @@ export function useResearchSession() {
     void (async () => {
       const transport = await getTransport();
       if (cancelled) return;
+      // scope="all" rather than "session" so child tool_calls / thinking
+      // reach us. The server-side session scope filter drops events whose
+      // execution_id isn't a root (see gateway/websocket/subscriptions.rs
+      // should_send_to_scope) — that's what was making the top pill go
+      // silent once a subagent took over. All events for this session
+      // are still routed here because the server keys by session_id.
       const unsub = transport.subscribeConversation(sid, {
-        scope: "session",
+        scope: "all",
         onEvent,
       });
       subscribedSessionIdRef.current = sid;
@@ -388,7 +395,7 @@ export function useResearchSession() {
   // --- Sync URL when the backend hands us a session id ---
   useEffect(() => {
     if (state.sessionId && urlSessionId !== state.sessionId) {
-      navigate(`/research-v2/${state.sessionId}`, { replace: true });
+      navigate(`/research/${state.sessionId}`, { replace: true });
     }
   }, [state.sessionId, urlSessionId, navigate]);
 
@@ -456,6 +463,7 @@ export function useResearchSession() {
       });
       try {
         await ensureSubscription(convId, onEvent, refs);
+        console.debug("[research-v2] sendMessage: subscribed to", convId);
         // Pre-invoke SESSION_BOUND seeds state.conversationId. The server's
         // invoke_accepted SESSION_BOUND re-dispatches with session_id; the
         // reducer's null-guard preserves whichever id lands first.
@@ -473,6 +481,7 @@ export function useResearchSession() {
           // mode undefined → executor defaults to SessionMode::Research
           undefined,
         );
+        console.debug("[research-v2] sendMessage: executeAgent result", result.success, result.data, result.error);
         if (!result.success) {
           dispatch({ type: "ERROR", message: result.error ?? "Failed to send" });
         }
@@ -498,7 +507,7 @@ export function useResearchSession() {
     dispatch({ type: "RESET" });
     hydratedForSessionRef.current = null;
     resnapshotForExecRef.current = null;
-    navigate("/research-v2", { replace: true });
+    navigate("/research", { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pillSink stable, see module-level note above.
   }, [navigate]);
 

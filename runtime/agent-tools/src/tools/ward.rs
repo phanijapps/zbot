@@ -192,6 +192,8 @@ impl Tool for WardTool {
 
     fn description(&self) -> &str {
         "Manage code wards (named project directories). Wards persist across sessions.\n\
+         Arguments: `action` (required, one of use|create|list|info) and `name` (string).\n\
+         No other fields are accepted — do not pass `title`, `label`, or `description`.\n\
          Actions:\n\
          - use: Switch to a ward (creates if needed). Sets working directory for shell/write/edit.\n\
          - create: Alias for use. Creates and switches to a new ward.\n\
@@ -231,10 +233,11 @@ impl Tool for WardTool {
             return Err(ZeroError::Tool(format!("{}: {}", error_type, message)));
         }
 
-        let action = args
-            .get("action")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'action' parameter".to_string()))?;
+        let action = args.get("action").and_then(|v| v.as_str()).ok_or_else(|| {
+            ZeroError::Tool(
+                "ward: missing 'action' parameter (one of: use, create, list, info)".to_string(),
+            )
+        })?;
 
         let wards_root = self
             .fs

@@ -18,6 +18,10 @@ import { timeAgo, switchToSession } from "./mission-hooks";
 interface HeroInputProps {
   onSend: (message: string, attachments: UploadedFile[]) => void;
   recentSessions?: LogSession[];
+  /** Override how a recent-session card click is handled. Defaults to
+   *  switching the /chat (mission-control) session. research-v2 passes a
+   *  router-based handler so the card opens under /research-v2/:id. */
+  onSelectSession?: (sessionId: string, conversationId: string) => void;
 }
 
 // ============================================================================
@@ -56,7 +60,8 @@ const SUGGESTIONS = [
 // Component
 // ============================================================================
 
-export function HeroInput({ onSend, recentSessions = [] }: HeroInputProps) {
+export function HeroInput({ onSend, recentSessions = [], onSelectSession }: HeroInputProps) {
+  const handleSelectSession = onSelectSession ?? switchToSession;
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -229,7 +234,7 @@ export function HeroInput({ onSend, recentSessions = [] }: HeroInputProps) {
                 <button
                   key={s.session_id}
                   className="hero-input__recent-card"
-                  onClick={() => switchToSession(s.session_id, s.conversation_id)}
+                  onClick={() => handleSelectSession(s.session_id, s.conversation_id)}
                 >
                   <span className="hero-input__recent-title">{displayTitle}</span>
                   <span className="hero-input__recent-meta">

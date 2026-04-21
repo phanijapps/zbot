@@ -18,8 +18,7 @@ import {
   Eye,
   RotateCcw,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Markdown } from "@/features/shared/markdown";
 import { getTransport, type MessageResponse, type SessionMessage, type MessageScope, type StreamEvent, type SubscriptionScope } from "@/services/transport";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
 
@@ -562,9 +561,9 @@ export function SessionChatViewer({
                       )}
                     </div>
                   )}
-                  <div className="prose prose-sm dark:prose-invert max-w-none text-sm">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-                  </div>
+                  <Markdown className="prose prose-sm dark:prose-invert max-w-none text-sm">
+                    {message.content}
+                  </Markdown>
                 </div>
               </div>
             ))}

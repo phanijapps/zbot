@@ -31,6 +31,22 @@ use gateway_database::KnowledgeDatabase;
 
 const BATCH_SIZE: usize = 100;
 
+/// Conservative character cap per input sent to an embedding provider.
+///
+/// The smallest context window across providers we target is 512 tokens
+/// (Snowflake Arctic Embed family, BGE-small). At ~4 chars per token that
+/// maps to ~2000 characters. Truncating here prevents HTTP 400
+/// "input length exceeds the context length" from crashing a batch.
+/// Callers that need full-document fidelity should chunk upstream.
+const MAX_CHARS_PER_EMBED_INPUT: usize = 2000;
+
+fn truncate_for_embedding(text: &str) -> &str {
+    match text.char_indices().nth(MAX_CHARS_PER_EMBED_INPUT) {
+        Some((byte_idx, _)) => &text[..byte_idx],
+        None => text,
+    }
+}
+
 /// Target of a single reindex pass.
 #[derive(Debug, Clone, Copy)]
 pub struct ReindexTarget {
@@ -262,8 +278,13 @@ where
             .unwrap_or_else(|| last_id.clone());
 
         // Embed this batch. Tolerate failure of the batch call by skipping all
-        // rows in that batch.
-        let texts: Vec<&str> = batch.iter().map(|(_, t)| t.as_str()).collect();
+        // rows in that batch. Truncate each input to a provider-safe length so
+        // a single oversized row (e.g. a full wiki article) doesn't 400 the
+        // whole batch.
+        let texts: Vec<&str> = batch
+            .iter()
+            .map(|(_, t)| truncate_for_embedding(t.as_str()))
+            .collect();
         let embeddings_res = client.embed(&texts).await;
 
         match embeddings_res {
@@ -522,7 +543,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reindex_all_processes_three_targets() {
+    async fn reindex_all_processes_every_target() {
         let (_tmp, db) = fresh_db();
         seed_memory_facts(&db, 2);
         let client: Arc<dyn Trait> = Arc::new(MockClient::new(384));
@@ -574,14 +595,48 @@ mod tests {
     }
 
     #[test]
-    fn reindex_targets_has_three_entries() {
-        assert_eq!(REINDEX_TARGETS.len(), 3);
-        assert!(REINDEX_TARGETS
-            .iter()
-            .any(|t| t.table == "memory_facts_index"));
-        assert!(REINDEX_TARGETS.iter().any(|t| t.table == "kg_name_index"));
-        assert!(REINDEX_TARGETS
-            .iter()
-            .any(|t| t.table == "session_episodes_index"));
+    fn truncate_for_embedding_is_noop_for_short_input() {
+        let input = "short text";
+        assert_eq!(truncate_for_embedding(input), input);
+    }
+
+    #[test]
+    fn truncate_for_embedding_caps_long_ascii() {
+        let input = "a".repeat(MAX_CHARS_PER_EMBED_INPUT + 500);
+        let out = truncate_for_embedding(&input);
+        assert_eq!(out.chars().count(), MAX_CHARS_PER_EMBED_INPUT);
+    }
+
+    #[test]
+    fn truncate_for_embedding_preserves_utf8_boundary() {
+        // Repeat a 3-byte char past the cap; the slice must not split
+        // a multi-byte codepoint.
+        let ch = "✓"; // 3 bytes
+        let input = ch.repeat(MAX_CHARS_PER_EMBED_INPUT + 10);
+        let out = truncate_for_embedding(&input);
+        assert_eq!(out.chars().count(), MAX_CHARS_PER_EMBED_INPUT);
+        // If truncation sliced mid-codepoint the next line would panic.
+        let _round_trip = out.to_string();
+    }
+
+    #[test]
+    fn reindex_targets_covers_all_vec0_tables() {
+        // Each entry must map 1:1 with a vec0 virtual table created by
+        // `initialize_vec_tables_with_dim` in gateway-database. Update
+        // both when adding a new embedded source.
+        let expected = [
+            "memory_facts_index",
+            "kg_name_index",
+            "session_episodes_index",
+            "wiki_articles_index",
+            "procedures_index",
+        ];
+        assert_eq!(REINDEX_TARGETS.len(), expected.len());
+        for table in expected {
+            assert!(
+                REINDEX_TARGETS.iter().any(|t| t.table == table),
+                "missing reindex target for vec0 table: {table}"
+            );
+        }
     }
 }

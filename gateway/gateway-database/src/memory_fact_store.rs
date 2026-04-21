@@ -445,11 +445,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
     /// `created_at`, `updated_at` on hit — or `{"found": false, "key": ...}`
     /// on miss. Never performs fuzzy ranking; a missing key never
     /// "nearest-neighbors" to a different fact.
-    async fn get_ctx_fact(
-        &self,
-        ward_id: &str,
-        key: &str,
-    ) -> Result<Option<Value>, String> {
+    async fn get_ctx_fact(&self, ward_id: &str, key: &str) -> Result<Option<Value>, String> {
         let fact = self
             .memory_repo
             .get_fact_by_key(CTX_AGENT_SENTINEL, CTX_SCOPE, ward_id, key)?;
@@ -742,7 +738,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(miss.is_none(), "missing key must return None, not a ranked neighbor");
+        assert!(
+            miss.is_none(),
+            "missing key must return None, not a ranked neighbor"
+        );
     }
 
     #[tokio::test]

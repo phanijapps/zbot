@@ -15,12 +15,17 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FolderOpen, Menu, Plus, Square } from "lucide-react";
 import { toast } from "sonner";
-import { ChatInput } from "../chat/ChatInput";
+import { ChatInput, type UploadedFile } from "../chat/ChatInput";
+import { HeroInput } from "../chat/HeroInput";
+import { useRecentSessions } from "../chat/mission-hooks";
+
+type UploadedFileShim = UploadedFile;
 import { ArtifactSlideOut } from "../chat/ArtifactSlideOut";
 import { StatusPill } from "../shared/statusPill";
 import { AgentTurnBlock } from "./AgentTurnBlock";
 import { ArtifactStrip } from "./ArtifactStrip";
 import { AssistantMessage, UserMessage } from "./ResearchMessages";
+import { IntentInfoButton } from "./IntentInfoButton";
 import { SessionsDrawer } from "./SessionsDrawer";
 import { useResearchSession } from "./useResearchSession";
 import { useSessionsList } from "./useSessionsList";
@@ -59,9 +64,12 @@ interface ResearchHeaderProps {
   onNew(): void;
   onStop(): void;
   onOpenWard(wardId: string): void;
+  /** Hide the "New research" button on the landing page since the hero
+   *  already provides the new-session entry point. */
+  showNewButton?: boolean;
 }
 
-function ResearchHeader({ state, onOpenDrawer, onNew, onStop, onOpenWard }: ResearchHeaderProps) {
+function ResearchHeader({ state, onOpenDrawer, onNew, onStop, onOpenWard, showNewButton = true }: ResearchHeaderProps) {
   return (
     <div className="research-page__header">
       <button
@@ -76,6 +84,7 @@ function ResearchHeader({ state, onOpenDrawer, onNew, onStop, onOpenWard }: Rese
 
       <div className="research-page__title" title={deriveTitle(state)}>
         {deriveTitle(state)}
+        {state.sessionId && <IntentInfoButton sessionId={state.sessionId} />}
       </div>
 
       <div className="research-page__header-actions">
@@ -91,9 +100,11 @@ function ResearchHeader({ state, onOpenDrawer, onNew, onStop, onOpenWard }: Rese
             <span>{state.wardName}</span>
           </button>
         )}
-        <button type="button" className="btn btn--ghost btn--sm" onClick={onNew}>
-          <Plus size={14} /> New research
-        </button>
+        {showNewButton && (
+          <button type="button" className="btn btn--ghost btn--sm" onClick={onNew}>
+            <Plus size={14} /> New research
+          </button>
+        )}
         {state.status === "running" && (
           <button
             type="button"
@@ -129,25 +140,38 @@ function IntentLine({ state }: { state: ResearchSessionState }) {
   return null;
 }
 
-function EmptyState() {
+interface EmptyHeroProps {
+  onSend: (message: string, attachments: UploadedFileShim[]) => void;
+}
+
+// Re-use the chat HeroInput visual for the research-v2 landing page. The
+// recent-session card click routes via React Router to /research-v2/:id
+// (instead of the chat mission-control switcher).
+function EmptyHero({ onSend }: EmptyHeroProps) {
+  const navigate = useNavigate();
+  const { sessions: recentSessions } = useRecentSessions();
   return (
-    <div className="research-page__empty">
-      <h1>Research</h1>
-      <p>Ask a research question — the full agent chain kicks in.</p>
-    </div>
+    <HeroInput
+      onSend={onSend}
+      recentSessions={recentSessions}
+      onSelectSession={(_sessionId, conversationId) => {
+        navigate(`/research/${conversationId}`);
+      }}
+    />
   );
 }
 
 interface MainColumnProps {
   state: ResearchSessionState;
   onToggleThinking(turnId: string): void;
+  onSend: (message: string, attachments: UploadedFileShim[]) => void;
 }
 
-function MainColumn({ state, onToggleThinking }: MainColumnProps) {
+function MainColumn({ state, onToggleThinking, onSend }: MainColumnProps) {
   const hasContent =
     state.messages.length > 0 || state.turns.length > 0 || state.sessionId !== null;
 
-  if (!hasContent) return <EmptyState />;
+  if (!hasContent) return <EmptyHero onSend={onSend} />;
 
   // Render root turns at depth 0; nested children are derived inside
   // AgentTurnBlock via the allTurns prop. See turn-tree.ts and the R14b spec
@@ -230,7 +254,7 @@ export function ResearchPage() {
 
   const handleSelect = (id: string) => {
     setDrawerOpen(false);
-    navigate(`/research-v2/${id}`);
+    navigate(`/research/${id}`);
   };
 
   const handleNew = () => {
@@ -249,6 +273,11 @@ export function ResearchPage() {
   }, []);
 
   const composerDisabled = state.status === "running";
+  // Landing state: no user message, no agent turns, no bound session. Hero
+  // takes over the column; the bottom composer + the header's "New
+  // research" button are hidden so the landing experience is uncluttered.
+  const isLanding =
+    state.messages.length === 0 && state.turns.length === 0 && state.sessionId === null;
 
   return (
     <div className="research-page">
@@ -258,11 +287,14 @@ export function ResearchPage() {
         onNew={handleNew}
         onStop={stopAgent}
         onOpenWard={handleOpenWard}
+        showNewButton={!isLanding}
       />
 
-      <div className="research-page__pill-strip">
-        <StatusPill state={pillState} />
-      </div>
+      {!isLanding && (
+        <div className="research-page__pill-strip">
+          <StatusPill state={pillState} />
+        </div>
+      )}
 
       <SessionsDrawer
         open={drawerOpen}
@@ -276,15 +308,18 @@ export function ResearchPage() {
 
       <div className="research-page__body">
         <div className="research-page__column">
-          <MainColumn state={state} onToggleThinking={toggleThinking} />
+          <MainColumn state={state} onToggleThinking={toggleThinking} onSend={sendMessage} />
         </div>
       </div>
 
-      <ArtifactStrip artifacts={state.artifacts} onOpen={handleOpenArtifact} />
-
-      <div className="research-page__composer">
-        <ChatInput onSend={sendMessage} disabled={composerDisabled} />
-      </div>
+      {!isLanding && (
+        <>
+          <ArtifactStrip artifacts={state.artifacts} onOpen={handleOpenArtifact} />
+          <div className="research-page__composer">
+            <ChatInput onSend={sendMessage} disabled={composerDisabled} />
+          </div>
+        </>
+      )}
 
       {viewingArtifact && (
         <ArtifactSlideOut

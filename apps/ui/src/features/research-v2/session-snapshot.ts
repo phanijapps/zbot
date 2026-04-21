@@ -83,10 +83,14 @@ export async function snapshotSession(
   transport: Transport,
   sessionId: string,
 ): Promise<ResearchSnapshot | null> {
-  const [logsRes, msgsRes, artifactsRes] = await Promise.all([
+  const [logsRes, msgsRes, artifactsRes, stateRes] = await Promise.all([
     transport.listLogSessions(),
     transport.getSessionMessages(sessionId, { scope: "all" }),
     transport.listSessionArtifacts(sessionId).catch(() => ({ success: false } as const)),
+    // /api/sessions/:id/state carries ward info so a reopened session
+    // re-populates the header ward chip + clickable folder link. Soft
+    // fail: older backends without the endpoint just leave ward null.
+    transport.getSessionState(sessionId).catch(() => ({ success: false } as const)),
   ]);
 
   if (!logsRes.success || !logsRes.data) return null;
@@ -105,6 +109,9 @@ export async function snapshotSession(
   const userMessages = buildUserMessages(messages, rootRow.session_id);
   const title = pickTitle(sessionRows);
   const status = mapRootStatus(rootRow.status);
+  const wardName = stateRes.success && stateRes.data?.ward?.name
+    ? stateRes.data.ward.name
+    : null;
 
   return {
     title,
@@ -112,8 +119,11 @@ export async function snapshotSession(
     turns,
     artifacts,
     messages: userMessages,
-    wardId: null,
-    wardName: null,
+    // The ward tool identifies a ward by its name; the gateway's
+    // /api/wards/:id/open accepts that same name as the :id param.
+    // There's no separate numeric ward id surfaced to the UI today.
+    wardId: wardName,
+    wardName,
     conversationId: null,
   };
 }

@@ -1,0 +1,110 @@
+name: e2e
+
+on:
+  pull_request:
+    paths:
+      - "apps/ui/**"
+      - "gateway/**"
+      - "runtime/**"
+      - "e2e/**"
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mode-ui:
+    name: e2e / Mode UI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+
+      - name: Install Python deps
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -r e2e/mock_gateway/requirements.txt
+          pip install -r e2e/mock_llm/requirements.txt
+
+      - name: Install UI deps
+        working-directory: apps/ui
+        run: npm ci
+
+      - name: Install Playwright
+        working-directory: e2e/playwright
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Unit tests — mocks
+        run: |
+          PYTHONPATH=. pytest e2e/mock_llm/tests e2e/mock_gateway/tests e2e/fixtures/tests -q
+
+      - name: Generate synthetic fixtures
+        run: PYTHONPATH=. python3 e2e/fixtures/seed_synthetic.py
+
+      - name: Run Mode UI specs
+        working-directory: e2e/playwright
+        run: npx playwright test ui-mode/ --reporter=github
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-ui-mode-results
+          path: e2e/playwright/test-results/
+
+  mode-full:
+    name: e2e / Mode Full
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python deps
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -r e2e/mock_llm/requirements.txt
+          pip install -r e2e/mock_gateway/requirements.txt
+
+      - name: Install UI deps
+        working-directory: apps/ui
+        run: npm ci
+
+      - name: Install Playwright
+        working-directory: e2e/playwright
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Build zerod
+        run: cargo build --release --bin zerod
+
+      - name: Generate synthetic fixtures
+        run: PYTHONPATH=. python3 e2e/fixtures/seed_synthetic.py
+
+      - name: Run Mode Full specs
+        working-directory: e2e/playwright
+        run: npx playwright test full-mode/ --reporter=github
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-full-mode-results
+          path: |
+            e2e/playwright/test-results/
+            /tmp/zbot-e2e-*/

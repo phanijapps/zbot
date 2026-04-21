@@ -8,7 +8,8 @@ use rusqlite::Connection;
 use std::time::Duration;
 
 use crate::knowledge_schema::{
-    cleanup_orphan_reindex_tables, initialize_knowledge_database, initialize_vec_tables_with_dim,
+    cleanup_orphan_reindex_tables, drop_and_recreate_vec_tables_at_dim,
+    initialize_knowledge_database, initialize_vec_tables_with_dim,
 };
 use crate::sqlite_vec_loader::load_sqlite_vec;
 
@@ -106,6 +107,22 @@ impl KnowledgeDatabase {
             .map_err(|e| format!("Failed to get knowledge connection: {e}"))?;
         f(&conn).map_err(|e| format!("Knowledge DB operation failed: {e}"))
     }
+
+    /// Drop-and-recreate every vec0 index table at `new_dim`.
+    ///
+    /// Used by the boot-time dim reconciler in `AppState::new` when the
+    /// configured `EmbeddingService` dimensions disagree with the
+    /// `.embedding-state` marker. Data loss is intentional — source rows
+    /// get re-embedded by the reindex pipeline at the next sleep cycle.
+    /// Recall returns empty results in the interim instead of blowing up
+    /// with `no such table` / `embedding dim mismatch`.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any DDL error from the connection.
+    pub fn reconcile_vec_tables_dim(&self, new_dim: usize) -> Result<(), String> {
+        self.with_connection(|conn| drop_and_recreate_vec_tables_at_dim(conn, new_dim))
+    }
 }
 
 /// Read `dim=<usize>` from `data/.embedding-state` without depending on
@@ -190,5 +207,53 @@ mod tests {
             })
             .unwrap();
         assert!(sql.contains("FLOAT[768]"), "got: {sql}");
+    }
+
+    /// Fix 2: boot-time dim reconcile drops + recreates tables at the new
+    /// dim even when the marker pinned a different dim.
+    #[test]
+    fn reconcile_vec_tables_dim_drops_and_recreates_at_new_dim() {
+        let tmp = TempDir::new().unwrap();
+        let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        paths.ensure_dirs_exist().unwrap();
+
+        // Seed marker at 384 so the DB comes up at 384.
+        std::fs::write(
+            paths.data_dir().join(".embedding-state"),
+            "backend=internal\nmodel=fastembed/all-MiniLM-L6-v2\ndim=384\nindexed_at=x\n",
+        )
+        .unwrap();
+
+        let db = KnowledgeDatabase::new(paths).unwrap();
+
+        // Sanity: schema currently at 384.
+        let sql_384: String = db
+            .with_connection(|c| {
+                c.query_row(
+                    "SELECT sql FROM sqlite_master WHERE name='memory_facts_index'",
+                    [],
+                    |r| r.get(0),
+                )
+            })
+            .unwrap();
+        assert!(sql_384.contains("FLOAT[384]"), "got: {sql_384}");
+
+        // Act: reconcile to 1024 (what happens when the user picks an
+        // Ollama 1024-d backend).
+        db.reconcile_vec_tables_dim(1024).unwrap();
+
+        // All 5 vec0 tables must now be at 1024.
+        for name in crate::knowledge_schema::REQUIRED_VEC_TABLES {
+            let sql: String = db
+                .with_connection(|c| {
+                    c.query_row(
+                        "SELECT sql FROM sqlite_master WHERE name=?1",
+                        rusqlite::params![name],
+                        |r| r.get(0),
+                    )
+                })
+                .unwrap();
+            assert!(sql.contains("FLOAT[1024]"), "{name} not at 1024: {sql}");
+        }
     }
 }

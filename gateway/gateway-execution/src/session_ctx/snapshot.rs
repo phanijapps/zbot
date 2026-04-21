@@ -114,9 +114,11 @@ pub fn build(
 /// `signature\nsummary` (or just `signature`). Output is markdown
 /// grouped by file:
 ///
-///     ## core/valuation.py
-///     - `calc_wacc(equity, debt, cost_of_equity, cost_of_debt, tax_rate) -> float`
-///       Weighted average cost of capital.
+/// ```text
+/// ## core/valuation.py
+/// - `calc_wacc(equity, debt, cost_of_equity, cost_of_debt, tax_rate) -> float`
+///   Weighted average cost of capital.
+/// ```
 fn render_primitives(facts: &[gateway_database::MemoryFact], cap: usize) -> String {
     use std::collections::BTreeMap;
     let mut by_file: BTreeMap<&str, Vec<&gateway_database::MemoryFact>> = BTreeMap::new();
@@ -300,7 +302,11 @@ mod tests {
     fn test_build_with_agents_md_only() {
         let dir = TempDir::new().unwrap();
         let wards = dir.path();
-        write(wards, "stock-analysis/AGENTS.md", "# stock-analysis\n\nPurpose: value companies.");
+        write(
+            wards,
+            "stock-analysis/AGENTS.md",
+            "# stock-analysis\n\nPurpose: value companies.",
+        );
         let out = build("stock-analysis", "sess-1", wards, None);
         assert!(out.starts_with("<ward_snapshot ward=\"stock-analysis\">"));
         assert!(out.ends_with("</ward_snapshot>"));
@@ -404,10 +410,7 @@ mod tests {
 
     #[test]
     fn test_extract_exec_id() {
-        assert_eq!(
-            extract_exec_id("ctx.sess-abc.state.exec-xyz"),
-            "exec-xyz"
-        );
+        assert_eq!(extract_exec_id("ctx.sess-abc.state.exec-xyz"), "exec-xyz");
         assert_eq!(
             extract_exec_id("ctx.sess.state.exec-1-with-dashes"),
             "exec-1-with-dashes"

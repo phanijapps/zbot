@@ -394,6 +394,17 @@ pub fn initialize_vec_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
     initialize_vec_tables_with_dim(conn, 384)
 }
 
+/// The five vec0 virtual tables materialised by
+/// [`initialize_vec_tables_with_dim`]. Kept in one place so the post-init
+/// presence check and the reindex pipeline stay aligned with the DDL.
+pub const REQUIRED_VEC_TABLES: &[&str] = &[
+    "memory_facts_index",
+    "kg_name_index",
+    "session_episodes_index",
+    "wiki_articles_index",
+    "procedures_index",
+];
+
 /// Variant of [`initialize_vec_tables`] that parameterizes the embedding
 /// dimension for the vec0 virtual tables.
 ///
@@ -404,6 +415,13 @@ pub fn initialize_vec_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
 ///
 /// Note: `CREATE VIRTUAL TABLE IF NOT EXISTS` is a no-op when the table
 /// already exists with a different dim — reindex must drop-and-recreate.
+///
+/// After running the CREATE batch we verify that all five expected vec0
+/// tables materialised. If sqlite-vec failed to load on the connection,
+/// `CREATE VIRTUAL TABLE ... USING vec0(...)` silently no-ops; returning an
+/// error here lets callers (notably `KnowledgeDatabase::new`'s `.expect`
+/// at daemon boot) fail loud with a descriptive message instead of leaving
+/// `memory.recall` to blow up on the first query.
 pub fn initialize_vec_tables_with_dim(
     conn: &Connection,
     dim: usize,
@@ -438,7 +456,94 @@ CREATE VIRTUAL TABLE IF NOT EXISTS session_episodes_index USING vec0(
     );
     conn.execute_batch(&sql)?;
     conn.execute_batch(TRIGGERS_SQL)?;
+    verify_vec_tables_present(conn)?;
     Ok(())
+}
+
+/// Verify all [`REQUIRED_VEC_TABLES`] exist in `sqlite_master`.
+///
+/// Returns a descriptive error when the count is short — the usual cause
+/// is that the sqlite-vec extension failed to load on this connection, so
+/// the `CREATE VIRTUAL TABLE ... USING vec0(...)` statements became
+/// silent no-ops.
+fn verify_vec_tables_present(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let expected = REQUIRED_VEC_TABLES.len() as i64;
+    let row_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN \
+         ('memory_facts_index', 'kg_name_index', 'session_episodes_index', \
+          'wiki_articles_index', 'procedures_index')",
+        [],
+        |r| r.get(0),
+    )?;
+    if row_count != expected {
+        let message = format!(
+            "vec0 table init incomplete: expected {expected} virtual tables, \
+             found {row_count}. sqlite-vec extension likely failed to load — \
+             check logs for sqlite_vec errors."
+        );
+        // Re-use ToSqlConversionFailure as a general error carrier —
+        // rusqlite 0.32's `ModuleError` / `UserFunctionError` variants are
+        // feature-gated behind `vtab` / `functions` which this crate does
+        // not enable. Callers bubble this up via `KnowledgeDatabase::new`'s
+        // `.expect()` at daemon boot so the operator sees the full context.
+        return Err(rusqlite::Error::ToSqlConversionFailure(
+            std::io::Error::other(message).into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Query `sqlite_master` for which [`REQUIRED_VEC_TABLES`] exist.
+///
+/// Returns `(present, missing)` as `Vec<String>` lists suitable for the
+/// `/api/embeddings/health` endpoint. Unlike [`verify_vec_tables_present`]
+/// this never errors — it returns empty-vectors on a DB error so the
+/// health endpoint keeps responding.
+#[must_use]
+pub fn list_vec_table_presence(conn: &Connection) -> (Vec<String>, Vec<String>) {
+    let mut present = Vec::new();
+    let mut missing = Vec::new();
+    for &name in REQUIRED_VEC_TABLES {
+        let exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+                rusqlite::params![name],
+                |_r| Ok(true),
+            )
+            .unwrap_or(false);
+        if exists {
+            present.push(name.to_string());
+        } else {
+            missing.push(name.to_string());
+        }
+    }
+    (present, missing)
+}
+
+/// Drop every live vec0 index and recreate it at `dim`.
+///
+/// Called by the boot-time dim reconciler in `AppState::new` when the
+/// configured `EmbeddingService` dim disagrees with the `.embedding-state`
+/// marker. Data loss is intentional — the reindex pipeline repopulates
+/// from the source tables on the next sleep cycle. Until that repopulates,
+/// recall returns empty results rather than blowing up with a dim mismatch.
+///
+/// # Errors
+///
+/// Returns an error if DROP or CREATE fails on the connection (e.g.
+/// sqlite-vec failed to load).
+pub fn drop_and_recreate_vec_tables_at_dim(
+    conn: &Connection,
+    dim: usize,
+) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS memory_facts_index;
+         DROP TABLE IF EXISTS kg_name_index;
+         DROP TABLE IF EXISTS session_episodes_index;
+         DROP TABLE IF EXISTS wiki_articles_index;
+         DROP TABLE IF EXISTS procedures_index;",
+    )?;
+    initialize_vec_tables_with_dim(conn, dim)
 }
 
 /// Drop any orphan `*__new` reindex tables left behind by a crash. Idempotent.
@@ -612,5 +717,57 @@ mod tests {
             )
             .expect("count");
         assert_eq!(vec_count, 0, "vec0 row should be cleaned up by trigger");
+    }
+
+    // -----------------------------------------------------------------
+    // Fix 1: verify_vec_tables_present / initialize_vec_tables_with_dim
+    // fails loud when sqlite-vec didn't load on the connection.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn initialize_vec_tables_errors_when_sqlite_vec_not_loaded() {
+        // Open a plain connection WITHOUT load_sqlite_vec — the CREATE VIRTUAL
+        // TABLE ... USING vec0(...) statements become "no such module: vec0"
+        // which is already caught by execute_batch; but belt-and-braces the
+        // verify_vec_tables_present call also guarantees we never silently
+        // return Ok with missing tables.
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init base schema");
+
+        let err = initialize_vec_tables_with_dim(&conn, 384)
+            .expect_err("expected failure when sqlite-vec is not loaded");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("vec0") || msg.contains("no such module"),
+            "error message should mention vec0: {msg}"
+        );
+    }
+
+    #[test]
+    fn list_vec_table_presence_reports_all_five_when_initialized() {
+        let conn = Connection::open_in_memory().expect("open");
+        load_sqlite_vec(&conn).expect("load sqlite-vec");
+        initialize_knowledge_database(&conn).expect("init base schema");
+        initialize_vec_tables_with_dim(&conn, 384).expect("init vec tables");
+
+        let (present, missing) = list_vec_table_presence(&conn);
+        assert_eq!(present.len(), 5, "expected 5 present, got: {present:?}");
+        assert!(missing.is_empty(), "unexpected missing: {missing:?}");
+    }
+
+    #[test]
+    fn list_vec_table_presence_reports_missing_when_dropped() {
+        let conn = Connection::open_in_memory().expect("open");
+        load_sqlite_vec(&conn).expect("load sqlite-vec");
+        initialize_knowledge_database(&conn).expect("init base schema");
+        initialize_vec_tables_with_dim(&conn, 384).expect("init vec tables");
+
+        // Manually drop one to simulate a partial state.
+        conn.execute("DROP TABLE memory_facts_index", [])
+            .expect("drop");
+
+        let (present, missing) = list_vec_table_presence(&conn);
+        assert_eq!(present.len(), 4);
+        assert_eq!(missing, vec!["memory_facts_index".to_string()]);
     }
 }

@@ -74,7 +74,10 @@ pub fn build(
     attrs.push(r#"fields="intent,prompt,plan,state.<exec_id>""#.to_string());
 
     if !prior_execution_ids.is_empty() {
-        attrs.push(format!(r#"prior_states="{}""#, prior_execution_ids.join(",")));
+        attrs.push(format!(
+            r#"prior_states="{}""#,
+            prior_execution_ids.join(",")
+        ));
     }
 
     format!("<session_ctx {} />", attrs.join(" "))
@@ -183,21 +186,12 @@ mod tests {
         // args (action="get_fact", key="..."). It must be wrapped in
         // single quotes so the quoting remains valid.
         let tag = build("sess-1", None, None, None, &[]);
-        assert!(tag.contains(
-            r#"tool='memory(action="get_fact", key="ctx.sess-1.<field>")'"#
-        ));
+        assert!(tag.contains(r#"tool='memory(action="get_fact", key="ctx.sess-1.<field>")'"#));
     }
 
     #[test]
     fn test_prepend_to_task_two_line_separator() {
-        let result = prepend_to_task(
-            "sess-1",
-            Some("w"),
-            Some(1),
-            Some(3),
-            &[],
-            "Do the thing.",
-        );
+        let result = prepend_to_task("sess-1", Some("w"), Some(1), Some(3), &[], "Do the thing.");
         assert!(result.starts_with("<session_ctx "));
         assert!(result.contains("\n\nDo the thing."));
     }

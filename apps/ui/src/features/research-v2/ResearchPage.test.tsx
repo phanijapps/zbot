@@ -138,10 +138,11 @@ describe("<ResearchPage>", () => {
     window.confirm = vi.fn(() => true);
   });
 
-  it("renders the empty state when session has no content", () => {
+  it("renders the HeroInput landing when session has no content", () => {
     renderPage();
-    expect(screen.getByText("Research")).toBeTruthy();
-    expect(screen.getByText(/full agent chain/)).toBeTruthy();
+    // HeroInput surfaces the z-Bot brand + the prompt placeholder.
+    expect(screen.getByText("z-Bot")).toBeTruthy();
+    expect(screen.getByPlaceholderText(/What would you like to work on/i)).toBeTruthy();
   });
 
   it("has a drawer-toggle button that is accessible by label", () => {
@@ -247,7 +248,11 @@ describe("<ResearchPage>", () => {
 
   it("New research button fires startNewResearch", () => {
     const newSpy = vi.fn();
-    researchRef.current = { ...makeIdleResearch(), startNewResearch: newSpy };
+    researchRef.current = {
+      ...makeIdleResearch(),
+      startNewResearch: newSpy,
+      state: { ...makeIdleResearch().state, sessionId: "sess-1" },
+    };
     renderPage();
     // /New research/ also appears as the title placeholder — scope to the button.
     fireEvent.click(screen.getByRole("button", { name: /New research/ }));
@@ -271,6 +276,7 @@ describe("<ResearchPage>", () => {
   it("renders the status pill when pillState.visible is true", () => {
     researchRef.current = {
       ...makeIdleResearch(),
+      state: { ...makeIdleResearch().state, sessionId: "sess-1" },
       pillState: {
         visible: true,
         narration: "Running shell",

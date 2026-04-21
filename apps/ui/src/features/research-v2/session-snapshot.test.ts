@@ -25,12 +25,31 @@ import type {
 const listLogSessions = vi.fn<Transport["listLogSessions"]>();
 const getSessionMessages = vi.fn<Transport["getSessionMessages"]>();
 const listSessionArtifacts = vi.fn<Transport["listSessionArtifacts"]>();
+const getSessionState = vi.fn<Transport["getSessionState"]>();
 
 function makeTransport(): Transport {
+  // getSessionState defaults to a benign no-ward response; individual
+  // tests can override to assert ward-bearing snapshots.
+  getSessionState.mockImplementation(async () => ({
+    success: true,
+    data: {
+      session: { id: "", title: null, status: "completed", startedAt: "", durationMs: 0, tokenCount: 0, model: null },
+      userMessage: null,
+      phase: "completed",
+      response: null,
+      intentAnalysis: null,
+      ward: null,
+      recalledFacts: [],
+      plan: [],
+      subagents: [],
+      isLive: false,
+    },
+  }));
   return {
     listLogSessions,
     getSessionMessages,
     listSessionArtifacts,
+    getSessionState,
   } as unknown as Transport;
 }
 
@@ -118,6 +137,7 @@ beforeEach(() => {
   listLogSessions.mockReset();
   getSessionMessages.mockReset();
   listSessionArtifacts.mockReset();
+  getSessionState.mockReset();
 });
 
 // -----------------------------------------------------------------------------

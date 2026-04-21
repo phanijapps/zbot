@@ -124,15 +124,34 @@
   white-space: pre-wrap;
 }
 
-/* --- Assistant message (hydrated history) --------------------------------- */
-/* Live responses render inside turn blocks; this is only for the reload /
-   session-switch path where we only have messages[], not rebuilt turns. */
+/* --- Assistant turn bubble ----------------------------------------------- */
+/* Wraps the entire assistant turn: z-bot avatar, any subagent cards, and
+ * the final respond body — all inside one rounded card. Matches the
+ * FastChat / QuickChat pattern but scaled up for the multi-section
+ * research turn (tighter bottom-left corner echoes a left-origin tail).
+ * The copy button stays outside the card so it can float below it. */
+.research-msg__card {
+  align-self: stretch;
+  max-width: 80%;
+  padding: 14px 16px;
+  border-radius: 14px 14px 14px 2px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Inner body no longer carries bubble styling — it's just the prose
+ * container now. */
 .research-page__assistant {
   font-size: 14px;
   line-height: 1.6;
   color: var(--foreground);
   align-self: stretch;
 }
+.research-page__assistant > :first-child { margin-top: 0; }
+.research-page__assistant > :last-child { margin-bottom: 0; }
 
 /* --- Message shells + adornments ----------------------------------------- */
 
@@ -166,37 +185,122 @@
   min-width: 0;
   width: 100%;
 }
-.research-msg__copy {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  background: transparent;
-  color: var(--muted-foreground);
-  border: 1px solid transparent;
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 120ms ease, background 120ms ease, border-color 120ms ease;
-}
-/* Assistant copy sits under the message, left-aligned. */
-.research-msg--assistant .research-msg__copy {
+/* Assistant copy sits under the message, left-aligned. Shared .copy-btn
+ * styles live in features/shared/copyButton/copy-button.css. */
+.research-msg--assistant .copy-btn {
   align-self: flex-start;
   margin-left: 0;
 }
-.research-msg:hover .research-msg__copy,
-.research-msg__copy:focus-visible {
-  opacity: 1;
+
+/* --- Intent info popover ------------------------------------------------- */
+
+.intent-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+}
+.intent-info__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  border: 1px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.intent-info__btn:hover,
+.intent-info__btn[aria-expanded="true"] {
+  color: var(--foreground);
+  background: var(--muted);
   border-color: var(--border);
 }
-.research-msg__copy:hover {
-  background: var(--muted);
-}
-.research-msg__copy:focus-visible {
+.intent-info__btn:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
+}
+.intent-info__popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 320px;
+  max-width: 480px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--foreground);
+  /* Escape the centered/bolded title styling that wraps the host button. */
+  text-align: left;
+  font-weight: 400;
+}
+.intent-info__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.intent-info__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  border: none;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.intent-info__close:hover { background: var(--muted); color: var(--foreground); }
+.intent-info__body { max-height: 360px; overflow-y: auto; }
+.intent-info__muted { color: var(--muted-foreground); }
+.intent-info__error { color: var(--destructive); }
+.intent-info__dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 12px;
+  row-gap: 8px;
+  margin: 0;
+}
+.intent-info__dl dt {
+  font-weight: 600;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding-top: 2px;
+}
+.intent-info__dl dd { margin: 0; }
+.intent-info__dl ul { margin: 0; padding-left: 18px; }
+.intent-info__reason {
+  margin-top: 4px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.intent-info__chip {
+  display: inline-block;
+  margin: 0 4px 4px 0;
+  padding: 2px 8px;
+  background: var(--muted);
+  border-radius: 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
 }
 
 /* --- Intent lines ---------------------------------------------------------- */
@@ -309,6 +413,31 @@
   font-style: italic;
 }
 
+/* --- Live ticker (per-turn) ---------------------------------------------- */
+/* Shows the latest timeline entry (thinking/tool_call/tool_result) while
+ * the turn is running. Truncates with ellipsis, takes the middle slot of
+ * the subagent card header between the agent name and the status meta. */
+.live-ticker {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-style: italic;
+  font-weight: normal;
+  padding: 0 4px;
+}
+
+/* Root avatar row carries the inline ticker next to the bot icon. */
+.root-turn__avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 /* --- Root block: nested subagent cards ---------------------------------- */
 
 .root-turn__subagents {
@@ -343,11 +472,19 @@
 }
 .subagent-card__header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   font-size: 12px;
   margin-bottom: 6px;
   gap: 8px;
+  min-width: 0;
+}
+/* Left-align name + ticker, push meta to the right. */
+.subagent-card__agent {
+  flex-shrink: 0;
+}
+.subagent-card__meta {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .subagent-card__toggle {
   width: 100%;

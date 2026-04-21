@@ -442,10 +442,7 @@ pub async fn spawn_delegated_agent(
 /// abstract policy text. Sonnet 4.6 complies with this style at >95%
 /// in our evals; weaker models need the validation loop too.
 fn reuse_check_block(agent_id: &str) -> Option<&'static str> {
-    let writes_code = matches!(
-        agent_id,
-        "code-agent" | "data-analyst"
-    );
+    let writes_code = matches!(agent_id, "code-agent" | "data-analyst");
     if !writes_code {
         return None;
     }

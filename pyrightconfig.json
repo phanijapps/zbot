@@ -1,0 +1,15 @@
+{
+  "include": ["e2e", "scripts"],
+  "extraPaths": ["."],
+  "executionEnvironments": [
+    {
+      "root": "e2e",
+      "extraPaths": [".."]
+    }
+  ],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "warning",
+  "reportUnusedFunction": "none",
+  "reportUnusedVariable": "none"
+}

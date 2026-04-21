@@ -18,6 +18,7 @@ categories = ["development-tools"]
 [dependencies]
 # Internal crates
 zero-core = { path = "../../framework/zero-core" }
+agent-tools = { path = "../agent-tools" }
 
 # Async runtime
 tokio = { workspace = true }

@@ -34,6 +34,13 @@ pub struct HealthResponse {
     pub status: String,
     pub indexed_count: usize,
     pub needs_reindex: bool,
+    /// Subset of the five expected vec0 virtual tables that currently
+    /// exist in `sqlite_master`.
+    pub tables_present: Vec<String>,
+    /// Subset that is missing. A non-empty list here means recall will
+    /// degrade to empty results until the boot reconciler succeeds or
+    /// the user triggers a re-indexing.
+    pub tables_missing: Vec<String>,
 }
 
 pub async fn get_health(State(state): State<AppState>) -> Json<HealthResponse> {
@@ -48,6 +55,7 @@ pub async fn get_health(State(state): State<AppState>) -> Json<HealthResponse> {
         Health::ModelMissing => "model_missing".to_string(),
         Health::Misconfigured(_) => "misconfigured".to_string(),
     };
+    let (tables_present, tables_missing) = vec_table_presence(&state.knowledge_db);
     Json(HealthResponse {
         backend: snapshot.backend.as_str().to_string(),
         model: Some(client.model_name().to_string()),
@@ -55,7 +63,25 @@ pub async fn get_health(State(state): State<AppState>) -> Json<HealthResponse> {
         status: status_str,
         indexed_count: count_indexed_rows(&state.knowledge_db),
         needs_reindex: svc.needs_reindex(),
+        tables_present,
+        tables_missing,
     })
+}
+
+/// Query the knowledge DB for which of the 5 expected vec0 tables exist.
+/// Returns `(Vec::new(), REQUIRED_VEC_TABLES)` on DB errors so the health
+/// endpoint keeps responding and the UI can warn that something is wrong.
+fn vec_table_presence(db: &gateway_database::KnowledgeDatabase) -> (Vec<String>, Vec<String>) {
+    db.with_connection(|conn| Ok(gateway_database::list_vec_table_presence(conn)))
+        .unwrap_or_else(|_| {
+            (
+                Vec::new(),
+                gateway_database::REQUIRED_VEC_TABLES
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            )
+        })
 }
 
 /// Sum of indexed rows across the three sqlite-vec tables. Each

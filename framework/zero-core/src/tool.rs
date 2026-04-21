@@ -8,10 +8,11 @@
 //! This enables the orchestrator to make informed routing decisions and
 //! show appropriate warnings to users.
 //!
-//! ```rust
+//! ```ignore
 //! use zero_core::{Tool, ToolPermissions, ToolRiskLevel};
 //!
-//! // Override permissions() to declare risk level and requirements
+//! // Inside an `impl Tool for MyTool` block — override permissions() to
+//! // declare risk level and requirements:
 //! fn permissions(&self) -> ToolPermissions {
 //!     ToolPermissions::moderate(vec!["network:http".into()])
 //! }

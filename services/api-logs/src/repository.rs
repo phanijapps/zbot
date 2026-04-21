@@ -205,6 +205,14 @@ impl<D: DbProvider> LogsRepository<D> {
     /// Get a single session by ID.
     pub fn get_session(&self, session_id: &str) -> Result<Option<LogSession>, String> {
         self.db.with_connection(|conn| {
+            // API wire-quirk: the frontend passes `sess-*` ids which the
+            // `execution_logs` schema stores in the `conversation_id` column
+            // (the `session_id` column holds `exec-*` execution ids). When
+            // called with a sess-* we need to resolve to the *root* execution
+            // id; the execution_logs table unfortunately stores
+            // parent_session_id as NULL for subagent logs too, so we rely on
+            // the `agent_executions` table (which is the source of truth for
+            // parent_execution_id) to pick out the root.
             let mut stmt = conn.prepare(
                 "SELECT
                     session_id,
@@ -218,8 +226,14 @@ impl<D: DbProvider> LogsRepository<D> {
                     SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END) as error_count,
                     MAX(parent_session_id) as parent_session_id
                 FROM execution_logs
-                WHERE session_id = ?
-                GROUP BY session_id",
+                WHERE session_id = ?1
+                   OR session_id = (
+                       SELECT id FROM agent_executions
+                       WHERE session_id = ?1 AND parent_execution_id IS NULL
+                       LIMIT 1
+                   )
+                GROUP BY session_id
+                LIMIT 1",
             )?;
 
             let session = stmt
