@@ -177,24 +177,37 @@ pub(crate) async fn dispatch_loop<T: McpTransport>(
 
 ---
 
-## Phase 3 · HTML report template partials (1-2 days, low risk)
+## Phase 3 · HTML report templates — **re-scoped to config-only exclusion**
 
-**Goal:** Remove the biggest single chunk of duplication — ~1,400 lines across 6 `html-report/` templates that all re-embed the same header, navigation, base table layout, and footer.
+**Original goal:** Factor out ~1,400 duplicated lines across 7 `html-report/` templates into `_base.html` + `_table_section.html` partials.
 
-**Files:**
-- `gateway/templates/skills/html-report/{cri,pnl,portfolio,risk-reversal,stress-test,trade-specification,template}.html`
+**Why the original plan was wrong:** These templates are NOT server-side rendered pages — they are **self-contained HTML files distributed to end-users via the `html-report` skill**. `SKILL.md` documents the usage contract explicitly:
 
-**Steps:**
-- [ ] Identify the templating engine currently driving these templates (check `gateway-templates` / how they're rendered at runtime)
-- [ ] Extract a shared `_base.html` partial containing `<head>`, theme CSS `<link>`, navigation bar, footer
-- [ ] Extract a `_table_section.html` partial for the repeated `<section><h2><table>...` pattern (common to at least 4 of the 6 templates)
-- [ ] Convert each concrete template to `{{> _base}}` or the equivalent include syntax, passing the body block as a slot/variable
-- [ ] Render each template with sample inputs, visually diff against the pre-change output to confirm parity
-- [ ] Measure: run Sonar locally or wait for next CI pass to confirm ~1,200 dup lines eliminated
+> "You only write the `<body>` content — no `<head>` needed! ... `template = read("/.pi/skills/html-report/template.html"); html = template.replace("{{BODY}}", body_content); write("reports/...html", html)`"
 
-**Risk:** Visual regressions in generated reports. Mitigation: render all 6 before and after with the same sample payload and compare pixel-wise (or at least DOM-wise).
+Each template is a one-file deliverable the skill invoker reads, substitutes `{{VAR}}` placeholders in, and writes to `reports/`. Breaking that into partials would:
 
-**Phase 3 exit criteria:** dup density on these 6 files drops below 10% each; report-rendering tests (if any) pass; visual parity confirmed.
+1. Break the documented one-file-read UX
+2. Require a build/assembly step users don't currently have
+3. Couple the skill surface to an internal template engine — reversing the self-contained contract
+
+The ~1,400 duplicated lines are **intentional**. Duplication-detection metric counts them as a maintenance bug, but they're a feature of the skill.
+
+**Decision (2026-04-21):** Exclude `gateway/templates/**` from Sonar via `sonar.exclusions`. The entire `gateway/templates/` tree is distributed skill content (HTML reports, agent prompts, skill scripts, default configs) — none of it is first-party production code that should be graded against maintainability/duplication rules.
+
+**Change applied:** `sonar-project.properties` line updated:
+```
+sonar.exclusions=...,gateway/templates/**
+```
+
+**Expected Sonar impact:**
+- Duplicated-lines density drops by ~1,400 lines (the report-template cluster) plus any smaller duplication elsewhere under `gateway/templates/` → expect dup density <3%, the new-code quality gate threshold
+- The 33 `javascript:S7761` issues Phase 1a fixed stay fixed in source even though the scanner now skips them — still good hygiene
+- Analysis surface shrinks so coverage and complexity metrics become more meaningful (less noise from distributed content)
+
+**If later we want structural deduplication (optional):** source-of-truth partials in `gateway/templates/skills/html-report/_partials/`, a Python build script that concatenates partials into the 7 distributed files, and a CI check verifying the generated output matches the committed files. User-facing skill contract preserved. That's a separate mini-project, not required for the quality gate.
+
+**Phase 3 exit criteria (revised):** Sonar exclusion configured; plan doc records the decision; no source changes to the templates themselves.
 
 ---
 
@@ -295,6 +308,8 @@ pub(crate) async fn dispatch_loop<T: McpTransport>(
 | Duplicated-lines density | 4.2% | ~2.2% | ✅ under 3% new-code gate |
 | Duplicated files | 88 | ~40 | −48 |
 | CI gate on new code | ERROR | OK (pending coverage land) | ✅ |
+
+Note: Phase 3 counts ~1,400 of the −3,400 duplicated-lines delta as a Sonar-exclusion win (they stop being *measured*), not a source-level extraction. The remaining ~2,000-line reduction still comes from real code changes in Phases 2, 4, and 5.
 
 ---
 
