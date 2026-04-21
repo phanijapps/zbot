@@ -6,67 +6,13 @@
 //! all four arrays with server-computed `age_bucket` annotations and matching
 //! `counts`.
 
-use axum_test::TestServer;
-use gateway::{http::create_http_router, AppState, GatewayConfig};
-use gateway_database::{
-    vector_index::VectorIndex, EpisodeRepository, MemoryFact, Procedure, ProcedureRepository,
-    SessionEpisode, SqliteVecIndex, WardWikiRepository, WikiArticle,
-};
+mod common;
+
+use common::{make_episode_repo, make_procedure_repo, make_wiki_repo, now_iso, setup};
+use gateway_database::{MemoryFact, Procedure, SessionEpisode, WikiArticle};
 use serde_json::Value;
-use std::sync::Arc;
-use tempfile::TempDir;
 
 const TEST_WARD: &str = "literature-library";
-
-fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339()
-}
-
-fn setup() -> (TestServer, TempDir, AppState) {
-    let dir = TempDir::new().expect("temp dir");
-    std::fs::create_dir_all(dir.path().join("agents")).unwrap();
-    std::fs::create_dir_all(dir.path().join("skills")).unwrap();
-    let state = AppState::minimal(dir.path().to_path_buf());
-    let router = create_http_router(GatewayConfig::default(), state.clone());
-    let server = TestServer::new(router).expect("test server");
-    (server, dir, state)
-}
-
-fn make_wiki_repo(state: &AppState) -> Arc<WardWikiRepository> {
-    let vec: Arc<dyn VectorIndex> = Arc::new(
-        SqliteVecIndex::new(
-            state.knowledge_db.clone(),
-            "wiki_articles_index",
-            "article_id",
-        )
-        .expect("wiki vec"),
-    );
-    Arc::new(WardWikiRepository::new(state.knowledge_db.clone(), vec))
-}
-
-fn make_procedure_repo(state: &AppState) -> Arc<ProcedureRepository> {
-    let vec: Arc<dyn VectorIndex> = Arc::new(
-        SqliteVecIndex::new(
-            state.knowledge_db.clone(),
-            "procedures_index",
-            "procedure_id",
-        )
-        .expect("proc vec"),
-    );
-    Arc::new(ProcedureRepository::new(state.knowledge_db.clone(), vec))
-}
-
-fn make_episode_repo(state: &AppState) -> Arc<EpisodeRepository> {
-    let vec: Arc<dyn VectorIndex> = Arc::new(
-        SqliteVecIndex::new(
-            state.knowledge_db.clone(),
-            "session_episodes_index",
-            "episode_id",
-        )
-        .expect("episode vec"),
-    );
-    Arc::new(EpisodeRepository::new(state.knowledge_db.clone(), vec))
-}
 
 #[tokio::test]
 async fn returns_four_content_types_with_age_buckets() {

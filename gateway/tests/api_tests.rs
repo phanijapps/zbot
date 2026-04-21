@@ -3,11 +3,13 @@
 //! These tests verify the HTTP API endpoints work correctly with a real
 //! (but minimal) application state.
 
+mod common;
+
 use axum::http::StatusCode;
 use axum_test::TestServer;
+use common::{setup, setup_with_state_service};
 use execution_state::{DelegationType, StateService};
 use gateway::database::DatabaseManager;
-use gateway::{http::create_http_router, AppState, GatewayConfig};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -16,45 +18,16 @@ use tempfile::TempDir;
 // Test Setup
 // ============================================================================
 
-/// Create a test server with minimal state.
-///
-/// This sets up a temporary directory, creates minimal app state,
-/// and returns a test server that can make HTTP requests.
+/// Sync-friendly wrapper so existing `.await`-style call sites keep compiling.
+/// `common::setup` is sync; this test file historically exposed an async variant.
 async fn setup_test_server() -> (TestServer, TempDir) {
-    let dir = TempDir::new().expect("Failed to create temp dir");
-
-    // Create agents and skills directories
-    std::fs::create_dir_all(dir.path().join("agents")).unwrap();
-    std::fs::create_dir_all(dir.path().join("skills")).unwrap();
-
-    let config = GatewayConfig::default();
-    let state = AppState::minimal(dir.path().to_path_buf());
-
-    let router = create_http_router(config, state);
-    let server = TestServer::new(router).expect("Failed to create test server");
-
+    let (server, dir, _state) = setup();
     (server, dir)
 }
 
-/// Create a test server with access to the state service for data insertion.
-///
-/// This is useful for tests that need to insert test data before making API calls.
 async fn setup_test_server_with_state() -> (TestServer, Arc<StateService<DatabaseManager>>, TempDir)
 {
-    let dir = TempDir::new().expect("Failed to create temp dir");
-
-    // Create agents and skills directories
-    std::fs::create_dir_all(dir.path().join("agents")).unwrap();
-    std::fs::create_dir_all(dir.path().join("skills")).unwrap();
-
-    let config = GatewayConfig::default();
-    let state = AppState::minimal(dir.path().to_path_buf());
-    let state_service = state.state_service.clone();
-
-    let router = create_http_router(config, state);
-    let server = TestServer::new(router).expect("Failed to create test server");
-
-    (server, state_service, dir)
+    setup_with_state_service()
 }
 
 // ============================================================================

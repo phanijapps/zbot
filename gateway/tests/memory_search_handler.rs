@@ -6,8 +6,11 @@
 //! `EmbeddingError::ConfigError` — hybrid mode must degrade gracefully to
 //! FTS-only in that case.
 
+mod common;
+
 use axum_test::TestServer;
-use gateway::{http::create_http_router, AppState, GatewayConfig};
+use common::{make_state, now_iso};
+use gateway::{http::create_http_router, GatewayConfig};
 use gateway_database::MemoryFact;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -15,13 +18,9 @@ use tempfile::TempDir;
 /// Build a minimal `TestServer` + seed one memory fact whose content contains
 /// the keyword `tickers`.
 fn setup_with_seeded_fact(agent_id: &str) -> (TestServer, TempDir) {
-    let dir = TempDir::new().expect("temp dir");
-    std::fs::create_dir_all(dir.path().join("agents")).unwrap();
-    std::fs::create_dir_all(dir.path().join("skills")).unwrap();
+    let (dir, state) = make_state();
 
-    let state = AppState::minimal(dir.path().to_path_buf());
-
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = now_iso();
     let fact = MemoryFact {
         id: "fact-test-1".to_string(),
         session_id: None,
