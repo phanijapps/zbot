@@ -213,8 +213,7 @@ function SubagentCard({ turn }: SubagentCardProps) {
   // Default: expanded while running, collapsed once done. User can override
   // either way by clicking the header. Reset on status transition.
   const [expanded, setExpanded] = useState(turn.status === "running");
-  const prevStatus = useSubagentStatusTransition(turn.status, setExpanded);
-  void prevStatus;
+  useSubagentStatusTransition(turn.status, setExpanded);
   return (
     <div
       className="subagent-card"

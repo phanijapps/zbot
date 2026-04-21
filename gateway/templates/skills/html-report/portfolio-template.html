@@ -508,20 +508,20 @@
   <script>
     function toggleTheme() {
       const html = document.documentElement;
-      const current = html.getAttribute('data-theme');
+      const current = html.dataset.theme;
       if (current) {
-        html.setAttribute('data-theme', current === 'dark' ? 'light' : 'dark');
+        html.dataset.theme = current === 'dark' ? 'light' : 'dark';
       } else {
         const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        html.setAttribute('data-theme', prefersDark ? 'light' : 'dark');
+        html.dataset.theme = prefersDark ? 'light' : 'dark';
       }
       updateToggleIcon();
     }
     function updateToggleIcon() {
       const btn = document.querySelector('.theme-toggle');
       if (!btn) return;
-      const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
-        (!document.documentElement.getAttribute('data-theme') &&
+      const isDark = document.documentElement.dataset.theme === 'dark' ||
+        (!document.documentElement.dataset.theme &&
          window.matchMedia('(prefers-color-scheme: dark)').matches);
       btn.textContent = isDark ? '☀ LIGHT' : '◐ DARK';
     }

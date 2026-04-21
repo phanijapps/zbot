@@ -82,7 +82,7 @@ export function IntentInfoButton({ sessionId }: IntentInfoButtonProps) {
     setOpen((wasOpen) => {
       const nextOpen = !wasOpen;
       if (nextOpen && intent === null && !loading) {
-        void fetchIntent();
+        fetchIntent().catch(() => {});
       }
       return nextOpen;
     });

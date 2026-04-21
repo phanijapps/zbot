@@ -2324,8 +2324,7 @@ async fn invoke_continuation(
             // Phase 2b: also populate session ctx with the plan so
             // subagents can fetch it via memory(get_fact, key="ctx.<sid>.plan")
             // instead of re-reading the specs file each turn.
-            if let (Some(ref fs), Some(ref ward)) =
-                (fact_store_for_ctx.as_ref(), session_ward_id.as_ref())
+            if let (Some(fs), Some(ward)) = (fact_store_for_ctx.as_ref(), session_ward_id.as_ref())
             {
                 crate::session_ctx::writer::plan_snapshot(fs, session_id, ward, &plan).await;
             }
