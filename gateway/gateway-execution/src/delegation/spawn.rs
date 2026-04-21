@@ -431,9 +431,6 @@ pub async fn spawn_delegated_agent(
     Ok(child_conversation_id)
 }
 
-#[allow(clippy::too_many_arguments)]
-/// Spawn the async execution task for the delegated agent.
-#[allow(clippy::too_many_arguments)]
 /// Return the `<reuse_check>` imperative for coding-capable agents.
 ///
 /// Injected at the top of the task prompt (above the ward_snapshot)
@@ -471,6 +468,13 @@ fn reuse_check_block(agent_id: &str) -> Option<&'static str> {
     )
 }
 
+/// Spawn the async execution task for the delegated agent.
+///
+/// The 18 parameters mirror the full delegation context. Refactoring into a
+/// context struct is a focused PR in its own right (touches every call site +
+/// downstream field access); suppress here rather than bundling with clippy
+/// cleanup.
+#[allow(clippy::too_many_arguments)]
 fn spawn_execution_task(
     executor: AgentExecutor,
     handle: ExecutionHandle,
@@ -744,7 +748,6 @@ fn spawn_execution_task(
 }
 
 /// Handle successful execution completion.
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 async fn handle_execution_success(
     conversation_repo: &ConversationRepository,

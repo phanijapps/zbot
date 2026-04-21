@@ -194,9 +194,12 @@ mod tests {
     use async_trait::async_trait;
     use std::sync::Mutex;
 
+    /// Recorded `save_ctx_fact` call — (agent, key, value, category, scope, persistent).
+    type RecordedCall = (String, String, String, String, String, bool);
+
     /// A fake store that records all save_ctx_fact calls.
     struct RecordingStore {
-        calls: Mutex<Vec<(String, String, String, String, String, bool)>>,
+        calls: Mutex<Vec<RecordedCall>>,
     }
 
     impl RecordingStore {
@@ -206,7 +209,7 @@ mod tests {
             }
         }
 
-        fn calls(&self) -> Vec<(String, String, String, String, String, bool)> {
+        fn calls(&self) -> Vec<RecordedCall> {
             self.calls.lock().unwrap().clone()
         }
     }
