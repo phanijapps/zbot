@@ -50,6 +50,16 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 3000,
     strictPort: false,
+    // HMR over LAN: the default client assumes `wss://localhost:<port>`
+    // when the page is served over anything other than localhost, which
+    // silently hangs on phones. Use an explicit non-TLS websocket with
+    // the same port as the page; the `host` field is left unset so the
+    // client infers `window.location.hostname` dynamically — that way
+    // the same config works for the dev machine and any LAN device.
+    hmr: {
+      protocol: "ws",
+      clientPort: 3000,
+    },
     proxy: {
       "/api": {
         target: "http://localhost:18791",
