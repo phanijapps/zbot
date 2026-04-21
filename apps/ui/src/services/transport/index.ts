@@ -79,15 +79,37 @@ export { getProviderDefaultModel } from "./types";
 // Default Configuration
 // ============================================================================
 
-const DEFAULT_CONFIG: TransportConfig = {
-  httpUrl: "http://localhost:18791",
-  wsUrl: "ws://localhost:18790",
-};
+const GATEWAY_HTTP_PORT = 18791;
+const GATEWAY_WS_PORT = 18790;
+
+/**
+ * Build default gateway URLs from the current page's hostname. Serving
+ * the UI on a LAN IP (e.g. http://192.168.1.5:3000 from a phone) needs
+ * the gateway at http://192.168.1.5:18791 — hard-coding "localhost"
+ * leaves the phone talking to itself. Falls back to localhost in
+ * non-browser contexts (SSR/tests).
+ */
+function defaultConfig(): TransportConfig {
+  if (typeof window === "undefined" || !window.location) {
+    return {
+      httpUrl: `http://localhost:${GATEWAY_HTTP_PORT}`,
+      wsUrl: `ws://localhost:${GATEWAY_WS_PORT}`,
+    };
+  }
+  const host = window.location.hostname || "localhost";
+  const wsProto = window.location.protocol === "https:" ? "wss" : "ws";
+  const httpProto = window.location.protocol === "https:" ? "https" : "http";
+  return {
+    httpUrl: `${httpProto}://${host}:${GATEWAY_HTTP_PORT}`,
+    wsUrl: `${wsProto}://${host}:${GATEWAY_WS_PORT}`,
+  };
+}
 
 /**
  * Get configuration from environment or use defaults.
  */
 function getConfig(): TransportConfig {
+  const fallback = defaultConfig();
   // In web mode, check for environment variables or window config
   if (typeof window !== "undefined") {
     const windowConfig = (window as { __ZERO_CONFIG__?: TransportConfig }).__ZERO_CONFIG__;
@@ -104,13 +126,13 @@ function getConfig(): TransportConfig {
 
     if (httpUrl || wsUrl) {
       return {
-        httpUrl: httpUrl || DEFAULT_CONFIG.httpUrl,
-        wsUrl: wsUrl || DEFAULT_CONFIG.wsUrl,
+        httpUrl: httpUrl || fallback.httpUrl,
+        wsUrl: wsUrl || fallback.wsUrl,
       };
     }
   }
 
-  return DEFAULT_CONFIG;
+  return fallback;
 }
 
 // ============================================================================
