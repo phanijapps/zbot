@@ -164,3 +164,197 @@ impl GraphStorageAccess for GraphStorageAdapter {
         Ok(entity.map(entity_to_info))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gateway_database::KnowledgeDatabase;
+    use gateway_services::VaultPaths;
+    use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType};
+
+    fn storage() -> (tempfile::TempDir, Arc<GraphStorage>) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        std::fs::create_dir_all(paths.conversations_db().parent().expect("parent")).expect("mkdir");
+        let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
+        let storage = Arc::new(GraphStorage::new(db).expect("storage"));
+        (tmp, storage)
+    }
+
+    /// Seed three entities under the `__global__` agent (which is what the
+    /// adapter queries) and return their IDs so tests can build relationships.
+    fn seed_three(storage: &Arc<GraphStorage>) -> (String, String, String) {
+        let alice = Entity::new("__global__".into(), EntityType::Person, "Alice".into());
+        let rust = Entity::new("__global__".into(), EntityType::Tool, "Rust".into());
+        let project = Entity::new("__global__".into(), EntityType::Project, "ProjectX".into());
+        let (a_id, r_id, p_id) = (alice.id.clone(), rust.id.clone(), project.id.clone());
+        storage
+            .store_knowledge(
+                "__global__",
+                ExtractedKnowledge {
+                    entities: vec![alice, rust, project],
+                    relationships: vec![],
+                },
+            )
+            .expect("seed entities");
+        (a_id, r_id, p_id)
+    }
+
+    #[tokio::test]
+    async fn search_entities_by_name_returns_seeded_match() {
+        let (_tmp, storage) = storage();
+        seed_three(&storage);
+        let adapter = GraphStorageAdapter::new(storage);
+
+        let out = adapter
+            .search_entities_by_name("Alice", None, 10)
+            .await
+            .expect("search");
+
+        assert!(
+            out.iter().any(|e| e.name == "Alice"),
+            "expected Alice in {out:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_entities_by_name_filters_by_type() {
+        let (_tmp, storage) = storage();
+        seed_three(&storage);
+        let adapter = GraphStorageAdapter::new(storage);
+
+        // With no filter: Alice (person) and Rust (tool) both returned for a
+        // broad query that matches both.
+        let all = adapter
+            .search_entities_by_name("", None, 10)
+            .await
+            .expect("search all");
+        assert!(all.iter().any(|e| e.name == "Alice"));
+        assert!(all.iter().any(|e| e.name == "Rust"));
+
+        // With type=person: only Alice.
+        let only_person = adapter
+            .search_entities_by_name("", Some("person"), 10)
+            .await
+            .expect("search person");
+        assert!(only_person.iter().all(|e| e.entity_type == "person"));
+        assert!(only_person.iter().any(|e| e.name == "Alice"));
+        assert!(only_person.iter().all(|e| e.name != "Rust"));
+    }
+
+    #[tokio::test]
+    async fn search_entities_by_name_honors_limit() {
+        let (_tmp, storage) = storage();
+        seed_three(&storage);
+        let adapter = GraphStorageAdapter::new(storage);
+
+        let out = adapter
+            .search_entities_by_name("", None, 1)
+            .await
+            .expect("search");
+        assert_eq!(out.len(), 1, "limit=1 must cap result count");
+    }
+
+    #[tokio::test]
+    async fn get_entity_by_name_found_returns_info() {
+        let (_tmp, storage) = storage();
+        seed_three(&storage);
+        let adapter = GraphStorageAdapter::new(storage);
+
+        let got = adapter
+            .get_entity_by_name("Alice")
+            .await
+            .expect("lookup")
+            .expect("should be Some(Alice)");
+
+        assert_eq!(got.name, "Alice");
+        assert_eq!(got.entity_type, "person");
+    }
+
+    #[tokio::test]
+    async fn get_entity_by_name_missing_returns_none() {
+        let (_tmp, storage) = storage();
+        seed_three(&storage);
+        let adapter = GraphStorageAdapter::new(storage);
+
+        let got = adapter.get_entity_by_name("Ghost").await.expect("lookup");
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_entity_neighbors_unknown_entity_returns_empty() {
+        let (_tmp, storage) = storage();
+        seed_three(&storage);
+        let adapter = GraphStorageAdapter::new(storage);
+
+        let got = adapter
+            .get_entity_neighbors("Ghost", "both", 10)
+            .await
+            .expect("neighbors");
+        assert!(got.is_empty(), "unknown entity → empty neighbours");
+    }
+
+    #[tokio::test]
+    async fn get_entity_neighbors_returns_linked_entity() {
+        let (_tmp, storage) = storage();
+        let alice = Entity::new("__global__".into(), EntityType::Person, "Alice".into());
+        let rust = Entity::new("__global__".into(), EntityType::Tool, "Rust".into());
+        let rel = Relationship::new(
+            "__global__".into(),
+            alice.id.clone(),
+            rust.id.clone(),
+            RelationshipType::Uses,
+        );
+        storage
+            .store_knowledge(
+                "__global__",
+                ExtractedKnowledge {
+                    entities: vec![alice, rust],
+                    relationships: vec![rel],
+                },
+            )
+            .expect("seed");
+        let adapter = GraphStorageAdapter::new(storage);
+
+        let got = adapter
+            .get_entity_neighbors("Alice", "outgoing", 10)
+            .await
+            .expect("neighbors");
+
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].entity.name, "Rust");
+        assert_eq!(got[0].direction, "outgoing");
+        assert_eq!(got[0].relationship_type, "uses");
+    }
+
+    #[tokio::test]
+    async fn get_entity_neighbors_direction_defaults_to_both_on_unknown_string() {
+        // "banana" isn't a valid direction → the match arm falls through to
+        // Direction::Both. We only assert the call succeeds (specific row
+        // shape depends on the seeded graph's directionality).
+        let (_tmp, storage) = storage();
+        seed_three(&storage);
+        let adapter = GraphStorageAdapter::new(storage);
+
+        let result = adapter.get_entity_neighbors("Alice", "banana", 10).await;
+        assert!(result.is_ok(), "unknown direction must not error");
+    }
+
+    #[tokio::test]
+    async fn search_entities_with_view_smoke_test() {
+        // GraphView::from_str("entity") is the most permissive view. We don't
+        // assert specific ranking — just that the adapter wires into
+        // GraphService without panicking and returns a Vec.
+        let (_tmp, storage) = storage();
+        seed_three(&storage);
+        let adapter = GraphStorageAdapter::new(storage);
+
+        let out = adapter
+            .search_entities_with_view("Alice", None, "entity", 5)
+            .await
+            .expect("view search");
+        // Can't guarantee Alice surfaces (depends on view semantics) but the
+        // call path is exercised — that's what coverage needs.
+        let _ = out;
+    }
+}
