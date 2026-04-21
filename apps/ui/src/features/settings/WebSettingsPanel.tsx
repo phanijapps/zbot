@@ -26,6 +26,7 @@ import { ProvidersGrid } from "./ProvidersGrid";
 import { ProviderSlideover } from "./ProviderSlideover";
 import type { ProviderPreset } from "./providerPresets";
 import { getAvailablePresets } from "./providerPresets";
+import { ModelTextInput } from "../shared/modelTextInput";
 
 // ============================================================================
 // Component
@@ -623,22 +624,18 @@ export function WebSettingsPanel() {
                     </div>
                     <div>
                       <label className="settings-field-label" htmlFor="orch-model">Model</label>
-                      <select
+                      <ModelTextInput
                         id="orch-model"
-                        className="form-input form-select"
                         value={execSettings.orchestrator?.model || ""}
-                        onChange={(e) => handleExecChange({
+                        onChange={(next) => handleExecChange({
                           orchestrator: {
                             ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
-                            model: e.target.value || null,
+                            model: next || null,
                           },
                         })}
-                      >
-                        <option value="">Default Model</option>
-                        {(providers.find((p) => p.id === (execSettings.orchestrator?.providerId || defaultProviderId))?.models || []).map((m) => (
-                          <option key={m} value={m}>{m}</option>
-                        ))}
-                      </select>
+                        suggestions={providers.find((p) => p.id === (execSettings.orchestrator?.providerId || defaultProviderId))?.models || []}
+                        placeholder="provider default"
+                      />
                     </div>
                     <div>
                       <label className="settings-field-label" htmlFor="orch-temp">Temperature</label>
@@ -728,27 +725,23 @@ export function WebSettingsPanel() {
                     </div>
                     <div>
                       <label className="settings-field-label" htmlFor="dist-model">Model</label>
-                      <select
+                      <ModelTextInput
                         id="dist-model"
-                        className="form-input form-select"
                         value={execSettings.distillation?.model || ""}
-                        onChange={(e) => handleExecChange({
+                        onChange={(next) => handleExecChange({
                           distillation: {
                             ...execSettings.distillation,
-                            model: e.target.value || null,
+                            model: next || null,
                           },
                         })}
-                      >
-                        <option value="">Inherit from Orchestrator</option>
-                        {(() => {
+                        suggestions={(() => {
                           const distProviderId = execSettings.distillation?.providerId
                             || execSettings.orchestrator?.providerId
                             || defaultProviderId;
-                          return (providers.find((p) => p.id === distProviderId)?.models || []).map((m) => (
-                            <option key={m} value={m}>{m}</option>
-                          ));
+                          return providers.find((p) => p.id === distProviderId)?.models || [];
                         })()}
-                      </select>
+                        placeholder="provider default"
+                      />
                     </div>
                   </div>
                 </div>
@@ -788,25 +781,21 @@ export function WebSettingsPanel() {
                     </div>
                     <div>
                       <label className="settings-field-label" htmlFor="mm-model">Model</label>
-                      <select
+                      <ModelTextInput
                         id="mm-model"
-                        className="form-input form-select"
                         value={execSettings.multimodal?.model || ""}
-                        onChange={(e) => handleExecChange({
+                        onChange={(next) => handleExecChange({
                           multimodal: {
                             ...execSettings.multimodal || { temperature: 0.3, maxTokens: 4096 },
-                            model: e.target.value || null,
+                            model: next || null,
                           },
                         })}
-                      >
-                        <option value="">Select Vision Model</option>
-                        {(() => {
+                        suggestions={(() => {
                           const mmProviderId = execSettings.multimodal?.providerId || defaultProviderId;
-                          return (providers.find((p) => p.id === mmProviderId)?.models || []).map((m) => (
-                            <option key={m} value={m}>{m}</option>
-                          ));
+                          return providers.find((p) => p.id === mmProviderId)?.models || [];
                         })()}
-                      </select>
+                        placeholder="provider default"
+                      />
                     </div>
                     <div>
                       <label className="settings-field-label" htmlFor="mm-temp">Temperature</label>
