@@ -30,6 +30,7 @@ import {
 } from "@/services/transport";
 import { Slideover } from "@/components/Slideover";
 import { ModelChip } from "@/shared/ui/ModelChip";
+import { ModelTextInput } from "../shared/modelTextInput";
 
 // ============================================================================
 // Types
@@ -227,16 +228,13 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor="edit-agent-model">Model</label>
-            <select
+            <ModelTextInput
               id="edit-agent-model"
-              className="form-select"
               value={formData.model || ""}
-              onChange={(e) => setFormData({ ...formData, model: e.target.value })}
-            >
-              {selectedProvider?.models.map((m) => (
-                <option key={m} value={m}>{m}</option>
-              )) || <option value="">Select a provider first</option>}
-            </select>
+              onChange={(next) => setFormData({ ...formData, model: next })}
+              suggestions={selectedProvider?.models || []}
+              placeholder="provider default"
+            />
             {formData.model && modelRegistry[formData.model] && (
               <div style={{ marginTop: "var(--spacing-2)" }}>
                 <ModelChip
