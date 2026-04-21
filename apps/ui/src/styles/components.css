@@ -5249,3 +5249,114 @@
 .memory-search-results__rows { display: flex; flex-direction: column; gap: var(--spacing-2); }
 .memory-search-results__row strong { display: block; margin-bottom: var(--spacing-1); }
 .memory-search-results__row p { margin: 0; font-size: 0.8125rem; color: var(--color-muted-foreground); }
+
+/* ============================================================================
+   MOBILE RESPONSIVE
+   Breakpoint: ≤768px (phones, narrow tablets in portrait). Above this we keep
+   the desktop layout untouched. Strategy:
+     - Sidebar becomes an off-canvas drawer toggled via .app-shell__nav-toggle
+     - Pages go full-width; message bubbles widen to 92% (was 80%)
+     - Composer + hero shrink padding and font
+     - Safe-area insets on the bottom composer so the iPhone home pill
+       doesn't overlap the send button
+   ========================================================================== */
+
+.app-shell__nav-toggle {
+  display: none;
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 60;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--foreground);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+.app-shell__nav-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.32);
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+@media (max-width: 768px) {
+  /* ---- App shell + sidebar drawer ---- */
+  .app-shell__nav-toggle { display: inline-flex; }
+  .app-shell__nav-backdrop { display: block; }
+  .app-shell .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: -100%;
+    z-index: 50;
+    width: min(280px, 80vw);
+    transition: left 180ms ease;
+    box-shadow: 2px 0 16px rgba(0, 0, 0, 0.2);
+  }
+  .app-shell--nav-open .sidebar { left: 0; }
+  /* Push main content to use the full width */
+  .app-shell > main { width: 100%; }
+
+  /* ---- Research v2 ---- */
+  .research-page__header {
+    padding: 10px 12px 10px 56px; /* leave room for the hamburger */
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .research-page__title {
+    font-size: 14px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .research-page__header-actions { gap: 4px; flex-wrap: wrap; }
+  .research-page__body { padding: 0 12px; }
+  .research-page__column { max-width: 100%; }
+  .research-msg__card { max-width: 100%; padding: 10px 12px; }
+  .research-page__assistant { max-width: 100%; }
+  .research-page__composer {
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  }
+  .intent-info__popover {
+    position: fixed;
+    top: 60px;
+    left: 12px;
+    right: 12px;
+    min-width: 0;
+    max-width: none;
+  }
+
+  /* ---- Quick chat (/chat) ---- */
+  .quick-chat__header { padding: 10px 12px 10px 56px; }
+  .quick-chat__scroll { padding: 0 12px; }
+  .quick-chat__user-bubble,
+  .quick-chat__assistant { max-width: 92%; }
+  .quick-chat__composer {
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  }
+
+  /* ---- Hero input landing ---- */
+  .hero-input {
+    padding: 24px 16px 40px;
+  }
+  .hero-input__brand { margin-bottom: 24px; }
+  .hero-input__field { font-size: 15px; }
+  .hero-input__suggestions { flex-wrap: wrap; gap: 6px; }
+  .hero-input__recent-cards {
+    grid-template-columns: 1fr;
+  }
+
+  /* ---- Artifact slide-out full-width ---- */
+  .artifact-slideout { width: 100%; max-width: 100%; }
+}

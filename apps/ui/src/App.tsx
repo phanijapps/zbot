@@ -18,6 +18,7 @@ import {
   Brain,
   Network,
   MessageSquare,
+  Menu,
   Search,
 } from "lucide-react";
 import { initializeTransport, getTransport } from "@/services/transport";
@@ -263,8 +264,29 @@ const navGroups: NavGroup[] = [
 ];
 
 function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const location = useLocation();
+  // Close the mobile drawer whenever the route changes.
+  useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
   return (
-    <div className="app-shell">
+    <div className={`app-shell${mobileNavOpen ? " app-shell--nav-open" : ""}`}>
+      <button
+        type="button"
+        className="app-shell__nav-toggle"
+        aria-label={mobileNavOpen ? "Close navigation" : "Open navigation"}
+        aria-expanded={mobileNavOpen}
+        onClick={() => setMobileNavOpen((v) => !v)}
+      >
+        <Menu size={20} />
+      </button>
+      {mobileNavOpen && (
+        <button
+          type="button"
+          className="app-shell__nav-backdrop"
+          aria-label="Close navigation"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      )}
       <nav className="sidebar">
         <div className="sidebar__header">
           <div className="sidebar__logo">
