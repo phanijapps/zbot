@@ -60,7 +60,7 @@ import { useResearchSession } from "./useResearchSession";
 // Harness
 // ---------------------------------------------------------------------------
 
-const TEST_INITIAL_PATH = "/research-v2";
+const TEST_INITIAL_PATH = "/research";
 
 function routerWrapper(initialPath: string) {
   return function Wrapper({ children }: PropsWithChildren) {
@@ -70,9 +70,9 @@ function routerWrapper(initialPath: string) {
       createElement(
         Routes,
         null,
-        createElement(Route, { path: "/research-v2", element: children }),
+        createElement(Route, { path: "/research", element: children }),
         createElement(Route, {
-          path: "/research-v2/:sessionId",
+          path: "/research/:sessionId",
           element: children,
         }),
       ),
@@ -321,7 +321,7 @@ describe("useResearchSession — subscription ordering (R14a)", () => {
     });
 
     const { result } = renderHook(() => useResearchSession(), {
-      wrapper: routerWrapper(`/research-v2/${EXISTING_SESSION}`),
+      wrapper: routerWrapper(`/research/${EXISTING_SESSION}`),
     });
 
     // Let hydrate effect flush — snapshotSession fan-out resolves in two ticks.
@@ -437,7 +437,7 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
     });
 
     const { result } = renderHook(() => useResearchSession(), {
-      wrapper: routerWrapper(`/research-v2/${EXISTING_SESSION}`),
+      wrapper: routerWrapper(`/research/${EXISTING_SESSION}`),
     });
 
     await act(async () => {
@@ -467,7 +467,7 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
     listSessionArtifacts.mockResolvedValueOnce({ success: true, data: [] });
 
     const { result } = renderHook(() => useResearchSession(), {
-      wrapper: routerWrapper(`/research-v2/${EXISTING_SESSION}`),
+      wrapper: routerWrapper(`/research/${EXISTING_SESSION}`),
     });
 
     await act(async () => {
@@ -538,7 +538,7 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
     listSessionArtifacts.mockResolvedValue({ success: true, data: [] });
 
     const { result } = renderHook(() => useResearchSession(), {
-      wrapper: routerWrapper(`/research-v2/${EXISTING_SESSION}`),
+      wrapper: routerWrapper(`/research/${EXISTING_SESSION}`),
     });
     await act(async () => {
       await Promise.resolve();
@@ -583,7 +583,7 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
     vi.useFakeTimers();
     try {
       renderHook(() => useResearchSession(), {
-        wrapper: routerWrapper(`/research-v2/${EXISTING_SESSION}`),
+        wrapper: routerWrapper(`/research/${EXISTING_SESSION}`),
       });
       await act(async () => {
         await Promise.resolve();

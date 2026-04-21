@@ -395,7 +395,7 @@ export function useResearchSession() {
   // --- Sync URL when the backend hands us a session id ---
   useEffect(() => {
     if (state.sessionId && urlSessionId !== state.sessionId) {
-      navigate(`/research-v2/${state.sessionId}`, { replace: true });
+      navigate(`/research/${state.sessionId}`, { replace: true });
     }
   }, [state.sessionId, urlSessionId, navigate]);
 
@@ -507,7 +507,7 @@ export function useResearchSession() {
     dispatch({ type: "RESET" });
     hydratedForSessionRef.current = null;
     resnapshotForExecRef.current = null;
-    navigate("/research-v2", { replace: true });
+    navigate("/research", { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pillSink stable, see module-level note above.
   }, [navigate]);
 

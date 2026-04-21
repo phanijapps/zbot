@@ -155,7 +155,7 @@ function EmptyHero({ onSend }: EmptyHeroProps) {
       onSend={onSend}
       recentSessions={recentSessions}
       onSelectSession={(_sessionId, conversationId) => {
-        navigate(`/research-v2/${conversationId}`);
+        navigate(`/research/${conversationId}`);
       }}
     />
   );
@@ -254,7 +254,7 @@ export function ResearchPage() {
 
   const handleSelect = (id: string) => {
     setDrawerOpen(false);
-    navigate(`/research-v2/${id}`);
+    navigate(`/research/${id}`);
   };
 
   const handleNew = () => {

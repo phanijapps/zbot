@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, Navigate, Link, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, Link, useLocation, useParams } from "react-router-dom";
 import { Toaster } from "sonner";
 import {
   Bot,
@@ -22,7 +22,6 @@ import {
 } from "lucide-react";
 import { initializeTransport, getTransport } from "@/services/transport";
 import { SetupWizard, SetupGuard } from "./features/setup";
-import { WebChatPanel } from "./features/agent/WebChatPanel";
 import { WebAgentsPanel } from "./features/agent/WebAgentsPanel";
 import { WebSettingsPanel } from "./features/settings/WebSettingsPanel";
 import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPanel";
@@ -47,6 +46,12 @@ interface ConnectionStatus {
 // ============================================================================
 // App Component
 // ============================================================================
+
+/** Legacy redirect: /research-v2/:sessionId → /research/:sessionId. */
+function ResearchV2Redirect() {
+  const { sessionId } = useParams<{ sessionId: string }>();
+  return <Navigate to={`/research/${sessionId ?? ""}`} replace />;
+}
 
 function App() {
   const [isInitializing, setIsInitializing] = useState(true);
@@ -177,7 +182,7 @@ function App() {
             <SetupGuard>
               <WebAppShell connectionStatus={connectionStatus}>
                 <Routes>
-                  <Route path="/" element={<WebChatPanel />} />
+                  <Route path="/" element={<Navigate to="/research" replace />} />
                   <Route path="/dashboard" element={<WebOpsDashboard />} />
                   <Route path="/logs" element={<WebLogsPanel />} />
                   <Route path="/memory" element={<MemoryPage />} />
@@ -188,8 +193,11 @@ function App() {
                   <Route path="/chat" element={<QuickChat />} />
                   {/* Legacy bookmark redirect. */}
                   <Route path="/chat-v2" element={<Navigate to="/chat" replace />} />
-                  <Route path="/research-v2" element={<ResearchPage />} />
-                  <Route path="/research-v2/:sessionId" element={<ResearchPage />} />
+                  <Route path="/research" element={<ResearchPage />} />
+                  <Route path="/research/:sessionId" element={<ResearchPage />} />
+                  {/* Legacy bookmark redirects. */}
+                  <Route path="/research-v2" element={<Navigate to="/research" replace />} />
+                  <Route path="/research-v2/:sessionId" element={<ResearchV2Redirect />} />
                   <Route path="/providers" element={<Navigate to="/settings" replace />} />
                   <Route path="/skills" element={<Navigate to="/agents?tab=skills" replace />} />
                   <Route path="/hooks" element={<Navigate to="/agents?tab=schedules" replace />} />
@@ -232,8 +240,7 @@ const navGroups: NavGroup[] = [
     // Main group - no label
     items: [
       { to: "/chat", label: "Chat", icon: MessageSquare },
-      { to: "/", label: "Research", icon: Search },
-      { to: "/research-v2", label: "Research", icon: Search, matchPrefix: true, badge: "v2" },
+      { to: "/research", label: "Research", icon: Search, matchPrefix: true },
       { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { to: "/logs", label: "Logs", icon: Eye },
       { to: "/memory", label: "Memory", icon: Brain },
