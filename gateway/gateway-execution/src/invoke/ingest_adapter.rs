@@ -160,3 +160,199 @@ fn build_knowledge(
         relationships: kg_relationships,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ingest::extractor::Extractor;
+    use gateway_database::{KgEpisode, KnowledgeDatabase};
+    use gateway_services::VaultPaths;
+
+    /// Minimal no-op extractor — lets IngestionQueue::start spawn cleanly
+    /// without needing a provider/LLM. Tests never exercise the worker loop.
+    struct NoopExtractor;
+
+    #[async_trait]
+    impl Extractor for NoopExtractor {
+        async fn process(
+            &self,
+            _episode: &KgEpisode,
+            _chunk_text: &str,
+            _graph: &Arc<GraphStorage>,
+        ) -> std::result::Result<(), String> {
+            Ok(())
+        }
+    }
+
+    struct Harness {
+        _tmp: tempfile::TempDir,
+        episode_repo: Arc<KgEpisodeRepository>,
+        graph: Arc<GraphStorage>,
+        adapter: IngestionAdapter,
+    }
+
+    fn setup() -> Harness {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        std::fs::create_dir_all(paths.conversations_db().parent().expect("parent")).expect("mkdir");
+        let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
+        let episode_repo = Arc::new(KgEpisodeRepository::new(db.clone()));
+        let graph = Arc::new(GraphStorage::new(db).expect("graph"));
+        // 0 workers — spawns the dispatcher only. notify() is a no-op,
+        // no workers try to claim-and-process anything we enqueue. Keeps
+        // tests deterministic: the rows we insert stay in `pending`.
+        let queue = Arc::new(IngestionQueue::start(
+            0,
+            episode_repo.clone(),
+            graph.clone(),
+            Arc::new(NoopExtractor),
+        ));
+        let adapter = IngestionAdapter::new(queue, episode_repo.clone(), graph.clone());
+        Harness {
+            _tmp: tmp,
+            episode_repo,
+            graph,
+            adapter,
+        }
+    }
+
+    // --- build_knowledge: pure helper ---
+
+    #[test]
+    fn build_knowledge_maps_entity_and_relationship_fields() {
+        let entity = StructuredEntity {
+            id: "alice".into(),
+            name: "Alice".into(),
+            entity_type: "person".into(),
+            properties: serde_json::json!({"role": "author"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        };
+        let rel = StructuredRelationship {
+            rel_type: "uses".into(),
+            from: "alice".into(),
+            to: "rust".into(),
+            properties: serde_json::json!({"since": "2026"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        };
+
+        let knowledge = build_knowledge("agent-x", vec![entity], vec![rel]);
+
+        assert_eq!(knowledge.entities.len(), 1);
+        let e = &knowledge.entities[0];
+        assert_eq!(e.id, "alice");
+        assert_eq!(e.name, "Alice");
+        assert_eq!(e.agent_id, "agent-x");
+        assert_eq!(e.mention_count, 1);
+        assert_eq!(e.properties.get("role"), Some(&serde_json::json!("author")));
+
+        assert_eq!(knowledge.relationships.len(), 1);
+        let r = &knowledge.relationships[0];
+        assert!(r.id.starts_with("rel-"));
+        assert_eq!(r.agent_id, "agent-x");
+        assert_eq!(r.source_entity_id, "alice");
+        assert_eq!(r.target_entity_id, "rust");
+        assert_eq!(r.mention_count, 1);
+        assert_eq!(r.properties.get("since"), Some(&serde_json::json!("2026")));
+    }
+
+    #[test]
+    fn build_knowledge_empty_inputs_produce_empty_outputs() {
+        let knowledge = build_knowledge("agent-x", vec![], vec![]);
+        assert!(knowledge.entities.is_empty());
+        assert!(knowledge.relationships.is_empty());
+    }
+
+    // --- IngestionAdapter::enqueue ---
+
+    #[tokio::test]
+    async fn enqueue_chunks_text_and_persists_one_episode_per_chunk() {
+        let h = setup();
+        let text = "a".repeat(3000); // Forces at least 2 chunks at default chunk size.
+        let (id, count) = h
+            .adapter
+            .enqueue("src-1", "document", &text, None, "agent-1")
+            .await
+            .expect("enqueue");
+
+        assert_eq!(id, "src-1");
+        assert!(count >= 1, "at least one chunk enqueued");
+
+        // Verify `pending` rows were written via the global pending counter.
+        let pending_rows = h
+            .episode_repo
+            .count_pending_global()
+            .expect("count pending");
+        assert_eq!(
+            pending_rows as usize, count,
+            "pending episode count matches enqueued chunk count"
+        );
+    }
+
+    #[tokio::test]
+    async fn enqueue_empty_text_returns_zero_chunks() {
+        let h = setup();
+        let (id, count) = h
+            .adapter
+            .enqueue("src-empty", "document", "", None, "agent-1")
+            .await
+            .expect("enqueue");
+        assert_eq!(id, "src-empty");
+        assert_eq!(count, 0, "empty text produces no chunks");
+    }
+
+    // --- IngestionAdapter::ingest_structured ---
+
+    #[tokio::test]
+    async fn ingest_structured_upserts_entities_and_returns_counts() {
+        let h = setup();
+        let entities = vec![
+            StructuredEntity {
+                id: "e1".into(),
+                name: "EntityOne".into(),
+                entity_type: "concept".into(),
+                properties: serde_json::Map::new(),
+            },
+            StructuredEntity {
+                id: "e2".into(),
+                name: "EntityTwo".into(),
+                entity_type: "concept".into(),
+                properties: serde_json::Map::new(),
+            },
+        ];
+        let relationships = vec![StructuredRelationship {
+            rel_type: "relates-to".into(),
+            from: "e1".into(),
+            to: "e2".into(),
+            properties: serde_json::Map::new(),
+        }];
+
+        let counts = h
+            .adapter
+            .ingest_structured("agent-x", entities, relationships)
+            .await
+            .expect("ingest_structured");
+
+        assert_eq!(counts.entities_upserted, 2);
+        assert_eq!(counts.relationships_upserted, 1);
+
+        // The entities should actually have landed in the graph.
+        let stored = h.graph.get_entity_by_name("agent-x", "EntityOne").unwrap();
+        assert!(stored.is_some(), "EntityOne should be retrievable");
+    }
+
+    #[tokio::test]
+    async fn ingest_structured_empty_batches_are_noops() {
+        let h = setup();
+        let counts = h
+            .adapter
+            .ingest_structured("agent-x", vec![], vec![])
+            .await
+            .expect("ingest_structured");
+        assert_eq!(counts.entities_upserted, 0);
+        assert_eq!(counts.relationships_upserted, 0);
+    }
+}
