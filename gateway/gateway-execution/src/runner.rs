@@ -165,6 +165,42 @@ pub struct ExecutionRunnerConfig {
     pub max_parallel_agents: u32,
 }
 
+/// Borrowed-reference bundle for the nested `spawn_with_notification` helper
+/// inside `spawn_delegation_handler`. All fields are `&Arc<_>` (or `&T`) —
+/// the helper `.clone()`s each one for the `tokio::spawn` it owns internally.
+///
+/// The previous 22-positional-arg version of the helper was called at three
+/// sites inside the delegation loop; a field-swap between same-type
+/// `Option<Arc<…>>` slots (memory_repo vs graph_storage vs ingestion_adapter)
+/// would have been a silent runtime regression with no compile signal.
+struct SpawnNotificationDeps<'a> {
+    event_bus: &'a Arc<EventBus>,
+    agent_service: &'a Arc<AgentService>,
+    provider_service: &'a Arc<ProviderService>,
+    mcp_service: &'a Arc<McpService>,
+    skill_service: &'a Arc<gateway_services::SkillService>,
+    paths: &'a SharedVaultPaths,
+    conversation_repo: &'a Arc<ConversationRepository>,
+    handles: &'a Arc<RwLock<HashMap<String, ExecutionHandle>>>,
+    delegation_registry: &'a Arc<DelegationRegistry>,
+    delegation_tx: &'a mpsc::UnboundedSender<DelegationRequest>,
+    log_service: &'a Arc<LogService<DatabaseManager>>,
+    state_service: &'a Arc<StateService<DatabaseManager>>,
+    workspace_cache: &'a WorkspaceCache,
+    delegation_semaphore: &'a Arc<Semaphore>,
+    memory_repo: &'a Option<Arc<gateway_database::MemoryRepository>>,
+    embedding_client: &'a Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+    memory_recall: &'a Option<Arc<super::recall::MemoryRecall>>,
+    rate_limiters: &'a Arc<
+        std::sync::RwLock<
+            std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
+        >,
+    >,
+    graph_storage: &'a Option<Arc<knowledge_graph::GraphStorage>>,
+    ingestion_adapter: &'a Option<Arc<dyn agent_tools::IngestionAccess>>,
+    goal_adapter: &'a Option<Arc<dyn agent_tools::GoalAccess>>,
+}
+
 impl ExecutionRunner {
     /// Create a new execution runner from a [`ExecutionRunnerConfig`].
     ///
@@ -344,60 +380,35 @@ impl ExecutionRunner {
             /// Acquires the global semaphore permit, runs `spawn_delegated_agent`,
             /// then signals the handler loop via `done_tx` so the next queued
             /// request for the same session can be dispatched.
-            #[allow(clippy::too_many_arguments)]
             fn spawn_with_notification(
                 request: DelegationRequest,
-                event_bus: &Arc<EventBus>,
-                agent_service: &Arc<AgentService>,
-                provider_service: &Arc<ProviderService>,
-                mcp_service: &Arc<McpService>,
-                skill_service: &Arc<gateway_services::SkillService>,
-                paths: &SharedVaultPaths,
-                conversation_repo: &Arc<ConversationRepository>,
-                handles: &Arc<RwLock<HashMap<String, ExecutionHandle>>>,
-                delegation_registry: &Arc<DelegationRegistry>,
-                delegation_tx: &mpsc::UnboundedSender<DelegationRequest>,
-                log_service: &Arc<LogService<DatabaseManager>>,
-                state_service: &Arc<StateService<DatabaseManager>>,
-                workspace_cache: &WorkspaceCache,
-                delegation_semaphore: &Arc<Semaphore>,
-                memory_repo: &Option<Arc<gateway_database::MemoryRepository>>,
-                embedding_client: &Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
-                memory_recall: &Option<Arc<super::recall::MemoryRecall>>,
-                rate_limiters: &Arc<
-                    std::sync::RwLock<
-                        std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
-                    >,
-                >,
-                graph_storage: &Option<Arc<knowledge_graph::GraphStorage>>,
-                ingestion_adapter: &Option<Arc<dyn agent_tools::IngestionAccess>>,
-                goal_adapter: &Option<Arc<dyn agent_tools::GoalAccess>>,
+                deps: &SpawnNotificationDeps<'_>,
                 done_tx: mpsc::UnboundedSender<String>,
             ) {
                 let session_id = request.session_id.clone();
 
                 // Clone all Arcs for the spawned task
-                let event_bus = event_bus.clone();
-                let agent_service = agent_service.clone();
-                let provider_service = provider_service.clone();
-                let mcp_service = mcp_service.clone();
-                let skill_service = skill_service.clone();
-                let paths = paths.clone();
-                let conversation_repo = conversation_repo.clone();
-                let handles = handles.clone();
-                let delegation_registry = delegation_registry.clone();
-                let delegation_tx = delegation_tx.clone();
-                let log_service = log_service.clone();
-                let state_service = state_service.clone();
-                let workspace_cache = workspace_cache.clone();
-                let delegation_semaphore = delegation_semaphore.clone();
-                let memory_repo = memory_repo.clone();
-                let embedding_client = embedding_client.clone();
-                let memory_recall = memory_recall.clone();
-                let rate_limiters = rate_limiters.clone();
-                let graph_storage = graph_storage.clone();
-                let ingestion_adapter = ingestion_adapter.clone();
-                let goal_adapter = goal_adapter.clone();
+                let event_bus = deps.event_bus.clone();
+                let agent_service = deps.agent_service.clone();
+                let provider_service = deps.provider_service.clone();
+                let mcp_service = deps.mcp_service.clone();
+                let skill_service = deps.skill_service.clone();
+                let paths = deps.paths.clone();
+                let conversation_repo = deps.conversation_repo.clone();
+                let handles = deps.handles.clone();
+                let delegation_registry = deps.delegation_registry.clone();
+                let delegation_tx = deps.delegation_tx.clone();
+                let log_service = deps.log_service.clone();
+                let state_service = deps.state_service.clone();
+                let workspace_cache = deps.workspace_cache.clone();
+                let delegation_semaphore = deps.delegation_semaphore.clone();
+                let memory_repo = deps.memory_repo.clone();
+                let embedding_client = deps.embedding_client.clone();
+                let memory_recall = deps.memory_recall.clone();
+                let rate_limiters = deps.rate_limiters.clone();
+                let graph_storage = deps.graph_storage.clone();
+                let ingestion_adapter = deps.ingestion_adapter.clone();
+                let goal_adapter = deps.goal_adapter.clone();
 
                 tokio::spawn(async move {
                     let semaphore = delegation_semaphore.clone();
@@ -443,6 +454,32 @@ impl ExecutionRunner {
                 });
             }
 
+            // One shared borrow bundle for all spawn_with_notification call
+            // sites — avoids repeating the 21-field list three times.
+            let deps = SpawnNotificationDeps {
+                event_bus: &event_bus,
+                agent_service: &agent_service,
+                provider_service: &provider_service,
+                mcp_service: &mcp_service,
+                skill_service: &skill_service,
+                paths: &paths,
+                conversation_repo: &conversation_repo,
+                handles: &handles,
+                delegation_registry: &delegation_registry,
+                delegation_tx: &delegation_tx,
+                log_service: &log_service,
+                state_service: &state_service,
+                workspace_cache: &workspace_cache,
+                delegation_semaphore: &delegation_semaphore,
+                memory_repo: &memory_repo,
+                embedding_client: &embedding_client,
+                memory_recall: &memory_recall,
+                rate_limiters: &rate_limiters,
+                graph_storage: &graph_storage_for_delegation,
+                ingestion_adapter: &ingestion_adapter_for_delegation,
+                goal_adapter: &goal_adapter_for_delegation,
+            };
+
             loop {
                 tokio::select! {
                     Some(request) = rx.recv() => {
@@ -455,20 +492,7 @@ impl ExecutionRunner {
                                 child_agent = %request.child_agent_id,
                                 "Parallel delegation — bypassing per-session queue"
                             );
-                            spawn_with_notification(
-                                request,
-                                &event_bus, &agent_service, &provider_service,
-                                &mcp_service, &skill_service, &paths,
-                                &conversation_repo, &handles, &delegation_registry,
-                                &delegation_tx, &log_service, &state_service,
-                                &workspace_cache, &delegation_semaphore,
-                                &memory_repo, &embedding_client,
-                                &memory_recall, &rate_limiters,
-                                &graph_storage_for_delegation,
-                                &ingestion_adapter_for_delegation,
-                                &goal_adapter_for_delegation,
-                                done_tx.clone(),
-                            );
+                            spawn_with_notification(request, &deps, done_tx.clone());
                         } else if active_sessions.contains(&session_id) {
                             // Sequential: queue behind active delegation
                             tracing::info!(
@@ -488,20 +512,7 @@ impl ExecutionRunner {
                             );
                             active_sessions.insert(session_id.clone());
 
-                            spawn_with_notification(
-                                request,
-                                &event_bus, &agent_service, &provider_service,
-                                &mcp_service, &skill_service, &paths,
-                                &conversation_repo, &handles, &delegation_registry,
-                                &delegation_tx, &log_service, &state_service,
-                                &workspace_cache, &delegation_semaphore,
-                                &memory_repo, &embedding_client,
-                                &memory_recall, &rate_limiters,
-                                &graph_storage_for_delegation,
-                                &ingestion_adapter_for_delegation,
-                                &goal_adapter_for_delegation,
-                                done_tx.clone(),
-                            );
+                            spawn_with_notification(request, &deps, done_tx.clone());
                         }
                     }
                     Some(completed_session) = done_rx.recv() => {
@@ -518,20 +529,7 @@ impl ExecutionRunner {
                                 );
                                 active_sessions.insert(completed_session.clone());
 
-                                spawn_with_notification(
-                                    next,
-                                    &event_bus, &agent_service, &provider_service,
-                                    &mcp_service, &skill_service, &paths,
-                                    &conversation_repo, &handles, &delegation_registry,
-                                    &delegation_tx, &log_service, &state_service,
-                                    &workspace_cache, &delegation_semaphore,
-                                    &memory_repo, &embedding_client,
-                                    &memory_recall, &rate_limiters,
-                                    &graph_storage_for_delegation,
-                                    &ingestion_adapter_for_delegation,
-                                    &goal_adapter_for_delegation,
-                                    done_tx.clone(),
-                                );
+                                spawn_with_notification(next, &deps, done_tx.clone());
                             }
                             if queued.get(&completed_session).map(|q| q.is_empty()).unwrap_or(true) {
                                 queued.remove(&completed_session);
