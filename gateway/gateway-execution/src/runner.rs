@@ -165,6 +165,40 @@ pub struct ExecutionRunnerConfig {
     pub max_parallel_agents: u32,
 }
 
+/// Inputs for [`invoke_continuation`]. Previously 24 positional arguments,
+/// with eight same-type `Option<Arc<…>>` dependencies in a row
+/// (memory_repo, embedding_client, distiller, memory_recall,
+/// model_registry, graph_storage, kg_episode_repo, ingestion_adapter,
+/// goal_adapter) — the densest silent-swap cluster in the file. A
+/// psychopath adding a 25th dependency to the old signature had an even
+/// chance of scrambling which optional dep routed where.
+struct ContinuationArgs<'a> {
+    session_id: &'a str,
+    root_agent_id: &'a str,
+    event_bus: Arc<EventBus>,
+    agent_service: Arc<AgentService>,
+    provider_service: Arc<ProviderService>,
+    mcp_service: Arc<McpService>,
+    skill_service: Arc<gateway_services::SkillService>,
+    paths: SharedVaultPaths,
+    conversation_repo: Arc<ConversationRepository>,
+    handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
+    delegation_registry: Arc<DelegationRegistry>,
+    delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
+    log_service: Arc<LogService<DatabaseManager>>,
+    state_service: Arc<StateService<DatabaseManager>>,
+    workspace_cache: WorkspaceCache,
+    memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+    distiller: Option<Arc<super::distillation::SessionDistiller>>,
+    memory_recall: Option<Arc<super::recall::MemoryRecall>>,
+    model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
+    graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+    ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
+    goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+}
+
 /// Borrowed inputs for [`ExecutionRunner::create_executor`]. Previously
 /// 8 positional args with *four* silent-swap hazards:
 ///
@@ -633,35 +667,37 @@ impl ExecutionRunner {
 
                         // Invoke the root agent to continue
                         // The agent will see full session context including callbacks
-                        if let Err(e) = invoke_continuation(
-                            &session_id,
-                            &root_agent_id,
-                            event_bus.clone(),
-                            agent_service.clone(),
-                            provider_service.clone(),
-                            mcp_service.clone(),
-                            skill_service.clone(),
-                            paths.clone(),
-                            conversation_repo.clone(),
-                            handles.clone(),
-                            delegation_registry.clone(),
-                            delegation_tx.clone(),
-                            log_service.clone(),
-                            state_service.clone(),
-                            workspace_cache.clone(),
-                            memory_repo.clone(),
-                            embedding_client.clone(),
-                            distiller.clone(),
-                            memory_recall.clone(),
-                            // Read the live registry at fire time, not
-                            // a stale capture. `load_full()` already
-                            // returns `Option<Arc<ModelRegistry>>`.
-                            model_registry.load_full(),
-                            graph_storage.clone(),
-                            kg_episode_repo.clone(),
-                            ingestion_adapter.clone(),
-                            goal_adapter.clone(),
-                        )
+                        if let Err(e) = invoke_continuation(ContinuationArgs {
+                            session_id: &session_id,
+                            root_agent_id: &root_agent_id,
+                            event_bus: event_bus.clone(),
+                            agent_service: agent_service.clone(),
+                            provider_service: provider_service.clone(),
+                            mcp_service: mcp_service.clone(),
+                            skill_service: skill_service.clone(),
+                            paths: paths.clone(),
+                            conversation_repo: conversation_repo.clone(),
+                            handles: handles.clone(),
+                            delegation_registry: delegation_registry.clone(),
+                            delegation_tx: delegation_tx.clone(),
+                            log_service: log_service.clone(),
+                            state_service: state_service.clone(),
+                            workspace_cache: workspace_cache.clone(),
+                            memory_repo: memory_repo.clone(),
+                            embedding_client: embedding_client.clone(),
+                            distiller: distiller.clone(),
+                            memory_recall: memory_recall.clone(),
+                            // Read the live registry at fire time, not a
+                            // stale capture. `load_full()` returns
+                            // `Option<Arc<ModelRegistry>>` — exactly the
+                            // shape `ContinuationArgs.model_registry`
+                            // expects, so no extra unwrap dance needed.
+                            model_registry: model_registry.load_full(),
+                            graph_storage: graph_storage.clone(),
+                            kg_episode_repo: kg_episode_repo.clone(),
+                            ingestion_adapter: ingestion_adapter.clone(),
+                            goal_adapter: goal_adapter.clone(),
+                        })
                         .await
                         {
                             tracing::error!(
@@ -2122,33 +2158,33 @@ impl ExecutionRunner {
 /// - Original user message
 /// - Previous assistant responses
 /// - Callback messages from completed subagents (as system messages)
-#[allow(clippy::too_many_arguments)]
-async fn invoke_continuation(
-    session_id: &str,
-    root_agent_id: &str,
-    event_bus: Arc<EventBus>,
-    agent_service: Arc<AgentService>,
-    provider_service: Arc<ProviderService>,
-    mcp_service: Arc<McpService>,
-    skill_service: Arc<gateway_services::SkillService>,
-    paths: SharedVaultPaths,
-    conversation_repo: Arc<ConversationRepository>,
-    handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
-    _delegation_registry: Arc<DelegationRegistry>,
-    delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
-    log_service: Arc<LogService<DatabaseManager>>,
-    state_service: Arc<StateService<DatabaseManager>>,
-    workspace_cache: WorkspaceCache,
-    memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
-    embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
-    distiller: Option<Arc<super::distillation::SessionDistiller>>,
-    memory_recall: Option<Arc<super::recall::MemoryRecall>>,
-    model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
-    graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
-    kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
-    ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
-    goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
-) -> Result<(), String> {
+async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<(), String> {
+    let ContinuationArgs {
+        session_id,
+        root_agent_id,
+        event_bus,
+        agent_service,
+        provider_service,
+        mcp_service,
+        skill_service,
+        paths,
+        conversation_repo,
+        handles,
+        delegation_registry: _delegation_registry,
+        delegation_tx,
+        log_service,
+        state_service,
+        workspace_cache,
+        memory_repo,
+        embedding_client,
+        distiller,
+        memory_recall,
+        model_registry,
+        graph_storage,
+        kg_episode_repo,
+        ingestion_adapter,
+        goal_adapter,
+    } = args;
     // Generate a new conversation ID for this continuation turn
     let conversation_id = format!(
         "{}-cont-{}",

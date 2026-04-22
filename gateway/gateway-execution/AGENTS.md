@@ -73,11 +73,16 @@ Functions that take ≥7 arguments must take a named-field context struct instea
 
 Established examples:
 - Construction: `ExecutionRunner::with_config(ExecutionRunnerConfig { … })`
+- Runner internals: `ExecutionRunner::spawn_execution_task(ExecutionTaskArgs { … })`, `ExecutionRunner::create_executor(CreateExecutorArgs { … })`, `spawn_with_notification(request, &SpawnNotificationDeps { … }, done_tx)`, `invoke_continuation(ContinuationArgs { … })`
 - Lifecycle: `complete_execution(CompleteExecution { … })`, `crash_execution(CrashExecution { … })`, `stop_execution(StopExecution { … })`, `emit_delegation_completed(DelegationCompletedEvent { … })`
 - Delegation: `spawn_execution_task(SpawnContext { … })`, `handle_execution_success(HandleExecutionSuccess { … })`, `handle_execution_failure(HandleExecutionFailure { … })`
 - Batch writer: `BatchWrite::SessionMessage(SessionMessage { … })`
 
 When extending any of these, add the new input as a named field to the relevant struct. Don't grow the positional signature.
+
+### Invariant: zero `#[allow(clippy::too_many_arguments)]` inside this crate
+
+The workspace clippy gate runs with `-D warnings`. Any time you catch yourself reaching for `#[allow(clippy::too_many_arguments)]` instead of adding a context struct, stop — the rule above was introduced to replace exactly that reflex. `runner.rs`, `lifecycle.rs`, and `delegation/spawn.rs` used to have nine such attributes combined; they now have zero, and a new one showing up here will fail CI.
 
 ### When to simplify vs. test
 
