@@ -5,8 +5,17 @@ Agent execution engine. Converts runtime stream events to gateway events, manage
 ## Build & Test
 
 ```bash
-cargo test -p gateway-execution    # 19 tests
+cargo test -p gateway-execution    # 370 tests
 ```
+
+For hot-path safety (runner.rs, delegation/spawn.rs), unit tests aren't enough on their own — run the Mode Full E2E after any change to `ExecutionRunner::spawn_execution_task`, `create_executor`, `invoke_continuation`, or the delegation spawn path:
+
+```bash
+cd e2e && ./scripts/boot-full-mode.sh simple-qa &
+cd playwright && npx playwright test full-mode/simple-qa.full.spec.ts
+```
+
+Real zerod + mock-llm + real UI build + scripted browser. Zero-drift report confirms the LLM call shape hasn't changed.
 
 ## Key Types
 
@@ -89,3 +98,15 @@ The workspace clippy gate runs with `-D warnings`. Any time you catch yourself r
 If a function has low coverage AND high cognitive complexity, simplify first (split, extract, introduce context structs) and add tests for the smaller resulting pieces. Don't test a god method as-is — you pin the wrong behaviour in place.
 
 If a function has low coverage but IS small and single-purpose, just test it.
+
+### Extract shared helpers over inline duplication
+
+When two methods do the same thing with the same closure captures, the copy will eventually diverge in a way you can't see from either site. Prefer a module-private free function (or `pub(crate)` method) with a focused signature.
+
+Established examples:
+- `attach_mid_session_recall_hook(executor, memory_recall, agent_id, ward_id)` — replaced identical ~55-line `executor.set_recall_hook(...)` invocations in `create_executor` and `invoke_continuation`.
+- `handle_tool_call_start` / `handle_tool_result` — extracted from the per-event match inside `spawn_execution_task`. The closure body used to be a 130-line switch; now it's a flat dispatcher. Both handlers take `&mut EventAccumulator` + `&EventHandlerDeps<'_>` so new events or new mutables don't grow the signature.
+- `run_intent_analysis` + `emit_intent_fallback_complete` — replaced a 220-line nested-5-deep block inside `create_executor` with a single `Option<IntentOutcome>` return value. The caller is now one `if let Some(out) = ...` line.
+- `prepend_continuation_recall` + `build_continuation_message` — extracted from `invoke_continuation`; both are async module-private helpers with clearly-documented preconditions for their no-op branches.
+
+If the two sites have *similar* but not *identical* behaviour, resist the pressure to unify under an `Option`-flag argument — that often hides a behaviour change as a refactor. Check whether the divergence is intentional (e.g. the continuation task skips working-memory updates on purpose) before reaching for a shared helper.
