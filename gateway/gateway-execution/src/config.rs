@@ -381,4 +381,78 @@ mod tests {
         let research = base.with_mode("deep".to_string());
         assert!(!research.is_chat_mode());
     }
+
+    #[test]
+    fn execution_config_with_hook_context_stores_it() {
+        use gateway_events::HookType;
+        let ctx = HookContext {
+            hook_type: HookType::Cli,
+            source_id: "cli-1".into(),
+            channel_id: None,
+            metadata: std::collections::HashMap::new(),
+            created_at: chrono::Utc::now(),
+        };
+        let cfg = ExecutionConfig::new("root".into(), "c".into(), PathBuf::from("/tmp"))
+            .with_hook_context(ctx);
+        assert!(cfg.hook_context.is_some());
+    }
+
+    // --- GatewayFileSystem: FileSystemContext impl ---
+    //
+    // One assertion per method. All deterministic: every path resolves to a
+    // pre-known subdir under the vault, except `python_executable` which is
+    // hardcoded None.
+
+    #[test]
+    fn gateway_fs_resolves_every_vault_subdir() {
+        let vault = PathBuf::from("/v");
+        let fs = GatewayFileSystem::new(vault.clone());
+
+        assert_eq!(fs.vault_path(), Some(vault.clone()));
+        assert_eq!(fs.outputs_dir(), Some(vault.join("outputs")));
+        assert_eq!(fs.skills_dir(), Some(vault.join("skills")));
+        assert_eq!(fs.agents_dir(), Some(vault.join("agents")));
+        assert_eq!(fs.wards_root_dir(), Some(vault.join("wards")));
+        assert_eq!(
+            fs.mcps_config(),
+            Some(vault.join("config").join("mcps.json"))
+        );
+        assert_eq!(
+            fs.conversation_dir("c1"),
+            Some(vault.join("conversations").join("c1"))
+        );
+        assert_eq!(
+            fs.session_code_dir("s1"),
+            Some(vault.join("code").join("s1"))
+        );
+        assert_eq!(
+            fs.session_data_dir("s1"),
+            Some(vault.join("wards").join("s1"))
+        );
+        assert_eq!(
+            fs.agent_data_dir("agent-a"),
+            Some(vault.join("wards").join("agent-a"))
+        );
+        assert_eq!(fs.ward_dir("w1"), Some(vault.join("wards").join("w1")));
+    }
+
+    #[test]
+    fn gateway_fs_python_executable_is_none() {
+        // Documented as "use system Python — could be made configurable."
+        // If this ever returns Some(...), the behaviour change should be
+        // flagged by this test flipping.
+        let fs = GatewayFileSystem::new(PathBuf::from("/v"));
+        assert!(fs.python_executable().is_none());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn is_fast_mode_deprecated_alias_still_tracks_is_chat_mode() {
+        // Kept for migration; the two must stay in lockstep until removed.
+        let cfg = ExecutionConfig::new("root".into(), "c".into(), PathBuf::from("/tmp"))
+            .with_mode("fast".into());
+        assert_eq!(cfg.is_fast_mode(), cfg.is_chat_mode());
+        let default = ExecutionConfig::new("root".into(), "c".into(), PathBuf::from("/tmp"));
+        assert_eq!(default.is_fast_mode(), default.is_chat_mode());
+    }
 }
