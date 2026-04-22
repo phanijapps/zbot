@@ -165,6 +165,26 @@ pub struct ExecutionRunnerConfig {
     pub max_parallel_agents: u32,
 }
 
+/// Borrowed inputs for [`ExecutionRunner::create_executor`]. Previously
+/// 8 positional args with *four* silent-swap hazards:
+///
+/// - `session_id: &str` ↔ `execution_id: &str` (same type, consecutive)
+/// - `ward_id: Option<&str>` ↔ `user_message: Option<&str>` (same type,
+///   adjacent)
+/// - `is_root: bool` (Boolean trap)
+///
+/// Named-field construction makes all four compile-checkable.
+struct CreateExecutorArgs<'a> {
+    agent: &'a gateway_services::agents::Agent,
+    provider: &'a gateway_services::providers::Provider,
+    config: &'a ExecutionConfig,
+    session_id: &'a str,
+    ward_id: Option<&'a str>,
+    is_root: bool,
+    user_message: Option<&'a str>,
+    execution_id: &'a str,
+}
+
 /// Owned inputs for [`ExecutionRunner::spawn_execution_task`] — three
 /// consecutive `String` ids (message, session_id, execution_id) in the
 /// old positional signature were a silent-swap waiting to happen.
@@ -840,16 +860,16 @@ impl ExecutionRunner {
 
         // Create executor (restore ward_id from existing session if available)
         let (executor, recommended_skills) = match self
-            .create_executor(
-                &agent,
-                &provider,
-                &config,
-                &session_id,
-                setup.ward_id.as_deref(),
-                true,
-                Some(&message),
-                &execution_id,
-            )
+            .create_executor(CreateExecutorArgs {
+                agent: &agent,
+                provider: &provider,
+                config: &config,
+                session_id: &session_id,
+                ward_id: setup.ward_id.as_deref(),
+                is_root: true,
+                user_message: Some(&message),
+                execution_id: &execution_id,
+            })
             .await
         {
             Ok(result) => result,
@@ -1660,21 +1680,23 @@ impl ExecutionRunner {
     }
 
     /// Create an executor for the agent using the ExecutorBuilder.
-    #[allow(clippy::too_many_arguments)]
     ///
     /// Returns the executor and any recommended skill IDs from intent analysis
     /// (empty when analysis is skipped or fails).
     async fn create_executor(
         &self,
-        agent: &gateway_services::agents::Agent,
-        provider: &gateway_services::providers::Provider,
-        config: &ExecutionConfig,
-        session_id: &str,
-        ward_id: Option<&str>,
-        is_root: bool,
-        user_message: Option<&str>,
-        execution_id: &str,
+        args: CreateExecutorArgs<'_>,
     ) -> Result<(AgentExecutor, Vec<String>), String> {
+        let CreateExecutorArgs {
+            agent,
+            provider,
+            config,
+            session_id,
+            ward_id,
+            is_root,
+            user_message,
+            execution_id,
+        } = args;
         // Collect available agents and skills for executor state
         let available_agents = collect_agents_summary(&self.agent_service).await;
         let available_skills = collect_skills_summary(&self.skill_service).await;
