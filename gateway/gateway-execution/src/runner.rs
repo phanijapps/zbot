@@ -38,8 +38,8 @@ use super::invoke::micro_recall::MicroRecallContext;
 use super::invoke::working_memory_middleware;
 use super::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
-    spawn_batch_writer_with_repo, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
-    ToolCallAccumulator, WorkingMemory, WorkspaceCache,
+    spawn_batch_writer_with_repo, AgentLoader, BatchWriterHandle, ExecutorBuilder,
+    ResponseAccumulator, StreamContext, ToolCallAccumulator, WorkingMemory, WorkspaceCache,
 };
 use super::lifecycle::{
     complete_execution, crash_execution, emit_agent_started, get_or_create_session,
@@ -217,6 +217,143 @@ struct CreateExecutorArgs<'a> {
     is_root: bool,
     user_message: Option<&'a str>,
     execution_id: &'a str,
+}
+
+/// Per-turn state mutated by the stream-event handler closure inside
+/// `spawn_execution_task`. Pulled into a struct so each event-type handler
+/// takes `&mut EventAccumulator` + a few deps, instead of a 10-parameter
+/// signature per handler — and so the (>400-line) closure body shrinks to
+/// a flat dispatcher.
+struct EventAccumulator {
+    tool_acc: ToolCallAccumulator,
+    turn_tool_calls: Vec<serde_json::Value>,
+    turn_text: String,
+    working_memory: WorkingMemory,
+    pending_recall_triggers: Vec<(super::invoke::micro_recall::MicroRecallTrigger, u32)>,
+    current_tool_name: String,
+}
+
+/// Borrowed dependencies the stream-event handlers need to observe but not
+/// mutate. Constructed once per spawn, passed by reference into each handler.
+struct EventHandlerDeps<'a> {
+    batch_writer: &'a BatchWriterHandle,
+    session_id: &'a str,
+    execution_id: &'a str,
+    agent_id: &'a str,
+    handle: &'a ExecutionHandle,
+    kg_episode_repo: Option<&'a Arc<gateway_database::KgEpisodeRepository>>,
+    graph_storage: Option<&'a Arc<knowledge_graph::GraphStorage>>,
+}
+
+/// Handle a `StreamEvent::ToolCallStart` — record the call, update the
+/// current tool name, and append to the per-turn tool-call list.
+fn handle_tool_call_start(
+    acc: &mut EventAccumulator,
+    tool_id: &str,
+    tool_name: &str,
+    args: &serde_json::Value,
+) {
+    acc.tool_acc
+        .start_call(tool_id.to_string(), tool_name.to_string(), args.clone());
+    acc.current_tool_name = tool_name.to_string();
+    acc.turn_tool_calls.push(serde_json::json!({
+        "tool_id": tool_id,
+        "tool_name": tool_name,
+        "args": args,
+    }));
+}
+
+/// Handle a `StreamEvent::ToolResult` — flush the pending assistant turn,
+/// emit the tool message, update working memory, fire-and-forget graph
+/// extraction, and collect micro-recall triggers for post-stream execution.
+fn handle_tool_result(
+    acc: &mut EventAccumulator,
+    deps: &EventHandlerDeps<'_>,
+    tool_id: &str,
+    result: &str,
+    error: Option<&str>,
+) {
+    acc.tool_acc
+        .complete_call(tool_id, result.to_string(), error.map(String::from));
+
+    // Emit the assistant message for this turn (with accumulated tool_calls)
+    if !acc.turn_tool_calls.is_empty() {
+        let tc_json = serde_json::to_string(&acc.turn_tool_calls).unwrap_or_default();
+        let content = if acc.turn_text.is_empty() {
+            "[tool calls]".to_string()
+        } else {
+            std::mem::take(&mut acc.turn_text)
+        };
+        deps.batch_writer.session_message(
+            deps.session_id,
+            deps.execution_id,
+            "assistant",
+            &content,
+            Some(&tc_json),
+            None,
+        );
+        acc.turn_tool_calls.clear();
+    }
+
+    // Emit tool result message
+    let tool_content = match error {
+        Some(err) => format!("Error: {}", err),
+        None => result.to_string(),
+    };
+    deps.batch_writer.session_message(
+        deps.session_id,
+        deps.execution_id,
+        "tool",
+        &tool_content,
+        None,
+        Some(tool_id),
+    );
+
+    // Update working memory from tool result
+    working_memory_middleware::process_tool_result(
+        &mut acc.working_memory,
+        &acc.current_tool_name,
+        result,
+        error,
+        deps.handle.current_iteration(),
+    );
+
+    // Phase 6d: real-time graph extraction from tool output.
+    // Non-blocking — fires in a background task so the execution
+    // loop never waits.
+    if let (Some(ep_repo), Some(graph)) = (deps.kg_episode_repo, deps.graph_storage) {
+        let tool_name_cl = acc.current_tool_name.clone();
+        let tool_id_cl = tool_id.to_string();
+        let result_cl = result.to_string();
+        let session_id_cl = deps.session_id.to_string();
+        let agent_id_cl = deps.agent_id.to_string();
+        let ep_repo_cl = ep_repo.clone();
+        let graph_cl = graph.clone();
+        tokio::spawn(async move {
+            crate::tool_result_extractor::extract_and_persist(
+                &tool_name_cl,
+                &tool_id_cl,
+                &result_cl,
+                &session_id_cl,
+                &agent_id_cl,
+                ep_repo_cl.as_ref(),
+                &graph_cl,
+            )
+            .await;
+        });
+    }
+
+    // Detect micro-recall triggers (sync) — executed after stream completes
+    let triggers = working_memory_middleware::detect_recall_triggers(
+        &acc.working_memory,
+        &acc.current_tool_name,
+        result,
+        error,
+    );
+    let iter = deps.handle.current_iteration();
+    for trigger in triggers {
+        acc.pending_recall_triggers.push((trigger, iter));
+    }
 }
 
 /// Owned inputs for [`ExecutionRunner::spawn_execution_task`] — three
@@ -1031,22 +1168,22 @@ impl ExecutionRunner {
             .with_recommended_skills(recommended_skills.clone());
 
             let mut response_acc = ResponseAccumulator::new();
-            let mut tool_acc = ToolCallAccumulator::new();
 
             // Append user message to session stream BEFORE execution
             batch_writer.session_message(&session_id, &execution_id, "user", &message, None, None);
 
-            // Track per-turn tool calls for assistant message emission
-            let session_id_inner = session_id.clone();
-            let execution_id_inner = execution_id.clone();
-            let batch_writer_inner = batch_writer.clone();
-            // Track tool calls for the current assistant turn
-            let mut turn_tool_calls: Vec<serde_json::Value> = Vec::new();
-            // Track accumulated text for the current assistant turn
-            let mut turn_text = String::new();
+            // Per-turn mutable state — kept in one struct so the event
+            // handlers take `&mut EventAccumulator` instead of 10 parameters.
+            let mut acc = EventAccumulator {
+                tool_acc: ToolCallAccumulator::new(),
+                turn_tool_calls: Vec::new(),
+                turn_text: String::new(),
+                working_memory: WorkingMemory::new(1500),
+                pending_recall_triggers: Vec::new(),
+                current_tool_name: String::new(),
+            };
 
-            // Initialize working memory and seed from recalled corrections
-            let mut working_memory = WorkingMemory::new(1500);
+            // Seed working memory from recalled corrections (system messages)
             for msg in &history {
                 if msg.role == "system" {
                     let content = msg.text_content();
@@ -1056,7 +1193,7 @@ impl ExecutionRunner {
                             if trimmed.starts_with("[correction]")
                                 || trimmed.starts_with("[pattern]")
                             {
-                                working_memory.add_correction(trimmed);
+                                acc.working_memory.add_correction(trimmed);
                             }
                         }
                     }
@@ -1064,33 +1201,39 @@ impl ExecutionRunner {
             }
 
             // Inject working memory into history if it has content
-            if !working_memory.is_empty() {
-                history.push(ChatMessage::system(working_memory.format_for_prompt()));
+            if !acc.working_memory.is_empty() {
+                history.push(ChatMessage::system(acc.working_memory.format_for_prompt()));
             }
 
-            // Track current tool name for working memory middleware
-            let mut current_tool_name = String::new();
-
-            // Phase 6d: clones for real-time tool-result extraction (fire-and-forget).
+            // Immutable handler deps — constructed once, borrowed into each
+            // event handler call.
+            let session_id_inner = session_id.clone();
+            let execution_id_inner = execution_id.clone();
+            let agent_id_inner = agent_id.clone();
+            let batch_writer_inner = batch_writer.clone();
             let kg_episode_repo_inner = kg_episode_repo.clone();
             let graph_storage_inner = graph_storage.clone();
-            let agent_id_inner = agent_id.clone();
 
-            // Collect micro-recall triggers during stream (sync closure cannot run async)
-            let mut pending_recall_triggers: Vec<(
-                super::invoke::micro_recall::MicroRecallTrigger,
-                u32,
-            )> = Vec::new();
-
-            // Execute with streaming
+            // Execute with streaming — closure dispatches into free-fn
+            // handlers defined at module scope (handle_tool_call_start,
+            // handle_tool_result). Keeps the spawn body flat.
             let result = executor
                 .execute_stream(&message, &history, |event| {
-                    // Check for stop request
                     if handle.is_stop_requested() {
                         return;
                     }
 
                     handle.increment();
+
+                    let deps = EventHandlerDeps {
+                        batch_writer: &batch_writer_inner,
+                        session_id: &session_id_inner,
+                        execution_id: &execution_id_inner,
+                        agent_id: &agent_id_inner,
+                        handle: &handle,
+                        kg_episode_repo: kg_episode_repo_inner.as_ref(),
+                        graph_storage: graph_storage_inner.as_ref(),
+                    };
 
                     // Stream messages to session as they happen
                     match &event {
@@ -1099,109 +1242,15 @@ impl ExecutionRunner {
                             tool_name,
                             args,
                             ..
-                        } => {
-                            tool_acc.start_call(tool_id.clone(), tool_name.clone(), args.clone());
-                            current_tool_name = tool_name.clone();
-                            // Accumulate tool call for the current assistant message
-                            turn_tool_calls.push(serde_json::json!({
-                                "tool_id": tool_id,
-                                "tool_name": tool_name,
-                                "args": args,
-                            }));
-                        }
+                        } => handle_tool_call_start(&mut acc, tool_id, tool_name, args),
                         agent_runtime::StreamEvent::ToolResult {
                             tool_id,
                             result,
                             error,
                             ..
-                        } => {
-                            tool_acc.complete_call(tool_id, result.clone(), error.clone());
-
-                            // Emit the assistant message for this turn (with accumulated tool_calls)
-                            if !turn_tool_calls.is_empty() {
-                                let tc_json =
-                                    serde_json::to_string(&turn_tool_calls).unwrap_or_default();
-                                let content = if turn_text.is_empty() {
-                                    "[tool calls]".to_string()
-                                } else {
-                                    std::mem::take(&mut turn_text)
-                                };
-                                batch_writer_inner.session_message(
-                                    &session_id_inner,
-                                    &execution_id_inner,
-                                    "assistant",
-                                    &content,
-                                    Some(&tc_json),
-                                    None,
-                                );
-                                turn_tool_calls.clear();
-                            }
-
-                            // Emit tool result message
-                            let tool_content = if let Some(err) = error {
-                                format!("Error: {}", err)
-                            } else {
-                                result.clone()
-                            };
-                            batch_writer_inner.session_message(
-                                &session_id_inner,
-                                &execution_id_inner,
-                                "tool",
-                                &tool_content,
-                                None,
-                                Some(tool_id),
-                            );
-
-                            // Update working memory from tool result
-                            working_memory_middleware::process_tool_result(
-                                &mut working_memory,
-                                &current_tool_name,
-                                result,
-                                error.as_deref(),
-                                handle.current_iteration(),
-                            );
-
-                            // Phase 6d: real-time graph extraction from tool output.
-                            // Non-blocking — fires in a background task so the
-                            // execution loop never waits.
-                            if let (Some(ref ep_repo), Some(ref graph)) =
-                                (&kg_episode_repo_inner, &graph_storage_inner)
-                            {
-                                let tool_name_cl = current_tool_name.clone();
-                                let tool_id_cl = tool_id.clone();
-                                let result_cl = result.clone();
-                                let session_id_cl = session_id_inner.clone();
-                                let agent_id_cl = agent_id_inner.clone();
-                                let ep_repo_cl = ep_repo.clone();
-                                let graph_cl = graph.clone();
-                                tokio::spawn(async move {
-                                    crate::tool_result_extractor::extract_and_persist(
-                                        &tool_name_cl,
-                                        &tool_id_cl,
-                                        &result_cl,
-                                        &session_id_cl,
-                                        &agent_id_cl,
-                                        ep_repo_cl.as_ref(),
-                                        &graph_cl,
-                                    )
-                                    .await;
-                                });
-                            }
-
-                            // Detect micro-recall triggers (sync) — executed after stream completes
-                            let triggers = working_memory_middleware::detect_recall_triggers(
-                                &working_memory,
-                                &current_tool_name,
-                                result,
-                                error.as_deref(),
-                            );
-                            let iter = handle.current_iteration();
-                            for trigger in triggers {
-                                pending_recall_triggers.push((trigger, iter));
-                            }
-                        }
+                        } => handle_tool_result(&mut acc, &deps, tool_id, result, error.as_deref()),
                         agent_runtime::StreamEvent::Token { content, .. } => {
-                            turn_text.push_str(content);
+                            acc.turn_text.push_str(content);
                         }
                         _ => {}
                     }
@@ -1222,15 +1271,15 @@ impl ExecutionRunner {
                 .await;
 
             // Execute micro-recall triggers collected during the stream
-            if !pending_recall_triggers.is_empty() {
+            if !acc.pending_recall_triggers.is_empty() {
                 let recall_ctx = MicroRecallContext {
                     memory_repo: memory_repo.clone(),
                     graph_storage: graph_storage.clone(),
                     agent_id: agent_id.clone(),
                 };
-                for (trigger, iter) in &pending_recall_triggers {
+                for (trigger, iter) in &acc.pending_recall_triggers {
                     working_memory_middleware::execute_micro_recall_triggers(
-                        &mut working_memory,
+                        &mut acc.working_memory,
                         std::slice::from_ref(trigger),
                         &recall_ctx,
                         *iter,
@@ -1244,19 +1293,19 @@ impl ExecutionRunner {
             tracing::info!(
                 execution_id = %execution_id,
                 response_len = accumulated_response.len(),
-                tool_calls_count = tool_acc.len(),
+                tool_calls_count = acc.tool_acc.len(),
                 "Execution stream completed"
             );
 
             // Emit any remaining text that wasn't flushed as part of a tool-call turn.
             // If turn_text is empty, the response was already written when the last
             // ToolResult (e.g., from the respond tool) flushed it. Don't write again.
-            if !turn_text.is_empty() {
+            if !acc.turn_text.is_empty() {
                 batch_writer.session_message(
                     &session_id,
                     &execution_id,
                     "assistant",
-                    &turn_text,
+                    &acc.turn_text,
                     None,
                     None,
                 );
