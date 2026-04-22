@@ -117,11 +117,11 @@ impl RuntimeService {
         ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
         goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     ) -> Self {
-        let mut runner = ExecutionRunner::with_connector_registry(
-            event_bus.clone(),
+        let mut runner = ExecutionRunner::with_config(gateway_execution::ExecutionRunnerConfig {
+            event_bus: event_bus.clone(),
             agent_service,
             provider_service,
-            paths.clone(),
+            paths: paths.clone(),
             conversation_repo,
             mcp_service,
             skill_service,
@@ -136,7 +136,7 @@ impl RuntimeService {
             bridge_outbox,
             embedding_client,
             max_parallel_agents,
-        );
+        });
 
         // Initialize model registry from bundled + local overrides
         let bundled_models = gateway_templates::Templates::get("models_registry.json")

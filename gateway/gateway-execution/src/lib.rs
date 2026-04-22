@@ -64,5 +64,5 @@ pub use lifecycle::{
 };
 pub use recall::{format_scored_items, MemoryRecall};
 pub use resource_provider::GatewayResourceProvider;
-pub use runner::{ExecutionRunner, OnSessionReady};
+pub use runner::{ExecutionRunner, ExecutionRunnerConfig, OnSessionReady};
 pub use session_state::{SessionState, SessionStateBuilder};

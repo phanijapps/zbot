@@ -13,6 +13,7 @@ cargo test -p gateway-execution    # 19 tests
 | Type | Purpose |
 |------|---------|
 | `ExecutionRunner` | Main execution orchestrator |
+| `ExecutionRunnerConfig` | Construction-time input bundle for `ExecutionRunner::with_config` |
 | `ExecutionHandle` | Control handle (stop, pause, resume, cancel) |
 | `ExecutionConfig` | Execution configuration |
 | `GatewayFileSystem` | `FileSystemContext` implementation with ward support |
@@ -59,3 +60,27 @@ gateway-execution/src/
 ## Dependencies
 
 Depends on most other gateway sub-crates: gateway-events, gateway-database, gateway-services, gateway-connectors, gateway-templates. Also depends on agent-runtime and agent-tools.
+
+## Conventions
+
+### Context structs over positional arguments
+
+Functions that take ≥7 arguments must take a named-field context struct instead of a positional arg list. Rationale:
+
+- Same-type fields (e.g. four consecutive `&str` ids, or three `Option<Arc<…>>`) can be silently swapped on a positional call — the bug only shows up at runtime in the wrong DB row / event / session.
+- Adding a new dependency to a positional signature touches every call site, in order. Adding a new field to a context struct is one line per call site, order-independent.
+- `#[allow(clippy::too_many_arguments)]` is a confession, not a solution. Don't use it; introduce a `FooContext` / `FooConfig` struct instead.
+
+Established examples:
+- Construction: `ExecutionRunner::with_config(ExecutionRunnerConfig { … })`
+- Lifecycle: `complete_execution(CompleteExecution { … })`, `crash_execution(CrashExecution { … })`, `stop_execution(StopExecution { … })`, `emit_delegation_completed(DelegationCompletedEvent { … })`
+- Delegation: `spawn_execution_task(SpawnContext { … })`, `handle_execution_success(HandleExecutionSuccess { … })`, `handle_execution_failure(HandleExecutionFailure { … })`
+- Batch writer: `BatchWrite::SessionMessage(SessionMessage { … })`
+
+When extending any of these, add the new input as a named field to the relevant struct. Don't grow the positional signature.
+
+### When to simplify vs. test
+
+If a function has low coverage AND high cognitive complexity, simplify first (split, extract, introduce context structs) and add tests for the smaller resulting pieces. Don't test a god method as-is — you pin the wrong behaviour in place.
+
+If a function has low coverage but IS small and single-purpose, just test it.

@@ -127,24 +127,51 @@ pub struct ExecutionRunner {
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 }
 
+/// All inputs needed to construct an [`ExecutionRunner`].
+///
+/// Replaces the previous 18-positional-argument `with_connector_registry`
+/// constructor. Using a struct literal at the call site means:
+///
+/// - Adding a new dependency is one line here + one line at every caller,
+///   no positional reshuffling.
+/// - Same-type `Option<Arc<...>>` fields (connector_registry vs bridge_registry
+///   vs memory_repo) can't be silently swapped — the field name is checked at
+///   compile time.
+/// - Callers that only want the minimum can lean on `Default::default()` for
+///   the optional integrations.
+pub struct ExecutionRunnerConfig {
+    // --- Required services ---
+    pub event_bus: Arc<EventBus>,
+    pub agent_service: Arc<AgentService>,
+    pub provider_service: Arc<ProviderService>,
+    pub paths: SharedVaultPaths,
+    pub conversation_repo: Arc<ConversationRepository>,
+    pub mcp_service: Arc<McpService>,
+    pub skill_service: Arc<gateway_services::SkillService>,
+    pub log_service: Arc<LogService<DatabaseManager>>,
+    pub state_service: Arc<StateService<DatabaseManager>>,
+
+    // --- Optional integrations ---
+    pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
+    pub workspace_cache: WorkspaceCache,
+    pub memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    pub distiller: Option<Arc<super::distillation::SessionDistiller>>,
+    pub memory_recall: Option<Arc<super::recall::MemoryRecall>>,
+    pub bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
+    pub bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
+    pub embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+
+    // --- Resource control ---
+    pub max_parallel_agents: u32,
+}
+
 impl ExecutionRunner {
-    /// Create a new execution runner.
+    /// Create a new execution runner from a [`ExecutionRunnerConfig`].
     ///
-    /// This initializes the runner and spawns a background task for
-    /// processing delegation requests from running agents.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        event_bus: Arc<EventBus>,
-        agent_service: Arc<AgentService>,
-        provider_service: Arc<ProviderService>,
-        paths: SharedVaultPaths,
-        conversation_repo: Arc<ConversationRepository>,
-        mcp_service: Arc<McpService>,
-        skill_service: Arc<gateway_services::SkillService>,
-        log_service: Arc<LogService<DatabaseManager>>,
-        state_service: Arc<StateService<DatabaseManager>>,
-    ) -> Self {
-        Self::with_connector_registry(
+    /// Initializes the runner and spawns background tasks for processing
+    /// delegation + continuation requests.
+    pub fn with_config(config: ExecutionRunnerConfig) -> Self {
+        let ExecutionRunnerConfig {
             event_bus,
             agent_service,
             provider_service,
@@ -154,40 +181,17 @@ impl ExecutionRunner {
             skill_service,
             log_service,
             state_service,
-            None,
-            Arc::new(tokio::sync::RwLock::new(None)),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            2, // default max_parallel_agents
-        )
-    }
+            connector_registry,
+            workspace_cache,
+            memory_repo,
+            distiller,
+            memory_recall,
+            bridge_registry,
+            bridge_outbox,
+            embedding_client,
+            max_parallel_agents,
+        } = config;
 
-    #[allow(clippy::too_many_arguments)]
-    /// Create a new execution runner with connector registry for response routing.
-    pub fn with_connector_registry(
-        event_bus: Arc<EventBus>,
-        agent_service: Arc<AgentService>,
-        provider_service: Arc<ProviderService>,
-        paths: SharedVaultPaths,
-        conversation_repo: Arc<ConversationRepository>,
-        mcp_service: Arc<McpService>,
-        skill_service: Arc<gateway_services::SkillService>,
-        log_service: Arc<LogService<DatabaseManager>>,
-        state_service: Arc<StateService<DatabaseManager>>,
-        connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
-        workspace_cache: WorkspaceCache,
-        memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
-        distiller: Option<Arc<super::distillation::SessionDistiller>>,
-        memory_recall: Option<Arc<super::recall::MemoryRecall>>,
-        bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
-        bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
-        embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
-        max_parallel_agents: u32,
-    ) -> Self {
         // Create channel for delegation requests
         let (delegation_tx, delegation_rx) = mpsc::unbounded_channel::<DelegationRequest>();
 
