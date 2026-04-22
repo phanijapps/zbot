@@ -199,6 +199,26 @@ struct ContinuationArgs<'a> {
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 }
 
+/// Borrowed inputs for [`ExecutionRunner::run_intent_analysis`]. Same
+/// life-cycle + field conventions as the other runner context structs.
+struct IntentAnalysisCtx<'a> {
+    agent: &'a gateway_services::agents::Agent,
+    provider: &'a gateway_services::providers::Provider,
+    config: &'a ExecutionConfig,
+    session_id: &'a str,
+    execution_id: &'a str,
+    is_root: bool,
+    user_message: Option<&'a str>,
+    fact_store: Option<&'a Arc<dyn zero_core::MemoryFactStore>>,
+}
+
+/// What [`ExecutionRunner::run_intent_analysis`] returns on success — the
+/// downstream consumers of intent analysis inside `create_executor`.
+struct IntentOutcome {
+    recommended_skills: Vec<String>,
+    instructions_injection: String,
+}
+
 /// Borrowed inputs for [`ExecutionRunner::create_executor`]. Previously
 /// 8 positional args with *four* silent-swap hazards:
 ///
@@ -1869,220 +1889,23 @@ impl ExecutionRunner {
         // so we query by execution_id to find prior intent logs.
         let mut agent_for_build = agent.clone();
         let mut recommended_skills: Vec<String> = Vec::new();
-        let already_analyzed = if is_root {
-            self.log_service.has_intent_log(execution_id)
-        } else {
-            false
-        };
-        let is_chat_mode = config.is_chat_mode();
-        if is_root && already_analyzed && !is_chat_mode {
-            // Notify UI that intent analysis was skipped (continuation turn)
-            self.event_bus
-                .publish(gateway_events::GatewayEvent::IntentAnalysisSkipped {
-                    session_id: session_id.to_string(),
-                    execution_id: execution_id.to_string(),
-                })
-                .await;
-            tracing::debug!("Intent analysis skipped (already analyzed for this execution)");
-        }
-        if is_root && !already_analyzed && !is_chat_mode {
-            if let Some(ref fs) = fact_store_for_indexing {
-                // Index resources (fast DB upsert — no LLM call)
-                index_resources(
-                    fs.as_ref(),
-                    &self.skill_service,
-                    &self.agent_service,
-                    &self.paths,
-                )
-                .await;
-                tracing::info!("Resource indexing complete (skills, agents, wards)");
-
-                // Run intent analysis if user message is present
-                if let Some(msg) = user_message {
-                    // Emit started event so UI can show "Analyzing..."
-                    self.event_bus
-                        .publish(gateway_events::GatewayEvent::IntentAnalysisStarted {
-                            session_id: session_id.to_string(),
-                            execution_id: execution_id.to_string(),
-                        })
-                        .await;
-
-                    // Build temporary LLM client for analysis
-                    let llm_config = agent_runtime::LlmConfig::new(
-                        provider.base_url.clone(),
-                        provider.api_key.clone(),
-                        agent.model.clone(),
-                        provider.id.clone().unwrap_or_else(|| provider.name.clone()),
-                    )
-                    .with_max_tokens(2048); // Intent analysis JSON is 1-2KB — keep max_tokens low for speed
-                    match agent_runtime::OpenAiClient::new(llm_config) {
-                        Ok(raw_client) => {
-                            let retrying = agent_runtime::RetryingLlmClient::new(
-                                std::sync::Arc::new(raw_client),
-                                agent_runtime::RetryPolicy::default(),
-                            );
-
-                            let system_prompt =
-                                crate::middleware::intent_analysis::load_intent_analysis_prompt(
-                                    &self.paths,
-                                );
-                            match analyze_intent(
-                                &retrying,
-                                msg,
-                                fs.as_ref(),
-                                self.memory_recall.as_ref().map(|r| r.as_ref()),
-                                &system_prompt,
-                            )
-                            .await
-                            {
-                                Ok(analysis) => {
-                                    tracing::info!(
-                                        primary_intent = %analysis.primary_intent,
-                                        approach = %analysis.execution_strategy.approach,
-                                        "Intent analysis succeeded"
-                                    );
-
-                                    // Emit IntentAnalysisComplete event
-                                    self.event_bus
-                                        .publish(GatewayEvent::IntentAnalysisComplete {
-                                            session_id: session_id.to_string(),
-                                            execution_id: execution_id.to_string(),
-                                            primary_intent: analysis.primary_intent.clone(),
-                                            hidden_intents: analysis.hidden_intents.clone(),
-                                            recommended_skills: analysis.recommended_skills.clone(),
-                                            recommended_agents: analysis.recommended_agents.clone(),
-                                            ward_recommendation: serde_json::to_value(
-                                                &analysis.ward_recommendation,
-                                            )
-                                            .unwrap_or_default(),
-                                            execution_strategy: serde_json::to_value(
-                                                &analysis.execution_strategy,
-                                            )
-                                            .unwrap_or_default(),
-                                        })
-                                        .await;
-
-                                    // Phase 2b: populate session ctx with the intent-analyzer's
-                                    // decision + verbatim user prompt. Subagents spawned later
-                                    // can fetch these via memory(get_fact, key="ctx.<sid>.intent")
-                                    // without re-reading the original message.
-                                    if let Some(ref fs) = fact_store_for_indexing {
-                                        let ward = analysis.ward_recommendation.ward_name.as_str();
-                                        let intent_json = serde_json::to_value(&analysis)
-                                            .unwrap_or(serde_json::Value::Null);
-                                        crate::session_ctx::writer::intent_snapshot(
-                                            fs,
-                                            session_id,
-                                            ward,
-                                            &intent_json,
-                                            msg,
-                                        )
-                                        .await;
-                                    }
-
-                                    // Log for session replay
-                                    if let Ok(meta) = serde_json::to_value(&analysis) {
-                                        let log_entry = api_logs::ExecutionLog::new(
-                                            execution_id,
-                                            session_id,
-                                            &config.agent_id,
-                                            api_logs::LogLevel::Info,
-                                            api_logs::LogCategory::Intent,
-                                            format!("Intent: {}", analysis.primary_intent),
-                                        )
-                                        .with_metadata(meta);
-                                        let _ = self.log_service.log(log_entry);
-                                    }
-
-                                    // Capture recommended skills for post-execution scaffolding
-                                    recommended_skills = analysis.recommended_skills.clone();
-
-                                    // Collect spec guidance from recommended skills' ward_setup
-                                    let spec_guidance = {
-                                        let mut guidances = Vec::new();
-                                        for skill_name in &analysis.recommended_skills {
-                                            if let Ok(Some(ws)) =
-                                                self.skill_service.get_ward_setup(skill_name).await
-                                            {
-                                                if let Some(ref g) = ws.spec_guidance {
-                                                    guidances.push(g.clone());
-                                                }
-                                            }
-                                        }
-                                        if guidances.is_empty() {
-                                            None
-                                        } else {
-                                            Some(guidances.join("\n\n"))
-                                        }
-                                    };
-
-                                    // Inject intent analysis into agent instructions
-                                    // so the agent can follow ward/skill/strategy recommendations
-                                    agent_for_build.instructions.push_str(
-                                        &format_intent_injection(
-                                            &analysis,
-                                            spec_guidance.as_deref(),
-                                            user_message,
-                                        ),
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Intent analysis failed (non-fatal): {}", e);
-                                    // Fallback: emit minimal analysis so UI gets a block
-                                    // and agent receives ward naming guidance
-                                    self.event_bus
-                                        .publish(GatewayEvent::IntentAnalysisComplete {
-                                            session_id: session_id.to_string(),
-                                            execution_id: execution_id.to_string(),
-                                            primary_intent: "general".to_string(),
-                                            hidden_intents: vec![],
-                                            recommended_skills: vec![],
-                                            recommended_agents: vec![],
-                                            ward_recommendation: serde_json::json!({
-                                                "action": "create_new",
-                                                "ward_name": "scratch",
-                                                "subdirectory": null,
-                                                "reason": "Intent analysis failed — using scratch ward"
-                                            }),
-                                            execution_strategy: serde_json::json!({
-                                                "approach": "simple",
-                                                "explanation": "Intent analysis unavailable"
-                                            }),
-                                        })
-                                        .await;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to create LLM client for intent analysis: {}",
-                                e
-                            );
-                            // Fallback: emit minimal analysis event
-                            self.event_bus
-                                .publish(GatewayEvent::IntentAnalysisComplete {
-                                    session_id: session_id.to_string(),
-                                    execution_id: execution_id.to_string(),
-                                    primary_intent: "general".to_string(),
-                                    hidden_intents: vec![],
-                                    recommended_skills: vec![],
-                                    recommended_agents: vec![],
-                                    ward_recommendation: serde_json::json!({
-                                        "action": "create_new",
-                                        "ward_name": "scratch",
-                                        "subdirectory": null,
-                                        "reason": "LLM client creation failed — using scratch ward"
-                                    }),
-                                    execution_strategy: serde_json::json!({
-                                        "approach": "simple",
-                                        "explanation": "Intent analysis unavailable (no LLM client)"
-                                    }),
-                                })
-                                .await;
-                        }
-                    }
-                }
-            }
+        let outcome = self
+            .run_intent_analysis(IntentAnalysisCtx {
+                agent,
+                provider,
+                config,
+                session_id,
+                execution_id,
+                is_root,
+                user_message,
+                fact_store: fact_store_for_indexing.as_ref(),
+            })
+            .await;
+        if let Some(out) = outcome {
+            recommended_skills = out.recommended_skills;
+            agent_for_build
+                .instructions
+                .push_str(&out.instructions_injection);
         }
 
         // Flag if placeholder specs exist — delegate tool uses this to block ad-hoc delegations
@@ -2175,6 +1998,234 @@ impl ExecutionRunner {
         }
 
         Ok((executor, recommended_skills))
+    }
+
+    /// Run the intent-analysis sub-pipeline that was previously inlined into
+    /// `create_executor` (~220 LOC, 5 levels deep). Sequence:
+    ///
+    ///   1. Skip entirely for non-root, chat-mode, or re-entry executions.
+    ///      For re-entry, emit `IntentAnalysisSkipped` so the UI still gets
+    ///      a block.
+    ///   2. Run fast DB resource-indexing (skills/agents/wards) against
+    ///      the provided fact store.
+    ///   3. Emit `IntentAnalysisStarted`, build a temporary LLM client,
+    ///      call `analyze_intent`.
+    ///   4. On success: emit `IntentAnalysisComplete`, snapshot to session
+    ///      ctx, log for replay, return the injected agent-instructions
+    ///      suffix + recommended_skills to the caller.
+    ///   5. On LLM-client or analysis failure: emit the "scratch ward"
+    ///      fallback `IntentAnalysisComplete` shape and return `None`.
+    ///
+    /// Returning `Option<IntentOutcome>` instead of mutating out-params
+    /// keeps the caller simple: `if let Some(out) = …` applies the
+    /// instructions suffix; otherwise the agent continues unchanged.
+    async fn run_intent_analysis(&self, ctx: IntentAnalysisCtx<'_>) -> Option<IntentOutcome> {
+        let IntentAnalysisCtx {
+            agent,
+            provider,
+            config,
+            session_id,
+            execution_id,
+            is_root,
+            user_message,
+            fact_store,
+        } = ctx;
+
+        // Guard: non-root or chat-mode — never run intent analysis.
+        if !is_root || config.is_chat_mode() {
+            return None;
+        }
+
+        // Already analyzed (e.g. continuation turn): emit Skipped so the
+        // UI renders a block, then return.
+        if self.log_service.has_intent_log(execution_id) {
+            self.event_bus
+                .publish(gateway_events::GatewayEvent::IntentAnalysisSkipped {
+                    session_id: session_id.to_string(),
+                    execution_id: execution_id.to_string(),
+                })
+                .await;
+            tracing::debug!("Intent analysis skipped (already analyzed for this execution)");
+            return None;
+        }
+
+        let fs = fact_store?;
+        let msg = user_message?;
+
+        // Index resources (fast DB upsert — no LLM call). Runs before
+        // analyze_intent so the analyzer has the latest capability index.
+        index_resources(
+            fs.as_ref(),
+            &self.skill_service,
+            &self.agent_service,
+            &self.paths,
+        )
+        .await;
+        tracing::info!("Resource indexing complete (skills, agents, wards)");
+
+        // Emit started event so UI can show "Analyzing..."
+        self.event_bus
+            .publish(gateway_events::GatewayEvent::IntentAnalysisStarted {
+                session_id: session_id.to_string(),
+                execution_id: execution_id.to_string(),
+            })
+            .await;
+
+        // Build temporary LLM client for analysis.
+        let llm_config = agent_runtime::LlmConfig::new(
+            provider.base_url.clone(),
+            provider.api_key.clone(),
+            agent.model.clone(),
+            provider.id.clone().unwrap_or_else(|| provider.name.clone()),
+        )
+        .with_max_tokens(2048); // Intent analysis JSON is 1-2KB — keep max_tokens low for speed
+
+        let raw_client = match agent_runtime::OpenAiClient::new(llm_config) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Failed to create LLM client for intent analysis: {}", e);
+                self.emit_intent_fallback_complete(
+                    session_id,
+                    execution_id,
+                    "LLM client creation failed — using scratch ward",
+                    "Intent analysis unavailable (no LLM client)",
+                )
+                .await;
+                return None;
+            }
+        };
+
+        let retrying = agent_runtime::RetryingLlmClient::new(
+            std::sync::Arc::new(raw_client),
+            agent_runtime::RetryPolicy::default(),
+        );
+        let system_prompt =
+            crate::middleware::intent_analysis::load_intent_analysis_prompt(&self.paths);
+
+        let analysis = match analyze_intent(
+            &retrying,
+            msg,
+            fs.as_ref(),
+            self.memory_recall.as_ref().map(|r| r.as_ref()),
+            &system_prompt,
+        )
+        .await
+        {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::warn!("Intent analysis failed (non-fatal): {}", e);
+                self.emit_intent_fallback_complete(
+                    session_id,
+                    execution_id,
+                    "Intent analysis failed — using scratch ward",
+                    "Intent analysis unavailable",
+                )
+                .await;
+                return None;
+            }
+        };
+
+        tracing::info!(
+            primary_intent = %analysis.primary_intent,
+            approach = %analysis.execution_strategy.approach,
+            "Intent analysis succeeded"
+        );
+
+        // Emit IntentAnalysisComplete event with the real analysis.
+        self.event_bus
+            .publish(GatewayEvent::IntentAnalysisComplete {
+                session_id: session_id.to_string(),
+                execution_id: execution_id.to_string(),
+                primary_intent: analysis.primary_intent.clone(),
+                hidden_intents: analysis.hidden_intents.clone(),
+                recommended_skills: analysis.recommended_skills.clone(),
+                recommended_agents: analysis.recommended_agents.clone(),
+                ward_recommendation: serde_json::to_value(&analysis.ward_recommendation)
+                    .unwrap_or_default(),
+                execution_strategy: serde_json::to_value(&analysis.execution_strategy)
+                    .unwrap_or_default(),
+            })
+            .await;
+
+        // Phase 2b: populate session ctx with the intent-analyzer's
+        // decision + verbatim user prompt. Subagents spawned later can
+        // fetch these via memory(get_fact, key="ctx.<sid>.intent") without
+        // re-reading the original message.
+        let ward = analysis.ward_recommendation.ward_name.as_str();
+        let intent_json = serde_json::to_value(&analysis).unwrap_or(serde_json::Value::Null);
+        crate::session_ctx::writer::intent_snapshot(fs, session_id, ward, &intent_json, msg).await;
+
+        // Log for session replay.
+        if let Ok(meta) = serde_json::to_value(&analysis) {
+            let log_entry = api_logs::ExecutionLog::new(
+                execution_id,
+                session_id,
+                &config.agent_id,
+                api_logs::LogLevel::Info,
+                api_logs::LogCategory::Intent,
+                format!("Intent: {}", analysis.primary_intent),
+            )
+            .with_metadata(meta);
+            let _ = self.log_service.log(log_entry);
+        }
+
+        // Collect spec guidance from recommended skills' ward_setup.
+        let spec_guidance = {
+            let mut guidances = Vec::new();
+            for skill_name in &analysis.recommended_skills {
+                if let Ok(Some(ws)) = self.skill_service.get_ward_setup(skill_name).await {
+                    if let Some(ref g) = ws.spec_guidance {
+                        guidances.push(g.clone());
+                    }
+                }
+            }
+            if guidances.is_empty() {
+                None
+            } else {
+                Some(guidances.join("\n\n"))
+            }
+        };
+
+        Some(IntentOutcome {
+            recommended_skills: analysis.recommended_skills.clone(),
+            instructions_injection: format_intent_injection(
+                &analysis,
+                spec_guidance.as_deref(),
+                Some(msg),
+            ),
+        })
+    }
+
+    /// Emit the fallback `IntentAnalysisComplete` event used when the LLM
+    /// client can't be built or the analysis call fails — keeps the UI
+    /// unblocked and steers the agent toward the `scratch` ward.
+    async fn emit_intent_fallback_complete(
+        &self,
+        session_id: &str,
+        execution_id: &str,
+        ward_reason: &str,
+        strategy_explanation: &str,
+    ) {
+        self.event_bus
+            .publish(GatewayEvent::IntentAnalysisComplete {
+                session_id: session_id.to_string(),
+                execution_id: execution_id.to_string(),
+                primary_intent: "general".to_string(),
+                hidden_intents: vec![],
+                recommended_skills: vec![],
+                recommended_agents: vec![],
+                ward_recommendation: serde_json::json!({
+                    "action": "create_new",
+                    "ward_name": "scratch",
+                    "subdirectory": null,
+                    "reason": ward_reason,
+                }),
+                execution_strategy: serde_json::json!({
+                    "approach": "simple",
+                    "explanation": strategy_explanation,
+                }),
+            })
+            .await;
     }
 
     /// Emit an error event.
