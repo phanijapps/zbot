@@ -729,21 +729,21 @@ fn spawn_execution_task(ctx: SpawnContext) {
 
         match result {
             Ok(()) => {
-                handle_execution_success(
-                    &conversation_repo,
-                    &state_service,
-                    &log_service,
-                    &event_bus,
-                    &delegation_registry,
-                    &execution_id,
-                    &session_id,
-                    &agent_id,
-                    &conv_id,
-                    &accumulated_response,
-                    &parent_agent,
-                    &parent_execution_id,
-                    fact_store_for_ctx.as_ref(),
-                )
+                handle_execution_success(HandleExecutionSuccess {
+                    conversation_repo: &conversation_repo,
+                    state_service: &state_service,
+                    log_service: &log_service,
+                    event_bus: &event_bus,
+                    delegation_registry: &delegation_registry,
+                    execution_id: &execution_id,
+                    session_id: &session_id,
+                    agent_id: &agent_id,
+                    conv_id: &conv_id,
+                    response: &accumulated_response,
+                    parent_agent: &parent_agent,
+                    parent_execution_id: &parent_execution_id,
+                    fact_store_for_ctx: fact_store_for_ctx.as_ref(),
+                })
                 .await;
             }
             Err(e) => {
@@ -758,19 +758,19 @@ fn spawn_execution_task(ctx: SpawnContext) {
                     &paths,
                 );
 
-                handle_execution_failure(
-                    &conversation_repo,
-                    &state_service,
-                    &log_service,
-                    &event_bus,
-                    &delegation_registry,
-                    &execution_id,
-                    &session_id,
-                    &agent_id,
-                    &conv_id,
-                    &parent_execution_id,
-                    &crash_report,
-                )
+                handle_execution_failure(HandleExecutionFailure {
+                    conversation_repo: &conversation_repo,
+                    state_service: &state_service,
+                    log_service: &log_service,
+                    event_bus: &event_bus,
+                    delegation_registry: &delegation_registry,
+                    execution_id: &execution_id,
+                    session_id: &session_id,
+                    agent_id: &agent_id,
+                    conv_id: &conv_id,
+                    parent_execution_id: &parent_execution_id,
+                    error: &crash_report,
+                })
                 .await;
             }
         }
@@ -782,23 +782,41 @@ fn spawn_execution_task(ctx: SpawnContext) {
     });
 }
 
+/// Inputs for `handle_execution_success` — same pattern as `SpawnContext`
+/// but borrowed (these are called from inside the spawn-owned async closure).
+struct HandleExecutionSuccess<'a> {
+    conversation_repo: &'a ConversationRepository,
+    state_service: &'a StateService<DatabaseManager>,
+    log_service: &'a LogService<DatabaseManager>,
+    event_bus: &'a EventBus,
+    delegation_registry: &'a DelegationRegistry,
+    execution_id: &'a str,
+    session_id: &'a str,
+    agent_id: &'a str,
+    conv_id: &'a str,
+    response: &'a str,
+    parent_agent: &'a str,
+    parent_execution_id: &'a str,
+    fact_store_for_ctx: Option<&'a Arc<dyn zero_core::MemoryFactStore>>,
+}
+
 /// Handle successful execution completion.
-#[allow(clippy::too_many_arguments)]
-async fn handle_execution_success(
-    conversation_repo: &ConversationRepository,
-    state_service: &StateService<DatabaseManager>,
-    log_service: &LogService<DatabaseManager>,
-    event_bus: &EventBus,
-    delegation_registry: &DelegationRegistry,
-    execution_id: &str,
-    session_id: &str,
-    agent_id: &str,
-    conv_id: &str,
-    response: &str,
-    parent_agent: &str,
-    parent_execution_id: &str,
-    fact_store_for_ctx: Option<&Arc<dyn zero_core::MemoryFactStore>>,
-) {
+async fn handle_execution_success(ctx: HandleExecutionSuccess<'_>) {
+    let HandleExecutionSuccess {
+        conversation_repo,
+        state_service,
+        log_service,
+        event_bus,
+        delegation_registry,
+        execution_id,
+        session_id,
+        agent_id,
+        conv_id,
+        response,
+        parent_agent,
+        parent_execution_id,
+        fact_store_for_ctx,
+    } = ctx;
     // Messages already streamed to child session during execution
 
     // Complete execution and emit events
@@ -931,21 +949,38 @@ fn crash_spawn_failure(
     }
 }
 
+/// Inputs for `handle_execution_failure`. Same-type String ids travel together;
+/// named fields prevent order-swap bugs between `session_id` and
+/// `parent_execution_id`.
+struct HandleExecutionFailure<'a> {
+    conversation_repo: &'a ConversationRepository,
+    state_service: &'a StateService<DatabaseManager>,
+    log_service: &'a LogService<DatabaseManager>,
+    event_bus: &'a EventBus,
+    delegation_registry: &'a DelegationRegistry,
+    execution_id: &'a str,
+    session_id: &'a str,
+    agent_id: &'a str,
+    conv_id: &'a str,
+    parent_execution_id: &'a str,
+    error: &'a str,
+}
+
 /// Handle execution failure.
-#[allow(clippy::too_many_arguments)]
-async fn handle_execution_failure(
-    conversation_repo: &ConversationRepository,
-    state_service: &StateService<DatabaseManager>,
-    log_service: &LogService<DatabaseManager>,
-    event_bus: &EventBus,
-    delegation_registry: &DelegationRegistry,
-    execution_id: &str,
-    session_id: &str,
-    agent_id: &str,
-    conv_id: &str,
-    parent_execution_id: &str,
-    error: &str,
-) {
+async fn handle_execution_failure(ctx: HandleExecutionFailure<'_>) {
+    let HandleExecutionFailure {
+        conversation_repo,
+        state_service,
+        log_service,
+        event_bus,
+        delegation_registry,
+        execution_id,
+        session_id,
+        agent_id,
+        conv_id,
+        parent_execution_id,
+        error,
+    } = ctx;
     // Messages already streamed to child session during execution
 
     // Crash execution and emit events (don't crash session for subagent)
