@@ -144,6 +144,25 @@ pub fn start_execution(
 // COMPLETION HANDLING
 // ============================================================================
 
+/// Inputs for [`complete_execution`]. Groups the 13 historical positional
+/// parameters — four same-type `&str` ids that silently misorder, plus five
+/// Option-typed "dispatch policy" slots — into named fields.
+pub struct CompleteExecution<'a> {
+    pub state_service: &'a StateService<DatabaseManager>,
+    pub log_service: &'a LogService<DatabaseManager>,
+    pub event_bus: &'a EventBus,
+    pub execution_id: &'a str,
+    pub session_id: &'a str,
+    pub agent_id: &'a str,
+    pub conversation_id: &'a str,
+    pub response: Option<String>,
+    pub connector_registry: Option<&'a Arc<ConnectorRegistry>>,
+    pub respond_to: Option<&'a Vec<String>>,
+    pub thread_id: Option<&'a str>,
+    pub bridge_registry: Option<&'a Arc<BridgeRegistry>>,
+    pub bridge_outbox: Option<&'a Arc<BridgeOutbox>>,
+}
+
 /// Handle successful execution completion.
 ///
 /// Updates state, logs the completion, emits events, and dispatches to connectors.
@@ -153,22 +172,22 @@ pub fn start_execution(
 ///
 /// If `respond_to` contains connector IDs and `connector_registry` is provided,
 /// the response will be dispatched to those connectors.
-#[allow(clippy::too_many_arguments)]
-pub async fn complete_execution(
-    state_service: &StateService<DatabaseManager>,
-    log_service: &LogService<DatabaseManager>,
-    event_bus: &EventBus,
-    execution_id: &str,
-    session_id: &str,
-    agent_id: &str,
-    conversation_id: &str,
-    response: Option<String>,
-    connector_registry: Option<&Arc<ConnectorRegistry>>,
-    respond_to: Option<&Vec<String>>,
-    thread_id: Option<&str>,
-    bridge_registry: Option<&Arc<BridgeRegistry>>,
-    bridge_outbox: Option<&Arc<BridgeOutbox>>,
-) {
+pub async fn complete_execution(ctx: CompleteExecution<'_>) {
+    let CompleteExecution {
+        state_service,
+        log_service,
+        event_bus,
+        execution_id,
+        session_id,
+        agent_id,
+        conversation_id,
+        response,
+        connector_registry,
+        respond_to,
+        thread_id,
+        bridge_registry,
+        bridge_outbox,
+    } = ctx;
     // Update execution status to COMPLETED
     if let Err(e) = state_service.complete_execution(execution_id) {
         tracing::warn!("Failed to complete execution: {}", e);
@@ -329,21 +348,36 @@ pub async fn complete_execution(
     }
 }
 
+/// Inputs for [`crash_execution`]. Four same-type `&str` ids + a bool
+/// (`crash_session`) that a positional call can silently flip — named
+/// fields make both failure modes compile errors instead.
+pub struct CrashExecution<'a> {
+    pub state_service: &'a StateService<DatabaseManager>,
+    pub log_service: &'a LogService<DatabaseManager>,
+    pub event_bus: &'a EventBus,
+    pub execution_id: &'a str,
+    pub session_id: &'a str,
+    pub agent_id: &'a str,
+    pub conversation_id: &'a str,
+    pub error: &'a str,
+    pub crash_session: bool,
+}
+
 /// Handle execution error/crash.
 ///
-#[allow(clippy::too_many_arguments)]
 /// Updates state, logs the error, and emits events.
-pub async fn crash_execution(
-    state_service: &StateService<DatabaseManager>,
-    log_service: &LogService<DatabaseManager>,
-    event_bus: &EventBus,
-    execution_id: &str,
-    session_id: &str,
-    agent_id: &str,
-    conversation_id: &str,
-    error: &str,
-    crash_session: bool,
-) {
+pub async fn crash_execution(ctx: CrashExecution<'_>) {
+    let CrashExecution {
+        state_service,
+        log_service,
+        event_bus,
+        execution_id,
+        session_id,
+        agent_id,
+        conversation_id,
+        error,
+        crash_session,
+    } = ctx;
     // Update execution status to CRASHED
     if let Err(e) = state_service.crash_execution(execution_id, error) {
         tracing::warn!("Failed to crash execution: {}", e);
@@ -383,20 +417,32 @@ pub async fn crash_execution(
         .await;
 }
 
+/// Inputs for [`stop_execution`].
+pub struct StopExecution<'a> {
+    pub state_service: &'a StateService<DatabaseManager>,
+    pub log_service: &'a LogService<DatabaseManager>,
+    pub event_bus: &'a EventBus,
+    pub execution_id: &'a str,
+    pub session_id: &'a str,
+    pub agent_id: &'a str,
+    pub conversation_id: &'a str,
+    pub iteration: u32,
+}
+
 /// Handle user-initiated stop.
-#[allow(clippy::too_many_arguments)]
 ///
 /// Updates state, logs the stop, and emits events.
-pub async fn stop_execution(
-    state_service: &StateService<DatabaseManager>,
-    log_service: &LogService<DatabaseManager>,
-    event_bus: &EventBus,
-    execution_id: &str,
-    session_id: &str,
-    agent_id: &str,
-    conversation_id: &str,
-    iteration: u32,
-) {
+pub async fn stop_execution(ctx: StopExecution<'_>) {
+    let StopExecution {
+        state_service,
+        log_service,
+        event_bus,
+        execution_id,
+        session_id,
+        agent_id,
+        conversation_id,
+        iteration,
+    } = ctx;
     // Update session status to CANCELLED
     if let Err(e) = state_service.cancel_session(session_id) {
         tracing::warn!("Failed to cancel session: {}", e);
@@ -471,18 +517,30 @@ pub async fn emit_delegation_started(
         .await;
 }
 
+/// Inputs for [`emit_delegation_completed`].
+pub struct DelegationCompletedEvent<'a> {
+    pub event_bus: &'a EventBus,
+    pub parent_agent_id: &'a str,
+    pub session_id: &'a str,
+    pub child_agent_id: &'a str,
+    pub child_execution_id: &'a str,
+    pub parent_conversation_id: Option<&'a str>,
+    pub child_conversation_id: Option<&'a str>,
+    pub result: Option<String>,
+}
+
 /// Emit delegation completed event.
-#[allow(clippy::too_many_arguments)]
-pub async fn emit_delegation_completed(
-    event_bus: &EventBus,
-    parent_agent_id: &str,
-    session_id: &str,
-    child_agent_id: &str,
-    child_execution_id: &str,
-    parent_conversation_id: Option<&str>,
-    child_conversation_id: Option<&str>,
-    result: Option<String>,
-) {
+pub async fn emit_delegation_completed(ctx: DelegationCompletedEvent<'_>) {
+    let DelegationCompletedEvent {
+        event_bus,
+        parent_agent_id,
+        session_id,
+        child_agent_id,
+        child_execution_id,
+        parent_conversation_id,
+        child_conversation_id,
+        result,
+    } = ctx;
     event_bus
         .publish(GatewayEvent::DelegationCompleted {
             session_id: session_id.to_string(),
