@@ -239,6 +239,92 @@ struct CreateExecutorArgs<'a> {
     execution_id: &'a str,
 }
 
+/// Prepend recalled facts to `history` as a system message at position 0.
+///
+/// Uses the most recent user message in `history` as the recall query so the
+/// recalled facts are relevant to the task at hand (vs. a hardcoded placeholder).
+/// No-op when `memory_recall` is `None`, the recall call errors, or it returns
+/// no items.
+async fn prepend_continuation_recall(
+    history: &mut Vec<ChatMessage>,
+    memory_recall: Option<&Arc<super::recall::MemoryRecall>>,
+    agent_id: &str,
+    ward_id: Option<&str>,
+) {
+    let Some(recall) = memory_recall else {
+        return;
+    };
+
+    // Use the last user message as the recall query.
+    let query = history
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.text_content())
+        .unwrap_or_else(|| "continuation recall".to_string());
+
+    match recall
+        .recall_unified(agent_id, &query, ward_id, &[], 10)
+        .await
+    {
+        Ok(items) if !items.is_empty() => {
+            let formatted = crate::recall::format_scored_items(&items);
+            if !formatted.is_empty() {
+                history.insert(0, ChatMessage::system(formatted));
+            }
+            tracing::info!(
+                item_count = items.len(),
+                "Recalled unified context for continuation"
+            );
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("Continuation recall failed: {}", e),
+    }
+}
+
+/// Build the system-message prompt that seeds a continuation turn.
+///
+/// If the session has a ward and `specs/{topic}/plan.md` exists, inject the
+/// plan's full text with a "just find-next-step + delegate" directive so the
+/// continuation agent doesn't redo analysis. Otherwise emit the terse "delegate
+/// the next step immediately" nudge.
+///
+/// Side effect: when a plan is found and a fact store is available, the plan
+/// text is written to `ctx.<session_id>.plan` so subagents can fetch it via
+/// `memory(get_fact, …)` without re-reading the file.
+async fn build_continuation_message(
+    paths: &SharedVaultPaths,
+    session_id: &str,
+    ward_id: Option<&str>,
+    fact_store: Option<&Arc<dyn zero_core::MemoryFactStore>>,
+) -> String {
+    let plan_hint = ward_id.and_then(|wid| {
+        let specs_dir = paths.vault_dir().join("wards").join(wid).join("specs");
+        find_latest_plan(&specs_dir)
+    });
+
+    let Some(plan) = plan_hint else {
+        return "[Delegation completed. Delegate the next step in your plan immediately. \
+                 Do NOT read files or analyze — just delegate.]"
+            .to_string();
+    };
+
+    // Populate session ctx with the plan so subagents can fetch it via
+    // memory(get_fact, key="ctx.<sid>.plan") instead of re-reading the specs
+    // file each turn.
+    if let (Some(fs), Some(ward)) = (fact_store, ward_id) {
+        crate::session_ctx::writer::plan_snapshot(fs, session_id, ward, &plan).await;
+    }
+
+    format!(
+        "[DELEGATION COMPLETED. YOUR PLAN IS BELOW.\n\
+         DO NOT read files. DO NOT analyze. DO NOT use shell.\n\
+         Just find the next step that hasn't been done and delegate it NOW.\n\
+         One action only: delegate_to_agent.]\n\n{}",
+        plan
+    )
+}
+
 /// Wire the mid-session recall hook onto an [`AgentExecutor`] if the owning
 /// runner has a [`MemoryRecall`] configured with `mid_session_recall.enabled`.
 ///
@@ -2370,41 +2456,16 @@ async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<(), String> {
         .flatten()
         .and_then(|s| s.ward_id);
 
-    // Recall domain-relevant facts for continuation context.
-    // Use the last user message from history as the recall query (instead of a
-    // hardcoded placeholder) so the recalled facts are relevant to the actual task.
-    let continuation_recall_query = history
-        .iter()
-        .rev()
-        .find(|m| m.role == "user")
-        .map(|m| m.text_content())
-        .unwrap_or_else(|| "continuation recall".to_string());
-
-    if let Some(recall) = &memory_recall {
-        match recall
-            .recall_unified(
-                root_agent_id,
-                &continuation_recall_query,
-                session_ward_id.as_deref(),
-                &[],
-                10,
-            )
-            .await
-        {
-            Ok(items) if !items.is_empty() => {
-                let formatted = crate::recall::format_scored_items(&items);
-                if !formatted.is_empty() {
-                    history.insert(0, ChatMessage::system(formatted));
-                }
-                tracing::info!(
-                    item_count = items.len(),
-                    "Recalled unified context for continuation"
-                );
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!("Continuation recall failed: {}", e),
-        }
-    }
+    // Prepend recalled facts (if any) to history as a system message at
+    // position 0 — formatted by `format_scored_items`. No-op when
+    // memory_recall is None, recall fails, or returns nothing.
+    prepend_continuation_recall(
+        &mut history,
+        memory_recall.as_ref(),
+        root_agent_id,
+        session_ward_id.as_deref(),
+    )
+    .await;
 
     tracing::info!(
         session_id = %session_id,
@@ -2478,35 +2539,14 @@ async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<(), String> {
         session_ward_id.as_deref(),
     );
 
-    // Build a focused continuation message with the plan injected.
-    // Search specs/**/plan.md (planner saves to specs/{domain_task}/plan.md).
-    let continuation_message = {
-        let plan_hint = session_ward_id.as_ref().and_then(|ward_id| {
-            let specs_dir = paths.vault_dir().join("wards").join(ward_id).join("specs");
-            find_latest_plan(&specs_dir)
-        });
-
-        if let Some(plan) = plan_hint {
-            // Phase 2b: also populate session ctx with the plan so
-            // subagents can fetch it via memory(get_fact, key="ctx.<sid>.plan")
-            // instead of re-reading the specs file each turn.
-            if let (Some(fs), Some(ward)) = (fact_store_for_ctx.as_ref(), session_ward_id.as_ref())
-            {
-                crate::session_ctx::writer::plan_snapshot(fs, session_id, ward, &plan).await;
-            }
-            format!(
-                "[DELEGATION COMPLETED. YOUR PLAN IS BELOW.\n\
-                 DO NOT read files. DO NOT analyze. DO NOT use shell.\n\
-                 Just find the next step that hasn't been done and delegate it NOW.\n\
-                 One action only: delegate_to_agent.]\n\n{}",
-                plan
-            )
-        } else {
-            "[Delegation completed. Delegate the next step in your plan immediately. \
-             Do NOT read files or analyze — just delegate.]"
-                .to_string()
-        }
-    };
+    // Build a focused continuation message with the plan injected if one exists.
+    let continuation_message = build_continuation_message(
+        &paths,
+        session_id,
+        session_ward_id.as_deref(),
+        fact_store_for_ctx.as_ref(),
+    )
+    .await;
 
     // Spawn execution task
     let session_id_clone = session_id.to_string();
