@@ -102,18 +102,172 @@ pub fn prune_decayed_facts(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gateway_database::vector_index::VectorIndex;
+    use gateway_database::{KnowledgeDatabase, MemoryFact, SqliteVecIndex};
+    use gateway_services::VaultPaths;
+    use std::sync::Arc;
 
-    #[test]
-    fn prune_disabled_returns_zero() {
-        let config = TemporalDecayConfig {
+    struct Harness {
+        _tmp: tempfile::TempDir,
+        repo: MemoryRepository,
+    }
+
+    fn setup() -> Harness {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        std::fs::create_dir_all(paths.conversations_db().parent().expect("parent")).expect("mkdir");
+        let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
+        let vec: Arc<dyn VectorIndex> =
+            Arc::new(SqliteVecIndex::new(db.clone(), "memory_facts_index", "fact_id").unwrap());
+        let repo = MemoryRepository::new(db, vec);
+        Harness { _tmp: tmp, repo }
+    }
+
+    /// Build a fact whose `updated_at` is `age_days` days in the past, with
+    /// the supplied category, confidence and mention_count. Everything else
+    /// gets sensible test defaults.
+    fn fact(
+        id: &str,
+        category: &str,
+        confidence: f64,
+        mention_count: i32,
+        age_days: i64,
+    ) -> MemoryFact {
+        let updated_at = (chrono::Utc::now() - chrono::Duration::days(age_days)).to_rfc3339();
+        MemoryFact {
+            id: id.into(),
+            session_id: None,
+            agent_id: "agent:root".into(),
+            scope: "agent".into(),
+            category: category.into(),
+            key: format!("test.{id}"),
+            content: "irrelevant".into(),
+            confidence,
+            mention_count,
+            source_summary: None,
+            embedding: None,
+            ward_id: "__global__".into(),
+            contradicted_by: None,
+            created_at: updated_at.clone(),
+            updated_at,
+            expires_at: None,
+            valid_from: None,
+            valid_until: None,
+            superseded_by: None,
+            pinned: false,
+            epistemic_class: Some("current".into()),
+            source_episode_id: None,
+            source_ref: None,
+        }
+    }
+
+    fn disabled_config() -> TemporalDecayConfig {
+        TemporalDecayConfig {
             enabled: false,
             half_life_days: HashMap::new(),
             prune_threshold: 0.05,
             prune_after_days: 30,
-        };
-        // We can't construct a MemoryRepository without a DatabaseManager,
-        // but we verify the early-exit path compiles and works logically.
-        // A full integration test would use an in-memory DB.
-        assert!(!config.enabled);
+        }
+    }
+
+    fn aggressive_config() -> TemporalDecayConfig {
+        // High threshold + short prune_after so any non-pinned decayed fact
+        // qualifies. Used to exercise the archive path.
+        TemporalDecayConfig {
+            enabled: true,
+            half_life_days: HashMap::from([("domain".into(), 1.0)]),
+            prune_threshold: 1.0,
+            prune_after_days: 1,
+        }
+    }
+
+    #[test]
+    fn prune_disabled_short_circuits_without_fetching_facts() {
+        let h = setup();
+        let out = prune_decayed_facts(&h.repo, &disabled_config()).expect("prune");
+        assert_eq!(out.pruned_count, 0);
+        assert!(out.categories.is_empty());
+    }
+
+    #[test]
+    fn prune_empty_store_is_noop() {
+        let h = setup();
+        let out = prune_decayed_facts(&h.repo, &aggressive_config()).expect("prune");
+        assert_eq!(out.pruned_count, 0);
+        assert!(out.categories.is_empty());
+    }
+
+    #[test]
+    fn prune_skips_skill_and_agent_categories_even_when_decayed() {
+        let h = setup();
+        // Old, low-confidence facts in the protected categories — they should
+        // never be pruned even when the rest of the config says "prune everything."
+        h.repo
+            .upsert_memory_fact(&fact("s1", "skill", 0.01, 1, 999))
+            .unwrap();
+        h.repo
+            .upsert_memory_fact(&fact("a1", "agent", 0.01, 1, 999))
+            .unwrap();
+
+        let out = prune_decayed_facts(&h.repo, &aggressive_config()).expect("prune");
+        assert_eq!(
+            out.pruned_count, 0,
+            "skill/agent must be capability-preserved"
+        );
+    }
+
+    #[test]
+    fn prune_archives_decayed_facts_and_counts_per_category() {
+        let h = setup();
+        // 3 decayed `domain` facts, 1 decayed `pattern` fact (uses default
+        // half-life of 30.0 since the config only maps `domain`).
+        for id in ["d1", "d2", "d3"] {
+            h.repo
+                .upsert_memory_fact(&fact(id, "domain", 0.1, 1, 365))
+                .unwrap();
+        }
+        h.repo
+            .upsert_memory_fact(&fact("p1", "pattern", 0.1, 1, 365))
+            .unwrap();
+
+        let out = prune_decayed_facts(&h.repo, &aggressive_config()).expect("prune");
+
+        assert_eq!(out.pruned_count, 4);
+        assert_eq!(out.categories.get("domain").copied(), Some(3));
+        assert_eq!(out.categories.get("pattern").copied(), Some(1));
+    }
+
+    #[test]
+    fn prune_keeps_young_facts_even_with_low_confidence() {
+        let h = setup();
+        // Young fact (age 0 days) — won't meet the `age_days > prune_after_days`
+        // gate no matter how decayed.
+        h.repo
+            .upsert_memory_fact(&fact("young", "domain", 0.01, 1, 0))
+            .unwrap();
+
+        let out = prune_decayed_facts(&h.repo, &aggressive_config()).expect("prune");
+        assert_eq!(out.pruned_count, 0);
+    }
+
+    #[test]
+    fn prune_keeps_high_confidence_facts_even_when_old() {
+        // With domain half-life=1 day and age=365 days, a confidence=1.0 fact
+        // with a heavy mention_count still sits above the 1.0 threshold only
+        // when the boost is enough — set mention_count high so score stays
+        // above threshold and the age-filter alone shouldn't prune it.
+        //
+        // Using the DEFAULT config (threshold 0.05), a high-confidence fact
+        // lands well above threshold and should be kept.
+        let h = setup();
+        h.repo
+            .upsert_memory_fact(&fact("tough", "domain", 1.0, 100, 365))
+            .unwrap();
+
+        let out = prune_decayed_facts(&h.repo, &TemporalDecayConfig::default()).expect("prune");
+        assert_eq!(
+            out.pruned_count, 0,
+            "high-confidence + mention-boosted fact should survive default pruning"
+        );
     }
 }

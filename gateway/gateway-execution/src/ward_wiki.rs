@@ -374,4 +374,188 @@ mod tests {
         // Multi-byte safety
         assert_eq!(truncate_str("héllo", 3), "hél...");
     }
+
+    // ------------------------------------------------------------------
+    // Integration: compile_ward_wiki against a real WardWikiRepository +
+    // scripted LLM / embedding clients.
+    // ------------------------------------------------------------------
+
+    use agent_runtime::llm::client::StreamCallback;
+    use agent_runtime::llm::embedding::EmbeddingError;
+    use agent_runtime::llm::LlmError;
+    use async_trait::async_trait;
+    use gateway_database::vector_index::VectorIndex;
+    use gateway_database::{KnowledgeDatabase, SqliteVecIndex};
+    use gateway_services::VaultPaths;
+    use std::sync::{Arc, Mutex};
+
+    /// Scripted LLM returning a fixed textual response — whatever the caller
+    /// passes in. We only use `chat`; `chat_stream` panics if invoked so a
+    /// mis-wired future caller is caught immediately.
+    struct MockLlm {
+        response: Mutex<String>,
+    }
+    impl MockLlm {
+        fn new(text: &str) -> Self {
+            Self {
+                response: Mutex::new(text.to_string()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmClient for MockLlm {
+        fn model(&self) -> &str {
+            "mock-model"
+        }
+        fn provider(&self) -> &str {
+            "mock"
+        }
+        async fn chat(
+            &self,
+            _messages: Vec<ChatMessage>,
+            _tools: Option<serde_json::Value>,
+        ) -> Result<agent_runtime::llm::client::ChatResponse, LlmError> {
+            Ok(agent_runtime::llm::client::ChatResponse {
+                content: self.response.lock().unwrap().clone(),
+                tool_calls: None,
+                reasoning: None,
+                usage: None,
+            })
+        }
+        async fn chat_stream(
+            &self,
+            _messages: Vec<ChatMessage>,
+            _tools: Option<serde_json::Value>,
+            _callback: StreamCallback,
+        ) -> Result<agent_runtime::llm::client::ChatResponse, LlmError> {
+            panic!("MockLlm::chat_stream should not be called in tests");
+        }
+    }
+
+    /// Deterministic embedding client — same 384-float vector for every input.
+    /// Matches the KnowledgeDatabase default dim so the vec-index write
+    /// inside `upsert_article` succeeds.
+    struct ConstEmbedding;
+    #[async_trait]
+    impl EmbeddingClient for ConstEmbedding {
+        async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            let mut v = vec![0.0f32; 384];
+            v[0] = 1.0;
+            Ok(texts.iter().map(|_| v.clone()).collect())
+        }
+        fn dimensions(&self) -> usize {
+            384
+        }
+        fn model_name(&self) -> String {
+            "const".to_string()
+        }
+    }
+
+    fn make_wiki_repo() -> (tempfile::TempDir, WardWikiRepository) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        std::fs::create_dir_all(paths.conversations_db().parent().expect("parent")).expect("mkdir");
+        let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
+        let vec: Arc<dyn VectorIndex> =
+            Arc::new(SqliteVecIndex::new(db.clone(), "wiki_articles_index", "article_id").unwrap());
+        let repo = WardWikiRepository::new(db, vec);
+        (tmp, repo)
+    }
+
+    #[tokio::test]
+    async fn compile_ward_wiki_empty_facts_short_circuits() {
+        let (_tmp, repo) = make_wiki_repo();
+        let llm = MockLlm::new("unused");
+        let out = compile_ward_wiki("w1", "root", &[], &repo, &llm, None)
+            .await
+            .expect("compile");
+        assert_eq!(out, 0);
+    }
+
+    #[tokio::test]
+    async fn compile_ward_wiki_upserts_article_and_writes_index() {
+        let (_tmp, repo) = make_wiki_repo();
+        let llm_response = r#"{"articles": [
+            {"title": "Rate Limits", "content": "Use 1 req/sec.", "tags": ["yfinance"]}
+        ]}"#;
+        let llm = MockLlm::new(llm_response);
+        let facts = vec![FactSummary {
+            category: "pattern".into(),
+            key: "rate_limiting".into(),
+            content: "1 req/sec".into(),
+        }];
+
+        let out = compile_ward_wiki("w1", "root", &facts, &repo, &llm, None)
+            .await
+            .expect("compile");
+        assert_eq!(out, 1);
+
+        let articles = repo.list_articles("w1").expect("list");
+        // Expect 2: the new article + the __index__ rollup.
+        assert!(articles.iter().any(|a| a.title == "Rate Limits"));
+        assert!(articles.iter().any(|a| a.title == "__index__"));
+
+        // Index must name the new article.
+        let index = articles
+            .iter()
+            .find(|a| a.title == "__index__")
+            .expect("index exists");
+        assert!(index.content.contains("Rate Limits"));
+        assert!(index.content.contains("Use 1 req/sec"));
+    }
+
+    #[tokio::test]
+    async fn compile_ward_wiki_malformed_llm_json_returns_err() {
+        let (_tmp, repo) = make_wiki_repo();
+        let llm = MockLlm::new("not json at all");
+        let facts = vec![FactSummary {
+            category: "x".into(),
+            key: "y".into(),
+            content: "z".into(),
+        }];
+
+        let err = compile_ward_wiki("w1", "root", &facts, &repo, &llm, None)
+            .await
+            .unwrap_err();
+        assert!(err.contains("parse"));
+    }
+
+    #[tokio::test]
+    async fn compile_ward_wiki_uses_embedding_client_when_provided() {
+        // We don't assert dedup behavior (that's integration-testing the
+        // repo's similarity search) — just that the embedding path runs
+        // end-to-end without erroring when an embedding client is supplied.
+        let (_tmp, repo) = make_wiki_repo();
+        let llm_response = r#"{"articles": [
+            {"title": "Doc A", "content": "body", "tags": null}
+        ]}"#;
+        let llm = MockLlm::new(llm_response);
+        let emb = ConstEmbedding;
+        let facts = vec![FactSummary {
+            category: "pattern".into(),
+            key: "k".into(),
+            content: "c".into(),
+        }];
+
+        let out = compile_ward_wiki("w1", "root", &facts, &repo, &llm, Some(&emb))
+            .await
+            .expect("compile");
+        assert_eq!(out, 1);
+    }
+
+    // ------------------------------------------------------------------
+    // Pure helper — build_index_content — exercised directly now that it
+    // takes a live repo.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn build_index_content_empty_ward_returns_just_header() {
+        let (_tmp, repo) = make_wiki_repo();
+        let out = build_index_content("w1", &repo).expect("build index");
+        assert!(out.starts_with("# w1 Wiki Index"));
+        // No bullet lines: the only article would've been __index__ itself,
+        // which is filtered out.
+        assert!(!out.contains("\n- "));
+    }
 }

@@ -98,12 +98,7 @@ impl ConnectorResourceProvider for GatewayResourceProvider {
             })?;
 
         // Expand URI template with params
-        let mut uri = resource.uri.clone();
-        if let Some(params) = &params {
-            for (key, value) in params {
-                uri = uri.replace(&format!("{{{}}}", key), value);
-            }
-        }
+        let uri = expand_uri_template(&resource.uri, params.as_ref());
 
         // Build HTTP request with resource headers
         let client = reqwest::Client::builder()
@@ -111,11 +106,11 @@ impl ConnectorResourceProvider for GatewayResourceProvider {
             .build()
             .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-        let mut request = match resource.method.to_uppercase().as_str() {
-            "POST" => client.post(&uri),
-            "PUT" => client.put(&uri),
-            "DELETE" => client.delete(&uri),
-            _ => client.get(&uri),
+        let mut request = match pick_http_method(&resource.method) {
+            HttpMethod::Post => client.post(&uri),
+            HttpMethod::Put => client.put(&uri),
+            HttpMethod::Delete => client.delete(&uri),
+            HttpMethod::Get => client.get(&uri),
         };
 
         // Apply resource-specific headers
@@ -211,41 +206,108 @@ impl ConnectorResourceProvider for GatewayResourceProvider {
     }
 }
 
+/// Expand `{placeholder}` segments in a URI template against an optional
+/// map of parameters. Extracted so tests can exercise the real code (not
+/// a re-implementation) and so the expansion logic has a single home.
+fn expand_uri_template(uri: &str, params: Option<&HashMap<String, String>>) -> String {
+    let mut out = uri.to_string();
+    if let Some(params) = params {
+        for (key, value) in params {
+            out = out.replace(&format!("{{{key}}}"), value);
+        }
+    }
+    out
+}
+
+/// Canonical HTTP method the adapter understands. Any unknown verb
+/// (including lowercased or typoed inputs) falls back to GET — same
+/// behaviour as before, just spelled out in a named enum instead of a
+/// `_ => GET` arm in the middle of the method.
+#[derive(Debug, PartialEq, Eq)]
+enum HttpMethod {
+    Get,
+    Post,
+    Put,
+    Delete,
+}
+
+fn pick_http_method(raw: &str) -> HttpMethod {
+    match raw.to_uppercase().as_str() {
+        "POST" => HttpMethod::Post,
+        "PUT" => HttpMethod::Put,
+        "DELETE" => HttpMethod::Delete,
+        _ => HttpMethod::Get,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // --- expand_uri_template ---
+
     #[test]
-    fn test_uri_template_expansion() {
-        let mut uri = "https://api.example.com/contacts/{id}".to_string();
-        let params = HashMap::from([("id".to_string(), "user-123".to_string())]);
-
-        for (key, value) in &params {
-            uri = uri.replace(&format!("{{{}}}", key), value);
-        }
-
-        assert_eq!(uri, "https://api.example.com/contacts/user-123");
+    fn expand_uri_template_substitutes_single_placeholder() {
+        let params = HashMap::from([("id".into(), "user-123".into())]);
+        let out = expand_uri_template("https://api.example.com/contacts/{id}", Some(&params));
+        assert_eq!(out, "https://api.example.com/contacts/user-123");
     }
 
     #[test]
-    fn test_uri_template_multiple_params() {
-        let mut uri = "https://api.example.com/{org}/repos/{repo}".to_string();
+    fn expand_uri_template_substitutes_multiple_placeholders() {
         let params = HashMap::from([
-            ("org".to_string(), "acme".to_string()),
-            ("repo".to_string(), "project".to_string()),
+            ("org".into(), "acme".into()),
+            ("repo".into(), "project".into()),
         ]);
-
-        for (key, value) in &params {
-            uri = uri.replace(&format!("{{{}}}", key), value);
-        }
-
-        assert_eq!(uri, "https://api.example.com/acme/repos/project");
+        let out = expand_uri_template("https://api.example.com/{org}/repos/{repo}", Some(&params));
+        assert_eq!(out, "https://api.example.com/acme/repos/project");
     }
 
     #[test]
-    fn test_uri_template_no_params() {
-        let uri = "https://api.example.com/contacts".to_string();
-        // No expansion needed
-        assert!(!uri.contains('{'));
+    fn expand_uri_template_no_params_map_returns_uri_unchanged() {
+        let out = expand_uri_template("https://api.example.com/contacts", None);
+        assert_eq!(out, "https://api.example.com/contacts");
+    }
+
+    #[test]
+    fn expand_uri_template_leaves_unknown_placeholders_untouched() {
+        // A placeholder that's not in `params` is kept as-is — the caller is
+        // responsible for ensuring required params are supplied.
+        let params = HashMap::from([("id".into(), "42".into())]);
+        let out = expand_uri_template("/api/{id}/{missing}", Some(&params));
+        assert_eq!(out, "/api/42/{missing}");
+    }
+
+    #[test]
+    fn expand_uri_template_empty_params_map_returns_uri_unchanged() {
+        let params = HashMap::new();
+        let out = expand_uri_template("/api/{id}", Some(&params));
+        assert_eq!(out, "/api/{id}");
+    }
+
+    // --- pick_http_method ---
+
+    #[test]
+    fn pick_http_method_matches_canonical_verbs() {
+        assert_eq!(pick_http_method("GET"), HttpMethod::Get);
+        assert_eq!(pick_http_method("POST"), HttpMethod::Post);
+        assert_eq!(pick_http_method("PUT"), HttpMethod::Put);
+        assert_eq!(pick_http_method("DELETE"), HttpMethod::Delete);
+    }
+
+    #[test]
+    fn pick_http_method_is_case_insensitive() {
+        assert_eq!(pick_http_method("post"), HttpMethod::Post);
+        assert_eq!(pick_http_method("Put"), HttpMethod::Put);
+        assert_eq!(pick_http_method("dElEtE"), HttpMethod::Delete);
+    }
+
+    #[test]
+    fn pick_http_method_falls_back_to_get_for_unknown_verbs() {
+        // Typos, unsupported verbs, and empty string all default to GET —
+        // safest fallback for a user-configured connector.
+        assert_eq!(pick_http_method("PATCH"), HttpMethod::Get);
+        assert_eq!(pick_http_method("POSTT"), HttpMethod::Get);
+        assert_eq!(pick_http_method(""), HttpMethod::Get);
     }
 }
