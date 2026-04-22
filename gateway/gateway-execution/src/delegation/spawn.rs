@@ -26,7 +26,7 @@ use crate::invoke::{
 };
 use crate::lifecycle::{
     complete_execution, crash_execution, emit_delegation_completed, emit_delegation_started,
-    start_execution,
+    start_execution, CompleteExecution, CrashExecution, DelegationCompletedEvent,
 };
 use crate::recall::MemoryRecall;
 
@@ -803,21 +803,21 @@ async fn handle_execution_success(
 
     // Complete execution and emit events
     // Delegations don't dispatch to connectors (they're internal subagent calls)
-    complete_execution(
+    complete_execution(CompleteExecution {
         state_service,
         log_service,
         event_bus,
         execution_id,
         session_id,
         agent_id,
-        conv_id,
-        Some(response.to_string()),
-        None,
-        None,
-        None, // No thread_id for delegations (internal subagent calls)
-        None, // No bridge dispatch for delegations
-        None,
-    )
+        conversation_id: conv_id,
+        response: Some(response.to_string()),
+        connector_registry: None,
+        respond_to: None,
+        thread_id: None,
+        bridge_registry: None,
+        bridge_outbox: None,
+    })
     .await;
 
     // Get delegation context before removing (for callback check)
@@ -827,16 +827,16 @@ async fn handle_execution_success(
     let parent_conv_id = delegation_ctx
         .as_ref()
         .map(|ctx| ctx.parent_conversation_id.as_str());
-    emit_delegation_completed(
+    emit_delegation_completed(DelegationCompletedEvent {
         event_bus,
-        parent_agent,
+        parent_agent_id: parent_agent,
         session_id,
-        agent_id,
-        execution_id,
-        parent_conv_id,
-        Some(conv_id),
-        Some(response.to_string()),
-    )
+        child_agent_id: agent_id,
+        child_execution_id: execution_id,
+        parent_conversation_id: parent_conv_id,
+        child_conversation_id: Some(conv_id),
+        result: Some(response.to_string()),
+    })
     .await;
 
     // Check if this was the last delegation and continuation is needed
@@ -949,17 +949,17 @@ async fn handle_execution_failure(
     // Messages already streamed to child session during execution
 
     // Crash execution and emit events (don't crash session for subagent)
-    crash_execution(
+    crash_execution(CrashExecution {
         state_service,
         log_service,
         event_bus,
         execution_id,
         session_id,
         agent_id,
-        conv_id,
+        conversation_id: conv_id,
         error,
-        false, // don't crash session for subagent
-    )
+        crash_session: false, // don't crash session for subagent
+    })
     .await;
 
     // Send error callback to parent

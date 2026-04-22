@@ -43,7 +43,7 @@ use super::invoke::{
 };
 use super::lifecycle::{
     complete_execution, crash_execution, emit_agent_started, get_or_create_session,
-    start_execution, stop_execution,
+    start_execution, stop_execution, CompleteExecution, CrashExecution, StopExecution,
 };
 
 // ============================================================================
@@ -1212,21 +1212,21 @@ impl ExecutionRunner {
                         }
                     } else {
                         // Normal completion — no active delegations
-                        complete_execution(
-                            &state_service,
-                            &log_service,
-                            &event_bus,
-                            &execution_id,
-                            &session_id,
-                            &agent_id,
-                            &conversation_id,
-                            Some(accumulated_response),
-                            connector_registry.as_ref(),
-                            respond_to.as_ref(),
-                            thread_id.as_deref(),
-                            bridge_registry.as_ref(),
-                            bridge_outbox.as_ref(),
-                        )
+                        complete_execution(CompleteExecution {
+                            state_service: &state_service,
+                            log_service: &log_service,
+                            event_bus: &event_bus,
+                            execution_id: &execution_id,
+                            session_id: &session_id,
+                            agent_id: &agent_id,
+                            conversation_id: &conversation_id,
+                            response: Some(accumulated_response),
+                            connector_registry: connector_registry.as_ref(),
+                            respond_to: respond_to.as_ref(),
+                            thread_id: thread_id.as_deref(),
+                            bridge_registry: bridge_registry.as_ref(),
+                            bridge_outbox: bridge_outbox.as_ref(),
+                        })
                         .await;
                     }
 
@@ -1265,17 +1265,17 @@ impl ExecutionRunner {
                 }
                 Err(e) => {
                     // Crash execution and emit events
-                    crash_execution(
-                        &state_service,
-                        &log_service,
-                        &event_bus,
-                        &execution_id,
-                        &session_id,
-                        &agent_id,
-                        &conversation_id,
-                        &e.to_string(),
-                        true, // crash session for root execution
-                    )
+                    crash_execution(CrashExecution {
+                        state_service: &state_service,
+                        log_service: &log_service,
+                        event_bus: &event_bus,
+                        execution_id: &execution_id,
+                        session_id: &session_id,
+                        agent_id: &agent_id,
+                        conversation_id: &conversation_id,
+                        error: &e.to_string(),
+                        crash_session: true, // crash session for root execution
+                    })
                     .await;
 
                     // Cancel any orphaned delegations for this session
@@ -1291,16 +1291,16 @@ impl ExecutionRunner {
 
             // Check if stopped
             if handle.is_stop_requested() {
-                stop_execution(
-                    &state_service,
-                    &log_service,
-                    &event_bus,
-                    &execution_id,
-                    &session_id,
-                    &agent_id,
-                    &conversation_id,
-                    handle.current_iteration(),
-                )
+                stop_execution(StopExecution {
+                    state_service: &state_service,
+                    log_service: &log_service,
+                    event_bus: &event_bus,
+                    execution_id: &execution_id,
+                    session_id: &session_id,
+                    agent_id: &agent_id,
+                    conversation_id: &conversation_id,
+                    iteration: handle.current_iteration(),
+                })
                 .await;
             }
         });
@@ -2544,21 +2544,21 @@ async fn invoke_continuation(
                     }
                 } else {
                     // No more delegations — complete normally
-                    complete_execution(
-                        &state_service,
-                        &log_service,
-                        &event_bus,
-                        &execution_id,
-                        &session_id_clone,
-                        &agent_id_clone,
-                        &conversation_id,
-                        Some(accumulated_response),
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                    )
+                    complete_execution(CompleteExecution {
+                        state_service: &state_service,
+                        log_service: &log_service,
+                        event_bus: &event_bus,
+                        execution_id: &execution_id,
+                        session_id: &session_id_clone,
+                        agent_id: &agent_id_clone,
+                        conversation_id: &conversation_id,
+                        response: Some(accumulated_response),
+                        connector_registry: None,
+                        respond_to: None,
+                        thread_id: None,
+                        bridge_registry: None,
+                        bridge_outbox: None,
+                    })
                     .await;
                 }
 
@@ -2591,32 +2591,32 @@ async fn invoke_continuation(
                 }
             }
             Err(e) => {
-                crash_execution(
-                    &state_service,
-                    &log_service,
-                    &event_bus,
-                    &execution_id,
-                    &session_id_clone,
-                    &agent_id_clone,
-                    &conversation_id,
-                    &e.to_string(),
-                    true,
-                )
+                crash_execution(CrashExecution {
+                    state_service: &state_service,
+                    log_service: &log_service,
+                    event_bus: &event_bus,
+                    execution_id: &execution_id,
+                    session_id: &session_id_clone,
+                    agent_id: &agent_id_clone,
+                    conversation_id: &conversation_id,
+                    error: &e.to_string(),
+                    crash_session: true,
+                })
                 .await;
             }
         }
 
         if handle.is_stop_requested() {
-            stop_execution(
-                &state_service,
-                &log_service,
-                &event_bus,
-                &execution_id,
-                &session_id_clone,
-                &agent_id_clone,
-                &conversation_id,
-                handle.current_iteration(),
-            )
+            stop_execution(StopExecution {
+                state_service: &state_service,
+                log_service: &log_service,
+                event_bus: &event_bus,
+                execution_id: &execution_id,
+                session_id: &session_id_clone,
+                agent_id: &agent_id_clone,
+                conversation_id: &conversation_id,
+                iteration: handle.current_iteration(),
+            })
             .await;
         }
     });
