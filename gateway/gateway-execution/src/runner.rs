@@ -239,6 +239,77 @@ struct CreateExecutorArgs<'a> {
     execution_id: &'a str,
 }
 
+/// Wire the mid-session recall hook onto an [`AgentExecutor`] if the owning
+/// runner has a [`MemoryRecall`] configured with `mid_session_recall.enabled`.
+///
+/// Same closure body is wired at two points — after a root executor is built
+/// in `create_executor`, and after a continuation executor is built in
+/// `invoke_continuation`. Extracted here so the ~55-line `set_recall_hook`
+/// invocation lives in exactly one place; either call site that forgets it
+/// must explicitly opt out rather than silently diverge.
+fn attach_mid_session_recall_hook(
+    executor: &mut AgentExecutor,
+    memory_recall: Option<&Arc<super::recall::MemoryRecall>>,
+    agent_id: &str,
+    ward_id: Option<&str>,
+) {
+    let Some(recall) = memory_recall else {
+        return;
+    };
+    let mid_cfg = &recall.config().mid_session_recall;
+    if !mid_cfg.enabled {
+        return;
+    }
+
+    let recall = Arc::clone(recall);
+    let agent_id = agent_id.to_string();
+    let ward = ward_id.map(String::from);
+    let min_novelty = mid_cfg.min_novelty_score;
+    let every_n = mid_cfg.every_n_turns as u32;
+
+    executor.set_recall_hook(
+        Box::new(
+            move |query: &str, already_injected: &std::collections::HashSet<String>| {
+                let recall = Arc::clone(&recall);
+                let agent_id = agent_id.clone();
+                let ward = ward.clone();
+                let query = query.to_string();
+                let already_injected = already_injected.clone();
+                Box::pin(async move {
+                    let facts = recall.recall(&agent_id, &query, 5, ward.as_deref()).await?;
+                    // Filter out already-injected facts and low-novelty results.
+                    let novel: Vec<_> = facts
+                        .into_iter()
+                        .filter(|f| !already_injected.contains(&f.fact.key))
+                        .filter(|f| f.score >= min_novelty)
+                        .collect();
+                    if novel.is_empty() {
+                        return Ok(agent_runtime::RecallHookResult {
+                            system_message: String::new(),
+                            fact_keys: Vec::new(),
+                        });
+                    }
+                    let keys: Vec<String> = novel.iter().map(|f| f.fact.key.clone()).collect();
+                    let lines: Vec<String> = novel
+                        .iter()
+                        .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
+                        .collect();
+                    Ok(agent_runtime::RecallHookResult {
+                        system_message: format!(
+                            "[Memory Refresh] Relevant facts for current context:\n{}",
+                            lines.join("\n")
+                        ),
+                        fact_keys: keys,
+                    })
+                })
+            },
+        ),
+        every_n,
+        std::collections::HashSet::new(),
+    );
+    tracing::debug!(every_n_turns = every_n, "Mid-session recall hook wired");
+}
+
 /// Per-turn state mutated by the stream-event handler closure inside
 /// `spawn_execution_task`. Pulled into a struct so each event-type handler
 /// takes `&mut EventAccumulator` + a few deps, instead of a 10-parameter
@@ -1941,61 +2012,12 @@ impl ExecutionRunner {
             )
             .await?;
 
-        // Wire mid-session recall hook so the executor refreshes memory every N turns.
-        if let Some(recall) = &self.memory_recall {
-            let mid_cfg = &recall.config().mid_session_recall;
-            if mid_cfg.enabled {
-                let recall = Arc::clone(recall);
-                let agent_id = agent.id.clone();
-                let ward = ward_id.map(String::from);
-                let min_novelty = mid_cfg.min_novelty_score;
-                let every_n = mid_cfg.every_n_turns as u32;
-
-                executor.set_recall_hook(
-                    Box::new(
-                        move |query: &str, already_injected: &std::collections::HashSet<String>| {
-                            let recall = Arc::clone(&recall);
-                            let agent_id = agent_id.clone();
-                            let ward = ward.clone();
-                            let query = query.to_string();
-                            let already_injected = already_injected.clone();
-                            Box::pin(async move {
-                                let facts =
-                                    recall.recall(&agent_id, &query, 5, ward.as_deref()).await?;
-                                // Filter out already-injected facts and low-novelty results
-                                let novel: Vec<_> = facts
-                                    .into_iter()
-                                    .filter(|f| !already_injected.contains(&f.fact.key))
-                                    .filter(|f| f.score >= min_novelty)
-                                    .collect();
-                                if novel.is_empty() {
-                                    return Ok(agent_runtime::RecallHookResult {
-                                        system_message: String::new(),
-                                        fact_keys: Vec::new(),
-                                    });
-                                }
-                                let keys: Vec<String> =
-                                    novel.iter().map(|f| f.fact.key.clone()).collect();
-                                let lines: Vec<String> = novel
-                                    .iter()
-                                    .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
-                                    .collect();
-                                Ok(agent_runtime::RecallHookResult {
-                                    system_message: format!(
-                                        "[Memory Refresh] Relevant facts for current context:\n{}",
-                                        lines.join("\n")
-                                    ),
-                                    fact_keys: keys,
-                                })
-                            })
-                        },
-                    ),
-                    every_n,
-                    std::collections::HashSet::new(),
-                );
-                tracing::debug!(every_n_turns = every_n, "Mid-session recall hook wired");
-            }
-        }
+        attach_mid_session_recall_hook(
+            &mut executor,
+            self.memory_recall.as_ref(),
+            &agent.id,
+            ward_id,
+        );
 
         Ok((executor, recommended_skills))
     }
@@ -2449,63 +2471,12 @@ async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<(), String> {
         )
         .await?;
 
-    // Wire mid-session recall hook for continuation executor.
-    if let Some(recall) = &memory_recall {
-        let mid_cfg = &recall.config().mid_session_recall;
-        if mid_cfg.enabled {
-            let recall = Arc::clone(recall);
-            let agent_id = root_agent_id.to_string();
-            let ward = session_ward_id.clone();
-            let min_novelty = mid_cfg.min_novelty_score;
-            let every_n = mid_cfg.every_n_turns as u32;
-
-            executor.set_recall_hook(
-                Box::new(
-                    move |query: &str, already_injected: &std::collections::HashSet<String>| {
-                        let recall = Arc::clone(&recall);
-                        let agent_id = agent_id.clone();
-                        let ward = ward.clone();
-                        let query = query.to_string();
-                        let already_injected = already_injected.clone();
-                        Box::pin(async move {
-                            let facts =
-                                recall.recall(&agent_id, &query, 5, ward.as_deref()).await?;
-                            let novel: Vec<_> = facts
-                                .into_iter()
-                                .filter(|f| !already_injected.contains(&f.fact.key))
-                                .filter(|f| f.score >= min_novelty)
-                                .collect();
-                            if novel.is_empty() {
-                                return Ok(agent_runtime::RecallHookResult {
-                                    system_message: String::new(),
-                                    fact_keys: Vec::new(),
-                                });
-                            }
-                            let keys: Vec<String> =
-                                novel.iter().map(|f| f.fact.key.clone()).collect();
-                            let lines: Vec<String> = novel
-                                .iter()
-                                .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
-                                .collect();
-                            Ok(agent_runtime::RecallHookResult {
-                                system_message: format!(
-                                    "[Memory Refresh] Relevant facts for current context:\n{}",
-                                    lines.join("\n")
-                                ),
-                                fact_keys: keys,
-                            })
-                        })
-                    },
-                ),
-                every_n,
-                std::collections::HashSet::new(),
-            );
-            tracing::debug!(
-                every_n_turns = every_n,
-                "Mid-session recall hook wired (continuation)"
-            );
-        }
-    }
+    attach_mid_session_recall_hook(
+        &mut executor,
+        memory_recall.as_ref(),
+        root_agent_id,
+        session_ward_id.as_deref(),
+    );
 
     // Build a focused continuation message with the plan injected.
     // Search specs/**/plan.md (planner saves to specs/{domain_task}/plan.md).
