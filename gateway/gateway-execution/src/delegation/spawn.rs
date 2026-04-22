@@ -400,14 +400,14 @@ pub async fn spawn_delegated_agent(
     let memory_repo_for_snapshot = memory_repo.clone();
 
     // Spawn the execution task
-    spawn_execution_task(
+    spawn_execution_task(SpawnContext {
         executor,
-        handle_clone,
-        request.clone(),
-        execution_id.clone(),
+        handle: handle_clone,
+        request: request.clone(),
+        execution_id: execution_id.clone(),
         session_id,
         child_session_id,
-        child_conversation_id.clone(),
+        conv_id: child_conversation_id.clone(),
         event_bus,
         conversation_repo,
         delegation_registry,
@@ -419,7 +419,7 @@ pub async fn spawn_delegated_agent(
         initial_history,
         fact_store_for_ctx,
         memory_repo_for_snapshot,
-    );
+    });
 
     tracing::info!(
         parent_agent = %request.parent_agent_id,
@@ -468,21 +468,32 @@ fn reuse_check_block(agent_id: &str) -> Option<&'static str> {
     )
 }
 
-/// Spawn the async execution task for the delegated agent.
+/// All inputs required to spawn the async delegated-agent execution task.
 ///
-/// The 18 parameters mirror the full delegation context. Refactoring into a
-/// context struct is a focused PR in its own right (touches every call site +
-/// downstream field access); suppress here rather than bundling with clippy
-/// cleanup.
-#[allow(clippy::too_many_arguments)]
-fn spawn_execution_task(
+/// Replaces an 18-positional-argument function signature. Using a struct
+/// literal at the call site means:
+///
+/// - Adding a 19th field is a single line in both this struct and the
+///   caller — no positional reshuffling.
+/// - Swapping two like-typed fields (e.g. `session_id` vs `child_session_id`,
+///   both `String`) is caught by name at construction, not silently at runtime.
+/// - Fields can be reordered freely without breaking call sites.
+struct SpawnContext {
+    // --- Execution identity ---
     executor: AgentExecutor,
     handle: ExecutionHandle,
     request: DelegationRequest,
     execution_id: String,
     session_id: String,
     child_session_id: String,
+    /// Child conversation id (what the downstream stream/log services key on).
     conv_id: String,
+    initial_history: Vec<ChatMessage>,
+
+    // --- Resource control ---
+    delegation_permit: Option<OwnedSemaphorePermit>,
+
+    // --- Shared services ---
     event_bus: Arc<EventBus>,
     conversation_repo: Arc<ConversationRepository>,
     delegation_registry: Arc<DelegationRegistry>,
@@ -490,11 +501,35 @@ fn spawn_execution_task(
     log_service: Arc<LogService<DatabaseManager>>,
     state_service: Arc<StateService<DatabaseManager>>,
     paths: SharedVaultPaths,
-    delegation_permit: Option<OwnedSemaphorePermit>,
-    initial_history: Vec<ChatMessage>,
+
+    // --- Optional memory wiring (Phase 4b + 7 ward_snapshot preamble) ---
     fact_store_for_ctx: Option<Arc<dyn zero_core::MemoryFactStore>>,
     memory_repo_for_snapshot: Option<Arc<gateway_database::MemoryRepository>>,
-) {
+}
+
+/// Spawn the async execution task for the delegated agent.
+fn spawn_execution_task(ctx: SpawnContext) {
+    let SpawnContext {
+        executor,
+        handle,
+        request,
+        execution_id,
+        session_id,
+        child_session_id,
+        conv_id,
+        initial_history,
+        delegation_permit,
+        event_bus,
+        conversation_repo,
+        delegation_registry,
+        delegation_tx,
+        log_service,
+        state_service,
+        paths,
+        fact_store_for_ctx,
+        memory_repo_for_snapshot,
+    } = ctx;
+
     let agent_id = request.child_agent_id.clone();
 
     // Phase 4b + 7: build the task prefix layers.
