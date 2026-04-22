@@ -165,6 +165,20 @@ pub struct ExecutionRunnerConfig {
     pub max_parallel_agents: u32,
 }
 
+/// Owned inputs for [`ExecutionRunner::spawn_execution_task`] — three
+/// consecutive `String` ids (message, session_id, execution_id) in the
+/// old positional signature were a silent-swap waiting to happen.
+struct ExecutionTaskArgs {
+    executor: AgentExecutor,
+    handle: ExecutionHandle,
+    config: ExecutionConfig,
+    message: String,
+    session_id: String,
+    execution_id: String,
+    history: Vec<ChatMessage>,
+    recommended_skills: Vec<String>,
+}
+
 /// Borrowed-reference bundle for the nested `spawn_with_notification` helper
 /// inside `spawn_delegation_handler`. All fields are `&Arc<_>` (or `&T`) —
 /// the helper `.clone()`s each one for the `tokio::spawn` it owns internally.
@@ -890,33 +904,32 @@ impl ExecutionRunner {
         }
 
         // Spawn execution task
-        self.spawn_execution_task(
+        self.spawn_execution_task(ExecutionTaskArgs {
             executor,
-            handle_clone,
+            handle: handle_clone,
             config,
             message,
-            session_id.clone(),
+            session_id: session_id.clone(),
             execution_id,
             history,
             recommended_skills,
-        );
+        });
 
         Ok((handle, session_id))
     }
 
     /// Spawn the async execution task.
-    #[allow(clippy::too_many_arguments)]
-    fn spawn_execution_task(
-        &self,
-        executor: AgentExecutor,
-        handle: ExecutionHandle,
-        config: ExecutionConfig,
-        message: String,
-        session_id: String,
-        execution_id: String,
-        mut history: Vec<ChatMessage>,
-        recommended_skills: Vec<String>,
-    ) {
+    fn spawn_execution_task(&self, args: ExecutionTaskArgs) {
+        let ExecutionTaskArgs {
+            executor,
+            handle,
+            config,
+            message,
+            session_id,
+            execution_id,
+            mut history,
+            recommended_skills,
+        } = args;
         let event_bus = self.event_bus.clone();
         let agent_id = config.agent_id.clone();
         let conversation_id = config.conversation_id.clone();
