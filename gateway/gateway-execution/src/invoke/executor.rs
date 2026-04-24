@@ -4,8 +4,8 @@
 
 use agent_runtime::{
     AgentExecutor, ContextEditingConfig, ContextEditingMiddleware, DelegateTool, ExecutorConfig,
-    LlmConfig, McpManager, MiddlewarePipeline, OpenAiClient, RespondTool, RetryPolicy,
-    RetryingLlmClient, ToolCallDecision, ToolRegistry,
+    LlmConfig, McpManager, MiddlewarePipeline, OpenAiClient, PlanBlockMiddleware, RespondTool,
+    RetryPolicy, RetryingLlmClient, ToolCallDecision, ToolRegistry,
 };
 use agent_tools::{
     EditFileTool,
@@ -453,6 +453,12 @@ impl ExecutorBuilder {
             } else {
                 pipeline
             };
+            // Layer 1 (pinned plan anchor) runs AFTER context editing so
+            // tool-result clearing happens first on the raw tape, then
+            // the fresh plan block is re-inserted at a stable slot
+            // behind the system prompt. The block's `is_summary = true`
+            // flag keeps it out of any future compaction pass.
+            let pipeline = pipeline.add_pre_processor(Box::new(PlanBlockMiddleware::new()));
             Arc::new(pipeline)
         };
 

@@ -81,8 +81,8 @@ pub use mcp::{McpClient, McpError, McpManager, McpServerConfig, McpTool};
 
 pub use middleware::{
     ContextEditingConfig, ContextEditingMiddleware, EventMiddleware, KeepPolicy, MiddlewareConfig,
-    MiddlewareContext, MiddlewareEffect, MiddlewarePipeline, PreProcessMiddleware,
-    SummarizationConfig, SummarizationMiddleware, TriggerCondition,
+    MiddlewareContext, MiddlewareEffect, MiddlewarePipeline, PlanBlockMiddleware,
+    PreProcessMiddleware, SummarizationConfig, SummarizationMiddleware, TriggerCondition,
 };
 
 pub use executor::{
