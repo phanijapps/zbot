@@ -22,6 +22,21 @@ pub struct ChatMessage {
 
     /// ID of the tool call this message is responding to (optional)
     pub tool_call_id: Option<String>,
+
+    /// True iff this message was produced by a compaction pass
+    /// (summarization, plan-block rewrite, or similar). Consumers use
+    /// this flag to avoid re-processing — e.g. the summarizer must
+    /// never summarize a message that is itself a summary, and
+    /// context-editing must never collapse a pinned plan block.
+    ///
+    /// Replaces the brittle `text.starts_with("[Turn ")` prefix sniff
+    /// that previously served the same purpose. Defaults to `false` —
+    /// regular conversation turns are never summaries.
+    ///
+    /// Not round-tripped on the wire: the flag is an in-process hint
+    /// for middleware, not part of the LLM provider payload. Both
+    /// `Serialize` and `Deserialize` below omit the field.
+    pub is_summary: bool,
 }
 
 impl ChatMessage {
@@ -33,6 +48,7 @@ impl ChatMessage {
             content: vec![Part::Text { text: content }],
             tool_calls: None,
             tool_call_id: None,
+            is_summary: false,
         }
     }
 
@@ -44,6 +60,7 @@ impl ChatMessage {
             content: vec![Part::Text { text: content }],
             tool_calls: None,
             tool_call_id: None,
+            is_summary: false,
         }
     }
 
@@ -55,6 +72,7 @@ impl ChatMessage {
             content: vec![Part::Text { text: content }],
             tool_calls: None,
             tool_call_id: None,
+            is_summary: false,
         }
     }
 
@@ -66,6 +84,7 @@ impl ChatMessage {
             content: vec![Part::Text { text: content }],
             tool_calls: None,
             tool_call_id: Some(tool_call_id),
+            is_summary: false,
         }
     }
 
@@ -147,6 +166,7 @@ impl<'de> Deserialize<'de> for ChatMessage {
             content,
             tool_calls: raw.tool_calls,
             tool_call_id: raw.tool_call_id,
+            is_summary: false,
         })
     }
 }
@@ -255,6 +275,7 @@ mod tests {
             ],
             tool_calls: None,
             tool_call_id: None,
+            is_summary: false,
         };
         assert_eq!(msg.text_content(), "What is this?");
         assert!(msg.has_multimodal_content());
@@ -284,6 +305,7 @@ mod tests {
             ],
             tool_calls: None,
             tool_call_id: None,
+            is_summary: false,
         };
         let json = serde_json::to_value(&msg).unwrap();
         assert!(json["content"].is_array());

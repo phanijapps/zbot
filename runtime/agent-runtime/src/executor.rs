@@ -450,6 +450,12 @@ impl AgentExecutor {
         // can make skill-aware decisions during context compaction.
         let execution_state = crate::middleware::traits::ExecutionState::from_messages(&messages);
 
+        // Plan state: scan the tape for the most recent `update_plan`
+        // call. Same pattern as `ExecutionState::from_messages` — the
+        // plan-block middleware uses this to render a pinned anchor
+        // that survives compaction.
+        let plan_state = crate::middleware::extract_plan_state(&messages);
+
         let middleware_context = MiddlewareContext::new(
             self.config.agent_id.clone(),
             self.config.conversation_id.clone(),
@@ -457,7 +463,8 @@ impl AgentExecutor {
             self.config.model.clone(),
         )
         .with_counts(message_count, estimated_tokens)
-        .with_execution_state(execution_state);
+        .with_execution_state(execution_state)
+        .with_plan_state(plan_state);
 
         // Process messages through middleware pipeline
         let processed_messages = self
@@ -918,6 +925,7 @@ impl AgentExecutor {
                 }],
                 tool_calls: Some(tool_calls.clone()),
                 tool_call_id: None,
+                is_summary: false,
             });
 
             // Track if respond tool was called - signals we should stop after this batch
@@ -2972,6 +2980,7 @@ mod progress_tracker_tests {
             }],
             tool_calls: None,
             tool_call_id: None,
+            is_summary: false,
         });
         // Original user request
         messages.push(ChatMessage {
@@ -2981,6 +2990,7 @@ mod progress_tracker_tests {
             }],
             tool_calls: None,
             tool_call_id: None,
+            is_summary: false,
         });
         // Add 30 filler messages so compaction kicks in
         for i in 0..30 {
@@ -2991,6 +3001,7 @@ mod progress_tracker_tests {
                 }],
                 tool_calls: None,
                 tool_call_id: None,
+                is_summary: false,
             });
         }
 
@@ -3027,6 +3038,7 @@ mod progress_tracker_tests {
                 }],
                 tool_calls: None,
                 tool_call_id: None,
+                is_summary: false,
             },
             ChatMessage {
                 role: "user".to_string(),
@@ -3035,6 +3047,7 @@ mod progress_tracker_tests {
                 }],
                 tool_calls: None,
                 tool_call_id: None,
+                is_summary: false,
             },
         ];
         let compacted = compact_messages(messages.clone());
@@ -3261,6 +3274,7 @@ mod compaction_tests {
                 }],
                 tool_calls: Some(vec![tool]),
                 tool_call_id: None,
+                is_summary: false,
             });
             messages.push(ChatMessage {
                 role: "tool".to_string(),
@@ -3269,6 +3283,7 @@ mod compaction_tests {
                 }],
                 tool_calls: None,
                 tool_call_id: Some(format!("call_{i}")),
+                is_summary: false,
             });
         }
 
@@ -3397,6 +3412,7 @@ mod compaction_tests {
                 }],
                 tool_calls: Some(vec![tc]),
                 tool_call_id: None,
+                is_summary: false,
             });
             messages.push(ChatMessage {
                 role: "tool".to_string(),
@@ -3405,6 +3421,7 @@ mod compaction_tests {
                 }],
                 tool_calls: None,
                 tool_call_id: Some(format!("call_{i}")),
+                is_summary: false,
             });
         }
 
