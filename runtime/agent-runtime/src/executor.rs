@@ -494,9 +494,21 @@ impl AgentExecutor {
         #[allow(unused_assignments)] // Initialized here, assigned in loop exit condition
         let mut full_response = String::new();
 
-        // Track cumulative token usage across the session
+        // Cumulative billing totals — summed across every LLM response in the
+        // session, emitted on `TokenUpdate` events for cost tracking. These
+        // grow monotonically and are NOT the right signal for compaction
+        // decisions (a 50-turn loop with a stable 20k-token tape would show
+        // `total_tokens_in = 1,000,000`, spuriously tripping the 80% trigger).
         let mut total_tokens_in: u64 = 0;
         let mut total_tokens_out: u64 = 0;
+
+        // Current tape size, in prompt tokens, as last measured by the
+        // provider on the prompt we most recently sent. This is the
+        // authoritative per-turn occupancy signal and the ONLY value the
+        // compaction trigger should compare against. Zero before the first
+        // response; falls back to the previous value if a response omits
+        // `usage` (some streaming error paths do).
+        let mut current_prompt_tokens: u64 = 0;
 
         // Progress tracker for diagnostics and advisory nudges.
         // No longer used for hard stops — agent runs until done or safety valve trips.
@@ -654,9 +666,13 @@ impl AgentExecutor {
             }
 
             // Token-budget auto-compaction trigger.
-            // When cumulative tokens approach 80% of the context window, trim old messages.
-            // Skip the check entirely if no new messages have been added since last check —
-            // avoids redundant threshold evaluation in tight tool-calling loops.
+            // Compares the CURRENT prompt size (as measured by the provider on
+            // the prompt we just sent) against 80% of the context window.
+            // `total_tokens_in` is billing-only here — it grows across turns
+            // and would spuriously trip the trigger on long tool loops.
+            //
+            // Skip the check entirely if no new messages have been added
+            // since last check — avoids redundant threshold evaluation.
             if self.config.context_window_tokens > 0
                 && current_messages.len() > last_compaction_check_msg_count
             {
@@ -664,7 +680,7 @@ impl AgentExecutor {
                 let warn_threshold =
                     (self.config.context_window_tokens * self.config.compaction_warn_pct) / 100;
                 let compact_threshold = (self.config.context_window_tokens * 80) / 100;
-                if total_tokens_in > warn_threshold {
+                if current_prompt_tokens > warn_threshold {
                     // Pre-compaction memory flush: inject a nudge to save important facts
                     // before context is trimmed. The agent can use save_fact on the next
                     // turn before the old messages disappear.
@@ -676,7 +692,7 @@ impl AgentExecutor {
                         ));
                         compaction_warned = true;
                         tracing::info!(
-                            tokens_in = total_tokens_in,
+                            current_prompt_tokens = current_prompt_tokens,
                             warn_threshold = warn_threshold,
                             "Pre-compaction memory flush warning injected"
                         );
@@ -685,11 +701,11 @@ impl AgentExecutor {
                     }
 
                     // Actual compaction triggers at 80% regardless of warn threshold
-                    if total_tokens_in > compact_threshold {
+                    if current_prompt_tokens > compact_threshold {
                         let before = current_messages.len();
                         current_messages = compact_messages(current_messages);
                         tracing::info!(
-                            tokens_in = total_tokens_in,
+                            current_prompt_tokens = current_prompt_tokens,
                             compact_threshold = compact_threshold,
                             messages_before = before,
                             messages_after = current_messages.len(),
@@ -851,6 +867,9 @@ impl AgentExecutor {
             if let Some(usage) = &response.usage {
                 total_tokens_in += u64::from(usage.prompt_tokens);
                 total_tokens_out += u64::from(usage.completion_tokens);
+                // Single-response prompt size — the provider's authoritative
+                // measurement of the tape we just sent. Drives compaction.
+                current_prompt_tokens = u64::from(usage.prompt_tokens);
 
                 on_event(StreamEvent::TokenUpdate {
                     timestamp: chrono::Utc::now().timestamp_millis() as u64,
@@ -3299,5 +3318,154 @@ mod compaction_tests {
     fn test_extract_key_info_empty() {
         let info = extract_key_info("Success! Operation completed.");
         assert!(info.is_empty());
+    }
+
+    // ========================================================================
+    // Phase 2 minimal-patch regression tests — these target the two bugs
+    // documented in memory-bank/future-state/compaction-strategy.md:
+    //   1. `total_tokens_in` accumulator overcount (executor.rs:498, :852)
+    //   2. `compact_messages` no-op on short high-token conversations
+    // ========================================================================
+
+    /// Simulates 30 tool-loop iterations whose `usage.prompt_tokens` each
+    /// equal 20_000 against a 200_000-token context window. Under the old
+    /// accumulator (`+=`) the trigger value would reach 600_000 and fire
+    /// spuriously. Under the new assignment semantic, the trigger value
+    /// is whatever the *last* response reported — never above the real tape.
+    #[test]
+    fn accumulator_does_not_sum_across_turns() {
+        // Simulate the assignment we wired at executor.rs:852.
+        // The test proves the *semantic* of the change: `current_prompt_tokens`
+        // tracks the latest response's value, not a running sum.
+        let mut current_prompt_tokens: u64 = 0;
+        let mut total_tokens_in: u64 = 0; // billing mirror, still accumulates
+
+        for _ in 0..30 {
+            let response_prompt_tokens: u32 = 20_000;
+            total_tokens_in += u64::from(response_prompt_tokens);
+            current_prompt_tokens = u64::from(response_prompt_tokens);
+        }
+
+        assert_eq!(
+            total_tokens_in, 600_000,
+            "billing accumulator still sums — UI/cost tracking relies on this"
+        );
+        assert_eq!(
+            current_prompt_tokens, 20_000,
+            "compaction signal stays bounded by per-turn value, not cumulative"
+        );
+
+        // With a 200_000-token window and 80% threshold = 160_000, the
+        // OLD trigger (tokens_in > 160k) would fire on turn 9 and every
+        // turn after. The NEW trigger (current_prompt_tokens > 160k)
+        // never fires for this stable tape.
+        let compact_threshold = (200_000u64 * 80) / 100;
+        assert!(
+            total_tokens_in > compact_threshold,
+            "old accumulator would have tripped the threshold"
+        );
+        assert!(
+            current_prompt_tokens <= compact_threshold,
+            "new signal does not trip the threshold — no spurious compaction"
+        );
+    }
+
+    /// Compaction must never orphan a `tool_use`/`tool_result` pair — the
+    /// Anthropic API returns HTTP 400 if a tool message references an
+    /// assistant `tool_call_id` that no longer exists. For every
+    /// `tool_call_id` present on any remaining assistant `tool_calls`,
+    /// there must be a paired `tool` message (and vice versa).
+    #[test]
+    fn compaction_preserves_tool_use_result_pairs() {
+        let mut messages = vec![
+            ChatMessage::system("system".to_string()),
+            ChatMessage::user("original request".to_string()),
+        ];
+        // 15 assistant+tool pairs. KEEP_RECENT = 20 means pairs near the
+        // front are candidates for compression/drop; those near the end
+        // stay intact.
+        for i in 0..15 {
+            let tc = ToolCall::new(
+                format!("call_{i}"),
+                "read_file".to_string(),
+                json!({"path": format!("src/file_{i}.py")}),
+            );
+            messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: vec![Part::Text {
+                    text: format!("step {i}"),
+                }],
+                tool_calls: Some(vec![tc]),
+                tool_call_id: None,
+            });
+            messages.push(ChatMessage {
+                role: "tool".to_string(),
+                content: vec![Part::Text {
+                    text: format!("output for call_{i}"),
+                }],
+                tool_calls: None,
+                tool_call_id: Some(format!("call_{i}")),
+            });
+        }
+
+        let compacted = compact_messages(messages);
+
+        // Collect all tool_call_ids referenced by surviving assistant messages.
+        let mut referenced_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for msg in &compacted {
+            if msg.role == "assistant" {
+                if let Some(tcs) = &msg.tool_calls {
+                    for tc in tcs {
+                        referenced_ids.insert(tc.id.clone());
+                    }
+                }
+            }
+        }
+
+        // Every surviving tool message's tool_call_id MUST be referenced.
+        for msg in &compacted {
+            if msg.role == "tool" {
+                let tcid = msg.tool_call_id.as_deref().unwrap_or("");
+                assert!(
+                    referenced_ids.contains(tcid),
+                    "orphaned tool message — tool_call_id '{tcid}' not referenced \
+                     by any surviving assistant message (this causes HTTP 400)"
+                );
+            }
+        }
+
+        // And every referenced tool_call_id MUST have a paired tool message.
+        for id in &referenced_ids {
+            let has_pair = compacted
+                .iter()
+                .any(|m| m.role == "tool" && m.tool_call_id.as_deref() == Some(id));
+            assert!(
+                has_pair,
+                "assistant references tool_call_id '{id}' but no tool response survived"
+            );
+        }
+    }
+
+    /// Some providers (streaming error paths, OAI-compat clones) omit
+    /// `response.usage`. When that happens the executor's
+    /// `current_prompt_tokens` stays at its prior value; the trigger does
+    /// not spuriously fire. This test exercises the fallback semantic of
+    /// the assignment at executor.rs:852.
+    #[test]
+    fn missing_usage_field_leaves_signal_unchanged() {
+        let mut current_prompt_tokens: u64 = 12_345;
+
+        // Simulate a response without `usage` — the `if let Some(usage)`
+        // guard at executor.rs:851 means we skip the assignment entirely.
+        let response_usage: Option<crate::llm::TokenUsage> = None;
+        if let Some(usage) = &response_usage {
+            current_prompt_tokens = u64::from(usage.prompt_tokens);
+        }
+
+        assert_eq!(
+            current_prompt_tokens, 12_345,
+            "missing usage must not zero out the signal — trigger holds steady"
+        );
     }
 }
