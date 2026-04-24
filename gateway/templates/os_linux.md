@@ -30,6 +30,6 @@ PLATFORM: Linux
 ## Running Python Code
 - For simple checks: `python3 -c "print('hello')"`
 - For multi-line code: write a .py file first, then run it:
-  1. Use the `apply_patch` tool to create the script
+  1. Use the `write_file` tool to create the script
   2. `python3 path/to/script.py` to run it
-- Prefer `apply_patch` tool + run for scripts longer than ~10 lines
+- Prefer `write_file` tool + run for scripts longer than ~10 lines

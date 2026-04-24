@@ -27,7 +27,6 @@ use zero_core::Tool;
 
 pub use agent::{CreateAgentTool, ListAgentsTool};
 pub use connectors::QueryResourceTool;
-pub use execution::ApplyPatchTool;
 pub use execution::EditFileTool;
 pub use execution::ExecutionGraphTool;
 pub use execution::PythonTool;
@@ -67,7 +66,8 @@ pub use web::WebFetchTool;
 ///
 /// Core tools (always enabled):
 /// - shell: Primary execution — commands
-/// - apply_patch: File creation/editing/deletion via patch format
+/// - write_file: Create new files
+/// - edit_file: Targeted find-and-replace edits on existing files
 /// - memory: Persist/recall information
 /// - ward: Project directory management
 /// - update_plan: Lightweight task checklist
@@ -102,7 +102,9 @@ pub struct ToolSettings {
     pub introspection: bool,
 
     /// Enable file tools (read, write, edit, glob) as separate tools.
-    /// When false (default), the model uses shell + apply_patch instead.
+    /// When false (default), the model uses the core `write_file` / `edit_file`
+    /// tools instead. These optional tools layer on extra capabilities
+    /// (binary read, glob patterns).
     #[serde(default)]
     pub file_tools: bool,
 
@@ -135,14 +137,15 @@ fn default_offload_enabled() -> bool {
 // BUILT-IN TOOLS FACTORY
 // ============================================================================
 
-/// Get core tools — the minimal, high-signal set (8 tools).
+/// Get core tools — the minimal, high-signal set.
 ///
-/// Shell for commands, apply_patch for file operations.
-/// Separate read/write/edit/glob tools are optional (moved to optional_tools).
+/// Shell for commands; write_file / edit_file for file operations.
+/// Separate read/glob tools are optional (moved to optional_tools).
 ///
 /// Core tools:
 /// - shell: Primary execution — commands
-/// - apply_patch: File creation/editing/deletion via patch format
+/// - write_file: Create new files
+/// - edit_file: Find-and-replace edits on existing files
 /// - memory: Persistent KV store
 /// - ward: Project directory management
 /// - update_plan: Lightweight task checklist

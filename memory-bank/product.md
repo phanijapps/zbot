@@ -174,7 +174,7 @@ Cron-based scheduling for automated agent invocations. Define recurring tasks th
    - Parallel tool execution + output truncation
    - Gateway crate decomposition (13 crates)
    - Code Wards (persistent project directories)
-   - Shell-first execution + apply_patch
+   - Shell-first execution with dedicated write_file / edit_file tools
    - Session Tree (continuous conversation, subagent isolation)
    - Goal-oriented execution (scoring, stuck-detection, safety valve)
    - 300+ tests across all crates

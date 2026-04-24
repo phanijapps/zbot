@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 
 use zero_core::{FileSystemContext, MemoryFactStore, Result, Tool, ToolContext, ZeroError};
 
-use super::apply_patch::resolve_ward_cwd;
 use super::ast_hook;
+use super::ward_cwd::resolve_ward_cwd;
 
 /// Tool that performs find-and-replace edits on existing files.
 pub struct EditFileTool {

@@ -68,11 +68,16 @@ impl EmbeddingBackend {
 }
 
 /// Ollama connection config (only used when `backend == Ollama`).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+///
+/// `dimensions` mirrors the embedding width that `model` produces. It lives
+/// on this struct (rather than only on [`EmbeddingConfig`]) because the new
+/// on-disk shape places it inside the ollama block — the user picks a model
+/// and its dimension together, so the two are logically bound.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OllamaConfig {
-    #[serde(default = "default_ollama_url")]
     pub base_url: String,
     pub model: String,
+    pub dimensions: usize,
 }
 
 fn default_ollama_url() -> String {
@@ -81,19 +86,43 @@ fn default_ollama_url() -> String {
 
 /// Persisted embedding configuration, mirroring the optional
 /// `embeddings` section of `settings.json`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+///
+/// ## Wire format (on disk)
+///
+/// ```json
+/// "embeddings": {
+///   "internal": true,
+///   "ollama": { "url": "http://localhost:11434", "model": "nomic-embed-text", "dimensions": 768 }
+/// }
+/// ```
+///
+/// `internal: true` selects the built-in BGE-small-en-v1.5 (384-d). The
+/// `ollama` block is preserved across toggles so switching back to Ollama
+/// keeps the user's URL / model choice without having to retype it.
+///
+/// A custom Deserialize also accepts the **legacy** shape
+/// `{"backend": "internal|ollama", "dimensions": N, "ollama": {"base_url", "model"}}`
+/// so settings.json files written by earlier builds migrate transparently
+/// on first load. Serialize always emits the new shape.
+///
+/// ## Internal representation
+///
+/// `backend`, top-level `dimensions`, and `ollama` remain as structured
+/// fields because the rest of the service (client construction, reindex
+/// trigger, health loop) already dispatches on them. `dimensions` is the
+/// effective width: 384 for Internal, `ollama.dimensions` for Ollama,
+/// 0 for Unconfigured. The wire format derives these during serialize and
+/// rehydrates them during deserialize — keeping the in-process types
+/// stable while presenting the shape the user actually wants to edit.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmbeddingConfig {
-    #[serde(default)]
     pub backend: EmbeddingBackend,
-    #[serde(default = "default_dim")]
     pub dimensions: usize,
-    #[serde(default)]
     pub ollama: Option<OllamaConfig>,
 }
 
-fn default_dim() -> usize {
-    384
-}
+/// Default dim for the internal BGE-small backend.
+const INTERNAL_BGE_DIM: usize = 384;
 
 impl Default for EmbeddingConfig {
     fn default() -> Self {
@@ -102,6 +131,122 @@ impl Default for EmbeddingConfig {
             dimensions: 0,
             ollama: None,
         }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Custom serde for the on-disk shape.
+// See the docstring on `EmbeddingConfig` for the format rationale.
+// ----------------------------------------------------------------------------
+
+/// The on-wire form of the ollama block for the new schema.
+#[derive(Debug, Serialize, Deserialize)]
+struct WireOllama {
+    /// New schema key for the base URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    /// Legacy schema key. Accepted on load; never emitted on save.
+    #[serde(default, skip_serializing)]
+    base_url: Option<String>,
+    #[serde(default)]
+    model: String,
+    /// Present in new schema; absent in legacy (where it lived at the top level).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dimensions: Option<usize>,
+}
+
+/// The on-wire form of the full embeddings section. Accepts both the new
+/// (`internal` + nested dims) and legacy (`backend` + top-level dims) shapes.
+#[derive(Debug, Serialize, Deserialize)]
+struct WireEmbeddings {
+    /// New: boolean switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    internal: Option<bool>,
+    /// Legacy: string enum. Accepted on load; never emitted on save.
+    #[serde(default, skip_serializing)]
+    backend: Option<String>,
+    /// Legacy: top-level dim. Accepted on load; never emitted on save.
+    #[serde(default, skip_serializing)]
+    dimensions: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ollama: Option<WireOllama>,
+}
+
+impl Serialize for EmbeddingConfig {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let internal_flag = matches!(
+            self.backend,
+            EmbeddingBackend::Internal | EmbeddingBackend::Unconfigured
+        );
+        let ollama_wire = self.ollama.as_ref().map(|o| WireOllama {
+            url: Some(o.base_url.clone()),
+            base_url: None,
+            model: o.model.clone(),
+            dimensions: Some(o.dimensions),
+        });
+        let wire = WireEmbeddings {
+            internal: Some(internal_flag),
+            backend: None,
+            dimensions: None,
+            ollama: ollama_wire,
+        };
+        wire.serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for EmbeddingConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let wire = WireEmbeddings::deserialize(d)?;
+
+        // Resolve the ollama block if it's present, combining new-schema
+        // and legacy-schema fields.
+        let ollama_resolved = wire.ollama.as_ref().map(|o| OllamaConfig {
+            base_url: o
+                .url
+                .clone()
+                .or_else(|| o.base_url.clone())
+                .unwrap_or_else(default_ollama_url),
+            model: o.model.clone(),
+            // Prefer nested dim (new shape); fall back to top-level (legacy).
+            dimensions: o.dimensions.or(wire.dimensions).unwrap_or(0),
+        });
+
+        // Determine backend.
+        let backend = if let Some(flag) = wire.internal {
+            if flag {
+                EmbeddingBackend::Internal
+            } else if ollama_resolved.is_some() {
+                EmbeddingBackend::Ollama
+            } else {
+                EmbeddingBackend::Unconfigured
+            }
+        } else if let Some(legacy) = wire.backend.as_deref() {
+            match legacy {
+                "internal" => EmbeddingBackend::Internal,
+                "ollama" => {
+                    if ollama_resolved.is_some() {
+                        EmbeddingBackend::Ollama
+                    } else {
+                        EmbeddingBackend::Unconfigured
+                    }
+                }
+                _ => EmbeddingBackend::Unconfigured,
+            }
+        } else {
+            EmbeddingBackend::Unconfigured
+        };
+
+        let dimensions = match backend {
+            EmbeddingBackend::Internal => INTERNAL_BGE_DIM,
+            EmbeddingBackend::Ollama => ollama_resolved.as_ref().map(|o| o.dimensions).unwrap_or(0),
+            EmbeddingBackend::Unconfigured => 0,
+        };
+
+        Ok(Self {
+            backend,
+            dimensions,
+            ollama: ollama_resolved,
+        })
     }
 }
 
@@ -288,6 +433,64 @@ fn read_config_from_settings_json(paths: &SharedVaultPaths) -> EmbeddingConfig {
     serde_json::from_value(section.clone()).unwrap_or_default()
 }
 
+/// Reconstruct an `EmbeddingConfig` from the on-disk `.embedding-state`
+/// marker alone. Returns `None` when no marker exists or the recorded
+/// backend is `Unconfigured` (nothing useful to recover).
+///
+/// The marker doesn't record the Ollama base URL (only backend/model/dim),
+/// so Ollama recovery assumes the default URL. Users who used a non-default
+/// URL get a reachable default; they can re-edit the URL in Settings if
+/// needed. The alternative — leaving them fully Unconfigured — is worse.
+fn recover_from_marker(paths: &SharedVaultPaths) -> Option<EmbeddingConfig> {
+    let marker = read_marker(paths)?;
+    match marker.backend {
+        EmbeddingBackend::Unconfigured => None,
+        EmbeddingBackend::Internal => Some(EmbeddingConfig {
+            backend: EmbeddingBackend::Internal,
+            dimensions: INTERNAL_BGE_DIM,
+            ollama: None,
+        }),
+        EmbeddingBackend::Ollama => Some(EmbeddingConfig {
+            backend: EmbeddingBackend::Ollama,
+            dimensions: marker.dim,
+            ollama: Some(OllamaConfig {
+                base_url: default_ollama_url(),
+                model: marker.model.clone(),
+                dimensions: marker.dim,
+            }),
+        }),
+    }
+}
+
+/// Write the `embeddings` section to `settings.json`, merging with any
+/// existing top-level keys. Used by the boot marker-recovery path, which
+/// runs before `EmbeddingService` is fully constructed (so it can't use
+/// the instance method).
+fn persist_settings_raw(paths: &SharedVaultPaths, cfg: &EmbeddingConfig) -> Result<(), String> {
+    let path = paths.settings();
+    let parent = path.parent().ok_or("settings has no parent")?;
+    fs::create_dir_all(parent).map_err(|e| format!("create config dir: {e}"))?;
+    let current: serde_json::Value = if path.exists() {
+        let text = fs::read_to_string(&path).map_err(|e| format!("read settings: {e}"))?;
+        serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+    let mut current = current;
+    current["embeddings"] =
+        serde_json::to_value(cfg).map_err(|e| format!("serialize embeddings: {e}"))?;
+    let tmp = parent.join("settings.json.tmp");
+    {
+        let mut f = fs::File::create(&tmp).map_err(|e| format!("create temp: {e}"))?;
+        let pretty = serde_json::to_string_pretty(&current).map_err(|e| format!("pretty: {e}"))?;
+        f.write_all(pretty.as_bytes())
+            .map_err(|e| format!("write temp: {e}"))?;
+        f.sync_all().map_err(|e| format!("fsync: {e}"))?;
+    }
+    fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
+    Ok(())
+}
+
 /// Build an `EmbeddingClient` for the given config (no network IO performed
 /// here — this is a pure construction step).
 fn build_client(cfg: &EmbeddingConfig) -> Result<Arc<dyn EmbeddingClient>, String> {
@@ -310,15 +513,52 @@ fn build_client(cfg: &EmbeddingConfig) -> Result<Arc<dyn EmbeddingClient>, Strin
             let ollama = cfg.ollama.as_ref().ok_or_else(|| {
                 "ollama backend selected but no ollama config present".to_string()
             })?;
-            let curated = curated_lookup(&ollama.model)
-                .ok_or_else(|| format!("model '{}' is not in the curated list", ollama.model))?;
+            if ollama.dimensions == 0 {
+                return Err(
+                    "ollama config missing dimensions — must be a positive integer".to_string(),
+                );
+            }
             // Ollama exposes an OpenAI-compatible surface at /v1/embeddings.
+            // The curated list is advisory (shown in the UI as suggestions);
+            // any model the user can name on their Ollama instance is
+            // accepted. Dim correctness is verified by `probe_dimensions`
+            // after swap — a mismatch surfaces as Health::Misconfigured
+            // rather than a silent corruption of the vec0 indexes.
             let base = format!("{}/v1", ollama.base_url.trim_end_matches('/'));
-            let client =
-                OpenAiEmbeddingClient::new(base, String::new(), ollama.model.clone(), curated.dim);
+            let client = OpenAiEmbeddingClient::new(
+                base,
+                String::new(),
+                ollama.model.clone(),
+                ollama.dimensions,
+            );
             Ok(Arc::new(client))
         }
     }
+}
+
+/// Embed a single short probe string and assert the returned vector has the
+/// declared dimension. Replaces the old hardcoded curated-list dim lookup:
+/// any model the user can name is allowed, but a wrong dim would silently
+/// corrupt the vec0 indexes (built at a fixed width), so we verify up front.
+///
+/// On a mismatch or upstream error, returns a human-readable reason the
+/// caller surfaces as `Health::Misconfigured`.
+async fn probe_dimensions(client: &dyn EmbeddingClient, declared: usize) -> Result<(), String> {
+    let result = client
+        .embed(&["agentzero dim probe"])
+        .await
+        .map_err(|e| format!("probe embed failed: {e}"))?;
+    let actual = result
+        .first()
+        .map(|v| v.len())
+        .ok_or_else(|| "probe returned no vectors".to_string())?;
+    if actual != declared {
+        return Err(format!(
+            "model returned vectors of dimension {actual}, but config declared {declared}. \
+             Update the dimension in Settings or choose a model whose width matches."
+        ));
+    }
+    Ok(())
 }
 
 /// Mutable state tracked under the `RwLock`.
@@ -357,7 +597,31 @@ impl EmbeddingService {
     pub fn from_config(paths: SharedVaultPaths) -> Result<Self, String> {
         // Orphan reindex tables are dropped lazily when the first reindex
         // runs; nothing to do here since we don't own the DB handle.
-        let cfg = read_config_from_settings_json(&paths);
+        let mut cfg = read_config_from_settings_json(&paths);
+
+        // Marker recovery: if settings.json doesn't have an embeddings
+        // section (or parsed to Unconfigured) but the on-disk marker
+        // records a real backend from a previous run, promote the marker
+        // back into settings.json so the selection survives. This covers
+        // the class of bug where another SettingsService writer wiped the
+        // section before we fixed the strip-on-save behavior. One-shot:
+        // subsequent boots just read the rewritten settings.json.
+        if matches!(cfg.backend, EmbeddingBackend::Unconfigured) {
+            if let Some(recovered) = recover_from_marker(&paths) {
+                tracing::warn!(
+                    recovered_backend = %recovered.backend.as_str(),
+                    "embeddings: settings.json missing, recovered from .embedding-state marker"
+                );
+                cfg = recovered;
+                // Best-effort write-back; a failure here is non-fatal (we
+                // still proceed with the recovered config in-memory), but
+                // unless it succeeds the recovery happens every boot.
+                if let Err(e) = persist_settings_raw(&paths, &cfg) {
+                    tracing::warn!(error = %e, "embeddings: marker-recovery write-back failed");
+                }
+            }
+        }
+
         Self::with_config(paths, cfg)
     }
 
@@ -441,8 +705,8 @@ impl EmbeddingService {
                 .ollama
                 .as_ref()
                 .ok_or_else(|| "ollama backend requires ollama config".to_string())?;
-            if curated_lookup(&ollama.model).is_none() {
-                let reason = format!("model '{}' is not in the curated list", ollama.model);
+            if ollama.dimensions == 0 {
+                let reason = "ollama config missing dimensions".to_string();
                 let h = Health::Misconfigured(reason.clone());
                 self.set_health(h.clone());
                 on_progress(h);
@@ -492,6 +756,21 @@ impl EmbeddingService {
             self.set_health(h.clone());
             on_progress(h);
         })?;
+
+        // Dim probe: for Ollama backends, verify the model actually returns
+        // vectors at the declared dimension before we swap it in. A mismatch
+        // would silently corrupt the vec0 indexes (which are built at a
+        // fixed dim). This used to be guarded by a 6-entry curated dim
+        // lookup; dropping that gate in favor of a truthful probe lets the
+        // UI accept any embedding model the user has pulled.
+        if let EmbeddingBackend::Ollama = new.backend {
+            if let Err(reason) = probe_dimensions(client.as_ref(), new.dimensions).await {
+                let h = Health::Misconfigured(reason.clone());
+                self.set_health(h.clone());
+                on_progress(h);
+                return Err(reason);
+            }
+        }
 
         // Determine whether indexes need a rebuild.
         let marker = read_marker(&self.paths);
@@ -665,34 +944,13 @@ impl EmbeddingService {
     }
 
     /// Overwrite `config/settings.json` `embeddings` section atomically.
+    /// Other top-level keys are preserved.
     ///
     /// # Errors
     ///
     /// Returns an error on IO or serialization failure.
     pub fn persist_settings(&self, cfg: &EmbeddingConfig) -> Result<(), String> {
-        let path = self.paths.settings();
-        let parent = path.parent().ok_or("settings has no parent")?;
-        fs::create_dir_all(parent).map_err(|e| format!("create config dir: {e}"))?;
-        let current: serde_json::Value = if path.exists() {
-            let text = fs::read_to_string(&path).map_err(|e| format!("read settings: {e}"))?;
-            serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({}))
-        } else {
-            serde_json::json!({})
-        };
-        let mut current = current;
-        current["embeddings"] =
-            serde_json::to_value(cfg).map_err(|e| format!("serialize embeddings: {e}"))?;
-        let tmp = parent.join("settings.json.tmp");
-        {
-            let mut f = fs::File::create(&tmp).map_err(|e| format!("create temp: {e}"))?;
-            let pretty =
-                serde_json::to_string_pretty(&current).map_err(|e| format!("pretty: {e}"))?;
-            f.write_all(pretty.as_bytes())
-                .map_err(|e| format!("write temp: {e}"))?;
-            f.sync_all().map_err(|e| format!("fsync: {e}"))?;
-        }
-        fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
-        Ok(())
+        persist_settings_raw(&self.paths, cfg)
     }
 }
 
@@ -836,7 +1094,15 @@ mod tests {
     #[tokio::test]
     async fn from_config_with_marker_dim_mismatch_sets_needs_reindex() {
         let (_tmp, paths) = test_paths();
-        // Write a marker at dim=1024.
+        // Explicit internal-backend settings.json — so marker-recovery does
+        // not kick in and overwrite with the marker's Ollama config.
+        std::fs::create_dir_all(paths.config_dir()).unwrap();
+        std::fs::write(
+            paths.settings(),
+            r#"{ "embeddings": { "internal": true } }"#,
+        )
+        .unwrap();
+        // Marker records a previous indexing at a different dim.
         let marker = Marker {
             backend: EmbeddingBackend::Ollama,
             model: "mxbai-embed-large".into(),
@@ -844,8 +1110,9 @@ mod tests {
             indexed_at: "".into(),
         };
         write_marker(&paths, &marker).unwrap();
-        // But start with internal/384.
+
         let svc = EmbeddingService::from_config(paths).unwrap();
+        assert_eq!(svc.config_snapshot().backend, EmbeddingBackend::Internal);
         assert!(svc.needs_reindex());
     }
 
@@ -898,9 +1165,30 @@ mod tests {
         server
     }
 
+    /// Install a `/v1/embeddings` mock on `server` that returns a single
+    /// vector of the given dimension. Reconfigure's post-swap probe hits
+    /// this endpoint to verify dim correctness.
+    async fn stub_embed_dim(server: &httpmock::MockServer, dim: usize) {
+        use httpmock::prelude::*;
+        let fake_vec: Vec<f32> = vec![0.1_f32; dim];
+        let body = serde_json::json!({
+            "data": [{ "embedding": fake_vec, "index": 0, "object": "embedding" }],
+            "model": "mock",
+            "object": "list",
+            "usage": { "prompt_tokens": 1, "total_tokens": 1 }
+        });
+        server
+            .mock_async(move |when, then| {
+                when.method(POST).path("/v1/embeddings");
+                then.status(200).json_body(body);
+            })
+            .await;
+    }
+
     #[tokio::test]
     async fn reconfigure_internal_to_same_dim_ollama_does_not_need_reindex_if_marker_matches() {
         let server = mock_ollama_with_models(&["snowflake-arctic-embed:s"]).await;
+        stub_embed_dim(&server, 384).await;
         let (_tmp, paths) = test_paths();
         // Mark as already indexed at 384 under the snowflake:s model.
         let m = Marker {
@@ -918,6 +1206,7 @@ mod tests {
             ollama: Some(OllamaConfig {
                 base_url: server.base_url(),
                 model: "snowflake-arctic-embed:s".into(),
+                dimensions: 384,
             }),
         };
         svc.reconfigure(new, |_| {}).await.unwrap();
@@ -927,6 +1216,7 @@ mod tests {
     #[tokio::test]
     async fn reconfigure_with_dim_change_triggers_needs_reindex() {
         let server = mock_ollama_with_models(&["mxbai-embed-large"]).await;
+        stub_embed_dim(&server, 1024).await;
         let (_tmp, paths) = test_paths();
         let svc = EmbeddingService::from_config(paths).unwrap();
         let new = EmbeddingConfig {
@@ -935,6 +1225,7 @@ mod tests {
             ollama: Some(OllamaConfig {
                 base_url: server.base_url(),
                 model: "mxbai-embed-large".into(),
+                dimensions: 1024,
             }),
         };
         svc.reconfigure(new, |_| {}).await.unwrap();
@@ -943,20 +1234,32 @@ mod tests {
         assert_eq!(svc.client().dimensions(), 1024);
     }
 
+    /// Replaces the old `reconfigure_rejects_uncurated_model` test. Curated
+    /// lookup is no longer a gate — dim correctness is verified by the
+    /// probe. Here the mock returns 768-d vectors but the config declares
+    /// 1024, so reconfigure must reject and mark Misconfigured.
     #[tokio::test]
-    async fn reconfigure_rejects_uncurated_model() {
+    async fn reconfigure_rejects_dimension_mismatch_via_probe() {
+        let server = mock_ollama_with_models(&["custom-embed"]).await;
+        stub_embed_dim(&server, 768).await;
         let (_tmp, paths) = test_paths();
         let svc = EmbeddingService::from_config(paths).unwrap();
         let new = EmbeddingConfig {
             backend: EmbeddingBackend::Ollama,
             dimensions: 1024,
             ollama: Some(OllamaConfig {
-                base_url: "http://localhost:11434".into(),
-                model: "totally-fake-model".into(),
+                base_url: server.base_url(),
+                model: "custom-embed".into(),
+                dimensions: 1024,
             }),
         };
         let err = svc.reconfigure(new, |_| {}).await;
         assert!(err.is_err());
+        let reason = err.err().unwrap();
+        assert!(
+            reason.contains("768") && reason.contains("1024"),
+            "error should mention actual and declared dims: {reason}"
+        );
         match svc.health() {
             Health::Misconfigured(_) => {}
             other => panic!("expected Misconfigured, got {other:?}"),
@@ -1031,6 +1334,7 @@ mod tests {
             ollama: Some(OllamaConfig {
                 base_url: "http://localhost:11434".into(),
                 model: "mxbai-embed-large".into(),
+                dimensions: 1024,
             }),
         };
         svc.persist_settings(&cfg).unwrap();
@@ -1041,6 +1345,7 @@ mod tests {
     #[tokio::test]
     async fn reconfigure_swaps_client_arc() {
         let server = mock_ollama_with_models(&["bge-large"]).await;
+        stub_embed_dim(&server, 1024).await;
         let (_tmp, paths) = test_paths();
         let svc = EmbeddingService::from_config(paths).unwrap();
         let before = svc.client();
@@ -1050,6 +1355,7 @@ mod tests {
             ollama: Some(OllamaConfig {
                 base_url: server.base_url(),
                 model: "bge-large".into(),
+                dimensions: 1024,
             }),
         };
         svc.reconfigure(new, |_| {}).await.unwrap();
@@ -1100,6 +1406,8 @@ mod tests {
                 );
             })
             .await;
+        // Dim probe endpoint.
+        stub_embed_dim(&server, 1024).await;
 
         let (_tmp, paths) = test_paths();
         let svc = EmbeddingService::from_config(paths.clone()).unwrap();
@@ -1110,6 +1418,7 @@ mod tests {
             ollama: Some(OllamaConfig {
                 base_url: server.base_url(),
                 model: "mxbai-embed-large".into(),
+                dimensions: 1024,
             }),
         };
 
@@ -1138,6 +1447,7 @@ mod tests {
             ollama: Some(OllamaConfig {
                 base_url: "http://127.0.0.1:1".into(),
                 model: "mxbai-embed-large".into(),
+                dimensions: 1024,
             }),
         };
         let err = svc.reconfigure(new, |_| {}).await;
@@ -1170,6 +1480,7 @@ mod tests {
             ollama: Some(OllamaConfig {
                 base_url: "http://127.0.0.1:1".into(),
                 model: "mxbai-embed-large".into(),
+                dimensions: 1024,
             }),
         };
         // with_config does not network — builds Ollama client, then preflight pings.
@@ -1201,6 +1512,7 @@ mod tests {
             ollama: Some(OllamaConfig {
                 base_url: server.base_url(),
                 model: "mxbai-embed-large".into(),
+                dimensions: 1024,
             }),
         };
         let svc = Arc::new(EmbeddingService::with_config(paths, cfg).unwrap());
@@ -1230,6 +1542,7 @@ mod tests {
             ollama: Some(OllamaConfig {
                 base_url: "http://127.0.0.1:1".into(),
                 model: "mxbai-embed-large".into(),
+                dimensions: 1024,
             }),
         };
         let svc = Arc::new(EmbeddingService::with_config(paths, cfg).unwrap());
@@ -1259,5 +1572,187 @@ mod tests {
         };
         let svc = EmbeddingService::with_config(paths, cfg.clone()).unwrap();
         assert_eq!(svc.config_snapshot(), cfg);
+    }
+
+    // ------------------------------------------------------------------------
+    // Wire-format: new shape + legacy-shape migration
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn deserialize_new_shape_internal_true() {
+        let json = r#"{ "internal": true }"#;
+        let cfg: EmbeddingConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.backend, EmbeddingBackend::Internal);
+        assert_eq!(cfg.dimensions, 384);
+        assert!(cfg.ollama.is_none());
+    }
+
+    #[test]
+    fn deserialize_new_shape_internal_false_with_ollama() {
+        let json = r#"{
+            "internal": false,
+            "ollama": {
+                "url": "http://localhost:11434",
+                "model": "nomic-embed-text",
+                "dimensions": 768
+            }
+        }"#;
+        let cfg: EmbeddingConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.backend, EmbeddingBackend::Ollama);
+        assert_eq!(cfg.dimensions, 768);
+        let o = cfg.ollama.unwrap();
+        assert_eq!(o.base_url, "http://localhost:11434");
+        assert_eq!(o.model, "nomic-embed-text");
+        assert_eq!(o.dimensions, 768);
+    }
+
+    #[test]
+    fn deserialize_new_shape_preserves_ollama_when_internal_true() {
+        // Users toggling internal=true keep their last Ollama URL/model so
+        // flipping back doesn't force them to retype.
+        let json = r#"{
+            "internal": true,
+            "ollama": {
+                "url": "http://box.local:11434",
+                "model": "bge-large",
+                "dimensions": 1024
+            }
+        }"#;
+        let cfg: EmbeddingConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.backend, EmbeddingBackend::Internal);
+        // Effective dim is the internal BGE dim, not the preserved Ollama dim.
+        assert_eq!(cfg.dimensions, 384);
+        let o = cfg.ollama.unwrap();
+        assert_eq!(o.base_url, "http://box.local:11434");
+        assert_eq!(o.model, "bge-large");
+        assert_eq!(o.dimensions, 1024);
+    }
+
+    #[test]
+    fn deserialize_legacy_shape_ollama_migrates() {
+        // Shape written by older builds: `backend` string + top-level
+        // `dimensions` + ollama.{base_url, model}. Must migrate cleanly.
+        let json = r#"{
+            "backend": "ollama",
+            "dimensions": 1024,
+            "ollama": {
+                "base_url": "http://localhost:11434",
+                "model": "snowflake-arctic-embed"
+            }
+        }"#;
+        let cfg: EmbeddingConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.backend, EmbeddingBackend::Ollama);
+        assert_eq!(cfg.dimensions, 1024);
+        let o = cfg.ollama.unwrap();
+        assert_eq!(o.base_url, "http://localhost:11434");
+        assert_eq!(o.model, "snowflake-arctic-embed");
+        assert_eq!(o.dimensions, 1024);
+    }
+
+    #[test]
+    fn deserialize_legacy_shape_internal_migrates() {
+        let json = r#"{ "backend": "internal", "dimensions": 384 }"#;
+        let cfg: EmbeddingConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.backend, EmbeddingBackend::Internal);
+        assert_eq!(cfg.dimensions, 384);
+        assert!(cfg.ollama.is_none());
+    }
+
+    #[test]
+    fn deserialize_empty_object_is_unconfigured() {
+        let cfg: EmbeddingConfig = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(cfg.backend, EmbeddingBackend::Unconfigured);
+        assert_eq!(cfg.dimensions, 0);
+        assert!(cfg.ollama.is_none());
+    }
+
+    #[test]
+    fn serialize_always_emits_new_shape() {
+        let cfg = EmbeddingConfig {
+            backend: EmbeddingBackend::Ollama,
+            dimensions: 1024,
+            ollama: Some(OllamaConfig {
+                base_url: "http://h:11434".into(),
+                model: "mxbai-embed-large".into(),
+                dimensions: 1024,
+            }),
+        };
+        let v = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(v["internal"].as_bool(), Some(false));
+        assert_eq!(v["ollama"]["url"].as_str(), Some("http://h:11434"));
+        assert_eq!(v["ollama"]["model"].as_str(), Some("mxbai-embed-large"));
+        assert_eq!(v["ollama"]["dimensions"].as_u64(), Some(1024));
+        // Legacy keys must NOT appear in output.
+        assert!(v.get("backend").is_none());
+        assert!(v.get("dimensions").is_none());
+        assert!(v["ollama"].get("base_url").is_none());
+    }
+
+    // ------------------------------------------------------------------------
+    // Boot marker-recovery
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn from_config_recovers_ollama_selection_from_marker() {
+        // Regression: previously the strip-on-save bug in SettingsService
+        // wiped the embeddings section each time any other setting was
+        // updated, leaving the service Unconfigured on boot while the
+        // marker still recorded a valid selection. This test simulates
+        // the stale-marker / empty-settings state and asserts the boot
+        // path recovers and writes the section back.
+        let (_tmp, paths) = test_paths();
+
+        // No settings.json embeddings section (fresh install / wiped).
+        // Marker says we previously indexed at 1024-d ollama/snowflake.
+        let m = Marker {
+            backend: EmbeddingBackend::Ollama,
+            model: "snowflake-arctic-embed".into(),
+            dim: 1024,
+            indexed_at: "2026-04-23T18:42:28+00:00".into(),
+        };
+        write_marker(&paths, &m).unwrap();
+
+        let svc = EmbeddingService::from_config(paths.clone()).unwrap();
+        let cfg = svc.config_snapshot();
+        assert_eq!(cfg.backend, EmbeddingBackend::Ollama);
+        assert_eq!(cfg.dimensions, 1024);
+        let o = cfg.ollama.as_ref().expect("ollama config recovered");
+        assert_eq!(o.model, "snowflake-arctic-embed");
+        assert_eq!(o.dimensions, 1024);
+
+        // The recovered config should be written back to settings.json so
+        // subsequent boots read from there without needing recovery.
+        let written = read_config_from_settings_json(&paths);
+        assert_eq!(written.backend, EmbeddingBackend::Ollama);
+        assert_eq!(written.dimensions, 1024);
+    }
+
+    #[test]
+    fn from_config_no_marker_no_settings_stays_unconfigured() {
+        let (_tmp, paths) = test_paths();
+        let svc = EmbeddingService::from_config(paths).unwrap();
+        let cfg = svc.config_snapshot();
+        assert_eq!(cfg.backend, EmbeddingBackend::Unconfigured);
+    }
+
+    #[test]
+    fn legacy_shape_round_trips_to_new_shape_via_load_save() {
+        // Simulates: boot reads legacy from disk, save() writes new shape back.
+        let legacy = r#"{
+            "backend": "ollama",
+            "dimensions": 768,
+            "ollama": {
+                "base_url": "http://localhost:11434",
+                "model": "nomic-embed-text"
+            }
+        }"#;
+        let cfg: EmbeddingConfig = serde_json::from_str(legacy).unwrap();
+        let reemitted = serde_json::to_string(&cfg).unwrap();
+        // Reparse should produce the same struct.
+        let cfg2: EmbeddingConfig = serde_json::from_str(&reemitted).unwrap();
+        assert_eq!(cfg, cfg2);
+        assert!(!reemitted.contains("\"backend\""));
+        assert!(!reemitted.contains("\"base_url\""));
+        assert!(reemitted.contains("\"internal\""));
     }
 }

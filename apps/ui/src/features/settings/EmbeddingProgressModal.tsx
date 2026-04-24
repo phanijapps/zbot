@@ -102,7 +102,7 @@ export function EmbeddingProgressModal({
       open
       onClose={handleCloseClick}
       title="Switching embedding backend"
-      subtitle={`Target: ${config.backend}${config.ollama ? ` · ${config.ollama.model}` : ""}`}
+      subtitle={`Target: ${config.internal ? "internal" : "ollama"}${config.ollama && !config.internal ? ` · ${config.ollama.model}` : ""}`}
       showCloseButton={!isWorking}
       closeOnEscape={!isWorking}
       closeOnBackdropClick={false}

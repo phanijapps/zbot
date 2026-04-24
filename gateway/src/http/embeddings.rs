@@ -5,6 +5,10 @@
 //! Endpoints:
 //! - `GET  /api/embeddings/health` — current backend + dim + status
 //! - `GET  /api/embeddings/models` — curated Ollama dropdown entries
+//! - `GET  /api/embeddings/ollama-models?url=<base>` — models the user's
+//!   Ollama instance actually has pulled, filtered to likely embedding
+//!   models. Soft-fails to an empty list when Ollama is unreachable so
+//!   the UI can gracefully fall back to curated suggestions.
 //! - `POST /api/embeddings/configure` — apply a new [`EmbeddingConfig`];
 //!   responds with an SSE stream of [`Health`] events terminating in
 //!   `ready` or `error`.
@@ -13,14 +17,14 @@ use std::convert::Infallible;
 
 use crate::state::AppState;
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
     Json,
 };
 use futures::stream::Stream;
-use gateway_services::{CuratedModel, EmbeddingConfig, Health, CURATED_MODELS};
-use serde::Serialize;
+use gateway_services::{CuratedModel, EmbeddingConfig, Health, OllamaClient, CURATED_MODELS};
+use serde::{Deserialize, Serialize};
 
 // ============================================================================
 // GET /api/embeddings/health
@@ -135,6 +139,75 @@ pub async fn list_models() -> Json<Vec<ModelEntry>> {
 }
 
 // ============================================================================
+// GET /api/embeddings/ollama-models?url=...
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct OllamaModelsQuery {
+    /// Base URL of the user's Ollama instance, e.g. `http://localhost:11434`.
+    /// Omitted → default localhost URL.
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OllamaModelsResponse {
+    /// All model tags returned by `/api/tags` on the user's instance.
+    pub all: Vec<String>,
+    /// Subset of `all` whose name heuristically looks like an embedding
+    /// model. The UI shows this first in the typeahead, but does not
+    /// prevent the user from picking something in `all` — the dim probe
+    /// on reconfigure catches wrong-dim picks regardless.
+    pub likely_embedding: Vec<String>,
+    /// `true` when the request reached the instance. `false` means we
+    /// couldn't connect (common when Ollama isn't running or the URL is
+    /// wrong); the UI falls back to curated suggestions in that case.
+    pub reachable: bool,
+}
+
+/// Heuristic: model tags that look like embedding models. Ollama has no
+/// explicit "is-embedding" flag, so we filter by substring match against
+/// names known to be embedding-family. This is advisory — the dim probe
+/// is the source of truth, so missing a match here just means the user's
+/// model is still selectable, it's just not bubbled to the top.
+const EMBEDDING_NAME_HINTS: &[&str] = &[
+    "embed", "bge", "nomic", "arctic", "mxbai", "e5", "gte-", "minilm",
+];
+
+fn looks_like_embedding(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    EMBEDDING_NAME_HINTS.iter().any(|h| lower.contains(h))
+}
+
+pub async fn list_ollama_models(Query(q): Query<OllamaModelsQuery>) -> Json<OllamaModelsResponse> {
+    let base_url = q
+        .url
+        .unwrap_or_else(|| "http://localhost:11434".to_string());
+    let client = OllamaClient::new(base_url);
+    match client.list_models().await {
+        Ok(all) => {
+            let likely: Vec<String> = all
+                .iter()
+                .filter(|n| looks_like_embedding(n))
+                .cloned()
+                .collect();
+            Json(OllamaModelsResponse {
+                likely_embedding: likely,
+                all,
+                reachable: true,
+            })
+        }
+        Err(err) => {
+            tracing::debug!(error = %err, "ollama-models: instance unreachable");
+            Json(OllamaModelsResponse {
+                all: Vec::new(),
+                likely_embedding: Vec::new(),
+                reachable: false,
+            })
+        }
+    }
+}
+
+// ============================================================================
 // POST /api/embeddings/configure — SSE stream
 // ============================================================================
 
@@ -222,4 +295,26 @@ pub async fn configure(
         }
     };
     Ok(Sse::new(s).keep_alive(KeepAlive::default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn looks_like_embedding_recognizes_common_families() {
+        assert!(looks_like_embedding("nomic-embed-text"));
+        assert!(looks_like_embedding("bge-large:latest"));
+        assert!(looks_like_embedding("snowflake-arctic-embed"));
+        assert!(looks_like_embedding("mxbai-embed-large"));
+        assert!(looks_like_embedding("all-MiniLM-L6-v2"));
+    }
+
+    #[test]
+    fn looks_like_embedding_rejects_chat_models() {
+        assert!(!looks_like_embedding("llama3"));
+        assert!(!looks_like_embedding("qwen2.5"));
+        assert!(!looks_like_embedding("gpt-oss"));
+        assert!(!looks_like_embedding("deepseek-r1"));
+    }
 }

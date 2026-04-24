@@ -123,7 +123,8 @@ impl<D: DbProvider> LogsRepository<D> {
                     MAX(e.parent_session_id) as parent_session_id,
                     s.title as session_title,
                     s.status as session_status,
-                    ae.parent_execution_id as ae_parent
+                    ae.parent_execution_id as ae_parent,
+                    s.mode as session_mode
                 FROM execution_logs e
                 LEFT JOIN sessions s ON s.id = e.conversation_id
                 LEFT JOIN agent_executions ae ON ae.id = e.session_id
@@ -194,6 +195,7 @@ impl<D: DbProvider> LogsRepository<D> {
                         duration_ms: None, // Computed from started_at/ended_at
                         parent_session_id: row.get(9)?,
                         child_session_ids: Vec::new(), // Fetched separately if needed
+                        mode: row.get::<_, Option<String>>(13).ok().flatten(),
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -215,24 +217,26 @@ impl<D: DbProvider> LogsRepository<D> {
             // parent_execution_id) to pick out the root.
             let mut stmt = conn.prepare(
                 "SELECT
-                    session_id,
-                    conversation_id,
-                    agent_id,
-                    MIN(timestamp) as started_at,
-                    MAX(timestamp) as ended_at,
+                    e.session_id,
+                    e.conversation_id,
+                    e.agent_id,
+                    MIN(e.timestamp) as started_at,
+                    MAX(e.timestamp) as ended_at,
                     COUNT(*) as log_count,
-                    SUM(CASE WHEN category = 'token' THEN 1 ELSE 0 END) as token_count,
-                    SUM(CASE WHEN category = 'tool_call' THEN 1 ELSE 0 END) as tool_call_count,
-                    SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END) as error_count,
-                    MAX(parent_session_id) as parent_session_id
-                FROM execution_logs
-                WHERE session_id = ?1
-                   OR session_id = (
+                    SUM(CASE WHEN e.category = 'token' THEN 1 ELSE 0 END) as token_count,
+                    SUM(CASE WHEN e.category = 'tool_call' THEN 1 ELSE 0 END) as tool_call_count,
+                    SUM(CASE WHEN e.level = 'error' THEN 1 ELSE 0 END) as error_count,
+                    MAX(e.parent_session_id) as parent_session_id,
+                    s.mode as session_mode
+                FROM execution_logs e
+                LEFT JOIN sessions s ON s.id = e.conversation_id
+                WHERE e.session_id = ?1
+                   OR e.session_id = (
                        SELECT id FROM agent_executions
                        WHERE session_id = ?1 AND parent_execution_id IS NULL
                        LIMIT 1
                    )
-                GROUP BY session_id
+                GROUP BY e.session_id
                 LIMIT 1",
             )?;
 
@@ -253,6 +257,7 @@ impl<D: DbProvider> LogsRepository<D> {
                         duration_ms: None,
                         parent_session_id: row.get(9)?,
                         child_session_ids: Vec::new(),
+                        mode: row.get::<_, Option<String>>(10).ok().flatten(),
                     })
                 })
                 .optional()?;
@@ -450,7 +455,8 @@ mod tests {
                     status TEXT NOT NULL DEFAULT 'completed',
                     root_agent_id TEXT NOT NULL,
                     title TEXT,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    mode TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS agent_executions (
@@ -618,6 +624,65 @@ mod tests {
         let filter_all = LogFilter::default();
         let sessions = repo.list_sessions(&filter_all).unwrap();
         assert_eq!(sessions.len(), 2);
+    }
+
+    /// Regression: list_sessions must surface the `sessions.mode` column
+    /// (joined via `sessions s ON s.id = e.conversation_id`). The UI relies
+    /// on this to distinguish chat sessions (`mode='fast'`) from research
+    /// sessions (`mode` NULL or `'deep'`) without scraping conversation-id
+    /// prefixes.
+    #[test]
+    fn list_sessions_includes_session_mode() {
+        let repo = setup_repo();
+        let db = repo.db.clone();
+        // Seed two sessions rows — one chat ('fast'), one research (NULL).
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO sessions (id, status, root_agent_id, title, created_at, mode) \
+                 VALUES ('conv-chat', 'completed', 'root', 'hi', '2026-04-24', 'fast')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO sessions (id, status, root_agent_id, title, created_at, mode) \
+                 VALUES ('conv-research', 'completed', 'root', 'research', '2026-04-24', NULL)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Seed matching execution_logs rows so list_sessions returns them.
+        repo.insert_log(&make_log(
+            "sess-chat-1",
+            "conv-chat",
+            "root",
+            LogLevel::Info,
+            LogCategory::Session,
+            "start",
+        ))
+        .unwrap();
+        repo.insert_log(&make_log(
+            "sess-research-1",
+            "conv-research",
+            "root",
+            LogLevel::Info,
+            LogCategory::Session,
+            "start",
+        ))
+        .unwrap();
+
+        let sessions = repo.list_sessions(&LogFilter::default()).unwrap();
+        assert_eq!(sessions.len(), 2);
+        let chat = sessions
+            .iter()
+            .find(|s| s.conversation_id == "conv-chat")
+            .expect("chat session row");
+        let research = sessions
+            .iter()
+            .find(|s| s.conversation_id == "conv-research")
+            .expect("research session row");
+        assert_eq!(chat.mode.as_deref(), Some("fast"));
+        assert!(research.mode.is_none());
     }
 
     #[test]

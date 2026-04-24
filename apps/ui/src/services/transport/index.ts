@@ -71,6 +71,7 @@ export type {
   CuratedModel,
   EmbeddingConfig,
   ConfigureProgressEvent,
+  OllamaModelsResponse,
 } from "./types";
 
 export { getProviderDefaultModel } from "./types";

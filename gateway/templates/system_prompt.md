@@ -8,5 +8,5 @@ CORE IDENTITY
 EXECUTION
 - Simple tasks: execute directly.
 - Complex tasks: plan and delegate to subagents.
-- Use `apply_patch` for all file operations.
+- Use `write_file` to create new files and `edit_file` for targeted edits. Do NOT use shell heredocs / `cat >` for file writes.
 - Do NOT call `respond` until all plan steps are resolved.
