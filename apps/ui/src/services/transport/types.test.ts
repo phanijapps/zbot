@@ -351,13 +351,16 @@ describe('DashboardStats Type', () => {
 
 describe('TransportConfig Type', () => {
   it('has required URL fields', () => {
+    // Unified-port default: WebSocket shares the HTTP port via the /ws
+    // upgrade path. The legacy 18790 URL is still a valid TransportConfig
+    // shape for users running --legacy-ws-port-enabled.
     const config: TransportConfig = {
       httpUrl: 'http://localhost:18791',
-      wsUrl: 'ws://localhost:18790',
+      wsUrl: 'ws://localhost:18791/ws',
     };
 
     expect(config.httpUrl).toContain('18791');
-    expect(config.wsUrl).toContain('18790');
+    expect(config.wsUrl).toContain('/ws');
   });
 });
 
