@@ -65,18 +65,41 @@ impl EpisodeRepository {
     // CRUD
     // =========================================================================
 
-    /// Insert a new session episode.
+    /// Insert or update a session episode.
+    ///
+    /// `session_episodes` has a `UNIQUE(session_id)` constraint — re-running
+    /// distillation for the same session (e.g., after a continuation) must
+    /// refresh the episode in place rather than fail with a constraint
+    /// error. The returned `String` is the persisted row's `id`: for a
+    /// first insert it's `episode.id`; for a conflict-update it's the
+    /// **existing** row's id (so the caller keys the vector index to the
+    /// row that actually lives in `session_episodes`, not to a ghost id
+    /// that never made it to disk).
+    ///
+    /// Mutable fields (`task_summary`, `outcome`, `strategy_used`,
+    /// `key_learnings`, `token_cost`) are overwritten on conflict —
+    /// later distillations carry a more complete view. Identity fields
+    /// (`id`, `agent_id`, `ward_id`, `created_at`) are preserved.
     ///
     /// If `episode.embedding` is `Some(v)`, the vector is written to
-    /// `session_episodes_index` via the injected `VectorIndex`. **Callers must
-    /// L2-normalize the vector first**.
-    pub fn insert(&self, episode: &SessionEpisode) -> Result<(), String> {
-        self.db.with_connection(|conn| {
-            conn.execute(
+    /// `session_episodes_index` via the injected `VectorIndex`, keyed to
+    /// the persisted id. **Callers must L2-normalize the vector first**.
+    pub fn insert(&self, episode: &SessionEpisode) -> Result<String, String> {
+        let persisted_id: String = self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
                 "INSERT INTO session_episodes \
                  (id, session_id, agent_id, ward_id, task_summary, outcome, \
                   strategy_used, key_learnings, token_cost, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
+                 ON CONFLICT(session_id) DO UPDATE SET \
+                    task_summary = excluded.task_summary, \
+                    outcome = excluded.outcome, \
+                    strategy_used = excluded.strategy_used, \
+                    key_learnings = excluded.key_learnings, \
+                    token_cost = excluded.token_cost \
+                 RETURNING id",
+            )?;
+            let id: String = stmt.query_row(
                 params![
                     episode.id,
                     episode.session_id,
@@ -89,15 +112,19 @@ impl EpisodeRepository {
                     episode.token_cost,
                     episode.created_at,
                 ],
+                |row| row.get::<_, String>(0),
             )?;
-            Ok(())
+            Ok(id)
         })?;
 
         if let Some(emb) = episode.embedding.as_ref() {
-            self.vec_index.upsert(&episode.id, emb)?;
+            // Key the vector to whatever id actually lives in
+            // session_episodes — on conflict-update that's the
+            // pre-existing row's id, not `episode.id`.
+            self.vec_index.upsert(&persisted_id, emb)?;
         }
 
-        Ok(())
+        Ok(persisted_id)
     }
 
     /// Get a session episode by session_id.
@@ -431,6 +458,54 @@ mod tests {
 
         let found = repo.get_by_session_id("nonexistent").unwrap();
         assert!(found.is_none());
+    }
+
+    /// Regression: a second `insert` for the same session_id (re-running
+    /// distillation on a continuation) must update the existing row in
+    /// place instead of failing with UNIQUE constraint. The returned id is
+    /// the *existing* row's id so vector storage stays correctly keyed.
+    #[test]
+    fn insert_is_idempotent_by_session_id() {
+        let (_tmp, repo) = setup();
+
+        // First distillation.
+        let mut ep1 = make_episode("agent-1", "sess-same", "partial");
+        ep1.id = "ep-first".to_string();
+        ep1.task_summary = "initial summary".to_string();
+        ep1.strategy_used = Some("initial strategy".to_string());
+        let first_id = repo.insert(&ep1).expect("first insert");
+        assert_eq!(first_id, "ep-first");
+
+        // Second distillation — same session, different `id`, richer content.
+        let mut ep2 = make_episode("agent-1", "sess-same", "success");
+        ep2.id = "ep-second-ghost".to_string();
+        ep2.task_summary = "refined summary".to_string();
+        ep2.strategy_used = Some("refined strategy".to_string());
+        ep2.key_learnings = Some("a new insight".to_string());
+        ep2.token_cost = Some(4200);
+        let second_id = repo
+            .insert(&ep2)
+            .expect("second insert must upsert, not fail");
+
+        // Persisted id is the *original* row's id — the ghost was a
+        // conflict and never made it to disk.
+        assert_eq!(second_id, "ep-first");
+
+        // Exactly one row for this session.
+        let by_agent = repo.get_by_agent("agent-1", None, 10).unwrap();
+        assert_eq!(by_agent.len(), 1, "upsert must not create a duplicate row");
+
+        // Mutable fields reflect the second insert.
+        let found = repo
+            .get_by_session_id("sess-same")
+            .unwrap()
+            .expect("row must exist");
+        assert_eq!(found.id, "ep-first", "identity preserved across upsert");
+        assert_eq!(found.outcome, "success");
+        assert_eq!(found.task_summary, "refined summary");
+        assert_eq!(found.strategy_used.as_deref(), Some("refined strategy"));
+        assert_eq!(found.key_learnings.as_deref(), Some("a new insight"));
+        assert_eq!(found.token_cost, Some(4200));
     }
 
     #[test]
