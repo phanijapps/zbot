@@ -259,6 +259,17 @@ impl Tool for DelegateTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::context::ToolContext as ConcreteCtx;
+
+    fn ctx_for(parent_agent: &str) -> Arc<dyn ToolContext> {
+        let cc = ConcreteCtx::full_with_state(
+            parent_agent.to_string(),
+            Some("conv-test".to_string()),
+            vec![],
+            std::collections::HashMap::new(),
+        );
+        Arc::new(cc)
+    }
 
     #[test]
     fn test_delegate_tool_schema() {
@@ -275,5 +286,158 @@ mod tests {
         let required = schema.get("required").unwrap().as_array().unwrap();
         assert!(required.iter().any(|v| v == "agent_id"));
         assert!(required.iter().any(|v| v == "task"));
+    }
+
+    // ------------------------------------------------------------------------
+    // Argument-validation guards
+    // ------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn missing_agent_id_returns_tool_error() {
+        let tool = DelegateTool::new();
+        let ctx = ctx_for("root");
+        let res = tool.execute(ctx, json!({ "task": "do thing" })).await;
+        let err = res.expect_err("must error");
+        assert!(matches!(err, zero_core::ZeroError::Tool(_)));
+        assert!(format!("{err}").contains("agent_id"));
+    }
+
+    #[tokio::test]
+    async fn missing_task_returns_tool_error() {
+        let tool = DelegateTool::new();
+        let ctx = ctx_for("root");
+        let res = tool
+            .execute(ctx, json!({ "agent_id": "writer-agent" }))
+            .await;
+        let err = res.expect_err("must error");
+        assert!(format!("{err}").contains("task"));
+    }
+
+    #[tokio::test]
+    async fn oversized_task_is_rejected() {
+        let tool = DelegateTool::new();
+        let ctx = ctx_for("root");
+        let big = "x".repeat(4001);
+        let res = tool
+            .execute(ctx, json!({ "agent_id": "writer-agent", "task": big }))
+            .await;
+        let err = res.expect_err("must error on >4000 chars");
+        let msg = format!("{err}");
+        assert!(msg.contains("Task too large"));
+        assert!(msg.contains("4000"));
+    }
+
+    #[tokio::test]
+    async fn oversized_context_is_rejected() {
+        let tool = DelegateTool::new();
+        let ctx = ctx_for("root");
+        // Build a context object whose serialized form > 4000 chars.
+        let big_string = "y".repeat(4100);
+        let res = tool
+            .execute(
+                ctx,
+                json!({
+                    "agent_id": "writer-agent",
+                    "task": "tiny task",
+                    "context": { "blob": big_string }
+                }),
+            )
+            .await;
+        let err = res.expect_err("must error on oversized context");
+        assert!(format!("{err}").contains("Context too large"));
+    }
+
+    #[tokio::test]
+    async fn self_delegation_is_rejected() {
+        let tool = DelegateTool::new();
+        let ctx = ctx_for("root");
+        let res = tool
+            .execute(
+                ctx,
+                json!({ "agent_id": "root", "task": "delegate to self" }),
+            )
+            .await;
+        let err = res.expect_err("self-delegation must fail");
+        assert!(format!("{err}").contains("Cannot delegate to yourself"));
+    }
+
+    // ------------------------------------------------------------------------
+    // try_claim — only one delegation per turn
+    // ------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn second_concurrent_delegate_returns_queued() {
+        let tool = DelegateTool::new();
+        let ctx = ctx_for("root");
+
+        // First call must succeed (claim acquired).
+        let first = tool
+            .execute(
+                ctx.clone(),
+                json!({ "agent_id": "writer-agent", "task": "first" }),
+            )
+            .await
+            .expect("first delegate ok");
+        assert_eq!(
+            first.get("status").and_then(|v| v.as_str()),
+            Some("delegated")
+        );
+
+        // Second call within the same context (= same loop iteration) must
+        // be soft-rejected with status="queued" — NOT a hard error.
+        let second = tool
+            .execute(ctx, json!({ "agent_id": "writer-agent", "task": "second" }))
+            .await
+            .expect("second delegate returns Ok with queued status");
+        assert_eq!(
+            second.get("status").and_then(|v| v.as_str()),
+            Some("queued"),
+            "second delegate must be queued: {second}"
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Happy path: success populates the DelegateAction the executor reads
+    // ------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn successful_delegate_sets_actions_and_returns_convid() {
+        let tool = DelegateTool::new();
+        let ctx = ctx_for("root");
+
+        let result = tool
+            .execute(
+                ctx.clone(),
+                json!({
+                    "agent_id": "writer-agent",
+                    "task": "compose summary",
+                    "skills": ["html-report"],
+                    "parallel": false,
+                }),
+            )
+            .await
+            .expect("delegate must succeed");
+
+        // Tool result shape
+        assert_eq!(
+            result.get("status").and_then(|v| v.as_str()),
+            Some("delegated")
+        );
+        assert!(
+            result.get("convid").and_then(|v| v.as_str()).is_some(),
+            "convid must be present: {result}"
+        );
+
+        // The executor reads ctx.actions().delegate — must be populated.
+        let action = ctx.actions().delegate.expect("delegate action set");
+        assert_eq!(action.agent_id, "writer-agent");
+        assert!(action.task.starts_with("compose summary"));
+        assert!(
+            action.task.contains("[PLATFORM:"),
+            "task must be enriched with platform hint"
+        );
+        assert_eq!(action.skills, vec!["html-report".to_string()]);
+        assert!(!action.parallel);
+        assert!(!action.wait_for_result);
     }
 }
