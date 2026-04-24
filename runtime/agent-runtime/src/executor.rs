@@ -443,7 +443,7 @@ impl AgentExecutor {
 
         // Create middleware context
         let message_count = messages.len();
-        let estimated_tokens = estimate_total_tokens(&messages);
+        let estimated_tokens = estimate_total_tokens(&messages, &self.config.model);
 
         // Build execution state from message history.
         // This extracts skill information from previous tool calls so middleware

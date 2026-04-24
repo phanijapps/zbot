@@ -209,7 +209,7 @@ impl PreProcessMiddleware for SummarizationMiddleware {
         }
 
         // Estimate current token count
-        let current_tokens = estimate_total_tokens(&messages);
+        let current_tokens = estimate_total_tokens(&messages, &context.model);
         let message_count = messages.len();
         let context_window = get_model_context_window(&context.model);
 
