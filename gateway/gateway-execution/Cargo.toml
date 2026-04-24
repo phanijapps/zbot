@@ -63,6 +63,10 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 indexmap = { workspace = true }
 
+# Lock-free shared cell for late-bound config (model_registry set after
+# ExecutionRunner::new() but read by pre-spawned background tasks).
+arc-swap = "1"
+
 [dev-dependencies]
 tempfile = "3"
 tokio-test = "0.4"
