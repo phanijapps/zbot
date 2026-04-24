@@ -491,6 +491,31 @@ fn persist_settings_raw(paths: &SharedVaultPaths, cfg: &EmbeddingConfig) -> Resu
     Ok(())
 }
 
+/// True iff `settings.json` exists and carries an `embeddings` section.
+/// Used by the fresh-install detector so we only self-heal when the user
+/// has never touched embedding config — existing installs that
+/// deliberately left the section off keep their Unconfigured state.
+fn settings_json_has_embeddings(paths: &SharedVaultPaths) -> bool {
+    let Ok(text) = fs::read_to_string(paths.settings()) else {
+        return false;
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    json.get("embeddings").is_some()
+}
+
+/// Default self-healing config installed on fresh vaults. Internal BGE-small
+/// is bundled into the daemon binary — no external dependency, no network,
+/// safe to activate automatically.
+fn fresh_install_default() -> EmbeddingConfig {
+    EmbeddingConfig {
+        backend: EmbeddingBackend::Internal,
+        dimensions: INTERNAL_BGE_DIM,
+        ollama: None,
+    }
+}
+
 /// Build an `EmbeddingClient` for the given config (no network IO performed
 /// here — this is a pure construction step).
 fn build_client(cfg: &EmbeddingConfig) -> Result<Arc<dyn EmbeddingClient>, String> {
@@ -595,34 +620,71 @@ impl EmbeddingService {
     /// configuration. Callers may treat this as non-fatal and fall back to
     /// defaults.
     pub fn from_config(paths: SharedVaultPaths) -> Result<Self, String> {
+        // Two distinct self-heal paths share this entry point:
+        //
+        // 1. Fresh install — neither `settings.json` has an `embeddings`
+        //    section nor does the `.embedding-state` marker exist. Brand-new
+        //    vault: auto-activate internal BGE-small and persist the choice
+        //    so the next boot takes the normal path. Existing installs that
+        //    deliberately want Unconfigured will also have the marker, so
+        //    they aren't false-positives here.
+        //
+        // 2. Marker recovery — `settings.json` parsed to Unconfigured but a
+        //    marker from a previous run records a real backend. Promote the
+        //    marker back into `settings.json` so the selection survives the
+        //    class of bug where a writer wiped the section before the
+        //    strip-on-save fix landed.
+        //
         // Orphan reindex tables are dropped lazily when the first reindex
         // runs; nothing to do here since we don't own the DB handle.
-        let mut cfg = read_config_from_settings_json(&paths);
+        let has_section = settings_json_has_embeddings(&paths);
+        let has_marker = marker_path(&paths).exists();
+        let self_healed_fresh = !has_section && !has_marker;
 
-        // Marker recovery: if settings.json doesn't have an embeddings
-        // section (or parsed to Unconfigured) but the on-disk marker
-        // records a real backend from a previous run, promote the marker
-        // back into settings.json so the selection survives. This covers
-        // the class of bug where another SettingsService writer wiped the
-        // section before we fixed the strip-on-save behavior. One-shot:
-        // subsequent boots just read the rewritten settings.json.
-        if matches!(cfg.backend, EmbeddingBackend::Unconfigured) {
+        let mut cfg = if self_healed_fresh {
+            fresh_install_default()
+        } else {
+            read_config_from_settings_json(&paths)
+        };
+
+        let mut recovered_from_marker = false;
+        if !self_healed_fresh && matches!(cfg.backend, EmbeddingBackend::Unconfigured) {
             if let Some(recovered) = recover_from_marker(&paths) {
                 tracing::warn!(
                     recovered_backend = %recovered.backend.as_str(),
                     "embeddings: settings.json missing, recovered from .embedding-state marker"
                 );
                 cfg = recovered;
-                // Best-effort write-back; a failure here is non-fatal (we
-                // still proceed with the recovered config in-memory), but
-                // unless it succeeds the recovery happens every boot.
+                recovered_from_marker = true;
                 if let Err(e) = persist_settings_raw(&paths, &cfg) {
                     tracing::warn!(error = %e, "embeddings: marker-recovery write-back failed");
                 }
             }
         }
 
-        Self::with_config(paths, cfg)
+        let service = Self::with_config(paths, cfg.clone())?;
+
+        if self_healed_fresh {
+            match service.persist_settings(&cfg) {
+                Ok(()) => tracing::info!(
+                    "Fresh vault detected — auto-activated internal BGE-small \
+                     (384d) embedding backend. Change via Settings > Advanced \
+                     > Embeddings."
+                ),
+                Err(e) => tracing::warn!(
+                    "Self-healed embedding config but failed to persist: {}. \
+                     Next boot will re-apply the default.",
+                    e
+                ),
+            }
+        } else if recovered_from_marker {
+            tracing::info!(
+                backend = %cfg.backend.as_str(),
+                "embeddings: marker-based recovery completed"
+            );
+        }
+
+        Ok(service)
     }
 
     /// Construct with an explicit config (test helper / advanced use).
@@ -845,7 +907,15 @@ impl EmbeddingService {
             match client.ping().await {
                 Ok(()) => self.set_health(Health::Ready),
                 Err(e) => {
-                    tracing::warn!(error = %e, "embedding preflight: ollama unreachable");
+                    tracing::warn!(
+                        error = %e,
+                        base_url = %ollama.base_url,
+                        model = %ollama.model,
+                        "embedding preflight: ollama unreachable — recall will \
+                         degrade to FTS-only until resolved. Fix: start Ollama \
+                         at this URL, OR switch to the internal (BGE-small) \
+                         backend via Settings > Advanced > Embeddings."
+                    );
                     self.set_health(Health::OllamaUnreachable);
                 }
             }
@@ -1064,18 +1134,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn from_config_with_no_settings_returns_unconfigured_noop() {
+    async fn from_config_on_fresh_vault_self_heals_to_internal() {
         let (_tmp, paths) = test_paths();
-        let svc = EmbeddingService::from_config(paths).unwrap();
-        // No backend chosen yet → dim 0, noop client, no BGE ONNX loaded.
-        assert_eq!(svc.dimensions(), 0);
-        assert_eq!(svc.client().model_name(), "unconfigured");
-        // Embedding attempt fails with a clear message instead of silently
-        // loading the internal model.
-        let err = svc.client().embed(&["hi"]).await.unwrap_err();
+        let svc = EmbeddingService::from_config(paths.clone()).unwrap();
+
+        // Fresh vault + no `embeddings` section in settings.json + no
+        // marker → auto-activate internal BGE-small so recall works out
+        // of the box.
+        assert_eq!(svc.dimensions(), 384);
+        assert_eq!(svc.client().model_name(), "bge-small-en-v1.5");
+
+        // Choice is persisted so subsequent boots read the explicit
+        // config instead of re-triggering the self-heal path.
+        let settings_text = std::fs::read_to_string(paths.settings())
+            .expect("settings.json should exist after self-heal");
+        // The on-disk wire shape is the `{"internal": true}` form; see the
+        // `EmbeddingConfig` doc comment for why the in-memory enum gets
+        // flattened on serialize.
         assert!(
-            format!("{err:?}").contains("not configured"),
-            "expected 'not configured' in {err:?}"
+            settings_text.contains("\"embeddings\""),
+            "persisted settings must carry an embeddings section ({settings_text:?})"
+        );
+        assert!(
+            settings_text.contains("\"internal\""),
+            "self-heal default is internal, not unconfigured or ollama"
+        );
+        assert!(
+            settings_text.contains("true"),
+            "internal flag must be set to true ({settings_text:?})"
+        );
+    }
+
+    #[tokio::test]
+    async fn from_config_with_existing_marker_does_not_self_heal() {
+        let (_tmp, paths) = test_paths();
+        // Pretend a prior boot already indexed at 1024 dims. The marker
+        // alone (without an `embeddings` section) signals an existing
+        // install, not a fresh vault — fresh-install self-heal must NOT
+        // overwrite it. Main's marker-recovery path will still promote
+        // the recorded backend (Ollama, dim 1024) back into the config
+        // — that's the desired behaviour from the prior strip-on-save
+        // fix and is what we want preserved here.
+        let marker = Marker {
+            backend: EmbeddingBackend::Ollama,
+            model: "mxbai-embed-large".into(),
+            dim: 1024,
+            indexed_at: "".into(),
+        };
+        write_marker(&paths, &marker).unwrap();
+
+        let svc = EmbeddingService::from_config(paths.clone()).unwrap();
+
+        // The marker recovery should pick up the recorded Ollama
+        // backend rather than the fresh-install default; dim stays at
+        // 1024 so the existing index isn't invalidated.
+        assert_eq!(svc.dimensions(), 1024);
+        assert_eq!(svc.client().model_name(), "mxbai-embed-large");
+
+        // Settings.json was written by the marker-recovery path (so the
+        // selection survives a future strip), but it carries the Ollama
+        // backend — NOT the fresh-install Internal default.
+        let settings_text = std::fs::read_to_string(paths.settings())
+            .expect("marker recovery writes settings.json");
+        assert!(
+            settings_text.contains("\"ollama\""),
+            "marker recovery must persist the recovered Ollama config, not fresh-install default ({settings_text:?})"
         );
     }
 
@@ -1728,11 +1851,16 @@ mod tests {
     }
 
     #[test]
-    fn from_config_no_marker_no_settings_stays_unconfigured() {
+    fn from_config_no_marker_no_settings_self_heals_to_internal() {
+        // Superseded the original "stays_unconfigured" test: fresh vaults
+        // (no settings + no marker) now auto-activate the internal
+        // backend so recall works out of the box. The deliberate
+        // Unconfigured state is still reachable — just not as a default.
         let (_tmp, paths) = test_paths();
         let svc = EmbeddingService::from_config(paths).unwrap();
         let cfg = svc.config_snapshot();
-        assert_eq!(cfg.backend, EmbeddingBackend::Unconfigured);
+        assert_eq!(cfg.backend, EmbeddingBackend::Internal);
+        assert_eq!(cfg.dimensions, INTERNAL_BGE_DIM);
     }
 
     #[test]
