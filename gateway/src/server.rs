@@ -134,6 +134,14 @@ impl GatewayServer {
         let (shutdown_tx, _) = broadcast::channel(1);
         self.shutdown_tx = Some(shutdown_tx.clone());
 
+        // Spawn the WS background tasks (subscription cleanup + event
+        // router) BEFORE any WS transport starts accepting connections.
+        // These used to live inside `WebSocketHandler::run` — moving them
+        // out fixes a regression where the unified-port mode
+        // (`run` disabled by default) left the event router unspawned,
+        // so invokes ran server-side but no tokens reached the UI.
+        self.ws_handler.spawn_background_tasks(&shutdown_tx);
+
         // Start HTTP server. The WebSocket upgrade route (`/ws`) shares
         // this listener — mobile clients and single-port deployments
         // don't need a second firewall hole.
