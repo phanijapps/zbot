@@ -586,6 +586,14 @@ export interface LogSession {
   error_count: number;
   duration_ms?: number;
   child_session_ids: string[];
+  /**
+   * Execution mode persisted on the underlying `sessions` row. `"fast"`
+   * and `"chat"` indicate chat-mode sessions; anything else (including
+   * undefined from older daemons) means research-mode. Use the
+   * `isChatSession` / `isResearchSession` predicates in
+   * `services/session-kind.ts` instead of reading this directly.
+   */
+  mode?: string | null;
 }
 
 /** Session with all its logs */
