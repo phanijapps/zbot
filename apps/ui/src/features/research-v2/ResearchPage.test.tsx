@@ -15,21 +15,27 @@ type DeleteSessionResult =
   | { success: true; data?: void }
   | { success: false; error: string };
 
-const { openWardMock, toastErrorMock, listArtifactsMock, deleteSessionMock } = vi.hoisted(() => ({
+const { openWardMock, toastErrorMock, listArtifactsMock, deleteSessionMock, listLogSessionsMock } = vi.hoisted(() => ({
   openWardMock: vi.fn<(wardId: string) => Promise<OpenWardResult>>(),
   toastErrorMock: vi.fn(),
   listArtifactsMock: vi.fn(),
   deleteSessionMock: vi.fn<(sessionId: string) => Promise<DeleteSessionResult>>(),
+  listLogSessionsMock: vi.fn(),
 }));
 
-vi.mock("@/services/transport", () => ({
-  getTransport: async () => ({
-    openWard: openWardMock,
-    listSessionArtifacts: listArtifactsMock,
-    getArtifactContentUrl: () => "about:blank",
-    deleteSession: deleteSessionMock,
-  }),
-}));
+vi.mock("@/services/transport", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("@/services/transport");
+  return {
+    ...actual,
+    getTransport: async () => ({
+      openWard: openWardMock,
+      listSessionArtifacts: listArtifactsMock,
+      getArtifactContentUrl: () => "about:blank",
+      deleteSession: deleteSessionMock,
+      listLogSessions: listLogSessionsMock,
+    }),
+  };
+});
 
 vi.mock("sonner", () => ({
   toast: { error: toastErrorMock },
@@ -132,6 +138,8 @@ describe("<ResearchPage>", () => {
     listArtifactsMock.mockResolvedValue({ success: true, data: [] });
     deleteSessionMock.mockClear();
     deleteSessionMock.mockResolvedValue({ success: true });
+    listLogSessionsMock.mockClear();
+    listLogSessionsMock.mockResolvedValue({ success: true, data: [] });
     // window.confirm is a browser-level primitive — force-accept so the
     // onAfterDelete code path is exercised without hitting jsdom's "confirm
     // is not implemented" stub.
@@ -494,5 +502,54 @@ describe("<ResearchPage>", () => {
     renderPage();
     lastListOptsRef.current.onAfterDelete?.("sess-999");
     expect(startNewResearch).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Regression: chat-mode sessions must not leak into the research landing
+  // hero's "Recent" cards. Before the session-kind fix, chat-v2 turns
+  // rendered as suggestion chips under the research composer.
+  // ---------------------------------------------------------------------------
+
+  it("excludes chat-mode sessions from the research empty-state recent cards", async () => {
+    listLogSessionsMock.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          session_id: "exec-chat-1",
+          conversation_id: "sess-chat-abc",
+          agent_id: "root",
+          agent_name: "root",
+          title: "hi there",
+          started_at: "2026-04-24T08:00:00Z",
+          status: "completed",
+          token_count: 100,
+          tool_call_count: 0,
+          error_count: 0,
+          child_session_ids: [],
+          mode: "fast",
+        },
+        {
+          session_id: "exec-research-1",
+          conversation_id: "sess-research-xyz",
+          agent_id: "root",
+          agent_name: "root",
+          title: "Analyze Q4 market data",
+          started_at: "2026-04-24T09:00:00Z",
+          status: "completed",
+          token_count: 4200,
+          tool_call_count: 12,
+          error_count: 0,
+          child_session_ids: [],
+          mode: null,
+        },
+      ],
+    });
+    renderPage();
+    // Research card visible.
+    await waitFor(() => {
+      expect(screen.getByText(/Analyze Q4 market data/)).toBeTruthy();
+    });
+    // Chat card's title ("hi there") must not appear as a recent card.
+    expect(screen.queryByText(/^hi there$/)).toBeNull();
   });
 });

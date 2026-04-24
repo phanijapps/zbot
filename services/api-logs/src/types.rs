@@ -285,6 +285,15 @@ pub struct LogSession {
     /// Child session IDs
     #[serde(default)]
     pub child_session_ids: Vec<String>,
+    /// Execution mode persisted on the underlying `sessions` row. Values
+    /// observed in production: `"fast"` / `"chat"` (chat-mode sessions
+    /// minted by /api/chat/init), `"deep"` / `"research"` (default), or
+    /// `None` when the session predates mode tracking. Consumers treat
+    /// fast/chat as "chat" and anything else (including `None`) as
+    /// "research" — see [`SessionMode::from_mode_string`] in
+    /// gateway-execution and the front-end `session-kind` module.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
 }
 
 // ============================================================================
