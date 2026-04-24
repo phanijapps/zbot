@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { ChatInput, type UploadedFile } from "../chat/ChatInput";
 import { HeroInput } from "../chat/HeroInput";
 import { useRecentSessions } from "../chat/mission-hooks";
+import { isChatSession } from "@/services/session-kind";
 
 type UploadedFileShim = UploadedFile;
 import { ArtifactSlideOut } from "../chat/ArtifactSlideOut";
@@ -149,7 +150,11 @@ interface EmptyHeroProps {
 // (instead of the chat mission-control switcher).
 function EmptyHero({ onSend }: EmptyHeroProps) {
   const navigate = useNavigate();
-  const { sessions: recentSessions } = useRecentSessions();
+  // Exclude chat-mode sessions from the research landing's recent cards
+  // so chat-v2 turns don't present themselves as research starters.
+  // Classification lives in services/session-kind — see that module for
+  // the mode/prefix fallback logic.
+  const { sessions: recentSessions } = useRecentSessions({ exclude: isChatSession });
   return (
     <HeroInput
       onSend={onSend}

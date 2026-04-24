@@ -91,7 +91,6 @@ const AGENT_COLOR: Record<string, string> = {
   writer: "var(--blue)",
   "writer-agent": "var(--blue)",
   root: "var(--foreground)",
-  "quick-chat": "var(--teal)",
 };
 
 function agentColour(agentId: string): string {

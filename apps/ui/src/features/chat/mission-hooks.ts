@@ -1400,24 +1400,43 @@ export function switchToSession(sessionId: string, conversationId: string): void
 // Hook: useRecentSessions
 // ============================================================================
 
-export function useRecentSessions() {
+/**
+ * Options for `useRecentSessions`.
+ *
+ * `exclude` is an optional predicate that drops rows before they reach
+ * the consumer — used by the research landing hero to filter out chat
+ * sessions so they don't appear as research "recent" cards. Default: no
+ * filtering, preserving the chat page's original behavior.
+ */
+export interface UseRecentSessionsOptions {
+  exclude?: (row: LogSession) => boolean;
+}
+
+export function useRecentSessions(options: UseRecentSessionsOptions = {}) {
   const [sessions, setSessions] = useState<LogSession[]>([]);
+  const { exclude } = options;
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
         const transport = await getTransport();
-        const res = await transport.listLogSessions({ limit: 5, root_only: true });
+        // Over-fetch a little when excluding so the final result still has
+        // up to 5 cards after the predicate runs. 20 is a safe upper bound
+        // — enough breathing room for typical usage without blowing the
+        // query's cost.
+        const limit = exclude ? 20 : 5;
+        const res = await transport.listLogSessions({ limit, root_only: true });
         if (cancelled || !res.success || !res.data) return;
-        setSessions(res.data);
+        const filtered = exclude ? res.data.filter((r) => !exclude(r)) : res.data;
+        setSessions(filtered.slice(0, 5));
       } catch (err) {
         console.error("[useRecentSessions] Failed to load sessions:", err);
       }
     };
     load();
     return () => { cancelled = true; };
-  }, []);
+  }, [exclude]);
 
   return { sessions };
 }
