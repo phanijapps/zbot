@@ -575,15 +575,18 @@ impl SessionDistiller {
                 .collect();
 
             for er in &canonicalized {
-                // Resolve entity names to IDs (or use names as IDs if not found)
-                let source_id = entity_map
-                    .get(&er.source)
-                    .cloned()
-                    .unwrap_or_else(|| er.source.clone());
-                let target_id = entity_map
-                    .get(&er.target)
-                    .cloned()
-                    .unwrap_or_else(|| er.target.clone());
+                // Resolve both endpoints to real `kg_entities.id` values. The
+                // LLM sometimes names an entity only in the relationships
+                // block without also declaring it in `response.entities` —
+                // the old fallback used the name itself as the id, which
+                // blew up the FOREIGN KEY constraint on `kg_relationships`
+                // and silently dropped the edge. See
+                // `resolve_relationship_endpoint` for the resolve-or-create
+                // policy.
+                let source_id =
+                    resolve_relationship_endpoint(graph, agent_id, &er.source, &mut entity_map);
+                let target_id =
+                    resolve_relationship_endpoint(graph, agent_id, &er.target, &mut entity_map);
 
                 let relationship = Relationship::new(
                     agent_id.to_string(),
@@ -1438,6 +1441,65 @@ impl SessionDistiller {
 ///    `used_by` → inverse `uses`).
 ///
 /// Returns `None` to drop the relationship, `Some(canonical)` to keep it.
+///
+/// Resolve a relationship endpoint (source or target name) to a real
+/// `kg_entities.id` value. Lookup order:
+///
+/// 1. `entity_map` — entities declared in this turn's `response.entities`
+///    (already stored or reused during step 5 above).
+/// 2. `graph.find_entity_by_name` — the entity may exist from a prior
+///    session. Cheap case-insensitive lookup.
+/// 3. Auto-create a stub entity with type `custom("unknown")` so the
+///    FOREIGN KEY on `kg_relationships` is satisfied and the edge survives.
+///    The LLM clearly surfaced the name in its relationships block; just
+///    because it wasn't in the entity array doesn't mean it's worthless.
+///    A later distillation (or a direct tool call) can refine the type.
+///
+/// Never panics. If the stub insert itself fails, logs and returns the
+/// stub id anyway — at worst we end up in the same bucket as the old
+/// fallback (FK will then fail and `store_knowledge` for the relationship
+/// will log + drop), so this is strictly an improvement.
+fn resolve_relationship_endpoint(
+    graph: &GraphStorage,
+    agent_id: &str,
+    name: &str,
+    entity_map: &mut std::collections::HashMap<String, String>,
+) -> String {
+    if let Some(id) = entity_map.get(name) {
+        return id.clone();
+    }
+    if let Ok(Some(existing_id)) = graph.find_entity_by_name(agent_id, name) {
+        entity_map.insert(name.to_string(), existing_id.clone());
+        return existing_id;
+    }
+    // Nothing found — create a stub so the relationship can be persisted.
+    let stub = Entity::new(
+        agent_id.to_string(),
+        EntityType::Custom("unknown".to_string()),
+        name.to_string(),
+    );
+    let stub_id = stub.id.clone();
+    let knowledge = knowledge_graph::types::ExtractedKnowledge {
+        entities: vec![stub],
+        relationships: vec![],
+    };
+    if let Err(e) = graph.store_knowledge(agent_id, knowledge) {
+        tracing::warn!(
+            name = %name,
+            error = %e,
+            "Failed to auto-create stub entity for relationship endpoint"
+        );
+    } else {
+        tracing::debug!(
+            name = %name,
+            id = %stub_id,
+            "Auto-created stub entity for undeclared relationship endpoint"
+        );
+    }
+    entity_map.insert(name.to_string(), stub_id.clone());
+    stub_id
+}
+
 fn canonicalize_relationship(
     er: &ExtractedRelationship,
     entities: &[ExtractedEntity],
@@ -2092,6 +2154,88 @@ CRITICAL: Your ENTIRE response must be a single valid JSON object. Do NOT includ
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------------------------------
+    // resolve_relationship_endpoint — FK survival policy
+    //
+    // Regression for the "India → Oil" failure: relationships that name
+    // an entity only in the relationships block (not in the entities
+    // array) used to be persisted with the literal name as the id, which
+    // violated the FK on `kg_relationships`. The helper must: prefer an
+    // existing entity_map entry, then look up by name in the graph, then
+    // auto-create a stub entity so the edge survives.
+    // ------------------------------------------------------------------------
+    mod resolve_endpoint {
+        use super::*;
+        use gateway_database::KnowledgeDatabase;
+        use gateway_services::VaultPaths;
+        use knowledge_graph::{types::ExtractedKnowledge, Entity, EntityType, GraphStorage};
+        use std::collections::HashMap;
+        use std::sync::Arc;
+        use tempfile::tempdir;
+
+        fn fresh_graph() -> GraphStorage {
+            let dir = tempdir().unwrap();
+            let paths = Arc::new(VaultPaths::new(dir.keep()));
+            std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
+            let db = Arc::new(KnowledgeDatabase::new(paths).unwrap());
+            GraphStorage::new(db).unwrap()
+        }
+
+        #[test]
+        fn returns_entity_map_hit_without_touching_graph() {
+            let graph = fresh_graph();
+            let mut map = HashMap::new();
+            map.insert("India".to_string(), "entity-india-id-42".to_string());
+
+            let id = resolve_relationship_endpoint(&graph, "agent-x", "India", &mut map);
+            assert_eq!(id, "entity-india-id-42");
+            // No new map key — hit was a read.
+            assert_eq!(map.len(), 1);
+        }
+
+        #[test]
+        fn resolves_via_graph_find_when_not_in_map() {
+            let graph = fresh_graph();
+            // Seed the graph with an entity from a "prior session".
+            let existing = Entity::new(
+                "agent-x".to_string(),
+                EntityType::Location,
+                "India".to_string(),
+            );
+            let existing_id = existing.id.clone();
+            graph
+                .store_knowledge(
+                    "agent-x",
+                    ExtractedKnowledge {
+                        entities: vec![existing],
+                        relationships: vec![],
+                    },
+                )
+                .unwrap();
+
+            let mut map = HashMap::new();
+            let id = resolve_relationship_endpoint(&graph, "agent-x", "India", &mut map);
+            assert_eq!(id, existing_id, "must reuse the pre-existing entity id");
+            // Cached into the map so subsequent endpoints in the same turn
+            // don't re-query the DB for the same name.
+            assert_eq!(map.get("India"), Some(&existing_id));
+        }
+
+        #[test]
+        fn auto_creates_stub_when_name_is_unknown() {
+            let graph = fresh_graph();
+            let mut map = HashMap::new();
+
+            let id = resolve_relationship_endpoint(&graph, "agent-x", "Oil", &mut map);
+            assert!(!id.is_empty());
+            // The stub is persisted — find_entity_by_name must now return it.
+            let looked_up = graph.find_entity_by_name("agent-x", "Oil").unwrap();
+            assert_eq!(looked_up.as_deref(), Some(id.as_str()));
+            // Cached in the map too.
+            assert_eq!(map.get("Oil"), Some(&id));
+        }
+    }
 
     #[test]
     fn test_parse_facts_from_json_array() {
