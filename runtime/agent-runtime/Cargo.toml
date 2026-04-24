@@ -54,6 +54,9 @@ dirs = "5.0"
 sha2 = "0.10"
 fastembed = "4"
 
+# Tokenization — real tokenizer for middleware token counting
+tiktoken-rs = { workspace = true }
+
 [dev-dependencies]
 tokio-test = "0.4"
 

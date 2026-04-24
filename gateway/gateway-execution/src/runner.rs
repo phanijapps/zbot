@@ -100,8 +100,17 @@ pub struct ExecutionRunner {
     delegation_semaphore: Arc<Semaphore>,
     /// Embedding client for generating vector embeddings (semantic search in memory)
     embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
-    /// Model capabilities registry for context window and capability lookups
-    model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
+    /// Model capabilities registry for context window and capability lookups.
+    ///
+    /// Stored in an `ArcSwapOption` so readers pre-captured by
+    /// `spawn_continuation_handler` (runner.rs:221, before
+    /// [`Self::set_model_registry`] is called from `runtime.rs:145`) can
+    /// still observe the registry once it's installed. A plain
+    /// `Option<Arc<ModelRegistry>>` would freeze as `None` in any
+    /// pre-spawned task's captured clone — the original cause of the
+    /// `context_window_tokens = 8192` fallback on the continuation path
+    /// (see `invoke/executor.rs:419-424`).
+    model_registry: Arc<arc_swap::ArcSwapOption<gateway_services::models::ModelRegistry>>,
     /// Per-provider rate limiters — shared across all executors using the same provider.
     rate_limiters: std::sync::Arc<
         std::sync::RwLock<
@@ -204,7 +213,7 @@ impl ExecutionRunner {
             memory_recall,
             delegation_semaphore: Arc::new(Semaphore::new(max_parallel_agents as usize)),
             embedding_client,
-            model_registry: None,
+            model_registry: Arc::new(arc_swap::ArcSwapOption::from(None)),
             rate_limiters: std::sync::Arc::new(std::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
@@ -224,8 +233,14 @@ impl ExecutionRunner {
     }
 
     /// Set the model capabilities registry.
-    pub fn set_model_registry(&mut self, registry: Arc<gateway_services::models::ModelRegistry>) {
-        self.model_registry = Some(registry);
+    ///
+    /// Takes `&self` (not `&mut self`) because the field is now an
+    /// `Arc<ArcSwapOption<...>>` shared with the continuation handler
+    /// task spawned during [`Self::new`]. The store is lock-free and
+    /// becomes visible to subsequent `.load_full()` reads — which is
+    /// what the continuation path does at fire time.
+    pub fn set_model_registry(&self, registry: Arc<gateway_services::models::ModelRegistry>) {
+        self.model_registry.store(Some(registry));
     }
 
     /// Set the knowledge graph storage for the graph_query tool.
@@ -547,6 +562,10 @@ impl ExecutionRunner {
         let embedding_client = self.embedding_client.clone();
         let distiller = self.distiller.clone();
         let memory_recall = self.memory_recall.clone();
+        // Clone the ArcSwap handle — NOT its inner value. Subsequent
+        // `.load_full()` calls read whatever [`Self::set_model_registry`]
+        // has installed. This is the fix for the capture-before-init bug
+        // where `Option<Arc<_>>` froze at `None` inside the spawn closure.
         let model_registry = self.model_registry.clone();
         let graph_storage = self.graph_storage.clone();
         let kg_episode_repo = self.kg_episode_repo.clone();
@@ -598,7 +617,10 @@ impl ExecutionRunner {
                             embedding_client.clone(),
                             distiller.clone(),
                             memory_recall.clone(),
-                            model_registry.clone(),
+                            // Read the live registry at fire time, not
+                            // a stale capture. `load_full()` already
+                            // returns `Option<Arc<ModelRegistry>>`.
+                            model_registry.load_full(),
                             graph_storage.clone(),
                             kg_episode_repo.clone(),
                             ingestion_adapter.clone(),
@@ -1701,8 +1723,8 @@ impl ExecutionRunner {
             .with_workspace_cache(self.workspace_cache.clone())
             .with_rate_limiter(rate_limiter)
             .with_chat_mode(config.is_chat_mode());
-        if let Some(ref registry) = self.model_registry {
-            builder = builder.with_model_registry(registry.clone());
+        if let Some(registry) = self.model_registry.load_full() {
+            builder = builder.with_model_registry(registry);
         }
         if let Some(fs) = fact_store {
             builder = builder.with_fact_store(fs);
@@ -2758,4 +2780,104 @@ async fn run_ward_artifact_indexer(
         session = %session_id,
         "Ward artifact indexing complete"
     );
+}
+
+#[cfg(test)]
+mod model_registry_late_binding_tests {
+    //! Regression tests for the capture-before-init bug that caused
+    //! `context_window_tokens = 8192` on the continuation path.
+    //!
+    //! The failure mode: `spawn_continuation_handler` clones
+    //! `self.model_registry` into a long-lived task BEFORE
+    //! `set_model_registry` runs. When the field was a plain
+    //! `Option<Arc<_>>`, the captured clone froze as `None` and every
+    //! continuation-path executor fell back to the 8192 default at
+    //! `invoke/executor.rs:423`. After the fix the field is an
+    //! `Arc<ArcSwapOption<_>>`, so pre-captured handles read the live
+    //! value at fire time.
+    //!
+    //! These tests target the ArcSwap-based late-binding contract
+    //! without needing the full `ExecutionRunner` construction graph.
+    use arc_swap::ArcSwapOption;
+    use gateway_services::models::ModelRegistry;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn load_user_registry() -> Arc<ModelRegistry> {
+        let bundled = gateway_templates::Templates::get("models_registry.json")
+            .map(|f| f.data.to_vec())
+            .unwrap_or_default();
+        let vault = PathBuf::from("/tmp/agentzero-test-vault");
+        Arc::new(ModelRegistry::load(&bundled, &vault))
+    }
+
+    /// The core contract: a clone of the `Arc<ArcSwapOption<T>>` captured
+    /// before `store(...)` must see `Some(...)` on a subsequent
+    /// `load_full()`. This is what pre-spawned async tasks rely on.
+    #[test]
+    fn pre_captured_clone_sees_late_store() {
+        // Step 1: field initialized empty (mirrors `ExecutionRunner::new`).
+        let field: Arc<ArcSwapOption<ModelRegistry>> = Arc::new(ArcSwapOption::from(None));
+
+        // Step 2: `spawn_continuation_handler` clones the handle into a
+        // long-lived task BEFORE the setter runs.
+        let captured = field.clone();
+        assert!(captured.load_full().is_none(), "field starts empty");
+
+        // Step 3: `runtime.rs:145` calls `set_model_registry(...)`.
+        field.store(Some(load_user_registry()));
+
+        // Step 4: the pre-captured clone reads the live value at fire time.
+        let reg = captured
+            .load_full()
+            .expect("late store must be visible to pre-captured clone");
+
+        // And the registry returns the real context window, not 8192.
+        let ctx = reg.context_window("glm-5-turbo");
+        assert_eq!(
+            ctx.input, 200_000,
+            "registry lookup must return glm-5-turbo's real 200k input \
+             window, not the 8192 fallback"
+        );
+    }
+
+    /// Multiple pre-captured clones (e.g. multiple background tasks)
+    /// each see the latest stored value. Mirrors the real topology:
+    /// spawn_delegation_handler + spawn_continuation_handler + others.
+    #[test]
+    fn multiple_captures_all_observe_late_store() {
+        let field: Arc<ArcSwapOption<ModelRegistry>> = Arc::new(ArcSwapOption::from(None));
+
+        let cap_a = field.clone();
+        let cap_b = field.clone();
+        let cap_c = field.clone();
+
+        field.store(Some(load_user_registry()));
+
+        for (name, cap) in [("a", cap_a), ("b", cap_b), ("c", cap_c)] {
+            assert!(
+                cap.load_full().is_some(),
+                "capture '{name}' must observe the stored registry"
+            );
+        }
+    }
+
+    /// Sanity: an unknown model falls back to the registry's internal
+    /// `input: 200_000`, NOT the executor's `8192`. That proves the fix
+    /// also helps the degenerate case (unknown model) as long as the
+    /// registry itself is installed.
+    #[test]
+    fn unknown_model_uses_registry_fallback_not_executor_fallback() {
+        let field: Arc<ArcSwapOption<ModelRegistry>> = Arc::new(ArcSwapOption::from(None));
+        let captured = field.clone();
+        field.store(Some(load_user_registry()));
+
+        let reg = captured.load_full().expect("installed");
+        let ctx = reg.context_window("some-unknown-model-xyz");
+        assert_eq!(
+            ctx.input, 200_000,
+            "registry's internal fallback for unknown models is 200k, \
+             not the 8192 emergency default"
+        );
+    }
 }
