@@ -37,6 +37,12 @@ pub struct TokenUsage {
 
     /// Total tokens
     pub total_tokens: u32,
+
+    /// Prompt tokens served from the provider's prompt cache, if the
+    /// provider reports them. `None` if unreported. Sources observed:
+    ///   - OpenAI: `usage.prompt_tokens_details.cached_tokens`
+    ///   - GLM / DeepSeek / z.ai: `usage.prompt_cache_hit_tokens`
+    pub cached_prompt_tokens: Option<u32>,
 }
 
 /// Callback type for streaming events
@@ -173,5 +179,6 @@ mod tests {
         assert_eq!(usage.prompt_tokens, 0);
         assert_eq!(usage.completion_tokens, 0);
         assert_eq!(usage.total_tokens, 0);
+        assert_eq!(usage.cached_prompt_tokens, None);
     }
 }
