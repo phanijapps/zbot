@@ -1,7 +1,9 @@
 // ============================================================================
 // EMBEDDINGS CARD
-// Settings → Advanced section for choosing the embedding backend
-// (internal BGE-small vs Ollama curated models).
+// Settings → Advanced section for choosing the embedding backend.
+// Internal BGE (384d) vs Ollama with freeform model typeahead + editable
+// dimensions. Mirrors the on-disk shape { internal, ollama: {url, model,
+// dimensions} } — see `embedding_service.rs::EmbeddingConfig`.
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -11,55 +13,73 @@ import {
   type CuratedModel,
   type EmbeddingConfig,
   type EmbeddingsHealth,
+  type OllamaModelsResponse,
 } from "@/services/transport";
 import { EmbeddingProgressModal } from "./EmbeddingProgressModal";
 
 // ---------------------------------------------------------------------------
-// Types
+// Types + constants
 // ---------------------------------------------------------------------------
 
 interface FormState {
   useInternal: boolean;
   baseUrl: string;
   modelTag: string;
+  dimensions: number;
 }
 
 const INTERNAL_DIM = 384;
 const DEFAULT_OLLAMA_URL = "http://localhost:11434";
 const INTERNAL_ESTIMATE_PER_ITEM = 0.05;
 const OLLAMA_ESTIMATE_PER_ITEM = 0.4;
+const MODEL_DATALIST_ID = "embedding-models-datalist";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helpers (pure)
 // ---------------------------------------------------------------------------
 
 function healthToForm(health: EmbeddingsHealth | null): FormState {
   if (!health || health.backend === "internal") {
-    return { useInternal: true, baseUrl: DEFAULT_OLLAMA_URL, modelTag: "" };
+    return {
+      useInternal: true,
+      baseUrl: DEFAULT_OLLAMA_URL,
+      modelTag: "",
+      dimensions: INTERNAL_DIM,
+    };
   }
   return {
     useInternal: false,
     baseUrl: DEFAULT_OLLAMA_URL,
     modelTag: health.model ?? "",
+    dimensions: health.dim || 0,
   };
 }
 
-function formToConfig(form: FormState, model: CuratedModel | undefined): EmbeddingConfig | null {
+function formToConfig(form: FormState): EmbeddingConfig | null {
   if (form.useInternal) {
-    return { backend: "internal", dimensions: INTERNAL_DIM };
+    return { internal: true };
   }
-  if (!model || !form.baseUrl.trim()) return null;
+  if (!form.baseUrl.trim() || !form.modelTag.trim() || form.dimensions <= 0) {
+    return null;
+  }
   return {
-    backend: "ollama",
-    dimensions: model.dim,
-    ollama: { base_url: form.baseUrl.trim(), model: model.tag },
+    internal: false,
+    ollama: {
+      url: form.baseUrl.trim(),
+      model: form.modelTag.trim(),
+      dimensions: form.dimensions,
+    },
   };
 }
 
 function formMatchesHealth(form: FormState, health: EmbeddingsHealth | null): boolean {
   if (!health) return false;
   if (form.useInternal) return health.backend === "internal";
-  return health.backend === "ollama" && health.model === form.modelTag;
+  return (
+    health.backend === "ollama" &&
+    health.model === form.modelTag &&
+    health.dim === form.dimensions
+  );
 }
 
 function estimateSeconds(indexed: number, targetDim: number): number {
@@ -79,7 +99,8 @@ function backendLabel(health: EmbeddingsHealth | null): string {
 
 export function EmbeddingsCard() {
   const [health, setHealth] = useState<EmbeddingsHealth | null>(null);
-  const [models, setModels] = useState<CuratedModel[]>([]);
+  const [curated, setCurated] = useState<CuratedModel[]>([]);
+  const [liveOllama, setLiveOllama] = useState<OllamaModelsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(healthToForm(null));
@@ -97,12 +118,13 @@ export function EmbeddingsCard() {
     }
   }, []);
 
+  // Initial load: health + curated suggestions.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setIsLoading(true);
       const transport = await getTransport();
-      const [healthRes, modelsRes] = await Promise.all([
+      const [healthRes, curatedRes] = await Promise.all([
         transport.getEmbeddingsHealth(),
         transport.getEmbeddingsModels(),
       ]);
@@ -113,8 +135,8 @@ export function EmbeddingsCard() {
       } else {
         setLoadError(healthRes.error ?? "Failed to load embeddings health");
       }
-      if (modelsRes.success && modelsRes.data) {
-        setModels(modelsRes.data);
+      if (curatedRes.success && curatedRes.data) {
+        setCurated(curatedRes.data);
       }
       setIsLoading(false);
     })();
@@ -123,23 +145,68 @@ export function EmbeddingsCard() {
     };
   }, []);
 
-  const selectedModel = useMemo(
-    () => models.find((m) => m.tag === form.modelTag),
-    [models, form.modelTag],
-  );
+  // Refresh the live Ollama list whenever the URL changes (while in Ollama mode).
+  useEffect(() => {
+    if (form.useInternal) {
+      setLiveOllama(null);
+      return;
+    }
+    const url = form.baseUrl.trim();
+    if (!url) {
+      setLiveOllama(null);
+      return;
+    }
+    let cancelled = false;
+    const handle = window.setTimeout(async () => {
+      const transport = await getTransport();
+      const res = await transport.getOllamaEmbeddingModels(url);
+      if (!cancelled && res.success && res.data) {
+        setLiveOllama(res.data);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [form.useInternal, form.baseUrl]);
 
-  const config = useMemo(() => formToConfig(form, selectedModel), [form, selectedModel]);
+  const curatedByTag = useMemo(() => {
+    const map = new Map<string, CuratedModel>();
+    for (const c of curated) map.set(c.tag, c);
+    return map;
+  }, [curated]);
+
+  const suggestions = useMemo(() => buildSuggestions(curated, liveOllama), [curated, liveOllama]);
+
+  const config = useMemo(() => formToConfig(form), [form]);
   const matches = formMatchesHealth(form, health);
-  const targetDim = form.useInternal ? INTERNAL_DIM : selectedModel?.dim ?? 0;
+  const targetDim = form.useInternal ? INTERNAL_DIM : form.dimensions;
   const dimChanged = health !== null && targetDim !== 0 && targetDim !== health.dim;
+  const currentDim = health?.dim ?? 0;
+  const indexed = health?.indexed_count ?? 0;
 
   const handleToggleInternal = useCallback((useInternal: boolean) => {
     setForm((prev) => ({
       ...prev,
       useInternal,
-      modelTag: useInternal ? prev.modelTag : prev.modelTag || "",
+      dimensions: useInternal ? INTERNAL_DIM : prev.dimensions,
     }));
   }, []);
+
+  const handleModelChange = useCallback(
+    (next: string) => {
+      setForm((prev) => {
+        const curatedDim = curatedByTag.get(next)?.dim;
+        return {
+          ...prev,
+          modelTag: next,
+          // Auto-fill dim on a curated match; leave editable otherwise.
+          dimensions: curatedDim ?? prev.dimensions,
+        };
+      });
+    },
+    [curatedByTag],
+  );
 
   const handleCancel = useCallback(() => {
     setForm(healthToForm(health));
@@ -189,7 +256,10 @@ export function EmbeddingsCard() {
       </div>
 
       {loadError ? (
-        <div className="settings-alert settings-alert--error" style={{ marginBottom: "var(--spacing-3)" }}>
+        <div
+          className="settings-alert settings-alert--error"
+          style={{ marginBottom: "var(--spacing-3)" }}
+        >
           {loadError}
         </div>
       ) : null}
@@ -217,11 +287,14 @@ export function EmbeddingsCard() {
       {!form.useInternal ? (
         <OllamaSubform
           form={form}
-          setForm={setForm}
-          models={models}
-          health={health}
-          selectedModel={selectedModel}
+          onModelChange={handleModelChange}
+          onFormChange={setForm}
+          suggestions={suggestions}
+          liveOllama={liveOllama}
+          currentDim={currentDim}
+          indexed={indexed}
           dimChanged={dimChanged}
+          targetDim={targetDim}
         />
       ) : null}
 
@@ -253,13 +326,13 @@ export function EmbeddingsCard() {
         data-testid="embeddings-status-footer"
       >
         Current state: {backendLabel(health)}, {health?.dim ?? 0}d,{" "}
-        {health?.indexed_count ?? 0} indexed. Last switched: {lastSwitched ?? "never"}.
+        {indexed} indexed. Last switched: {lastSwitched ?? "never"}.
       </div>
 
       {modalOpen && pendingConfig ? (
         <EmbeddingProgressModal
           config={pendingConfig}
-          indexedCount={health?.indexed_count ?? 0}
+          indexedCount={indexed}
           onClose={handleModalClose}
           onSuccess={handleSuccess}
         />
@@ -269,29 +342,75 @@ export function EmbeddingsCard() {
 }
 
 // ---------------------------------------------------------------------------
+// Suggestion assembly (curated + live)
+// ---------------------------------------------------------------------------
+
+interface ModelSuggestion {
+  tag: string;
+  label: string;
+  installed: boolean;
+  dim?: number;
+}
+
+function buildSuggestions(
+  curated: CuratedModel[],
+  live: OllamaModelsResponse | null,
+): ModelSuggestion[] {
+  const out: ModelSuggestion[] = [];
+  const seen = new Set<string>();
+
+  // Live Ollama entries first (marked installed, order preserved).
+  if (live?.reachable) {
+    for (const tag of live.likely_embedding) {
+      if (seen.has(tag)) continue;
+      seen.add(tag);
+      const dim = curated.find((c) => c.tag === tag || tag.startsWith(`${c.tag}:`))?.dim;
+      out.push({ tag, label: `${tag} · installed`, installed: true, dim });
+    }
+  }
+
+  // Then curated entries that aren't already in the live list.
+  for (const c of curated) {
+    if (seen.has(c.tag)) continue;
+    seen.add(c.tag);
+    out.push({
+      tag: c.tag,
+      label: `${c.tag} (${c.dim}d, ${c.size_mb}MB)`,
+      installed: false,
+      dim: c.dim,
+    });
+  }
+
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Ollama subform (extracted for complexity)
 // ---------------------------------------------------------------------------
 
 interface OllamaSubformProps {
   form: FormState;
-  setForm: React.Dispatch<React.SetStateAction<FormState>>;
-  models: CuratedModel[];
-  health: EmbeddingsHealth | null;
-  selectedModel: CuratedModel | undefined;
+  onModelChange: (next: string) => void;
+  onFormChange: React.Dispatch<React.SetStateAction<FormState>>;
+  suggestions: ModelSuggestion[];
+  liveOllama: OllamaModelsResponse | null;
+  currentDim: number;
+  indexed: number;
   dimChanged: boolean;
+  targetDim: number;
 }
 
 function OllamaSubform({
   form,
-  setForm,
-  models,
-  health,
-  selectedModel,
+  onModelChange,
+  onFormChange,
+  suggestions,
+  liveOllama,
+  currentDim,
+  indexed,
   dimChanged,
+  targetDim,
 }: OllamaSubformProps) {
-  const currentDim = health?.dim ?? 0;
-  const indexed = health?.indexed_count ?? 0;
-
   return (
     <div style={{ marginTop: "var(--spacing-3)" }}>
       <div className="grid grid-cols-2 gap-3">
@@ -304,44 +423,74 @@ function OllamaSubform({
             className="form-input"
             type="text"
             value={form.baseUrl}
-            onChange={(e) => setForm((p) => ({ ...p, baseUrl: e.target.value }))}
+            onChange={(e) => onFormChange((p) => ({ ...p, baseUrl: e.target.value }))}
             placeholder={DEFAULT_OLLAMA_URL}
           />
+          {liveOllama && !liveOllama.reachable ? (
+            <div className="page-subtitle" style={{ marginTop: 4, color: "var(--color-warning, #c77)" }}>
+              Unreachable — showing curated suggestions only.
+            </div>
+          ) : null}
         </div>
         <div>
           <label className="settings-field-label" htmlFor="emb-ollama-model">
             Model
           </label>
-          <select
+          <input
             id="emb-ollama-model"
-            className="form-input form-select"
+            className="form-input"
+            type="text"
+            list={MODEL_DATALIST_ID}
             value={form.modelTag}
-            onChange={(e) => setForm((p) => ({ ...p, modelTag: e.target.value }))}
-          >
-            <option value="">Select model</option>
-            {models.map((m) => {
-              const noReindex = m.dim === currentDim;
-              const suffix = noReindex ? " ← no reindex" : "";
-              return (
-                <option key={m.tag} value={m.tag}>
-                  {`${m.tag} (${m.dim}d, ${m.size_mb}MB)${suffix}`}
-                </option>
-              );
-            })}
-          </select>
+            onChange={(e) => onModelChange(e.target.value)}
+            placeholder="e.g. nomic-embed-text"
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <datalist id={MODEL_DATALIST_ID}>
+            {suggestions.map((s) => (
+              <option key={s.tag} value={s.tag} label={s.label} />
+            ))}
+          </datalist>
+          {form.modelTag && !suggestions.some((s) => s.tag === form.modelTag) ? (
+            <div className="page-subtitle" style={{ marginTop: 4 }}>
+              Custom model — dimensions not auto-filled. Set it manually below.
+            </div>
+          ) : null}
         </div>
       </div>
 
-      {selectedModel && dimChanged ? (
+      <div className="grid grid-cols-2 gap-3" style={{ marginTop: "var(--spacing-3)" }}>
+        <div>
+          <label className="settings-field-label" htmlFor="emb-ollama-dim">
+            Dimensions
+          </label>
+          <input
+            id="emb-ollama-dim"
+            className="form-input"
+            type="number"
+            min={1}
+            value={form.dimensions || ""}
+            onChange={(e) => {
+              const n = Number.parseInt(e.target.value, 10);
+              onFormChange((p) => ({ ...p, dimensions: Number.isFinite(n) ? n : 0 }));
+            }}
+            placeholder="e.g. 768"
+          />
+          <div className="page-subtitle" style={{ marginTop: 4 }}>
+            Must match the model's output width. Verified at save time.
+          </div>
+        </div>
+      </div>
+
+      {dimChanged && targetDim > 0 ? (
         <div
           className="settings-alert settings-alert--warning"
           style={{ marginTop: "var(--spacing-3)" }}
           data-testid="emb-warning"
         >
-          Switching to {selectedModel.tag} will: pull ~{selectedModel.size_mb}MB from Ollama (if
-          not present), reindex {indexed} embeddings (~
-          {estimateSeconds(indexed, selectedModel.dim)}s), briefly pause memory recall during
-          reindex.
+          Switching to {form.modelTag || "this model"} will reindex {indexed} embeddings (~
+          {estimateSeconds(indexed, targetDim)}s) and briefly pause memory recall. Current {currentDim}d → new {targetDim}d.
         </div>
       ) : null}
     </div>

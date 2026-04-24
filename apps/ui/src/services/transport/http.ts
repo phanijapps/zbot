@@ -92,6 +92,7 @@ import type {
   CuratedModel,
   EmbeddingConfig,
   ConfigureProgressEvent,
+  OllamaModelsResponse,
 } from "./types";
 
 // ============================================================================
@@ -1596,6 +1597,16 @@ export class HttpTransport implements Transport {
 
   async getEmbeddingsModels(): Promise<TransportResult<CuratedModel[]>> {
     return this.get<CuratedModel[]>("/api/embeddings/models");
+  }
+
+  async getOllamaEmbeddingModels(
+    baseUrl?: string,
+  ): Promise<TransportResult<OllamaModelsResponse>> {
+    const path =
+      baseUrl && baseUrl.length > 0
+        ? `/api/embeddings/ollama-models?url=${encodeURIComponent(baseUrl)}`
+        : "/api/embeddings/ollama-models";
+    return this.get<OllamaModelsResponse>(path);
   }
 
   async configureEmbeddings(

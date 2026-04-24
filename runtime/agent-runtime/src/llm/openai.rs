@@ -26,6 +26,47 @@ pub struct OpenAiClient {
     http_client: reqwest::Client,
 }
 
+/// Extract the provider-reported cached prompt-token count from a `usage`
+/// object, if any. Handles the two shapes we see in production:
+///
+///   - OpenAI: `usage.prompt_tokens_details.cached_tokens`
+///   - GLM / DeepSeek / z.ai: `usage.prompt_cache_hit_tokens`
+///
+/// Returns `None` when neither field is present, so downstream code can
+/// distinguish "no cache info reported" from "cache hit was zero".
+fn extract_cached_prompt_tokens(usage: &Value) -> Option<u32> {
+    if let Some(v) = usage
+        .pointer("/prompt_tokens_details/cached_tokens")
+        .and_then(Value::as_u64)
+    {
+        return Some(v as u32);
+    }
+    usage
+        .get("prompt_cache_hit_tokens")
+        .and_then(Value::as_u64)
+        .map(|v| v as u32)
+}
+
+/// Log cache-hit ratio at INFO when the provider reported it. Silent when
+/// not reported — keeps the log surface clean for providers that don't
+/// expose cache stats.
+fn log_cache_hit(tag: &str, usage: &TokenUsage) {
+    let Some(cached) = usage.cached_prompt_tokens else {
+        return;
+    };
+    let pct = if usage.prompt_tokens > 0 {
+        (f64::from(cached) / f64::from(usage.prompt_tokens)) * 100.0
+    } else {
+        0.0
+    };
+    tracing::info!(
+        cached_tokens = cached,
+        prompt_tokens = usage.prompt_tokens,
+        hit_pct = format!("{pct:.1}"),
+        "{tag} prompt_cache"
+    );
+}
+
 /// Attempt to recover the first JSON object from a concatenated string like `{"a":"b"}{"c":"d"}`.
 /// Returns Some(Value) if recovery succeeds, None otherwise.
 fn recover_first_json(raw: &str) -> Option<serde_json::Value> {
@@ -151,7 +192,30 @@ impl OpenAiClient {
             .collect()
     }
 
-    /// Build the request body for the API
+    /// Build the request body for the API.
+    ///
+    /// # Cache stability contract
+    ///
+    /// The serialized JSON produced here forms the prefix that upstream
+    /// providers hash for prompt caching (OpenAI auto-caches at ≥1024
+    /// tokens; GLM / DeepSeek / z.ai use similar schemes). Any per-call
+    /// noise — timestamps, UUIDs, randomized ordering, debug markers —
+    /// invalidates that cache and is billed as a miss.
+    ///
+    /// The body is deterministic today because:
+    ///   - `json!` macro uses `serde_json::Map` (BTreeMap) → keys sorted
+    ///   - no `Uuid::new_v4`, `chrono::now`, or `rand` calls in this fn
+    ///   - `messages` / `tools` are passed through unchanged (caller owns
+    ///     ordering; don't shuffle them)
+    ///
+    /// Do not introduce per-call noise here without updating
+    /// `request_body_is_byte_stable_across_identical_calls` to detect
+    /// the new axis and making the noise cache-friendly (e.g. moved
+    /// behind the stable prefix).
+    ///
+    /// References:
+    ///   - OpenAI prompt caching: <https://platform.openai.com/docs/guides/prompt-caching>
+    ///   - GLM / z.ai cache fields: `prompt_cache_hit_tokens` in response usage
     fn build_request_body(&self, messages: Vec<ChatMessage>, tools: Option<Value>) -> Value {
         let messages = Self::rehydrate_messages(messages);
         let mut body_obj = json!({
@@ -269,8 +333,13 @@ impl OpenAiClient {
                 prompt_tokens: u.get("prompt_tokens")?.as_u64()? as u32,
                 completion_tokens: u.get("completion_tokens")?.as_u64()? as u32,
                 total_tokens: u.get("total_tokens")?.as_u64()? as u32,
+                cached_prompt_tokens: extract_cached_prompt_tokens(u),
             })
         });
+
+        if let Some(ref u) = usage {
+            log_cache_hit("chat", u);
+        }
 
         ChatResponse {
             content,
@@ -500,6 +569,7 @@ impl LlmClient for OpenAiClient {
                             prompt_tokens: pt as u32,
                             completion_tokens: ct as u32,
                             total_tokens: tt as u32,
+                            cached_prompt_tokens: extract_cached_prompt_tokens(u),
                         });
                     }
                 }
@@ -665,8 +735,11 @@ impl LlmClient for OpenAiClient {
                 prompt_tokens: 0,
                 completion_tokens: estimated_completion,
                 total_tokens: estimated_completion,
+                cached_prompt_tokens: None,
             }
         });
+
+        log_cache_hit("stream", &usage);
 
         tracing::info!(
             "Streaming completed: prompt={} completion={} total={} tokens, {} tool calls",
@@ -724,6 +797,123 @@ mod tests {
 
         assert_eq!(tool_call.id, "call_123");
         assert_eq!(tool_call.name, "search");
+    }
+
+    // ------------------------------------------------------------------
+    // Cache-stability + cache-token parsing tests (Plan A).
+    //
+    // The cache-stability test is the single most important invariant
+    // for upstream prompt caching: any per-call drift in the serialized
+    // body invalidates the provider-side cache and is billed as a miss.
+    // ------------------------------------------------------------------
+
+    fn test_client() -> OpenAiClient {
+        let config = LlmConfig::new(
+            "https://api.openai.com".to_string(),
+            "test-key".to_string(),
+            "gpt-4-turbo".to_string(),
+            "openai".to_string(),
+        );
+        OpenAiClient::new(config).expect("client")
+    }
+
+    fn fixture_messages() -> Vec<ChatMessage> {
+        vec![
+            ChatMessage::system("You are a helpful assistant.".to_string()),
+            ChatMessage::user("What is 2 + 2?".to_string()),
+        ]
+    }
+
+    fn fixture_tools() -> Value {
+        json!([
+            {
+                "type": "function",
+                "function": {
+                    "name": "calculator",
+                    "description": "Evaluate a math expression",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "expression": { "type": "string" }
+                        },
+                        "required": ["expression"]
+                    }
+                }
+            }
+        ])
+    }
+
+    #[test]
+    fn request_body_is_byte_stable_across_identical_calls() {
+        let client = test_client();
+        let a = client.build_request_body(fixture_messages(), Some(fixture_tools()));
+        let b = client.build_request_body(fixture_messages(), Some(fixture_tools()));
+
+        let a_bytes = serde_json::to_vec(&a).expect("serialize a");
+        let b_bytes = serde_json::to_vec(&b).expect("serialize b");
+
+        assert_eq!(
+            a_bytes, b_bytes,
+            "build_request_body must be byte-stable — per-call drift breaks \
+             upstream prompt caching and is billed as a cache miss"
+        );
+    }
+
+    #[test]
+    fn request_body_is_byte_stable_without_tools() {
+        // Absence of `tools` must not introduce drift either.
+        let client = test_client();
+        let a = client.build_request_body(fixture_messages(), None);
+        let b = client.build_request_body(fixture_messages(), None);
+
+        let a_bytes = serde_json::to_vec(&a).expect("serialize a");
+        let b_bytes = serde_json::to_vec(&b).expect("serialize b");
+        assert_eq!(a_bytes, b_bytes);
+    }
+
+    #[test]
+    fn extract_cached_prompt_tokens_reads_openai_shape() {
+        let usage = json!({
+            "prompt_tokens": 1200,
+            "completion_tokens": 50,
+            "total_tokens": 1250,
+            "prompt_tokens_details": { "cached_tokens": 1024 }
+        });
+        assert_eq!(extract_cached_prompt_tokens(&usage), Some(1024));
+    }
+
+    #[test]
+    fn extract_cached_prompt_tokens_reads_glm_deepseek_fallback() {
+        // GLM / DeepSeek / z.ai report a flat `prompt_cache_hit_tokens`.
+        let usage = json!({
+            "prompt_tokens": 2048,
+            "completion_tokens": 40,
+            "total_tokens": 2088,
+            "prompt_cache_hit_tokens": 1800
+        });
+        assert_eq!(extract_cached_prompt_tokens(&usage), Some(1800));
+    }
+
+    #[test]
+    fn extract_cached_prompt_tokens_returns_none_when_unreported() {
+        let usage = json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120
+        });
+        assert_eq!(extract_cached_prompt_tokens(&usage), None);
+    }
+
+    #[test]
+    fn extract_cached_prompt_tokens_prefers_openai_shape_when_both_present() {
+        // If a proxy somehow fills both fields, the nested OpenAI shape
+        // wins — it's the documented source of truth on OpenAI proper.
+        let usage = json!({
+            "prompt_tokens": 500,
+            "prompt_tokens_details": { "cached_tokens": 400 },
+            "prompt_cache_hit_tokens": 300
+        });
+        assert_eq!(extract_cached_prompt_tokens(&usage), Some(400));
     }
 }
 

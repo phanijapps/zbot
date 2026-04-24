@@ -11,7 +11,7 @@
 //! Manage conversation context by clearing older tool call outputs.
 
 use crate::middleware::config::ContextEditingConfig;
-use crate::middleware::token_counter::estimate_total_tokens;
+use crate::middleware::token_counter::{estimate_message_tokens, estimate_total_tokens};
 use crate::middleware::traits::{
     ExecutionState, MiddlewareContext, MiddlewareEffect, PreProcessMiddleware,
 };
@@ -355,22 +355,18 @@ impl ContextEditingMiddleware {
     }
 
     /// Calculate how many tokens would be reclaimed
-    fn calculate_tokens_to_reclaim(&self, messages: &[ChatMessage], indices: &[usize]) -> usize {
+    fn calculate_tokens_to_reclaim(
+        &self,
+        messages: &[ChatMessage],
+        indices: &[usize],
+        model: &str,
+    ) -> usize {
         indices
             .iter()
             .filter_map(|idx| messages.get(*idx))
-            .map(estimate_message_tokens)
+            .map(|m| estimate_message_tokens(m, model))
             .sum()
     }
-}
-
-/// Estimate tokens for a single message without cloning.
-fn estimate_message_tokens(msg: &ChatMessage) -> usize {
-    let content_tokens = msg.content.len() / 4;
-    let tool_call_tokens = msg.tool_calls.as_ref().map_or(0, |tc| {
-        serde_json::to_string(tc).unwrap_or_default().len() / 4
-    });
-    content_tokens + tool_call_tokens + 4 // +4 for message overhead
 }
 
 impl Default for ContextEditingMiddleware {
@@ -401,7 +397,7 @@ impl PreProcessMiddleware for ContextEditingMiddleware {
         context: &MiddlewareContext,
     ) -> Result<MiddlewareEffect, String> {
         // Check if we should trigger context editing
-        let current_tokens = estimate_total_tokens(&messages);
+        let current_tokens = estimate_total_tokens(&messages, &context.model);
 
         if current_tokens < self.config.trigger_tokens {
             return Ok(MiddlewareEffect::Proceed);
@@ -416,7 +412,8 @@ impl PreProcessMiddleware for ContextEditingMiddleware {
         }
 
         // Check if we meet the minimum reclaim threshold
-        let tokens_to_reclaim = self.calculate_tokens_to_reclaim(&messages, &indices_to_clear);
+        let tokens_to_reclaim =
+            self.calculate_tokens_to_reclaim(&messages, &indices_to_clear, &context.model);
         if tokens_to_reclaim < self.config.min_reclaim {
             return Ok(MiddlewareEffect::Proceed);
         }
@@ -1088,5 +1085,144 @@ mod tests {
 
         let compressed = compress_assistant_message(&msg, 1);
         assert!(compressed.contains("core/data_fetcher.py"));
+    }
+
+    // ========================================================================
+    // Integration tests — real-tokenizer trigger accuracy.
+    //
+    // These drive the full `process()` path with a `MiddlewareContext` and
+    // assert that the trigger fires/doesn't-fire based on REAL token counts.
+    // Before Phase 1, `estimate_total_tokens` returned chars/4, so these
+    // fixtures would have hit the wrong thresholds — that's the bug this
+    // phase eliminates.
+    // ========================================================================
+
+    fn build_code_heavy_conversation(n_turns: usize) -> Vec<ChatMessage> {
+        // Python code chosen because `chars/4` notoriously undercounts it by
+        // ~25% — each short identifier and punctuation token is one real
+        // token but <4 characters. With real tokenizer, these tool results
+        // exceed the threshold; with the old heuristic they would not.
+        let code = "def fetch_user(user_id: int) -> Optional[User]:\n    \
+                    if not user_id:\n        return None\n    \
+                    return db.query(User).filter_by(id=user_id).first()\n\n\
+                    class UserRepository:\n    \
+                    def __init__(self, conn): self.conn = conn\n    \
+                    def get(self, uid): return self.conn.execute(\
+                    'SELECT * FROM users WHERE id=?', (uid,)).fetchone()\n";
+        let mut messages = Vec::with_capacity(n_turns * 2);
+        for i in 0..n_turns {
+            messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: vec![Part::Text {
+                    text: String::new(),
+                }],
+                tool_calls: Some(vec![ToolCall::new(
+                    format!("call_{i}"),
+                    "read_file".to_string(),
+                    json!({ "path": format!("src/module_{i}.py") }),
+                )]),
+                tool_call_id: None,
+            });
+            messages.push(ChatMessage {
+                role: "tool".to_string(),
+                content: vec![Part::Text {
+                    text: code.to_string(),
+                }],
+                tool_calls: None,
+                tool_call_id: Some(format!("call_{i}")),
+            });
+        }
+        messages
+    }
+
+    fn make_ctx(model: &str) -> MiddlewareContext {
+        MiddlewareContext::new(
+            "agent-test".to_string(),
+            None,
+            "openai".to_string(),
+            model.to_string(),
+        )
+    }
+
+    /// Conversation exceeds the trigger in REAL tokens but would fall
+    /// short under the old chars/4 heuristic — proves Phase 1 flips the
+    /// outcome from "miss" to "fire".
+    #[tokio::test]
+    async fn real_tokenizer_fires_trigger_that_chars_heuristic_would_miss() {
+        let messages = build_code_heavy_conversation(20);
+        let real_tokens = crate::middleware::token_counter::estimate_total_tokens(
+            &messages,
+            "claude-3-5-sonnet-20241022",
+        );
+        let chars_over_four: usize = messages
+            .iter()
+            .map(|m| m.text_content().len() / 4)
+            .sum::<usize>()
+            + messages.len() * 4;
+
+        // The trigger sits ABOVE the old chars/4 estimate but BELOW the
+        // real token count. Under chars/4 this would be a silent miss.
+        assert!(
+            chars_over_four < real_tokens,
+            "fixture must exhibit the code undercount: chars/4={chars_over_four}, real={real_tokens}"
+        );
+        let trigger = chars_over_four + (real_tokens - chars_over_four) / 2;
+
+        let config = ContextEditingConfig {
+            enabled: true,
+            trigger_tokens: trigger,
+            keep_tool_results: 3,
+            min_reclaim: 0,
+            ..Default::default()
+        };
+        let middleware = ContextEditingMiddleware::new(config);
+        let ctx = make_ctx("claude-3-5-sonnet-20241022");
+
+        let effect = middleware
+            .process(messages, &ctx)
+            .await
+            .expect("process ok");
+
+        match effect {
+            MiddlewareEffect::EmitAndModify { .. } | MiddlewareEffect::ModifiedMessages(_) => {}
+            MiddlewareEffect::Proceed | MiddlewareEffect::EmitEvent(_) => {
+                panic!(
+                    "expected trigger to fire at real-tokenizer threshold \
+                     (trigger={trigger}, real={real_tokens}); got Proceed/EmitEvent — \
+                     chars/4 regression"
+                );
+            }
+        }
+    }
+
+    /// Conversation sits safely below the trigger — no over-firing.
+    #[tokio::test]
+    async fn real_tokenizer_does_not_over_trigger_below_threshold() {
+        let messages = build_code_heavy_conversation(2);
+        let real_tokens = crate::middleware::token_counter::estimate_total_tokens(
+            &messages,
+            "claude-3-5-sonnet-20241022",
+        );
+
+        let config = ContextEditingConfig {
+            enabled: true,
+            // Trigger well above the conversation's real token count.
+            trigger_tokens: real_tokens * 10,
+            keep_tool_results: 3,
+            min_reclaim: 0,
+            ..Default::default()
+        };
+        let middleware = ContextEditingMiddleware::new(config);
+        let ctx = make_ctx("claude-3-5-sonnet-20241022");
+
+        let effect = middleware
+            .process(messages, &ctx)
+            .await
+            .expect("process ok");
+
+        assert!(
+            matches!(effect, MiddlewareEffect::Proceed),
+            "middleware must not trigger when real tokens are far below threshold"
+        );
     }
 }
