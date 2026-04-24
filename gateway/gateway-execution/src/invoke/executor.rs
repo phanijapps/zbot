@@ -578,7 +578,7 @@ impl ExecutorBuilder {
         } else {
             // Root agent: orchestrator tools only.
             // Root delegates — it doesn't do specialist work.
-            // Excluded: load_skill, list_skills, apply_patch, list_agents, execution_graph
+            // Excluded: load_skill, list_skills, list_agents, execution_graph
 
             // Orchestrator essentials
             tool_registry.register(Arc::new(ShellTool::new()));

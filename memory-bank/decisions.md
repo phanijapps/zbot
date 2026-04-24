@@ -40,11 +40,12 @@
 
 ## Architecture Decisions
 
-### Tool Tiers (Core 7, Optional, Action) — Shell-First
-- **Core (7)**: shell (w/ apply_patch), memory, ward, update_plan, list_skills, load_skill, grep — always available
+### Tool Tiers (Core, Optional, Action) — Shell + Dedicated File Tools
+- **Core**: shell, write_file, edit_file, memory, ward, update_plan, set_session_title, execution_graph, list_skills, load_skill, grep — always available
 - **Action (3)**: respond, delegate_to_agent, list_agents — always available, drive agent behavior
 - **Optional**: read, write, edit, glob, todos, python, web_fetch, ui_tools, create_agent, introspection — configurable per agent
-- Shell-first: the agent uses `shell` + `apply_patch` for file operations by default. Separate file tools (read/write/edit/glob) are opt-in.
+- File writes go through `write_file` (create) and `edit_file` (targeted edits). The `shell` tool rejects file-writing commands (`cat >`, heredocs, `Set-Content`, etc.) to force use of the dedicated tools.
+- `apply_patch` was removed — its diff format was error-prone for LLMs and its shell-interceptor path added complexity without benefit. `write_file` + `edit_file` cover the same surface area with cleaner semantics.
 - Old standalone knowledge_graph tools (5) removed — replaced by unified `graph` action in memory tool
 
 ### Memory: 4-Tier Hierarchy
@@ -203,7 +204,7 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 ### Settings UI: Deprecate Optional Tool Toggles
 **Problem**: Optional tool toggles (python, webFetch, todos, fileTools, uiTools, createAgent) confused non-technical users. Most didn't work correctly — TS types referenced non-existent backend keys (`grep`, `glob`, `loadSkill`). The toggles gave a false sense of control.
 **Decision**: Remove the Optional Tools section from the Settings UI. Keep introspection enabled via `settings.json`. Backend `ToolSettings` struct unchanged — tools can still be enabled programmatically or via direct JSON editing. UI focuses on the two settings that actually matter: context protection (offload) and logging.
-**Rationale**: Simpler surface for non-technical users. The tools that matter (shell, apply_patch, memory, ward) are always on. The deprecated toggles were rarely used and poorly implemented.
+**Rationale**: Simpler surface for non-technical users. The tools that matter (shell, write_file, edit_file, memory, ward) are always on. The deprecated toggles were rarely used and poorly implemented.
 
 ### Providers Page: Card Grid Over Split Panel
 **Problem**: The original split-panel layout (sidebar list + detail pane) was a developer tool pattern. No inline editing, no guided setup, no capability visibility. Non-technical users didn't know what to do.

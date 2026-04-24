@@ -1418,14 +1418,18 @@ CREATE INDEX idx_messages_session_created ON messages(session_id, created_at);
 
 ## Built-in Tools
 
-### Core Tools (Shell-First, 7 Tools)
+### Core Tools
 
 | Tool | Description | Permissions |
 |------|-------------|-------------|
-| `shell` | Primary execution — commands, file I/O, apply_patch interceptor | Dangerous |
+| `shell` | Primary execution — commands and scripts (file writes rejected — use write_file / edit_file) | Dangerous |
+| `write_file` | Create new files inside the active ward | Dangerous |
+| `edit_file` | Targeted find-and-replace edits on existing files | Dangerous |
 | `memory` | Persistent KV store + save_fact + recall + graph | Safe |
 | `ward` | Manage code wards (use, list, create, info) | Safe |
 | `update_plan` | Lightweight task checklist | Safe |
+| `set_session_title` | Set a human-readable session title | Safe |
+| `execution_graph` | DAG workflow engine for multi-step orchestration | Safe |
 | `list_skills` | List available skills | Safe |
 | `load_skill` | Load skill instructions | Safe |
 | `grep` | Search file contents | Safe |

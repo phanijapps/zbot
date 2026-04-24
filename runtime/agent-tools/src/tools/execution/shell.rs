@@ -212,13 +212,13 @@ impl ShellTool {
         let command_lower = command.to_lowercase();
         let command_normalized = command_lower.replace("  ", " ").trim().to_string();
 
-        // Block file-writing shell commands — use apply_patch instead.
+        // Block file-writing shell commands — use write_file / edit_file instead.
         // Checked before the allowlist so that e.g. `cat > file` is caught
         // even though `cat ` would normally bypass validation.
-        // apply_patch heredocs are excluded inside is_file_writing_command().
         if is_file_writing_command(&command_normalized) {
             return Err(ZeroError::Tool(
-                "Use the apply_patch tool for file creation/editing, not shell commands."
+                "Use the write_file tool to create files and edit_file for targeted \
+                 edits. Do not write files through the shell."
                     .to_string(),
             ));
         }
@@ -327,7 +327,7 @@ impl Tool for ShellTool {
     }
 
     fn description(&self) -> &str {
-        "Execute shell commands. For creating/editing files, use the apply_patch tool instead (not shell)."
+        "Execute shell commands. For creating or editing files, use `write_file` or `edit_file` — not shell heredocs."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -374,7 +374,7 @@ impl Tool for ShellTool {
                     "Your shell command was too large ({} bytes) and was truncated. \
                      To fix this:\n\
                      1. SIMPLIFY: Write shorter, simpler code. Avoid verbose formatting.\n\
-                     2. If using apply_patch: write one file per call, keep files under 200 lines.\n\
+                     2. For file creation/editing: use `write_file` / `edit_file` one file per call, keep files under 200 lines.\n\
                      3. Do NOT attempt to assemble a large file from many small chunks — this is fragile and error-prone.\n\
                      4. Keep each shell call under 12,000 bytes of arguments.",
                     original_len
@@ -583,7 +583,7 @@ impl Tool for ShellTool {
 // FILE-WRITING DETECTION
 // ============================================================================
 
-/// Detect shell commands that write files — these should use apply_patch instead.
+/// Detect shell commands that write files — these should use `write_file` / `edit_file` instead.
 fn is_file_writing_command(command: &str) -> bool {
     let cmd = command.to_lowercase();
 
@@ -593,8 +593,8 @@ fn is_file_writing_command(command: &str) -> bool {
     }
 
     // PowerShell here-string to file: @" ... "@ or @' ... '@
-    // These create multi-line content and pipe to file
-    if (cmd.contains("@\"") || cmd.contains("@'")) && !cmd.contains("apply_patch") {
+    // These create multi-line content and pipe to file.
+    if cmd.contains("@\"") || cmd.contains("@'") {
         return true;
     }
 
@@ -609,16 +609,16 @@ fn is_file_writing_command(command: &str) -> bool {
         return true;
     }
 
-    // Heredoc: << 'EOF' or << EOF (but not inside apply_patch or python stdin)
+    // Heredoc: << 'EOF' or << EOF — block unless it's python stdin (not file writing).
     if (cmd.contains("<< '") || cmd.contains("<<'") || cmd.contains("<< \""))
-        && !cmd.contains("apply_patch")
         && !cmd.starts_with("python")
     {
         return true;
     }
 
     // Python file writing via -c: python -c "open('file', 'w').write(...)"
-    // This is too broad — skip for now, apply_patch enforcement handles the intent
+    // Too broad to detect reliably; rely on the write_file / edit_file guidance
+    // in the shell tool description.
 
     false
 }
@@ -699,7 +699,7 @@ mod tests {
         // cat reading is fine (no longer in ALLOWED_PREFIXES, but doesn't trigger any rules)
         assert!(ShellTool::validate_command("cat file.txt").is_ok());
 
-        // cat writing is blocked — use apply_patch instead
+        // cat writing is blocked — use write_file / edit_file instead
         assert!(ShellTool::validate_command("cat > file.py << 'EOF'\nrm -rf /\nEOF").is_err());
     }
 
@@ -730,15 +730,16 @@ mod tests {
         assert!(ShellTool::validate_command("cat > file.py << 'EOF'").is_err());
         assert!(ShellTool::validate_command("echo 'hello' > output.txt").is_err());
 
-        // Heredocs (not apply_patch) — but python heredocs are allowed (stdin, not file writing)
+        // Python heredocs are allowed (stdin, not file writing).
         assert!(ShellTool::validate_command("python << 'EOF'\nprint('hi')\nEOF").is_ok());
     }
 
+    /// apply_patch was removed. Any attempt to invoke it via shell heredoc
+    /// is now blocked by the generic heredoc rule — the agent should use
+    /// `write_file` / `edit_file` instead.
     #[test]
-    fn test_apply_patch_not_blocked() {
-        // apply_patch heredoc syntax should not be blocked by validation
-        // (even though it would fail at shell execution since apply_patch is now a separate tool)
-        assert!(ShellTool::validate_command("apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: test.py\n+hello\n*** End Patch\nEOF").is_ok());
+    fn test_apply_patch_shell_invocation_blocked() {
+        assert!(ShellTool::validate_command("apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: test.py\n+hello\n*** End Patch\nEOF").is_err());
     }
 
     #[test]
