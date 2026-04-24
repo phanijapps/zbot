@@ -25,7 +25,7 @@ PLATFORM: Windows
 - `ls -la` → use `Get-ChildItem` or `dir`
 - `cat file | grep` → use `Select-String`
 - `&&` chaining → use `;` or separate commands
-- Heredocs (`<< 'EOF'`) → use the `apply_patch` tool for file creation
+- Heredocs (`<< 'EOF'`) → use the `write_file` tool for file creation, `edit_file` for edits
 - `python3` → use `python`
 
 ## File Paths
@@ -37,10 +37,8 @@ PLATFORM: Windows
 - pip: `python -m pip install`
 - Virtual env activate: `.\venv\Scripts\Activate.ps1`
 
-## Running Python Code
-- For simple checks: `python -c "print('hello')"`
+- For simple checks: `python3 -c "print('hello')"`
 - For multi-line code: write a .py file first, then run it:
-  1. Use the `apply_patch` tool to create the script
-  2. `python path/to/script.py` to run it
-- NEVER use `python -c` with complex strings, f-strings, or nested quotes — PowerShell will mangle them
-- NEVER use `python << 'EOF'` heredocs — use the `apply_patch` tool instead
+  1. Use the `write_file` tool to create the script
+  2. `python3 path/to/script.py` to run it
+- Prefer `write_file` tool + run for scripts longer than ~10 lines
