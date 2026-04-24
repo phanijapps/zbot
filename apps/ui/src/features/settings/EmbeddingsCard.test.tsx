@@ -9,6 +9,7 @@ import type {
   CuratedModel,
   EmbeddingsHealth,
   EmbeddingConfig,
+  OllamaModelsResponse,
 } from "@/services/transport";
 
 // ---------------------------------------------------------------------------
@@ -17,6 +18,7 @@ import type {
 
 const mockGetHealth = vi.fn();
 const mockGetModels = vi.fn();
+const mockGetOllamaModels = vi.fn();
 const mockConfigure = vi.fn();
 
 vi.mock("@/services/transport", async () => {
@@ -26,6 +28,7 @@ vi.mock("@/services/transport", async () => {
     getTransport: async () => ({
       getEmbeddingsHealth: mockGetHealth,
       getEmbeddingsModels: mockGetModels,
+      getOllamaEmbeddingModels: mockGetOllamaModels,
       configureEmbeddings: mockConfigure,
     }),
   };
@@ -48,64 +51,81 @@ const INTERNAL_HEALTH: EmbeddingsHealth = {
 };
 
 const MODELS: CuratedModel[] = [
-  { tag: "nomic-embed-text", dim: 768, size_mb: 274, mteb: 62.4 },
-  { tag: "bge-small-v1", dim: 384, size_mb: 130, mteb: 62.1 },
-  { tag: "mxbai-embed-large", dim: 1024, size_mb: 670, mteb: 64.7 },
+  { tag: "nomic-embed-text", dim: 768, size_mb: 274, mteb: 62 },
+  { tag: "bge-small-v1", dim: 384, size_mb: 130, mteb: 62 },
+  { tag: "mxbai-embed-large", dim: 1024, size_mb: 670, mteb: 65 },
 ];
+
+const UNREACHABLE_OLLAMA: OllamaModelsResponse = {
+  all: [],
+  likely_embedding: [],
+  reachable: false,
+};
 
 beforeEach(() => {
   mockGetHealth.mockReset();
   mockGetModels.mockReset();
+  mockGetOllamaModels.mockReset();
   mockConfigure.mockReset();
   mockGetHealth.mockResolvedValue({ success: true, data: INTERNAL_HEALTH });
   mockGetModels.mockResolvedValue({ success: true, data: MODELS });
+  mockGetOllamaModels.mockResolvedValue({ success: true, data: UNREACHABLE_OLLAMA });
   mockConfigure.mockResolvedValue({ success: true, data: INTERNAL_HEALTH });
 });
 
 describe("EmbeddingsCard", () => {
   it("renders internal default state after loading health", async () => {
     render(<EmbeddingsCard />);
-    await waitFor(() => expect(screen.getByRole("checkbox", { name: /use internal embedding/i })).toBeInTheDocument());
-    const toggleInput = screen.getByRole("checkbox", { name: /use internal embedding/i }) as HTMLInputElement;
-    expect(toggleInput.checked).toBe(true);
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: /use internal embedding/i })).toBeInTheDocument(),
+    );
+    const toggle = screen.getByRole("checkbox", { name: /use internal embedding/i }) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
     expect(screen.getByTestId("embeddings-status-footer").textContent).toMatch(/internal/);
     expect(screen.getByTestId("embeddings-status-footer").textContent).toMatch(/384d/);
     expect(screen.getByTestId("embeddings-status-footer").textContent).toMatch(/100 indexed/);
   });
 
-  it("reveals Ollama subform when internal toggle is disabled", async () => {
+  it("reveals Ollama subform with URL, model, dimensions fields when internal is off", async () => {
     render(<EmbeddingsCard />);
     await waitFor(() => screen.getByRole("checkbox", { name: /use internal embedding/i }));
-    const toggleInput = screen.getByRole("checkbox", { name: /use internal embedding/i }) as HTMLInputElement;
-    fireEvent.click(toggleInput);
+    const toggle = screen.getByRole("checkbox", { name: /use internal embedding/i }) as HTMLInputElement;
+    fireEvent.click(toggle);
     expect(screen.getByLabelText(/ollama base url/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^model$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^dimensions$/i)).toBeInTheDocument();
   });
 
-  it("shows 'no reindex' suffix for models with matching dim", async () => {
+  it("auto-fills dimensions when the typed model matches a curated entry", async () => {
     render(<EmbeddingsCard />);
     await waitFor(() => screen.getByRole("checkbox", { name: /use internal embedding/i }));
-    const toggleInput = screen.getByRole("checkbox", { name: /use internal embedding/i }) as HTMLInputElement;
-    fireEvent.click(toggleInput);
-    const select = screen.getByLabelText(/^model$/i) as HTMLSelectElement;
-    const options = Array.from(select.options).map((o) => o.textContent);
-    expect(options.some((t) => t?.includes("bge-small-v1") && t?.includes("no reindex"))).toBe(true);
-    expect(options.some((t) => t?.includes("nomic-embed-text") && t?.includes("no reindex"))).toBe(false);
+    const toggle = screen.getByRole("checkbox", { name: /use internal embedding/i }) as HTMLInputElement;
+    fireEvent.click(toggle);
+
+    const modelInput = screen.getByLabelText(/^model$/i) as HTMLInputElement;
+    const dimInput = screen.getByLabelText(/^dimensions$/i) as HTMLInputElement;
+
+    fireEvent.change(modelInput, { target: { value: "nomic-embed-text" } });
+    expect(dimInput.value).toBe("768");
+
+    fireEvent.change(modelInput, { target: { value: "mxbai-embed-large" } });
+    expect(dimInput.value).toBe("1024");
   });
 
-  it("shows warning with estimated time when dim differs", async () => {
+  it("leaves dimensions editable for custom (non-curated) models", async () => {
     render(<EmbeddingsCard />);
     await waitFor(() => screen.getByRole("checkbox", { name: /use internal embedding/i }));
-    const toggleInput = screen.getByRole("checkbox", { name: /use internal embedding/i }) as HTMLInputElement;
-    fireEvent.click(toggleInput);
-    const select = screen.getByLabelText(/^model$/i) as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "nomic-embed-text" } });
-    const warning = await screen.findByTestId("emb-warning");
-    expect(warning.textContent).toMatch(/nomic-embed-text/);
-    expect(warning.textContent).toMatch(/~274MB/);
-    expect(warning.textContent).toMatch(/reindex 100 embeddings/);
-    // 100 * 0.4 = 40s for ollama target
-    expect(warning.textContent).toMatch(/~40s/);
+    const toggle = screen.getByRole("checkbox", { name: /use internal embedding/i }) as HTMLInputElement;
+    fireEvent.click(toggle);
+
+    const modelInput = screen.getByLabelText(/^model$/i) as HTMLInputElement;
+    const dimInput = screen.getByLabelText(/^dimensions$/i) as HTMLInputElement;
+
+    fireEvent.change(modelInput, { target: { value: "my-custom-embedder" } });
+    // Didn't match curated — dim not auto-filled.
+    fireEvent.change(dimInput, { target: { value: "512" } });
+    expect(dimInput.value).toBe("512");
+    expect(screen.getByText(/custom model — dimensions not auto-filled/i)).toBeInTheDocument();
   });
 
   it("disables Save & Switch when form matches current health state", async () => {
@@ -115,13 +135,14 @@ describe("EmbeddingsCard", () => {
     expect(save).toBeDisabled();
   });
 
-  it("opens progress modal with form contents on submit", async () => {
+  it("submits the new wire-shape { internal, ollama: {url, model, dimensions} } on save", async () => {
     render(<EmbeddingsCard />);
     await waitFor(() => screen.getByRole("checkbox", { name: /use internal embedding/i }));
-    const toggleInput = screen.getByRole("checkbox", { name: /use internal embedding/i }) as HTMLInputElement;
-    fireEvent.click(toggleInput);
-    const select = screen.getByLabelText(/^model$/i) as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "nomic-embed-text" } });
+    const toggle = screen.getByRole("checkbox", { name: /use internal embedding/i }) as HTMLInputElement;
+    fireEvent.click(toggle);
+
+    const modelInput = screen.getByLabelText(/^model$/i) as HTMLInputElement;
+    fireEvent.change(modelInput, { target: { value: "nomic-embed-text" } });
 
     const save = screen.getByRole("button", { name: /save & switch/i });
     expect(save).not.toBeDisabled();
@@ -129,10 +150,9 @@ describe("EmbeddingsCard", () => {
 
     const modal = await screen.findByTestId("progress-modal-stub");
     const parsed = JSON.parse(modal.textContent!) as EmbeddingConfig;
-    expect(parsed.backend).toBe("ollama");
-    expect(parsed.dimensions).toBe(768);
+    expect(parsed.internal).toBe(false);
+    expect(parsed.ollama?.url).toBe("http://localhost:11434");
     expect(parsed.ollama?.model).toBe("nomic-embed-text");
-    expect(parsed.ollama?.base_url).toBe("http://localhost:11434");
+    expect(parsed.ollama?.dimensions).toBe(768);
   });
 });
-

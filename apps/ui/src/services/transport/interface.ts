@@ -82,6 +82,7 @@ import type {
   CuratedModel,
   EmbeddingConfig,
   ConfigureProgressEvent,
+  OllamaModelsResponse,
 } from "./types";
 
 // ============================================================================
@@ -542,6 +543,15 @@ export interface Transport {
 
   /** Fetch curated Ollama embedding model list */
   getEmbeddingsModels(): Promise<TransportResult<CuratedModel[]>>;
+
+  /**
+   * Query the user's running Ollama instance for its actual model list.
+   * Soft-fails to `{ reachable: false, all: [], likely_embedding: [] }`
+   * when the URL is wrong or Ollama isn't running.
+   */
+  getOllamaEmbeddingModels(
+    baseUrl?: string,
+  ): Promise<TransportResult<OllamaModelsResponse>>;
 
   /**
    * Configure (switch) embedding backend. Streams SSE progress events

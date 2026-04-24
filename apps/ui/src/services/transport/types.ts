@@ -1121,9 +1121,27 @@ export interface CuratedModel {
 }
 
 export interface EmbeddingConfig {
-  backend: EmbeddingsBackend;
-  dimensions: number;
-  ollama?: { base_url: string; model: string };
+  /**
+   * `true` selects the built-in BGE-small-en-v1.5 (384-d). `false` selects
+   * the Ollama configuration below. Wire shape matches `config/settings.json`.
+   */
+  internal: boolean;
+  /**
+   * Ollama connection + model. Preserved across `internal` toggles so
+   * flipping back doesn't force the user to retype the URL and model.
+   * Required when `internal: false`.
+   */
+  ollama?: { url: string; model: string; dimensions: number };
+}
+
+/** Response from GET /api/embeddings/ollama-models. */
+export interface OllamaModelsResponse {
+  /** Every model the user's Ollama instance currently has. */
+  all: string[];
+  /** Subset of `all` that looks like an embedding model (substring heuristic). */
+  likely_embedding: string[];
+  /** `false` when the URL was unreachable — UI should fall back to curated. */
+  reachable: boolean;
 }
 
 export type ConfigureProgressEvent =
