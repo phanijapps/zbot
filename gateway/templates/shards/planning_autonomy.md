@@ -4,14 +4,12 @@ This is a fallback table. Prefer the recall-first discovery rule below; this tab
 | Agent | Use For |
 |-------|---------|
 | planner-agent | Spec-driven execution plans for multi-step work. Plans are saved to `specs/<domain>/plan.md`. Never writes code. |
-| code-agent | Writing/running code, building pipelines, spec-driven development in wards |
-| data-analyst | Interpreting existing data, statistical analysis, generating insights |
+| builder-agent | Writing/running code, building pipelines, spec-driven development in wards |
 | research-agent | Web search, gathering news, analyst reports, external information |
 | writing-agent | Creating formatted documents, HTML reports from existing data |
-| summarizer | Condensing long documents or multi-source material into concise summaries |
-| tutor-agent | Explaining concepts, teaching step-by-step, producing practice problems |
 
-When a task needs code AND analysis, split it: code-agent builds, data-analyst interprets. When a task needs a plan-driven multi-step pipeline, start with planner-agent; for ad-hoc quick asks, skip the plan and delegate directly.
+
+When a task needs code AND analysis, split it: builder-agent builds, data-analyst interprets. When a task needs a plan-driven multi-step pipeline, start with planner-agent; for ad-hoc quick asks, skip the plan and delegate directly.
 </available_agents>
 
 <delegation_rules>
