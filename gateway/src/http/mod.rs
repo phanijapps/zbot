@@ -34,19 +34,31 @@ mod webhooks;
 
 use crate::config::GatewayConfig;
 use crate::state::AppState;
+use crate::websocket::{axum_ws_upgrade_handler, WebSocketHandler};
 use axum::{
     extract::DefaultBodyLimit,
     routing::{delete, get, post, put},
-    Router,
+    Extension, Router,
 };
 use std::path::PathBuf;
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
 /// Create the HTTP router with all endpoints.
-pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
+///
+/// `ws_handler` is threaded in via an Axum [`Extension`] so the `/ws`
+/// WebSocket-upgrade route can reach the same session/subscription
+/// state the legacy 18790 listener uses. Running both on one port lets
+/// firewalled mobile clients and simple reverse proxies work without
+/// an extra hole for the WS protocol.
+pub fn create_http_router(
+    config: GatewayConfig,
+    state: AppState,
+    ws_handler: Arc<WebSocketHandler>,
+) -> Router {
     let cors = if config.cors_enabled {
         CorsLayer::new()
             .allow_origin(Any)
@@ -343,5 +355,14 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         }
     }
 
-    router.layer(cors).layer(TraceLayer::new_for_http())
+    // Unified WebSocket upgrade on the same port as HTTP. Clients connect
+    // to `ws://host:<http_port>/ws`. The Extension layer makes the shared
+    // session registry / subscription manager / runtime available to the
+    // upgrade handler — same state the legacy listener uses.
+    router = router.route("/ws", get(axum_ws_upgrade_handler));
+
+    router
+        .layer(Extension(ws_handler))
+        .layer(cors)
+        .layer(TraceLayer::new_for_http())
 }

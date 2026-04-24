@@ -49,6 +49,12 @@ impl WebSocketHandler {
         self.sessions.clone()
     }
 
+    /// Get the runtime service. Exposed so the Axum-path handler can
+    /// dispatch incoming client messages through the shared forwarder.
+    pub fn runtime(&self) -> Arc<RuntimeService> {
+        self.runtime.clone()
+    }
+
     /// Run the WebSocket server.
     pub async fn run(&self, addr: &str, mut shutdown: broadcast::Receiver<()>) -> Result<()> {
         let listener = TcpListener::bind(addr)
@@ -320,6 +326,19 @@ async fn handle_connection(
     info!("Session {} disconnected", session_id);
 
     Ok(())
+}
+
+/// Public alias for the Axum-path handler so it can dispatch a parsed
+/// [`ClientMessage`] through the shared dispatcher without reimplementing
+/// the per-variant routing.
+pub(super) async fn forward_client_message(
+    session_id: &str,
+    msg: ClientMessage,
+    sessions: &SessionRegistry,
+    runtime: &RuntimeService,
+    subscriptions: Arc<SubscriptionManager>,
+) -> Result<()> {
+    handle_client_message(session_id, msg, sessions, runtime, subscriptions).await
 }
 
 /// Handle a client message.

@@ -18,7 +18,7 @@ use std::sync::Arc;
 use axum_test::TestServer;
 use execution_state::StateService;
 use gateway::database::DatabaseManager;
-use gateway::{http::create_http_router, AppState, GatewayConfig};
+use gateway::{http::create_http_router, websocket::WebSocketHandler, AppState, GatewayConfig};
 use gateway_database::{
     vector_index::VectorIndex, EpisodeRepository, ProcedureRepository, SqliteVecIndex,
     WardWikiRepository,
@@ -44,7 +44,11 @@ pub fn make_state() -> (TempDir, AppState) {
 /// want this triplet so they can seed via `state` and call via `server`.
 pub fn setup() -> (TestServer, TempDir, AppState) {
     let (dir, state) = make_state();
-    let router = create_http_router(GatewayConfig::default(), state.clone());
+    let ws_handler = Arc::new(WebSocketHandler::new(
+        state.event_bus.clone(),
+        state.runtime.clone(),
+    ));
+    let router = create_http_router(GatewayConfig::default(), state.clone(), ws_handler);
     let server = TestServer::new(router).expect("test server");
     (server, dir, state)
 }
@@ -54,7 +58,11 @@ pub fn setup() -> (TestServer, TempDir, AppState) {
 pub fn setup_with_state_service() -> (TestServer, Arc<StateService<DatabaseManager>>, TempDir) {
     let (dir, state) = make_state();
     let state_service = state.state_service.clone();
-    let router = create_http_router(GatewayConfig::default(), state);
+    let ws_handler = Arc::new(WebSocketHandler::new(
+        state.event_bus.clone(),
+        state.runtime.clone(),
+    ));
+    let router = create_http_router(GatewayConfig::default(), state, ws_handler);
     let server = TestServer::new(router).expect("test server");
     (server, state_service, dir)
 }
