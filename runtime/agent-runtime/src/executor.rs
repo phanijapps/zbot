@@ -1818,10 +1818,10 @@ impl ProgressTracker {
         }
 
         // Tool diversity scoring via rolling window
-        // Only track FAILED calls for diversity scoring. Subagents with 4 tools
-        // (shell, apply_patch, load_skill, respond) naturally have low diversity
-        // ratios even when productive. Penalizing low diversity on successful
-        // calls kills productive ralph.py workflows.
+        // Only track FAILED calls for diversity scoring. Subagents with a
+        // narrow toolset (shell, write_file, load_skill, respond) naturally
+        // have low diversity ratios even when productive. Penalizing low
+        // diversity on successful calls kills productive ralph.py workflows.
         if !succeeded {
             self.tool_name_window.push_back(name.to_string());
             if self.tool_name_window.len() > 20 {
@@ -3052,7 +3052,7 @@ mod progress_tracker_tests {
         let mut tracker = ProgressTracker::new(config.max_extensions);
 
         // Simulate a productive ralph.py workflow:
-        // shell(ralph.py next) -> apply_patch(create file) -> shell(verify) -> shell(ralph.py complete)
+        // shell(ralph.py next) -> write_file(create file) -> shell(verify) -> shell(ralph.py complete)
         // All successful — score should stay positive
         for i in 0..5 {
             tracker.record_tool_call(
@@ -3061,8 +3061,8 @@ mod progress_tracker_tests {
                 true,
             );
             tracker.record_tool_call(
-                "apply_patch",
-                &json!({"file": format!("core/mod{}.py", i)}),
+                "write_file",
+                &json!({"path": format!("core/mod{}.py", i)}),
                 true,
             );
             tracker.record_tool_call(
@@ -3117,7 +3117,7 @@ mod progress_tracker_tests {
         for i in 0..10 {
             let succeeded = i % 5 != 3; // fail on iteration 3 and 8
             tracker.record_tool_call(
-                if i % 2 == 0 { "shell" } else { "apply_patch" },
+                if i % 2 == 0 { "shell" } else { "write_file" },
                 &json!({"arg": format!("call_{}", i)}),
                 succeeded,
             );

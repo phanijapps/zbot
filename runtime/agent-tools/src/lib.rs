@@ -13,7 +13,6 @@ pub mod replay;
 mod tools;
 
 pub use tools::{
-    ApplyPatchTool,
     EditFileTool,
     // Knowledge graph query types
     EntityInfo,
