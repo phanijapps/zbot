@@ -64,12 +64,31 @@ impl DistillationRepository {
         Self { db }
     }
 
-    /// Insert a new distillation run record.
+    /// Insert or refresh a distillation run record.
+    ///
+    /// `distillation_runs` has a `UNIQUE(session_id)` constraint — when
+    /// distillation re-fires for the same session (both the initial and
+    /// the continuation completions trigger it), a plain INSERT fails.
+    /// On conflict we overwrite the row with the new attempt's state;
+    /// the caller's subsequent `update_success` / `update_retry` will
+    /// then advance that row through the lifecycle. Identity (`id`,
+    /// `session_id`) is preserved across retries so downstream queries
+    /// (e.g. `archiver.rs` joining on `session_id`) stay stable.
     pub fn insert(&self, run: &DistillationRun) -> Result<(), String> {
         self.db.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO distillation_runs (id, session_id, status, facts_extracted, entities_extracted, relationships_extracted, episode_created, error, retry_count, duration_ms, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                 ON CONFLICT(session_id) DO UPDATE SET
+                    status = excluded.status,
+                    facts_extracted = excluded.facts_extracted,
+                    entities_extracted = excluded.entities_extracted,
+                    relationships_extracted = excluded.relationships_extracted,
+                    episode_created = excluded.episode_created,
+                    error = excluded.error,
+                    retry_count = excluded.retry_count,
+                    duration_ms = excluded.duration_ms,
+                    created_at = excluded.created_at",
                 params![
                     run.id,
                     run.session_id,
@@ -331,6 +350,35 @@ mod tests {
         assert!(fetched.is_none());
     }
 
+    /// Regression: a second `insert` for the same session_id (re-firing
+    /// distillation on a continuation) must refresh the row in place
+    /// rather than fail with UNIQUE constraint. The `session_id` identity
+    /// is preserved; mutable fields reflect the latest attempt.
+    #[test]
+    fn insert_is_idempotent_by_session_id() {
+        let db = create_test_db();
+        let repo = DistillationRepository::new(db);
+
+        let first = make_run("sess-same", "failed");
+        repo.insert(&first).expect("first insert");
+
+        // Second attempt: different id, different state (the caller reset
+        // to "failed / Distillation in progress" each time record_pending
+        // fires). Must succeed.
+        let mut second = make_run("sess-same", "failed");
+        second.error = Some("Distillation in progress".to_string());
+        second.retry_count = 1;
+        repo.insert(&second)
+            .expect("second insert must upsert, not fail");
+
+        // Exactly one row by session.
+        let fetched = repo.get_by_session_id("sess-same").unwrap().unwrap();
+        assert_eq!(fetched.session_id, "sess-same");
+        // Mutable fields reflect the second insert.
+        assert_eq!(fetched.error.as_deref(), Some("Distillation in progress"));
+        assert_eq!(fetched.retry_count, 1);
+    }
+
     #[test]
     fn test_update_retry() {
         let db = create_test_db();
@@ -480,8 +528,13 @@ mod tests {
         assert_eq!(stats.total_episodes, 2);
     }
 
+    /// Previously asserted that a duplicate session_id was rejected.
+    /// After the upsert fix (`ON CONFLICT(session_id) DO UPDATE`), the
+    /// second insert overwrites the row instead — re-running distillation
+    /// on a continuation must not fail with UNIQUE constraint. Updated
+    /// to lock in the new semantics.
     #[test]
-    fn test_insert_duplicate_session_id_fails() {
+    fn test_insert_duplicate_session_id_overwrites() {
         let db = create_test_db();
         let repo = DistillationRepository::new(db);
 
@@ -489,7 +542,10 @@ mod tests {
         repo.insert(&run1).unwrap();
 
         let run2 = make_run("sess-dup", "success");
-        let result = repo.insert(&run2);
-        assert!(result.is_err(), "duplicate session_id should be rejected");
+        repo.insert(&run2)
+            .expect("upsert must replace the existing row, not fail");
+
+        let fetched = repo.get_by_session_id("sess-dup").unwrap().unwrap();
+        assert_eq!(fetched.status, "success");
     }
 }
