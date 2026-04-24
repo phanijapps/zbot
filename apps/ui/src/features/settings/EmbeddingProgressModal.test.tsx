@@ -41,9 +41,8 @@ vi.mock("@/services/transport", async () => {
 import { EmbeddingProgressModal } from "./EmbeddingProgressModal";
 
 const CONFIG: EmbeddingConfig = {
-  backend: "ollama",
-  dimensions: 768,
-  ollama: { base_url: "http://localhost:11434", model: "nomic-embed-text" },
+  internal: false,
+  ollama: { url: "http://localhost:11434", model: "nomic-embed-text", dimensions: 768 },
 };
 
 beforeEach(() => {

@@ -290,20 +290,55 @@ impl SettingsService {
     }
 
     /// Save settings to disk and update cache.
+    ///
+    /// Merges the typed `AppSettings` into the on-disk JSON object rather
+    /// than overwriting the file wholesale. Any top-level keys present on
+    /// disk but not modeled in `AppSettings` are preserved. This exists
+    /// because other services (notably `EmbeddingService::persist_settings`)
+    /// share the same file and write their own top-level sections — a
+    /// typed overwrite here would strip them silently on every save.
     pub fn save(&self, settings: &AppSettings) -> Result<(), String> {
-        // Ensure parent directory exists
-        if let Some(parent) = self.config_path().parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create config directory: {}", e))?;
+        let path = self.config_path();
+        let parent = path
+            .parent()
+            .ok_or_else(|| "settings.json has no parent directory".to_string())?;
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create config directory: {}", e))?;
+
+        // Load existing file as a free-form Value so unknown top-level
+        // keys survive the round-trip.
+        let mut merged: serde_json::Value = if path.exists() {
+            let text = fs::read_to_string(&path)
+                .map_err(|e| format!("Failed to read settings.json: {}", e))?;
+            serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+
+        let typed_value = serde_json::to_value(settings)
+            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+        if let (Some(merged_obj), Some(typed_obj)) =
+            (merged.as_object_mut(), typed_value.as_object())
+        {
+            for (key, value) in typed_obj {
+                merged_obj.insert(key.clone(), value.clone());
+            }
+        } else {
+            // On-disk file wasn't an object (corrupted / empty). Replace.
+            merged = typed_value;
         }
 
-        let content = serde_json::to_string_pretty(settings)
+        let content = serde_json::to_string_pretty(&merged)
             .map_err(|e| format!("Failed to serialize settings: {}", e))?;
 
-        fs::write(self.config_path(), content)
-            .map_err(|e| format!("Failed to write settings.json: {}", e))?;
+        // Atomic write: temp + rename. Prevents a crash mid-write from
+        // leaving a half-written settings.json, and keeps concurrent
+        // readers safe from torn content.
+        let tmp = parent.join("settings.json.tmp");
+        fs::write(&tmp, content.as_bytes())
+            .map_err(|e| format!("Failed to write settings.json tmp: {}", e))?;
+        fs::rename(&tmp, &path).map_err(|e| format!("Failed to rename settings.json: {}", e))?;
 
-        // Update cache
         if let Ok(mut cache) = self.cache.write() {
             *cache = Some(settings.clone());
         }
@@ -497,5 +532,63 @@ mod tests {
         let loaded = service.get_execution_settings().unwrap();
         assert!(loaded.distillation.provider_id.is_none());
         assert!(loaded.distillation.model.is_none());
+    }
+
+    /// Regression: saving typed AppSettings must preserve top-level keys
+    /// that the typed struct doesn't model. The `embeddings` section is
+    /// written by EmbeddingService; other services must not strip it.
+    #[test]
+    fn save_preserves_unknown_top_level_keys() {
+        let dir = tempdir().unwrap();
+        let service = SettingsService::new_legacy(dir.path().to_path_buf());
+
+        let initial_json = r#"{
+  "tools": { "python": false, "webFetch": false },
+  "embeddings": {
+    "backend": "ollama",
+    "dimensions": 1024,
+    "ollama": { "base_url": "http://localhost:11434", "model": "snowflake-arctic-embed" }
+  },
+  "thirdParty": { "anything": "preserved" }
+}"#;
+        let config_dir = dir.path().join("config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(config_dir.join("settings.json"), initial_json).unwrap();
+
+        // Save via typed API — this is what update_tool_settings, the
+        // wizard, etc. call. Before the fix this wiped the file wholesale.
+        service.invalidate_cache();
+        let mut settings = service.load().unwrap();
+        settings.tools.python = true;
+        service.save(&settings).unwrap();
+
+        // Reread raw so we can assert unknown keys survived.
+        let raw = fs::read_to_string(config_dir.join("settings.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            parsed["embeddings"]["backend"].as_str(),
+            Some("ollama"),
+            "embeddings.backend must survive typed save"
+        );
+        assert_eq!(
+            parsed["embeddings"]["dimensions"].as_u64(),
+            Some(1024),
+            "embeddings.dimensions must survive typed save"
+        );
+        assert_eq!(
+            parsed["embeddings"]["ollama"]["model"].as_str(),
+            Some("snowflake-arctic-embed"),
+            "embeddings.ollama.model must survive typed save"
+        );
+        assert_eq!(
+            parsed["thirdParty"]["anything"].as_str(),
+            Some("preserved"),
+            "arbitrary unknown keys must survive typed save"
+        );
+        assert_eq!(
+            parsed["tools"]["python"].as_bool(),
+            Some(true),
+            "typed field update must still take effect"
+        );
     }
 }

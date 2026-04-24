@@ -181,6 +181,10 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         // Embedding backend selection (Phase 1)
         .route("/api/embeddings/health", get(embeddings::get_health))
         .route("/api/embeddings/models", get(embeddings::list_models))
+        .route(
+            "/api/embeddings/ollama-models",
+            get(embeddings::list_ollama_models),
+        )
         .route("/api/embeddings/configure", post(embeddings::configure))
         // Memory endpoints
         .route("/api/memory", get(memory::list_all_memory_facts))
