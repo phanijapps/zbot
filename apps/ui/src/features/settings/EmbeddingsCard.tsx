@@ -157,7 +157,7 @@ export function EmbeddingsCard() {
       return;
     }
     let cancelled = false;
-    const handle = window.setTimeout(async () => {
+    const handle = globalThis.setTimeout(async () => {
       const transport = await getTransport();
       const res = await transport.getOllamaEmbeddingModels(url);
       if (!cancelled && res.success && res.data) {
@@ -166,7 +166,7 @@ export function EmbeddingsCard() {
     }, 300);
     return () => {
       cancelled = true;
-      window.clearTimeout(handle);
+      globalThis.clearTimeout(handle);
     };
   }, [form.useInternal, form.baseUrl]);
 

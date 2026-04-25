@@ -27,9 +27,9 @@ export function SessionsDrawer({ open, onClose, ...listProps }: SessionsDrawerPr
         className="sessions-drawer__backdrop"
         onClick={onClose}
       />
-      <aside
+      <dialog
+        open
         className="sessions-drawer"
-        role="dialog"
         aria-label="Research sessions"
       >
         <div className="sessions-drawer__header">
@@ -45,7 +45,7 @@ export function SessionsDrawer({ open, onClose, ...listProps }: SessionsDrawerPr
           </button>
         </div>
         <SessionsList {...listProps} renderDensity="expanded" />
-      </aside>
+      </dialog>
     </>
   );
 }

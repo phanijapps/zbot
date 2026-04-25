@@ -23,6 +23,103 @@ fn graph_to_rusqlite(e: GraphError) -> rusqlite::Error {
     }
 }
 
+/// Tuple shape returned by the entity-row `parse_entity` closure used by
+/// `list_entities` / `find_entities_by_*`. Centralized so the row-shaped
+/// result can be passed to `build_entity_from_row` without re-listing fields.
+type EntityRow = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    i64,
+);
+
+/// Convert an entity-shaped row tuple into a domain `Entity`. Extracted so
+/// per-row construction does not nest inside the SQL-building functions and
+/// keeps their cognitive complexity below the threshold.
+fn build_entity_from_row(row: EntityRow) -> Entity {
+    let (
+        id,
+        agent_id,
+        entity_type_str,
+        name,
+        properties_json,
+        first_seen_at,
+        last_seen_at,
+        mention_count,
+    ) = row;
+    let entity_type = EntityType::from_str(&entity_type_str);
+    let properties = properties_json
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default();
+    Entity {
+        id,
+        agent_id,
+        entity_type,
+        name,
+        properties,
+        first_seen_at: chrono::DateTime::parse_from_rfc3339(&first_seen_at)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now()),
+        last_seen_at: chrono::DateTime::parse_from_rfc3339(&last_seen_at)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now()),
+        mention_count,
+        name_embedding: None,
+    }
+}
+
+/// Tuple shape returned by the relationship-row `parse_relationship` closure
+/// used by `get_relationships` / `list_relationships` / `list_all_relationships`.
+type RelationshipRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    i64,
+);
+
+/// Convert a relationship-shaped row tuple into a domain `Relationship`.
+fn build_relationship_from_row(row: RelationshipRow) -> Relationship {
+    let (
+        id,
+        agent_id,
+        source_entity_id,
+        target_entity_id,
+        rel_type_str,
+        properties_json,
+        first_seen_at,
+        last_seen_at,
+        mention_count,
+    ) = row;
+    let relationship_type = RelationshipType::from_str(&rel_type_str);
+    let properties = properties_json
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default();
+    Relationship {
+        id,
+        agent_id,
+        source_entity_id,
+        target_entity_id,
+        relationship_type,
+        properties,
+        first_seen_at: chrono::DateTime::parse_from_rfc3339(&first_seen_at)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now()),
+        last_seen_at: chrono::DateTime::parse_from_rfc3339(&last_seen_at)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now()),
+        mention_count,
+    }
+}
+
 /// SQLite-backed storage for the knowledge graph, sharing the pooled
 /// `KnowledgeDatabase` connection for `knowledge.db` (schema v22).
 pub struct GraphStorage {
@@ -167,43 +264,9 @@ impl GraphStorage {
             })
             .map_err(GraphError::Database)?;
 
-        let mut relationships = Vec::new();
-        for row in rows {
-            let (
-                id,
-                agent_id,
-                source_entity_id,
-                target_entity_id,
-                rel_type_str,
-                properties_json,
-                first_seen_at,
-                last_seen_at,
-                mention_count,
-            ) = row?;
-
-            let relationship_type = RelationshipType::from_str(&rel_type_str);
-            let properties = if let Some(json) = properties_json {
-                serde_json::from_str(&json).unwrap_or_default()
-            } else {
-                Default::default()
-            };
-
-            relationships.push(Relationship {
-                id,
-                agent_id,
-                source_entity_id,
-                target_entity_id,
-                relationship_type,
-                properties,
-                first_seen_at: chrono::DateTime::parse_from_rfc3339(&first_seen_at)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .unwrap_or_else(|_| chrono::Utc::now()),
-                last_seen_at: chrono::DateTime::parse_from_rfc3339(&last_seen_at)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .unwrap_or_else(|_| chrono::Utc::now()),
-                mention_count,
-            });
-        }
+        let relationships = rows
+            .map(|row| row.map(build_relationship_from_row))
+            .collect::<Result<Vec<Relationship>, _>>()?;
 
         Ok(relationships)
                 })()
@@ -564,42 +627,9 @@ impl GraphStorage {
                 .map_err(GraphError::Database)?
         };
 
-        let mut entities = Vec::new();
-        for row_result in rows {
-            let (
-                id,
-                agent_id,
-                entity_type_str,
-                name,
-                properties_json,
-                first_seen_at,
-                last_seen_at,
-                mention_count,
-            ) = row_result?;
-
-            let entity_type = EntityType::from_str(&entity_type_str);
-            let properties = if let Some(json) = properties_json {
-                serde_json::from_str(&json).unwrap_or_default()
-            } else {
-                Default::default()
-            };
-
-            entities.push(Entity {
-                id,
-                agent_id,
-                entity_type,
-                name,
-                properties,
-                first_seen_at: chrono::DateTime::parse_from_rfc3339(&first_seen_at)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .unwrap_or_else(|_| chrono::Utc::now()),
-                last_seen_at: chrono::DateTime::parse_from_rfc3339(&last_seen_at)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .unwrap_or_else(|_| chrono::Utc::now()),
-                mention_count,
-                name_embedding: None,
-            });
-        }
+        let entities = rows
+            .map(|row_result| row_result.map(build_entity_from_row))
+            .collect::<Result<Vec<Entity>, _>>()?;
 
         Ok(entities)
                 })()
@@ -666,43 +696,9 @@ impl GraphStorage {
             .map_err(GraphError::Database)?
         };
 
-        let mut relationships = Vec::new();
-        for row_result in rows {
-            let (
-                id,
-                agent_id,
-                source_entity_id,
-                target_entity_id,
-                rel_type_str,
-                properties_json,
-                first_seen_at,
-                last_seen_at,
-                mention_count,
-            ) = row_result?;
-
-            let relationship_type = RelationshipType::from_str(&rel_type_str);
-            let properties = if let Some(json) = properties_json {
-                serde_json::from_str(&json).unwrap_or_default()
-            } else {
-                Default::default()
-            };
-
-            relationships.push(Relationship {
-                id,
-                agent_id,
-                source_entity_id,
-                target_entity_id,
-                relationship_type,
-                properties,
-                first_seen_at: chrono::DateTime::parse_from_rfc3339(&first_seen_at)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .unwrap_or_else(|_| chrono::Utc::now()),
-                last_seen_at: chrono::DateTime::parse_from_rfc3339(&last_seen_at)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .unwrap_or_else(|_| chrono::Utc::now()),
-                mention_count,
-            });
-        }
+        let relationships = rows
+            .map(|row_result| row_result.map(build_relationship_from_row))
+            .collect::<Result<Vec<Relationship>, _>>()?;
 
         Ok(relationships)
                 })()
@@ -1111,43 +1107,9 @@ impl GraphStorage {
             })
             .map_err(GraphError::Database)?;
 
-        let mut relationships = Vec::new();
-        for row in rows {
-            let (
-                id,
-                agent_id,
-                source_entity_id,
-                target_entity_id,
-                rel_type_str,
-                properties_json,
-                first_seen_at,
-                last_seen_at,
-                mention_count,
-            ) = row?;
-
-            let relationship_type = RelationshipType::from_str(&rel_type_str);
-            let properties = if let Some(json) = properties_json {
-                serde_json::from_str(&json).unwrap_or_default()
-            } else {
-                Default::default()
-            };
-
-            relationships.push(Relationship {
-                id,
-                agent_id,
-                source_entity_id,
-                target_entity_id,
-                relationship_type,
-                properties,
-                first_seen_at: chrono::DateTime::parse_from_rfc3339(&first_seen_at)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .unwrap_or_else(|_| chrono::Utc::now()),
-                last_seen_at: chrono::DateTime::parse_from_rfc3339(&last_seen_at)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .unwrap_or_else(|_| chrono::Utc::now()),
-                mention_count,
-            });
-        }
+        let relationships = rows
+            .map(|row| row.map(build_relationship_from_row))
+            .collect::<Result<Vec<Relationship>, _>>()?;
 
         Ok(relationships)
                 })()
@@ -1221,42 +1183,9 @@ impl GraphStorage {
             .query_map(params_refs.as_slice(), parse_entity)
             .map_err(GraphError::Database)?;
 
-        let mut entities = Vec::new();
-        for row_result in rows {
-            let (
-                id,
-                agent_id,
-                entity_type_str,
-                name,
-                properties_json,
-                first_seen_at,
-                last_seen_at,
-                mention_count,
-            ) = row_result?;
-
-            let entity_type = EntityType::from_str(&entity_type_str);
-            let properties = if let Some(json) = properties_json {
-                serde_json::from_str(&json).unwrap_or_default()
-            } else {
-                Default::default()
-            };
-
-            entities.push(Entity {
-                id,
-                agent_id,
-                entity_type,
-                name,
-                properties,
-                first_seen_at: chrono::DateTime::parse_from_rfc3339(&first_seen_at)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .unwrap_or_else(|_| chrono::Utc::now()),
-                last_seen_at: chrono::DateTime::parse_from_rfc3339(&last_seen_at)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .unwrap_or_else(|_| chrono::Utc::now()),
-                mention_count,
-                name_embedding: None,
-            });
-        }
+        let entities = rows
+            .map(|row_result| row_result.map(build_entity_from_row))
+            .collect::<Result<Vec<Entity>, _>>()?;
 
         Ok(entities)
                 })()

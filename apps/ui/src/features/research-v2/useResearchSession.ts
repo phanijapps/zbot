@@ -140,8 +140,8 @@ function handleRootAgentCompleted(
 // --- Subscription refs ----------------------------------------------------
 
 interface SubscriptionRefs {
-  subscribedConvIdRef: React.MutableRefObject<string | null>;
-  unsubscribeRef: React.MutableRefObject<UnsubscribeFn | null>;
+  subscribedConvIdRef: React.RefObject<string | null>;
+  unsubscribeRef: React.RefObject<UnsubscribeFn | null>;
 }
 
 /** Idempotent — no-op when convId matches the currently-subscribed one. */

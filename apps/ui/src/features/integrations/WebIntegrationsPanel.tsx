@@ -321,7 +321,7 @@ export function WebIntegrationsPanel() {
       const args = argsInput.split(",").map((a) => a.trim()).filter(Boolean);
 
       const request: CreateMcpRequest = {
-        type: formData.type as CreateMcpRequest["type"],
+        type: formData.type,
         name: formData.name,
         description: formData.description || "",
         enabled: formData.enabled ?? true,

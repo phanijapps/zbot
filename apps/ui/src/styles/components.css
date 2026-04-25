@@ -4883,9 +4883,11 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   padding: var(--spacing-2) var(--spacing-3);
+  transition: border-color .15s ease, box-shadow .15s ease;
 }
 .memory-search:focus-within {
   border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.15);
 }
 .memory-search__icon {
   color: var(--color-muted-foreground);
@@ -4922,8 +4924,9 @@
   font-family: ui-monospace, "SF Mono", monospace;
 }
 .memory-search__mode button.is-active {
-  background: rgba(14, 165, 233, 0.2);
+  background: rgba(14, 165, 233, 0.22);
   color: var(--color-primary);
+  font-weight: 600;
 }
 
 /* Scope Chips — Command Deck */
@@ -4974,7 +4977,14 @@
   font-size: 0.875rem;
 }
 .memory-deck__head { padding: var(--spacing-3) var(--spacing-4) 0; border-bottom: 1px solid var(--color-border); }
-.memory-deck__crumb { font-family: ui-monospace, "SF Mono", monospace; font-size: 0.6875rem; color: var(--color-primary); letter-spacing: 0.04em; margin-bottom: var(--spacing-2); }
+.memory-deck__crumb {
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 0.8125rem;
+  color: var(--color-primary);
+  letter-spacing: 0.02em;
+  margin-bottom: var(--spacing-2);
+  font-weight: 600;
+}
 .memory-deck__summary { font-size: 0.75rem; color: var(--color-muted-foreground); max-width: 520px; line-height: 1.5; margin-bottom: var(--spacing-3); }
 .memory-deck__tabs { display: flex; gap: 0; align-items: center; }
 .memory-deck__tabs button {
@@ -4990,12 +5000,29 @@
   gap: var(--spacing-1);
 }
 .memory-deck__tabs button:hover { color: var(--color-foreground); }
-.memory-deck__tabs button.is-active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
-.memory-deck__tab-count { font-size: 0.625rem; color: var(--color-muted-foreground); font-family: ui-monospace, "SF Mono", monospace; }
+.memory-deck__tabs button.is-active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+  font-weight: 600;
+  border-bottom-width: 2.5px;
+}
+.memory-deck__tab-count {
+  font-size: 0.625rem;
+  color: var(--color-muted-foreground);
+  font-family: ui-monospace, "SF Mono", monospace;
+  background: rgba(148, 163, 184, 0.12);
+  padding: 0.0625rem 0.375rem;
+  border-radius: var(--radius-full);
+}
 .memory-deck__graph { margin-left: auto; font-size: 0.75rem; color: var(--color-muted-foreground); background: transparent; border: 0; cursor: pointer; padding: var(--spacing-2) var(--spacing-3); }
 .memory-deck__body { flex: 1; overflow-y: auto; padding: var(--spacing-3) var(--spacing-4); }
 .memory-list { display: flex; flex-direction: column; gap: var(--spacing-2); }
-.memory-list__group { display: flex; flex-direction: column; gap: var(--spacing-2); }
+.memory-list__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-bottom: var(--spacing-1);
+}
 .memory-list__label {
   display: flex;
   justify-content: space-between;
@@ -5006,7 +5033,7 @@
   margin: var(--spacing-2) 0 var(--spacing-1);
   padding-bottom: var(--spacing-1);
   border-bottom: 1px dashed var(--color-border);
-  font-weight: 500;
+  font-weight: 600;
 }
 .memory-list__group:first-child .memory-list__label { margin-top: 0; }
 .memory-list-simple { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--spacing-2); }
@@ -5052,15 +5079,19 @@
 .memory-write__btn kbd {
   font-family: ui-monospace, "SF Mono", monospace;
   font-size: 0.625rem;
-  color: var(--color-muted-foreground);
-  background: rgba(0, 0, 0, 0.2);
+  color: var(--color-foreground);
+  background: var(--color-background-elevated, var(--color-background-surface));
   padding: 0.0625rem 0.25rem;
   border-radius: 0.125rem;
+  border: 1px solid var(--color-border);
+  font-weight: 500;
+  min-width: 1.25rem;
+  text-align: center;
 }
 .memory-write__stats {
-  margin-top: auto;
+  margin-top: var(--spacing-2);
   border-top: 1px dashed var(--color-border);
-  padding-top: var(--spacing-2);
+  padding-top: var(--spacing-3);
   font-family: ui-monospace, "SF Mono", monospace;
   font-size: 0.6875rem;
   color: var(--color-muted-foreground);
@@ -5069,7 +5100,12 @@
   flex-direction: column;
   gap: var(--spacing-0-5);
 }
-.memory-write__ward { color: var(--color-primary); }
+.memory-write__ward {
+  color: var(--color-primary);
+  font-weight: 600;
+  font-size: 0.75rem;
+  margin-bottom: var(--spacing-1);
+}
 
 /* AddDrawer */
 .add-drawer {
@@ -5166,69 +5202,9 @@
   cursor: pointer;
 }
 
-/* Search focus glow */
-.memory-search { transition: border-color .15s ease, box-shadow .15s ease; }
-.memory-search:focus-within {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.15);
-}
-
-/* Mode pill active contrast bump */
-.memory-search__mode button.is-active {
-  background: rgba(14, 165, 233, 0.22);
-  color: var(--color-primary);
-  font-weight: 600;
-}
-
-/* Breadcrumb bump */
-.memory-deck__crumb {
-  font-size: 0.8125rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-/* Active tab — thicker underline, bolder label */
-.memory-deck__tabs button.is-active {
-  font-weight: 600;
-  border-bottom-width: 2.5px;
-}
-.memory-deck__tab-count {
-  font-family: ui-monospace, "SF Mono", monospace;
-  font-size: 0.625rem;
-  background: rgba(148, 163, 184, 0.12);
-  padding: 0.0625rem 0.375rem;
-  border-radius: var(--radius-full);
-  color: var(--color-muted-foreground);
-}
 .memory-deck__tabs button.is-active .memory-deck__tab-count {
   background: rgba(14, 165, 233, 0.18);
   color: var(--color-primary);
-}
-
-/* Group label spacing tune */
-.memory-list__group { margin-bottom: var(--spacing-1); }
-.memory-list__label { font-weight: 600; }
-
-/* WriteRail kbd polish */
-.memory-write__btn kbd {
-  border: 1px solid var(--color-border);
-  background: var(--color-background-elevated, var(--color-background-surface));
-  color: var(--color-foreground);
-  font-weight: 500;
-  min-width: 1.25rem;
-  text-align: center;
-}
-
-/* WriteRail stats separator + ward color */
-.memory-write__stats {
-  border-top: 1px dashed var(--color-border);
-  margin-top: var(--spacing-2);
-  padding-top: var(--spacing-3);
-}
-.memory-write__ward {
-  font-weight: 600;
-  font-size: 0.75rem;
-  margin-bottom: var(--spacing-1);
 }
 
 /* Search Results — Command Deck */

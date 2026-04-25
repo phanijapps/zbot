@@ -5,7 +5,7 @@
 //! into working memory so the LLM has relevant context at the right moment.
 
 use super::working_memory::WorkingMemory;
-use gateway_database::MemoryRepository;
+use gateway_database::{MemoryFact, MemoryRepository};
 use knowledge_graph::storage::GraphStorage;
 use regex::Regex;
 use std::sync::Arc;
@@ -58,6 +58,16 @@ pub struct MicroRecallContext {
 // Trigger detection (sync)
 // ---------------------------------------------------------------------------
 
+/// Parse `result` as JSON and return the first present field string from
+/// `field_keys`. Returns `None` if the JSON is invalid or none of the keys
+/// resolve to a string.
+fn first_json_string<'a>(result: &str, field_keys: &'a [&'a str]) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(result).ok()?;
+    field_keys
+        .iter()
+        .find_map(|k| value.get(*k).and_then(|v| v.as_str()).map(String::from))
+}
+
 /// Detect micro-recall triggers from a tool invocation result.
 ///
 /// This is intentionally synchronous — it only inspects the tool name/result
@@ -68,47 +78,29 @@ pub fn detect_triggers(
     error: Option<&str>,
     wm: &WorkingMemory,
 ) -> Vec<MicroRecallTrigger> {
-    let mut triggers = Vec::new();
-
-    // 1. Tool error trigger
     if let Some(err) = error {
-        triggers.push(MicroRecallTrigger::ToolError {
+        return vec![MicroRecallTrigger::ToolError {
             tool_name: tool_name.to_string(),
             error_msg: truncate_safe(err, 200),
-        });
-        return triggers; // Don't extract entities from error text
+        }];
     }
 
-    // 2. Pre-delegation trigger
+    let mut triggers = Vec::new();
+
     if tool_name == "delegate_to_agent" {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(result) {
-            if let Some(agent_id) = value
-                .get("agent_id")
-                .or(value.get("child_agent_id"))
-                .and_then(|v| v.as_str())
-            {
-                triggers.push(MicroRecallTrigger::PreDelegation {
-                    agent_id: agent_id.to_string(),
-                });
-            }
+        if let Some(agent_id) = first_json_string(result, &["agent_id", "child_agent_id"]) {
+            triggers.push(MicroRecallTrigger::PreDelegation { agent_id });
         }
     }
 
-    // 3. Ward entry trigger
     if is_ward_tool(tool_name) {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(result) {
-            if let Some(ward_id) = value.get("ward_id").and_then(|v| v.as_str()) {
-                triggers.push(MicroRecallTrigger::WardEntry {
-                    ward_id: ward_id.to_string(),
-                });
-            }
+        if let Some(ward_id) = first_json_string(result, &["ward_id"]) {
+            triggers.push(MicroRecallTrigger::WardEntry { ward_id });
         }
     }
 
-    // 4. Entity mention triggers (skip for respond tool)
     if tool_name != "respond" && tool_name != "set_session_title" {
-        let new_entities = extract_new_entities(result, wm);
-        for name in new_entities {
+        for name in extract_new_entities(result, wm) {
             triggers.push(MicroRecallTrigger::EntityMention { entity_name: name });
         }
     }
@@ -160,6 +152,29 @@ pub async fn execute_micro_recall(
 // Handler: PreDelegation
 // ---------------------------------------------------------------------------
 
+/// Push every correction fact in `result` into `wm` with optional filtering
+/// by `needle`. Logs and swallows errors with a `failure_label` debug line.
+fn push_corrections(
+    wm: &mut WorkingMemory,
+    result: Result<Vec<MemoryFact>, String>,
+    needle: Option<&str>,
+    failure_label: &str,
+) {
+    match result {
+        Ok(facts) => {
+            for fact in facts {
+                let matches_needle = needle
+                    .map(|n| fact.content.contains(n) || fact.key.contains(n))
+                    .unwrap_or(true);
+                if matches_needle {
+                    wm.add_correction(&truncate_safe(&fact.content, 150));
+                }
+            }
+        }
+        Err(e) => debug!("micro-recall: {failure_label} lookup failed: {e}"),
+    }
+}
+
 /// Look up corrections and procedures relevant to the target agent.
 async fn handle_pre_delegation(
     wm: &mut WorkingMemory,
@@ -167,32 +182,19 @@ async fn handle_pre_delegation(
     ctx: &MicroRecallContext,
     iteration: u32,
 ) {
-    // Load correction-category facts for the target agent
     if let Some(repo) = &ctx.memory_repo {
-        match repo.get_facts_by_category(agent_id, "correction", 5) {
-            Ok(facts) => {
-                for fact in facts {
-                    wm.add_correction(&truncate_safe(&fact.content, 150));
-                }
-            }
-            Err(e) => {
-                debug!("micro-recall: pre-delegation correction lookup failed: {e}");
-            }
-        }
-
-        // Also check the current agent's corrections that mention the target
-        match repo.get_facts_by_category(&ctx.agent_id, "correction", 10) {
-            Ok(facts) => {
-                for fact in facts {
-                    if fact.content.contains(agent_id) || fact.key.contains(agent_id) {
-                        wm.add_correction(&truncate_safe(&fact.content, 150));
-                    }
-                }
-            }
-            Err(e) => {
-                debug!("micro-recall: pre-delegation self-correction lookup failed: {e}");
-            }
-        }
+        push_corrections(
+            wm,
+            repo.get_facts_by_category(agent_id, "correction", 5),
+            None,
+            "pre-delegation correction",
+        );
+        push_corrections(
+            wm,
+            repo.get_facts_by_category(&ctx.agent_id, "correction", 10),
+            Some(agent_id),
+            "pre-delegation self-correction",
+        );
     }
 
     wm.add_discovery(

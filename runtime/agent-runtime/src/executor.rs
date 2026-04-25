@@ -3411,17 +3411,12 @@ mod compaction_tests {
         let compacted = compact_messages(messages);
 
         // Collect all tool_call_ids referenced by surviving assistant messages.
-        let mut referenced_ids: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        for msg in &compacted {
-            if msg.role == "assistant" {
-                if let Some(tcs) = &msg.tool_calls {
-                    for tc in tcs {
-                        referenced_ids.insert(tc.id.clone());
-                    }
-                }
-            }
-        }
+        let referenced_ids: std::collections::HashSet<String> = compacted
+            .iter()
+            .filter(|m| m.role == "assistant")
+            .filter_map(|m| m.tool_calls.as_ref())
+            .flat_map(|tcs| tcs.iter().map(|tc| tc.id.clone()))
+            .collect();
 
         // Every surviving tool message's tool_call_id MUST be referenced.
         for msg in &compacted {
