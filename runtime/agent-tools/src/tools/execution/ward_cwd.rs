@@ -1,8 +1,7 @@
 // ============================================================================
 // WARD WORKING-DIRECTORY RESOLVER
 // Shared helper used by `write_file` and `edit_file` to scope file operations
-// to the active ward. Previously lived in `apply_patch.rs`; pulled out when
-// `apply_patch` was removed so the file tools don't keep a dead module alive.
+// to the active ward.
 // ============================================================================
 
 use std::path::PathBuf;
