@@ -154,12 +154,16 @@ describe("useSessionsList — research drawer filter", () => {
   });
 
   it("maps wire status 'error' / 'completed' / 'paused' onto the SessionSummary status enum", async () => {
+    // The wire `SessionStatus` enum is narrower than the strings the
+    // hook accepts at runtime (it tolerates 'paused' and 'crashed' too).
+    // Cast through `as unknown` to feed the broader strings without
+    // tightening the SessionStatus type just for this test.
     listLogSessionsMock.mockResolvedValue({
       success: true,
       data: [
         row({ conversation_id: "s-running", status: "running" }),
         row({ conversation_id: "s-complete", status: "completed" }),
-        row({ conversation_id: "s-paused", status: "paused" }),
+        row({ conversation_id: "s-paused", status: "paused" as unknown as LogSession["status"] }),
         row({ conversation_id: "s-error", status: "error" }),
       ],
     });

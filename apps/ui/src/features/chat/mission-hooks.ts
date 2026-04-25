@@ -1440,3 +1440,32 @@ export function useRecentSessions(options: UseRecentSessionsOptions = {}) {
 
   return { sessions };
 }
+
+// ============================================================================
+// Test-only exports
+//
+// These handlers are internal — the production surface stays via the
+// dispatchers and `useMissionControl`. Re-exposed here as a single
+// namespace so unit tests can exercise each branch directly without
+// having to drive the whole hook. Do NOT import this from production
+// code; if you find yourself wanting to, promote the function to a
+// proper named export instead.
+// ============================================================================
+
+export const __testInternals = {
+  handleAgentStarted,
+  handleInvokeAccepted,
+  handleTokenEvent,
+  handleToolCallEvent,
+  handleToolResultEvent,
+  handleDelegationStarted,
+  handleDelegationCompleted,
+  handleDelegationError,
+  handleSessionTitleChanged,
+  handleIntentAnalysisStarted,
+  handleIntentAnalysisComplete,
+  handleErrorEvent,
+  handleSystemOrMessage,
+  parsePlanSteps,
+  parseIntentAnalysisFromState,
+};
