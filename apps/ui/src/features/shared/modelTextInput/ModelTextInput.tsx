@@ -39,7 +39,7 @@ export function ModelTextInput({
   // text so filtering works even when the parent hasn't re-rendered yet.
   const [inputValue, setInputValue] = useState(value);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const listRef = useRef<HTMLUListElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
   const listId = useId();
 
   // Keep inputValue in sync when the prop changes from outside (e.g. commit).
@@ -121,14 +121,14 @@ export function ModelTextInput({
         onKeyDown={handleKeyDown}
       />
       {open && filtered.length > 0 && (
-        <ul
+        <div
           id={listId}
           ref={listRef}
           role="listbox"
           className="model-text-input__list"
         >
           {filtered.map((s, i) => (
-            <li
+            <div
               key={s}
               id={`${listId}-opt-${i}`}
               role="option"
@@ -145,9 +145,9 @@ export function ModelTextInput({
               onMouseEnter={() => setHighlight(i)}
             >
               {s}
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
     </div>
   );

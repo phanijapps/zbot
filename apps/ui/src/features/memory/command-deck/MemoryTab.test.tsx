@@ -66,7 +66,7 @@ describe("MemoryTab — delete fact wiring", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true) as unknown as ReturnType<typeof vi.spyOn>;
     mockListWards.mockResolvedValue({
       success: true,
       data: [{ id: "auth-system", count: 1 }],

@@ -538,7 +538,7 @@ export function WebSettingsPanel() {
                         <p className="settings-hint">0 = unlimited</p>
                       </div>
                       <div>
-                        <label className="settings-field-label" aria-hidden="true">&nbsp;</label>
+                        <div className="settings-field-label" aria-hidden="true">&nbsp;</div>
                         <label className="settings-toggle-option" style={{ opacity: isSavingLogs ? 0.7 : 1, marginTop: 0 }} aria-label="Quiet Mode">
                           <input type="checkbox" checked={logSettings.suppressStdout}
                             onChange={() => handleLogChange({ suppressStdout: !logSettings.suppressStdout })}

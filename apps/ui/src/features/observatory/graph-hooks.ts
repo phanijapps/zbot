@@ -61,22 +61,29 @@ export interface GraphData {
 
 /**
  * Resolve the gateway base URL from the transport layer.
- * Falls back to the default if transport hasn't been initialised yet.
+ *
+ * Returns "" (empty string) for same-origin browser requests — the default
+ * transport config in a browser sets `httpUrl: ""` so `fetch("${base}/api/x")`
+ * becomes `fetch("/api/x")`, resolved against `window.location.origin`. That
+ * keeps the gateway port out of the wire URL so mobile clients hitting the
+ * daemon on its LAN address don't run into a port mismatch.
+ *
+ * The localhost fallback is reserved for non-browser callers (SSR, unit
+ * tests where window is undefined).
  */
 async function getBaseUrl(): Promise<string> {
   try {
-    // The transport stores the config; we reach through to its HTTP URL.
-    // getTransport() initialises with defaults if needed.
     const transport = await getTransport();
     // The HttpTransport exposes the base URL via its config.
-    // We cast to `any` because the internal `config` property isn't
-    // part of the public Transport interface.
+    // We cast because the internal `config` property isn't part of the
+    // public Transport interface.
     const cfg = (transport as unknown as { config?: { httpUrl: string } }).config;
-    if (cfg?.httpUrl) return cfg.httpUrl;
+    // Empty string is a valid same-origin signal — keep it as-is.
+    if (cfg && typeof cfg.httpUrl === "string") return cfg.httpUrl;
   } catch {
     // swallow
   }
-  return "http://localhost:18791";
+  return typeof window === "undefined" ? "http://localhost:18791" : "";
 }
 
 async function fetchJson<T>(path: string): Promise<T> {

@@ -11,7 +11,7 @@ function makeFact(overrides: Partial<MemoryFact> = {}): MemoryFact {
   return {
     id: "fact-1",
     agent_id: "agent:root",
-    scope: "global",
+    scope: "shared",
     category: "preference",
     key: "prefers-jwt",
     content: "User prefers JWT auth over sessions.",
@@ -27,7 +27,7 @@ describe("MemoryFactCard — row delete button", () => {
   let confirmSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true) as unknown as ReturnType<typeof vi.spyOn>;
   });
 
   afterEach(() => {

@@ -65,6 +65,15 @@ export default defineConfig({
         target: "http://localhost:18791",
         changeOrigin: true,
       },
+      // WebSocket upgrade — the transport layer now connects to
+      // `ws://<page-host>/ws` so the dev server must proxy it through to
+      // the daemon. Without this, mobile (and any non-localhost client)
+      // would try to open a WS against the Vite port and silently hang.
+      "/ws": {
+        target: "ws://localhost:18791",
+        ws: true,
+        changeOrigin: true,
+      },
     },
   },
 });

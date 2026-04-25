@@ -413,8 +413,8 @@ describe("<ResearchPage>", () => {
     };
     renderPage();
     expect(screen.getByRole("list", { name: /session artifacts/i })).toBeTruthy();
-    expect(screen.getByRole("listitem", { name: /Open artifact plan\.md/ })).toBeTruthy();
-    expect(screen.getByRole("listitem", { name: /Open artifact data\.csv/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Open artifact plan\.md/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Open artifact data\.csv/ })).toBeTruthy();
   });
 
   it("clicking a chip opens the slide-out for the matching artifact (cached path)", async () => {
@@ -437,7 +437,7 @@ describe("<ResearchPage>", () => {
       getFullArtifact: vi.fn().mockReturnValue(cached),
     };
     renderPage();
-    fireEvent.click(screen.getByRole("listitem", { name: /Open artifact plan\.md/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Open artifact plan\.md/ }));
     await waitFor(() => {
       expect(researchRef.current.getFullArtifact).toHaveBeenCalledWith("a1");
     });
@@ -468,7 +468,7 @@ describe("<ResearchPage>", () => {
       getFullArtifact: vi.fn().mockReturnValue(undefined),
     };
     renderPage();
-    fireEvent.click(screen.getByRole("listitem", { name: /Open artifact plan\.md/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Open artifact plan\.md/ }));
     await waitFor(() => {
       expect(listArtifactsMock).toHaveBeenCalledWith("sess-1");
     });

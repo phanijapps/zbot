@@ -144,3 +144,23 @@ describe("WebSettingsPanel — provider load failure", () => {
     expect(screen.getByText("Providers")).toBeInTheDocument();
   });
 });
+
+describe("WebSettingsPanel — Sonar S6853 (empty label fix)", () => {
+  it("uses no <label> elements without accessible text in the Logging tab", async () => {
+    render(<WebSettingsPanel />);
+    await waitFor(() => expect(screen.getByText("Settings")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("Logging"));
+    // Every <label> in the rendered DOM either has accessible text content
+    // or an aria-label. The previous empty <label aria-hidden="true"> for
+    // layout spacing was the offender — it's now a <div>.
+    await waitFor(() => {
+      const labels = document.querySelectorAll("label");
+      for (const lbl of labels) {
+        const text = (lbl.textContent ?? "").trim();
+        const aria = lbl.getAttribute("aria-label");
+        const isAccessible = text.length > 0 || (aria && aria.length > 0);
+        expect(isAccessible).toBe(true);
+      }
+    });
+  });
+});
