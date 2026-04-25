@@ -1,4 +1,5 @@
 import type { ConversationEvent } from "@/services/transport/types";
+import { randomId } from "@/shared/utils/randomId";
 import type { PillEvent } from "../shared/statusPill";
 import type { ResearchAction } from "./reducer";
 import type { TimelineEntry } from "./types";
@@ -105,7 +106,7 @@ function mapThinkingDelta(e: Record<string, unknown>, now: number): ResearchActi
   const content = e["content"];
   if (typeof content !== "string" || content.length === 0) return null;
   const entry: TimelineEntry = {
-    id: crypto.randomUUID(),
+    id: randomId(),
     at: now,
     kind: "thinking",
     text: content,
@@ -116,7 +117,7 @@ function mapThinkingDelta(e: Record<string, unknown>, now: number): ResearchActi
 function mapToolCall(e: Record<string, unknown>, now: number): ResearchAction {
   const tool = toolNameOf(e, "tool");
   const entry: TimelineEntry = {
-    id: crypto.randomUUID(),
+    id: randomId(),
     at: now,
     kind: "tool_call",
     text: tool,
@@ -129,7 +130,7 @@ function mapToolCall(e: Record<string, unknown>, now: number): ResearchAction {
 function mapToolResult(e: Record<string, unknown>, now: number): ResearchAction {
   const tool = toolNameOf(e, "result");
   const entry: TimelineEntry = {
-    id: crypto.randomUUID(),
+    id: randomId(),
     at: now,
     kind: "tool_result",
     text: tool,

@@ -1,4 +1,5 @@
 import type { ConversationEvent } from "@/services/transport/types";
+import { randomId } from "@/shared/utils/randomId";
 import type { PillEvent } from "../shared/statusPill";
 import type { QuickChatAction } from "./reducer";
 
@@ -48,7 +49,7 @@ function mapDelegateToolCall(args: Record<string, unknown>): QuickChatAction {
   const agentId = (args["agent_id"] ?? args["agentId"] ?? "subagent") as string;
   return {
     type: "ADD_CHIP",
-    chip: { id: crypto.randomUUID(), kind: "delegate", label: `→ ${agentId}` },
+    chip: { id: randomId(), kind: "delegate", label: `→ ${agentId}` },
   };
 }
 
@@ -56,7 +57,7 @@ function mapLoadSkillToolCall(args: Record<string, unknown>): QuickChatAction {
   const skill = (args["skill"] ?? "skill") as string;
   return {
     type: "ADD_CHIP",
-    chip: { id: crypto.randomUUID(), kind: "skill", label: `loaded ${skill}` },
+    chip: { id: randomId(), kind: "skill", label: `loaded ${skill}` },
   };
 }
 
@@ -64,7 +65,7 @@ function mapMemoryToolCall(args: Record<string, unknown>): QuickChatAction | nul
   if (args["action"] !== "recall" && args["action"] !== "get_fact") return null;
   return {
     type: "ADD_CHIP",
-    chip: { id: crypto.randomUUID(), kind: "recall", label: "recalled" },
+    chip: { id: randomId(), kind: "recall", label: "recalled" },
   };
 }
 

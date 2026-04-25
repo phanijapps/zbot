@@ -6,6 +6,7 @@ import type {
   ConversationEvent,
   SessionMessage,
 } from "@/services/transport/types";
+import { randomId } from "@/shared/utils/randomId";
 import { useStatusPill, type PillEventSink } from "../shared/statusPill";
 import type { UploadedFile } from "../chat/ChatInput";
 import { composeMessageWithAttachments } from "../chat/attachments";
@@ -215,7 +216,7 @@ export function useQuickChat() {
       dispatch({
         type: "APPEND_USER",
         message: {
-          id: crypto.randomUUID(),
+          id: randomId(),
           role: "user",
           content: promptText,
           timestamp: Date.now(),

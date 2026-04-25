@@ -5,6 +5,7 @@
 // ============================================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { randomId } from "@/shared/utils/randomId";
 import {
   MessageSquare,
   Send,
@@ -363,7 +364,7 @@ export function SessionChatViewer({
     isSubmittingRef.current = true;
 
     const userMessage: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: randomId(),
       role: "user",
       content: input.trim(),
       timestamp: new Date(),

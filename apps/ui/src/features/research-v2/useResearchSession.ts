@@ -6,6 +6,7 @@ import type {
   ConversationEvent,
   UnsubscribeFn,
 } from "@/services/transport/types";
+import { randomId } from "@/shared/utils/randomId";
 import { useStatusPill, type PillEventSink } from "../shared/statusPill";
 import type { UploadedFile } from "../chat/ChatInput";
 import { composeMessageWithAttachments } from "../chat/attachments";
@@ -440,14 +441,14 @@ export function useResearchSession() {
       dispatch({
         type: "APPEND_USER",
         message: {
-          id: crypto.randomUUID(),
+          id: randomId(),
           role: "user",
           content: promptText,
           timestamp: sendAt,
         },
       });
       // Closure read: safe because only SESSION_BOUND (dispatched below) mutates state.conversationId.
-      const convId = state.conversationId ?? `${CONV_ID_PREFIX}${crypto.randomUUID()}`;
+      const convId = state.conversationId ?? `${CONV_ID_PREFIX}${randomId()}`;
       const refs: SubscriptionRefs = { subscribedConvIdRef, unsubscribeRef };
       const onRootAgentCompleted = (execId: string) => {
         if (resnapshotForExecRef.current === execId) return;

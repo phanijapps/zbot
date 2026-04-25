@@ -26,6 +26,7 @@ import { ActionBar, FilterChip } from "@/components/ActionBar";
 import { MetaChip } from "@/components/MetaChip";
 import { Slideover } from "@/components/Slideover";
 import { EmptyState } from "@/shared/ui/EmptyState";
+import { randomId } from "@/shared/utils/randomId";
 
 // ============================================================================
 // Constants
@@ -72,7 +73,7 @@ interface EnvVarEntry {
 function recordToEnvVars(record: Record<string, string> | undefined): EnvVarEntry[] {
   if (!record) return [];
   return Object.entries(record).map(([key, value]) => ({
-    id: crypto.randomUUID(),
+    id: randomId(),
     key,
     value,
   }));
@@ -1015,7 +1016,7 @@ function ToolServerForm({
               <button
                 type="button"
                 className="btn btn--ghost btn--sm"
-                onClick={() => setEnvVars((prev) => [...prev, { id: crypto.randomUUID(), key: "", value: "" }])}
+                onClick={() => setEnvVars((prev) => [...prev, { id: randomId(), key: "", value: "" }])}
                 style={{ alignSelf: "flex-start" }}
               >
                 <Plus style={{ width: 14, height: 14 }} /> Add Variable
