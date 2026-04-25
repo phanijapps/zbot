@@ -12,6 +12,7 @@ import type { Phase } from "./PhaseIndicators";
 import type { PlanStep, StepStatus } from "./PlanBlock";
 import type { RecalledFact, SubagentInfo } from "./IntelligenceFeed";
 import type { UploadedFile } from "./ChatInput";
+import { composeMessageWithAttachments } from "./attachments";
 
 // ============================================================================
 // Types
@@ -1276,21 +1277,7 @@ export function useMissionControl() {
 
       try {
         const transport = await getTransport();
-
-        // Build message — if attachments, include their references
-        let message = text.trim();
-        if (attachments.length > 0) {
-          const header = "| File | Type | Size | Path |";
-          const sep = "|------|------|------|------|";
-          const rows = attachments.map((a) => {
-            const sizeStr = a.size < 1024 ? `${a.size} B`
-              : a.size < 1024 * 1024 ? `${(a.size / 1024).toFixed(1)} KB`
-              : `${(a.size / (1024 * 1024)).toFixed(1)} MB`;
-            return `| ${a.name} | ${a.mimeType} | ${sizeStr} | ${a.path} |`;
-          }).join("\n");
-          message = `${message}\n\n**Attached files:**\n${header}\n${sep}\n${rows}`;
-        }
-
+        const message = composeMessageWithAttachments(text, attachments);
         await transport.executeAgent(ROOT_AGENT_ID, conversationId, message, currentSessionId);
       } catch (error) {
         console.error("[MissionControl] Failed to send message:", error);

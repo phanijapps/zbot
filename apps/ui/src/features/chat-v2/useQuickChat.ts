@@ -7,6 +7,8 @@ import type {
   SessionMessage,
 } from "@/services/transport/types";
 import { useStatusPill, type PillEventSink } from "../shared/statusPill";
+import type { UploadedFile } from "../chat/ChatInput";
+import { composeMessageWithAttachments } from "../chat/attachments";
 import {
   type QuickChatArtifactRef,
   type QuickChatMessage,
@@ -202,16 +204,20 @@ export function useQuickChat() {
 
   // --- Send a user message against the reserved session ---
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, attachments: UploadedFile[] = []) => {
       const trimmed = text.trim();
       if (!trimmed || state.status === "running") return;
       if (!state.sessionId || !state.conversationId) return;
+      // Splice uploaded-file metadata (incl. absolute server paths) into the
+      // prompt — executeAgent has no separate attachments channel, so the
+      // agent only learns about the upload through the message text.
+      const promptText = composeMessageWithAttachments(trimmed, attachments);
       dispatch({
         type: "APPEND_USER",
         message: {
           id: crypto.randomUUID(),
           role: "user",
-          content: trimmed,
+          content: promptText,
           timestamp: Date.now(),
         },
       });
@@ -219,7 +225,7 @@ export function useQuickChat() {
       const result = await transport.executeAgent(
         CHAT_AGENT_ID,
         state.conversationId,
-        trimmed,
+        promptText,
         state.sessionId,
         CHAT_MODE
       );

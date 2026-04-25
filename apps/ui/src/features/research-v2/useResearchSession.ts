@@ -7,6 +7,8 @@ import type {
   UnsubscribeFn,
 } from "@/services/transport/types";
 import { useStatusPill, type PillEventSink } from "../shared/statusPill";
+import type { UploadedFile } from "../chat/ChatInput";
+import { composeMessageWithAttachments } from "../chat/attachments";
 import { EMPTY_RESEARCH_STATE, type ResearchSessionState } from "./types";
 import { reduceResearch, type ResearchAction } from "./reducer";
 import { mapGatewayEventToResearchAction, mapGatewayEventToPillEvent } from "./event-map";
@@ -426,9 +428,13 @@ export function useResearchSession() {
 
   // --- Send a user message (subscribes BEFORE invoke, R14a) ---
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, attachments: UploadedFile[] = []) => {
       const trimmed = text.trim();
       if (!trimmed || state.status === "running") return;
+      // Splice uploaded-file metadata (incl. absolute server paths) into the
+      // prompt — executeAgent has no separate attachments channel, so the
+      // agent only learns about the upload through the message text.
+      const promptText = composeMessageWithAttachments(trimmed, attachments);
       const sendAt = Date.now();
       lastSendMsRef.current = sendAt;
       dispatch({
@@ -436,7 +442,7 @@ export function useResearchSession() {
         message: {
           id: crypto.randomUUID(),
           role: "user",
-          content: trimmed,
+          content: promptText,
           timestamp: sendAt,
         },
       });
@@ -476,7 +482,7 @@ export function useResearchSession() {
         const result = await transport.executeAgent(
           ROOT_AGENT_ID,
           convId,
-          trimmed,
+          promptText,
           state.sessionId ?? undefined,
           // mode undefined → executor defaults to SessionMode::Research
           undefined,
