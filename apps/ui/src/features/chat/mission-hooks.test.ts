@@ -1,6 +1,7 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import type { LogSession } from '@/services/transport/types';
+import { act } from 'react';
 import {
   __testInternals,
   handleToolCallRespond,
@@ -9,6 +10,7 @@ import {
   handleAgentCompleted,
   switchToSession,
   timeAgo,
+  useMissionControl,
   useRecentSessions,
   type EventHandlerCtx,
   type NarrativeBlock,
@@ -45,12 +47,31 @@ const listLogSessionsMock = vi.fn<
   }>
 >();
 
+// Captures the most recent onEvent callback handed to subscribeConversation
+// so tests can drive the hook by firing events directly.
+let capturedOnEvent: ((event: unknown) => void) | null = null;
+const subscribeConversationMock = vi.fn<
+  (
+    convId: string,
+    opts: { onEvent: (event: unknown) => void; scope?: string },
+  ) => () => void
+>();
+const subscribeUnsubMock = vi.fn();
+
+const executeAgentMock = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+const stopAgentMock = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+const getSessionStateMock = vi.fn<(...args: unknown[]) => Promise<{ success: boolean; data?: unknown; error?: string }>>();
+
 vi.mock('@/services/transport', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@/services/transport');
   return {
     ...actual,
     getTransport: async () => ({
       listLogSessions: listLogSessionsMock,
+      subscribeConversation: subscribeConversationMock,
+      executeAgent: executeAgentMock,
+      stopAgent: stopAgentMock,
+      getSessionState: getSessionStateMock,
     }),
   };
 });
@@ -1061,5 +1082,303 @@ describe('parseIntentAnalysisFromState', () => {
     expect(ia.recommendedSkills).toEqual([]);
     expect(ia.wardRecommendation.action).toBe('');
     expect(ia.executionStrategy.approach).toBe('simple');
+  });
+});
+
+// ============================================================================
+// useMissionControl — the master hook
+//
+// We don't drill into every event branch (those are unit-tested above via
+// __testInternals). Coverage here proves the integration: subscription
+// lifecycle, sendMessage / stopAgent / startNewSession contracts, and the
+// dispatcher routing one event end-to-end.
+// ============================================================================
+
+describe('useMissionControl', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    capturedOnEvent = null;
+    subscribeConversationMock.mockReset();
+    subscribeUnsubMock.mockReset();
+    executeAgentMock.mockReset();
+    stopAgentMock.mockReset();
+    getSessionStateMock.mockReset();
+
+    // Default: capture onEvent so tests can fire events into the hook.
+    subscribeConversationMock.mockImplementation((_id, opts) => {
+      capturedOnEvent = opts.onEvent;
+      return subscribeUnsubMock;
+    });
+    executeAgentMock.mockResolvedValue({ success: true });
+    stopAgentMock.mockResolvedValue({ success: true });
+    getSessionStateMock.mockResolvedValue({ success: false });
+  });
+
+  it('mounts with idle state and a fresh conversation id persisted to localStorage', async () => {
+    const { result } = renderHook(() => useMissionControl());
+    await waitFor(() => expect(subscribeConversationMock).toHaveBeenCalled());
+    expect(result.current.state.status).toBe('idle');
+    expect(result.current.state.phase).toBe('idle');
+    expect(result.current.state.blocks).toEqual([]);
+    expect(localStorage.getItem('agentzero_web_conv_id')).toMatch(/^web-/);
+  });
+
+  it('subscribes to the conversation id on mount and unsubscribes on unmount', async () => {
+    const { unmount } = renderHook(() => useMissionControl());
+    await waitFor(() => expect(subscribeConversationMock).toHaveBeenCalledTimes(1));
+    expect(subscribeUnsubMock).not.toHaveBeenCalled();
+    unmount();
+    expect(subscribeUnsubMock).toHaveBeenCalled();
+  });
+
+  it('routes a stream event through the dispatcher into state', async () => {
+    const { result } = renderHook(() => useMissionControl());
+    await waitFor(() => expect(capturedOnEvent).not.toBeNull());
+
+    act(() => {
+      capturedOnEvent!({ type: 'agent_started', model: 'gpt-test' });
+    });
+
+    expect(result.current.state.status).toBe('running');
+    expect(result.current.state.modelName).toBe('gpt-test');
+  });
+
+  it('drops stream events with a non-monotonic seq number', async () => {
+    const { result } = renderHook(() => useMissionControl());
+    await waitFor(() => expect(capturedOnEvent).not.toBeNull());
+
+    act(() => capturedOnEvent!({ type: 'token', delta: 'a', seq: 5 }));
+    act(() => capturedOnEvent!({ type: 'token', delta: 'b', seq: 3 })); // stale, dropped
+    act(() => capturedOnEvent!({ type: 'token', delta: 'c', seq: 10 }));
+
+    // Token-count fallback increments by 1 per accepted event.
+    expect(result.current.state.tokenCount).toBe(2);
+  });
+
+  it('invoke_accepted (no seq from backend) resets the seq counter so the next turn accepts low-seq events', async () => {
+    const { result } = renderHook(() => useMissionControl());
+    await waitFor(() => expect(capturedOnEvent).not.toBeNull());
+
+    act(() => capturedOnEvent!({ type: 'token', delta: 'a', seq: 100 }));
+    expect(result.current.state.tokenCount).toBe(1);
+
+    // invoke_accepted is the first event of a new turn — backend emits it
+    // without `seq`, so it bypasses the dedup guard, then resets
+    // lastSeqRef to 0 inside the switch case.
+    act(() => capturedOnEvent!({ type: 'invoke_accepted', session_id: 'sess-new' }));
+    act(() => capturedOnEvent!({ type: 'token', delta: 'b', seq: 5 }));
+    // Token is accepted because lastSeqRef was reset to 0.
+    expect(result.current.state.tokenCount).toBe(2);
+  });
+});
+
+describe('useMissionControl — sendMessage', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    capturedOnEvent = null;
+    subscribeConversationMock.mockReset();
+    subscribeUnsubMock.mockReset();
+    executeAgentMock.mockReset();
+    stopAgentMock.mockReset();
+    getSessionStateMock.mockReset();
+    subscribeConversationMock.mockImplementation((_id, opts) => {
+      capturedOnEvent = opts.onEvent;
+      return subscribeUnsubMock;
+    });
+    executeAgentMock.mockResolvedValue({ success: true });
+    stopAgentMock.mockResolvedValue({ success: true });
+    getSessionStateMock.mockResolvedValue({ success: false });
+  });
+
+  it('appends a user block, transitions to running, and calls transport.executeAgent', async () => {
+    const { result } = renderHook(() => useMissionControl());
+    await waitFor(() => expect(subscribeConversationMock).toHaveBeenCalled());
+
+    await act(async () => {
+      await result.current.sendMessage('hello there');
+    });
+
+    expect(result.current.state.status).toBe('running');
+    expect(result.current.state.blocks).toHaveLength(1);
+    expect(result.current.state.blocks[0].type).toBe('user');
+    expect(result.current.state.blocks[0].data.content).toBe('hello there');
+    expect(executeAgentMock).toHaveBeenCalledTimes(1);
+    const callArgs = executeAgentMock.mock.calls[0];
+    expect(callArgs[0]).toBe('root'); // ROOT_AGENT_ID
+    expect(callArgs[2]).toBe('hello there'); // message
+  });
+
+  it('is a no-op when message text is blank', async () => {
+    const { result } = renderHook(() => useMissionControl());
+    await waitFor(() => expect(subscribeConversationMock).toHaveBeenCalled());
+
+    await act(async () => {
+      await result.current.sendMessage('   ');
+    });
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(result.current.state.blocks).toEqual([]);
+    expect(result.current.state.status).toBe('idle');
+  });
+
+  it('flips status to error when transport.executeAgent throws', async () => {
+    executeAgentMock.mockRejectedValue(new Error('network'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useMissionControl());
+    await waitFor(() => expect(subscribeConversationMock).toHaveBeenCalled());
+
+    await act(async () => {
+      await result.current.sendMessage('boom');
+    });
+
+    expect(result.current.state.status).toBe('error');
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it('embeds an attachment table in the message body when files are attached', async () => {
+    const { result } = renderHook(() => useMissionControl());
+    await waitFor(() => expect(subscribeConversationMock).toHaveBeenCalled());
+
+    await act(async () => {
+      await result.current.sendMessage('see attached', [
+        { id: '1', name: 'report.md', size: 512, type: 'text/markdown', path: '/tmp/report.md' } as any,
+      ]);
+    });
+
+    const sentMessage = executeAgentMock.mock.calls[0][2] as string;
+    expect(sentMessage).toContain('see attached');
+    expect(sentMessage).toContain('Attached files');
+    expect(sentMessage).toContain('report.md');
+  });
+});
+
+describe('useMissionControl — stopAgent + startNewSession', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    capturedOnEvent = null;
+    subscribeConversationMock.mockReset();
+    subscribeUnsubMock.mockReset();
+    executeAgentMock.mockReset();
+    stopAgentMock.mockReset();
+    getSessionStateMock.mockReset();
+    subscribeConversationMock.mockImplementation((_id, opts) => {
+      capturedOnEvent = opts.onEvent;
+      return subscribeUnsubMock;
+    });
+    executeAgentMock.mockResolvedValue({ success: true });
+    stopAgentMock.mockResolvedValue({ success: true });
+    getSessionStateMock.mockResolvedValue({ success: false });
+  });
+
+  it('stopAgent calls transport.stopAgent with the active conversation id', async () => {
+    const { result } = renderHook(() => useMissionControl());
+    await waitFor(() => expect(subscribeConversationMock).toHaveBeenCalled());
+
+    await act(async () => {
+      await result.current.stopAgent();
+    });
+
+    expect(stopAgentMock).toHaveBeenCalledTimes(1);
+    expect(stopAgentMock.mock.calls[0][0]).toMatch(/^web-/);
+  });
+
+  it('startNewSession resets all state and mints a new conversation id', async () => {
+    const { result } = renderHook(() => useMissionControl());
+    await waitFor(() => expect(capturedOnEvent).not.toBeNull());
+
+    // Drive some state in.
+    act(() => capturedOnEvent!({ type: 'agent_started', model: 'gpt-test' }));
+    await act(async () => {
+      await result.current.sendMessage('something');
+    });
+    expect(result.current.state.blocks.length).toBeGreaterThan(0);
+
+    const oldConv = localStorage.getItem('agentzero_web_conv_id');
+
+    act(() => result.current.startNewSession());
+
+    expect(result.current.state.blocks).toEqual([]);
+    expect(result.current.state.status).toBe('idle');
+    expect(result.current.state.phase).toBe('idle');
+    expect(result.current.state.modelName).toBe('');
+    expect(result.current.state.tokenCount).toBe(0);
+    // Conversation id was rotated.
+    const newConv = localStorage.getItem('agentzero_web_conv_id');
+    expect(newConv).not.toBe(oldConv);
+    expect(newConv).toMatch(/^web-/);
+    // session_id key cleared.
+    expect(localStorage.getItem('agentzero_web_session_id')).toBeNull();
+  });
+});
+
+describe('useMissionControl — restore from log session id', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    capturedOnEvent = null;
+    subscribeConversationMock.mockReset();
+    subscribeUnsubMock.mockReset();
+    executeAgentMock.mockReset();
+    stopAgentMock.mockReset();
+    getSessionStateMock.mockReset();
+    subscribeConversationMock.mockImplementation((_id, opts) => {
+      capturedOnEvent = opts.onEvent;
+      return subscribeUnsubMock;
+    });
+  });
+
+  it('loads session state from agentzero_log_session_id and seeds the blocks/sidebar', async () => {
+    localStorage.setItem('agentzero_log_session_id', 'exec-restore-1');
+    getSessionStateMock.mockResolvedValue({
+      success: true,
+      data: {
+        session: {
+          id: 'sess-r',
+          status: 'completed',
+          startedAt: '2026-04-24T10:00:00Z',
+          title: 'Restored session',
+          tokenCount: 42,
+          durationMs: 1234,
+          model: 'gpt-test',
+        },
+        userMessage: 'first ask',
+        response: 'final answer',
+        phase: 'completed',
+        intentAnalysis: null,
+        ward: { name: 'stocks', content: 'finance' },
+        recalledFacts: [],
+        plan: [],
+        subagents: [],
+      },
+    });
+    // Suppress the noisy [MissionControl] console.log calls in the
+    // restore path.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useMissionControl());
+
+    await waitFor(() => expect(getSessionStateMock).toHaveBeenCalled());
+    await waitFor(() => expect(result.current.state.sessionTitle).toBe('Restored session'));
+
+    expect(result.current.state.tokenCount).toBe(42);
+    expect(result.current.state.modelName).toBe('gpt-test');
+    expect(result.current.state.activeWard).toEqual({ name: 'stocks', content: 'finance' });
+    // Blocks rebuilt: user + response.
+    expect(result.current.state.blocks.find((b) => b.type === 'user')?.data.content).toBe('first ask');
+    expect(result.current.state.blocks.find((b) => b.type === 'response')?.data.content).toBe('final answer');
+    // Restoration consumes the localStorage marker.
+    expect(localStorage.getItem('agentzero_log_session_id')).toBeNull();
+
+    logSpy.mockRestore();
+  });
+
+  it('is a no-op when there is no log session id and no active session', async () => {
+    const { result } = renderHook(() => useMissionControl());
+    // No log id was set, no activeSessionId either.
+    await waitFor(() => expect(subscribeConversationMock).toHaveBeenCalled());
+    // getSessionState should not have been called.
+    expect(getSessionStateMock).not.toHaveBeenCalled();
+    expect(result.current.state.blocks).toEqual([]);
   });
 });
