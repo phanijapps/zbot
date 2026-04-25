@@ -458,6 +458,109 @@ impl<D: StateDbProvider> StateRepository<D> {
         })
     }
 
+    /// Delete a session **and all of its descendant subagent sessions**, plus
+    /// all per-session conversation rows for every session in the tree.
+    ///
+    /// Walks `sessions.parent_session_id` recursively to collect the full
+    /// subtree rooted at `root_session_id`, then runs the same per-table
+    /// `DELETE` set as [`Self::delete_session_cascade`] but matched against
+    /// the entire descendant set. Memory tables (`memory_facts`, knowledge
+    /// graph) are preserved by the same invariant.
+    ///
+    /// Idempotent for orphans: even when no `sessions` row exists for
+    /// `root_session_id` (e.g. legacy rows that only ever made it into
+    /// `execution_logs.conversation_id`), the literal id is still placed
+    /// into the descendant set so per-table cleanup runs and the row
+    /// disappears from the UI's `/api/logs/sessions` view.
+    ///
+    /// `execution_logs` is matched against **both** its `session_id` (which
+    /// in production holds the `exec-…` execution id) and `conversation_id`
+    /// (which holds the `sess-…` session id the rest of the system uses).
+    /// Without the second column, orphan sessions never get cleaned and the
+    /// historical cascade silently no-opped on this table.
+    ///
+    /// Returns the total number of rows deleted across all tables.
+    pub fn delete_session_recursive_cascade(&self, root_session_id: &str) -> Result<usize, String> {
+        self.db.with_connection(|conn| {
+            let tx = conn.unchecked_transaction()?;
+
+            // Materialize the descendant set into a temp table once, then
+            // reuse it across every per-table delete. Avoids re-walking the
+            // recursive CTE eight times and sidesteps the 999-bound-param
+            // ceiling on `IN (?, ?, ...)`.
+            tx.execute("DROP TABLE IF EXISTS _delete_session_set", [])?;
+            tx.execute(
+                "CREATE TEMP TABLE _delete_session_set (id TEXT PRIMARY KEY)",
+                [],
+            )?;
+            // Always seed with the literal root id (whether or not it has a
+            // `sessions` row) so orphan log entries with a matching
+            // conversation_id still get cleaned. Recursive walk via
+            // `sessions.parent_session_id` appends real subagent descendants.
+            tx.execute(
+                "WITH RECURSIVE descendants(id) AS (
+                    SELECT ? AS id
+                    UNION
+                    SELECT s.id FROM sessions s
+                    INNER JOIN descendants d ON s.parent_session_id = d.id
+                 )
+                 INSERT INTO _delete_session_set(id) SELECT id FROM descendants",
+                params![root_session_id],
+            )?;
+            // Continuation turns (see runner::invoke_continuation) emit log
+            // rows under a derived conversation_id of the form
+            // `<sess>-cont-<8hex>`. They carry no `sessions` row of their
+            // own — they're log artifacts of an existing session. Pull every
+            // such derived id (rooted at any session in the descendant set)
+            // into the delete set so a single cascade clears the whole
+            // continuation history, not just one turn.
+            tx.execute(
+                "INSERT OR IGNORE INTO _delete_session_set(id) \
+                 SELECT DISTINCT el.conversation_id \
+                 FROM execution_logs el \
+                 JOIN _delete_session_set d \
+                   ON el.conversation_id LIKE d.id || '-cont-%'",
+                [],
+            )?;
+
+            let mut total = 0usize;
+            // Tables keyed exclusively by `session_id`. Order matters only
+            // when FK enforcement is on: child rows first, sessions row last.
+            for table in [
+                "messages",
+                "agent_executions",
+                "artifacts",
+                "distillation_runs",
+                "bridge_outbox",
+                "recall_log",
+            ] {
+                let sql = format!(
+                    "DELETE FROM {} WHERE session_id IN (SELECT id FROM _delete_session_set)",
+                    table
+                );
+                total += tx.execute(&sql, [])?;
+            }
+            // execution_logs uses both columns: `session_id` carries the
+            // execution id, `conversation_id` carries the actual session id.
+            // Match either so legacy orphan logs (only conversation_id set)
+            // are cleaned alongside current rows.
+            total += tx.execute(
+                "DELETE FROM execution_logs \
+                 WHERE session_id IN (SELECT id FROM _delete_session_set) \
+                    OR conversation_id IN (SELECT id FROM _delete_session_set)",
+                [],
+            )?;
+            total += tx.execute(
+                "DELETE FROM sessions WHERE id IN (SELECT id FROM _delete_session_set)",
+                [],
+            )?;
+
+            tx.execute("DROP TABLE _delete_session_set", [])?;
+            tx.commit()?;
+            Ok(total)
+        })
+    }
+
     /// Delete sessions older than a given timestamp.
     /// Returns the number of deleted sessions.
     pub fn delete_old_sessions(&self, older_than: &str) -> Result<u64, String> {
@@ -1756,6 +1859,362 @@ mod tests {
         // Target is fully gone.
         assert_eq!(count_rows(&db, "sessions", "id", "sess-kill"), 0);
         assert_eq!(count_rows(&db, "messages", "session_id", "sess-kill"), 0);
+    }
+
+    // ========================================================================
+    // delete_session_recursive_cascade Tests
+    //
+    // Recursive cascade walks `sessions.parent_session_id` to wipe the entire
+    // subtree spawned by a root chat / research session. Memory tables must
+    // still survive — same invariant as the non-recursive cascade.
+    // ========================================================================
+
+    /// Seed a session that has a parent — used to build subagent trees.
+    fn seed_child_session(
+        db: &CascadeDbProvider,
+        repo: &StateRepository<CascadeDbProvider>,
+        sid: &str,
+        parent_sid: &str,
+    ) {
+        let mut session = Session::new_with_source("subagent", TriggerSource::Web);
+        session.id = sid.to_string();
+        session.parent_session_id = Some(parent_sid.to_string());
+        repo.create_session(&session).unwrap();
+
+        let exec_id = format!("exec-{}", sid);
+        let msg_id = format!("msg-{}", sid);
+        let log_id = format!("log-{}", sid);
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO agent_executions (id, session_id, agent_id, delegation_type, status) \
+                 VALUES (?1, ?2, 'subagent', 'delegated', 'running')",
+                params![exec_id, sid],
+            )?;
+            conn.execute(
+                "INSERT INTO messages (id, execution_id, session_id, role, content, created_at) \
+                 VALUES (?1, ?2, ?3, 'assistant', 'subagent reply', '2026-04-19T00:00:00Z')",
+                params![msg_id, exec_id, sid],
+            )?;
+            conn.execute(
+                "INSERT INTO execution_logs (id, session_id, agent_id, parent_session_id, timestamp, level, category, message) \
+                 VALUES (?1, ?2, 'subagent', ?3, '2026-04-19T00:00:00Z', 'info', 'test', 'sublog')",
+                params![log_id, sid, parent_sid],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn delete_recursive_cascade_wipes_full_subagent_tree() {
+        // Root → 2 children, one of which has a grandchild. Deleting the
+        // root must take all four sessions plus their per-session rows.
+        let (db, repo) = cascade_repo();
+        seed_cascade_fixture(&db, &repo, "sess-root");
+        seed_child_session(&db, &repo, "sess-child-a", "sess-root");
+        seed_child_session(&db, &repo, "sess-child-b", "sess-root");
+        seed_child_session(&db, &repo, "sess-grandchild", "sess-child-a");
+
+        let deleted = repo.delete_session_recursive_cascade("sess-root").unwrap();
+        // Root: 1 session + 7 child rows = 8.
+        // Each of 3 descendants: 1 session + 1 exec + 1 msg + 1 log = 4.
+        // Total = 8 + 3*4 = 20.
+        assert_eq!(deleted, 20, "expected 20 rows deleted, got {deleted}");
+
+        for sid in [
+            "sess-root",
+            "sess-child-a",
+            "sess-child-b",
+            "sess-grandchild",
+        ] {
+            assert_eq!(
+                count_rows(&db, "sessions", "id", sid),
+                0,
+                "session {sid} should be gone"
+            );
+            assert_eq!(
+                count_rows(&db, "messages", "session_id", sid),
+                0,
+                "messages for {sid} should be gone"
+            );
+            assert_eq!(
+                count_rows(&db, "agent_executions", "session_id", sid),
+                0,
+                "agent_executions for {sid} should be gone"
+            );
+            assert_eq!(
+                count_rows(&db, "execution_logs", "session_id", sid),
+                0,
+                "execution_logs for {sid} should be gone"
+            );
+        }
+    }
+
+    #[test]
+    fn delete_recursive_cascade_preserves_memory_and_kg() {
+        let (db, repo) = cascade_repo();
+        seed_cascade_fixture(&db, &repo, "sess-root");
+        seed_child_session(&db, &repo, "sess-child", "sess-root");
+        seed_memory_fact(&db, "fact-survives", "important note");
+        seed_kg_entity(&db, "ent-survives", "FooCorp");
+        seed_kg_relationship(&db, "rel-survives", "ent-survives", "ent-survives");
+
+        repo.delete_session_recursive_cascade("sess-root").unwrap();
+
+        assert_eq!(
+            count_rows(&db, "memory_facts", "id", "fact-survives"),
+            1,
+            "memory facts must outlive a recursive subtree delete"
+        );
+        assert_eq!(count_rows(&db, "kg_entities", "id", "ent-survives"), 1);
+        assert_eq!(count_rows(&db, "kg_relationships", "id", "rel-survives"), 1);
+    }
+
+    #[test]
+    fn delete_recursive_cascade_does_not_touch_unrelated_trees() {
+        // Two parallel trees. Deleting one tree must leave the other intact.
+        let (db, repo) = cascade_repo();
+        seed_cascade_fixture(&db, &repo, "sess-keep-root");
+        seed_child_session(&db, &repo, "sess-keep-child", "sess-keep-root");
+        seed_cascade_fixture(&db, &repo, "sess-kill-root");
+        seed_child_session(&db, &repo, "sess-kill-child", "sess-kill-root");
+
+        repo.delete_session_recursive_cascade("sess-kill-root")
+            .unwrap();
+
+        assert_eq!(count_rows(&db, "sessions", "id", "sess-keep-root"), 1);
+        assert_eq!(count_rows(&db, "sessions", "id", "sess-keep-child"), 1);
+        assert_eq!(
+            count_rows(&db, "messages", "session_id", "sess-keep-child"),
+            1
+        );
+        assert_eq!(count_rows(&db, "sessions", "id", "sess-kill-root"), 0);
+        assert_eq!(count_rows(&db, "sessions", "id", "sess-kill-child"), 0);
+    }
+
+    #[test]
+    fn delete_recursive_cascade_leaf_session_only_touches_leaf() {
+        // Calling recursive cascade with a leaf id (no children) must behave
+        // exactly like the non-recursive cascade — siblings survive.
+        let (db, repo) = cascade_repo();
+        seed_cascade_fixture(&db, &repo, "sess-root");
+        seed_child_session(&db, &repo, "sess-leaf-a", "sess-root");
+        seed_child_session(&db, &repo, "sess-leaf-b", "sess-root");
+
+        repo.delete_session_recursive_cascade("sess-leaf-a")
+            .unwrap();
+
+        assert_eq!(count_rows(&db, "sessions", "id", "sess-leaf-a"), 0);
+        assert_eq!(count_rows(&db, "sessions", "id", "sess-leaf-b"), 1);
+        assert_eq!(count_rows(&db, "sessions", "id", "sess-root"), 1);
+    }
+
+    #[test]
+    fn delete_recursive_cascade_missing_root_is_no_op() {
+        let (_db, repo) = cascade_repo();
+        let rows = repo
+            .delete_session_recursive_cascade("sess-does-not-exist")
+            .unwrap();
+        assert_eq!(rows, 0);
+    }
+
+    /// Production shape: api-logs writes `execution_logs.session_id = exec-…`
+    /// and `conversation_id = sess-…`. Used to seed orphan rows that exist
+    /// only in the logs table (no sessions row).
+    fn seed_log_only_orphan(db: &CascadeDbProvider, conversation_id: &str, rows: usize) {
+        db.with_connection(|conn| {
+            for i in 0..rows {
+                let log_id = format!("log-orphan-{}-{}", conversation_id, i);
+                let exec_id = format!("exec-orphan-{}-{}", conversation_id, i);
+                conn.execute(
+                    "INSERT INTO execution_logs \
+                     (id, session_id, conversation_id, agent_id, timestamp, level, category, message) \
+                     VALUES (?1, ?2, ?3, 'root', '2026-04-19T00:00:00Z', 'info', 'test', 'orphan')",
+                    params![log_id, exec_id, conversation_id],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn delete_recursive_cascade_cleans_orphan_logs_with_no_sessions_row() {
+        // Reproduces the field bug where a session_id surfaced by
+        // /api/logs/sessions had rows only in execution_logs.conversation_id —
+        // the previous cascade silently no-opped because it matched the wrong
+        // column and the endpoint 404-ed before cascade ran.
+        let (db, repo) = cascade_repo();
+        seed_log_only_orphan(&db, "sess-orphan-only", 7);
+        // Sanity: nothing in sessions, exactly 7 orphan log rows.
+        assert_eq!(count_rows(&db, "sessions", "id", "sess-orphan-only"), 0);
+        assert_eq!(
+            count_rows(&db, "execution_logs", "conversation_id", "sess-orphan-only"),
+            7
+        );
+
+        let deleted = repo
+            .delete_session_recursive_cascade("sess-orphan-only")
+            .unwrap();
+        assert_eq!(deleted, 7, "all 7 orphan log rows must be removed");
+        assert_eq!(
+            count_rows(&db, "execution_logs", "conversation_id", "sess-orphan-only"),
+            0
+        );
+    }
+
+    #[test]
+    fn delete_recursive_cascade_cleans_logs_in_production_shape() {
+        // Real session has sessions row + per-session rows + execution_logs
+        // emitted in production shape (session_id=exec-X, conversation_id=sess-X).
+        // The historical cascade missed these log rows entirely.
+        let (db, repo) = cascade_repo();
+        seed_cascade_fixture(&db, &repo, "sess-prod");
+        // The fixture seeds one log via session_id; layer on production-shape
+        // rows via conversation_id to prove the OR match works.
+        seed_log_only_orphan(&db, "sess-prod", 4);
+        assert_eq!(
+            count_rows(&db, "execution_logs", "conversation_id", "sess-prod"),
+            4
+        );
+
+        repo.delete_session_recursive_cascade("sess-prod").unwrap();
+
+        assert_eq!(count_rows(&db, "sessions", "id", "sess-prod"), 0);
+        assert_eq!(
+            count_rows(&db, "execution_logs", "conversation_id", "sess-prod"),
+            0,
+            "production-shape log rows (matched via conversation_id) must be deleted"
+        );
+        assert_eq!(
+            count_rows(&db, "execution_logs", "session_id", "sess-prod"),
+            0,
+            "fixture log row (matched via session_id) must also be deleted"
+        );
+    }
+
+    /// Seed continuation log rows for a stem session in production shape:
+    /// session_id=exec-X (reused root execution), conversation_id=stem-cont-XXX.
+    /// This is what `runner::invoke_continuation` writes per turn.
+    fn seed_continuation_logs(
+        db: &CascadeDbProvider,
+        stem: &str,
+        exec_id: &str,
+        suffixes: &[&str],
+    ) {
+        db.with_connection(|conn| {
+            for sfx in suffixes {
+                let log_id = format!("log-cont-{}-{}", stem, sfx);
+                let conv_id = format!("{}-cont-{}", stem, sfx);
+                conn.execute(
+                    "INSERT INTO execution_logs \
+                     (id, session_id, conversation_id, agent_id, timestamp, level, category, message) \
+                     VALUES (?1, ?2, ?3, 'root', '2026-04-19T00:00:00Z', 'info', 'session', 'cont start')",
+                    params![log_id, exec_id, conv_id],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn delete_recursive_cascade_clears_all_continuation_logs() {
+        // A session emits N continuation turns; every -cont-XXX log row must
+        // be removed by a single cascade keyed on the canonical session id.
+        // This is the regression the user surfaced: deleting the canonical
+        // session left N-1 phantom continuations in execution_logs that
+        // surfaced as new sidebar rows on the next refresh.
+        let (db, repo) = cascade_repo();
+        let stem = "sess-with-cont";
+        seed_cascade_fixture(&db, &repo, stem);
+        seed_continuation_logs(
+            &db,
+            stem,
+            "exec-shared",
+            &["aaaaaaaa", "bbbbbbbb", "cccccccc", "dddddddd"],
+        );
+        // 4 continuation log rows under conversation_id LIKE 'sess-with-cont-cont-%'
+        let cont_rows_before: i64 = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM execution_logs \
+                     WHERE conversation_id LIKE 'sess-with-cont-cont-%'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(cont_rows_before, 4);
+
+        repo.delete_session_recursive_cascade(stem).unwrap();
+
+        let cont_rows_after: i64 = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM execution_logs \
+                     WHERE conversation_id LIKE 'sess-with-cont-cont-%'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            cont_rows_after, 0,
+            "every continuation log row must be removed by a single cascade on the stem"
+        );
+        assert_eq!(count_rows(&db, "sessions", "id", stem), 0);
+    }
+
+    #[test]
+    fn delete_recursive_cascade_continuation_does_not_match_other_stems() {
+        // `LIKE 'rootid-cont-%'` must be anchored to the root id, not match
+        // some other session whose id happens to share a prefix.
+        let (db, repo) = cascade_repo();
+        seed_cascade_fixture(&db, &repo, "sess-keep");
+        seed_continuation_logs(&db, "sess-keep", "exec-keep", &["11111111"]);
+        seed_cascade_fixture(&db, &repo, "sess-kill");
+        seed_continuation_logs(&db, "sess-kill", "exec-kill", &["22222222"]);
+
+        repo.delete_session_recursive_cascade("sess-kill").unwrap();
+
+        let kept_cont: i64 = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM execution_logs \
+                     WHERE conversation_id = 'sess-keep-cont-11111111'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(kept_cont, 1, "sibling stem's continuations must survive");
+        let killed_cont: i64 = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM execution_logs \
+                     WHERE conversation_id = 'sess-kill-cont-22222222'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(killed_cont, 0);
+    }
+
+    #[test]
+    fn delete_recursive_cascade_runs_twice_safely() {
+        // Temp table cleanup must allow back-to-back calls on the same
+        // connection (regression guard for `_delete_session_set` collisions).
+        let (db, repo) = cascade_repo();
+        seed_cascade_fixture(&db, &repo, "sess-a");
+        seed_cascade_fixture(&db, &repo, "sess-b");
+
+        repo.delete_session_recursive_cascade("sess-a").unwrap();
+        repo.delete_session_recursive_cascade("sess-b").unwrap();
+
+        assert_eq!(count_rows(&db, "sessions", "id", "sess-a"), 0);
+        assert_eq!(count_rows(&db, "sessions", "id", "sess-b"), 0);
     }
 
     // ========================================================================
