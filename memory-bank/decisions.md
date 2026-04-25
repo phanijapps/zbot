@@ -45,7 +45,6 @@
 - **Action (3)**: respond, delegate_to_agent, list_agents — always available, drive agent behavior
 - **Optional**: read, write, edit, glob, todos, python, web_fetch, ui_tools, create_agent, introspection — configurable per agent
 - File writes go through `write_file` (create) and `edit_file` (targeted edits). The `shell` tool rejects file-writing commands (`cat >`, heredocs, `Set-Content`, etc.) to force use of the dedicated tools.
-- `apply_patch` was removed — its diff format was error-prone for LLMs and its shell-interceptor path added complexity without benefit. `write_file` + `edit_file` cover the same surface area with cleaner semantics.
 - Old standalone knowledge_graph tools (5) removed — replaced by unified `graph` action in memory tool
 
 ### Memory: 4-Tier Hierarchy

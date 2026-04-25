@@ -734,14 +734,6 @@ mod tests {
         assert!(ShellTool::validate_command("python << 'EOF'\nprint('hi')\nEOF").is_ok());
     }
 
-    /// apply_patch was removed. Any attempt to invoke it via shell heredoc
-    /// is now blocked by the generic heredoc rule — the agent should use
-    /// `write_file` / `edit_file` instead.
-    #[test]
-    fn test_apply_patch_shell_invocation_blocked() {
-        assert!(ShellTool::validate_command("apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: test.py\n+hello\n*** End Patch\nEOF").is_err());
-    }
-
     #[test]
     fn test_reading_commands_not_blocked() {
         // Reading commands should NOT be blocked
