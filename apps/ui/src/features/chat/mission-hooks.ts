@@ -8,6 +8,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { getTransport, type StreamEvent } from "@/services/transport";
 import type { LogSession } from "@/services/transport/types";
 import type { SubagentStateData } from "@/services/transport/types";
+import { randomId } from "@/shared/utils/randomId";
 import type { Phase } from "./PhaseIndicators";
 import type { PlanStep, StepStatus } from "./PlanBlock";
 import type { RecalledFact, SubagentInfo } from "./IntelligenceFeed";
@@ -85,7 +86,7 @@ function getOrCreateConversationId(): string {
 
   let convId = localStorage.getItem(WEB_CONV_ID_KEY);
   if (!convId) {
-    convId = `web-${crypto.randomUUID()}`;
+    convId = `web-${randomId()}`;
     localStorage.setItem(WEB_CONV_ID_KEY, convId);
   }
   return convId;
@@ -94,7 +95,7 @@ function getOrCreateConversationId(): string {
 /** Create a fresh conversation — clears session state so the next invoke creates a new session */
 function createNewConversationId(): string {
   localStorage.removeItem(WEB_SESSION_ID_KEY);
-  const convId = `web-${crypto.randomUUID()}`;
+  const convId = `web-${randomId()}`;
   localStorage.setItem(WEB_CONV_ID_KEY, convId);
   return convId;
 }
@@ -223,7 +224,7 @@ function handleToolCallSetSessionTitle(args: Record<string, unknown>, ctx: Event
 }
 
 function handleToolCallMemoryRecall(toolCallId: string, ctx: EventHandlerCtx): void {
-  const blockId = crypto.randomUUID();
+  const blockId = randomId();
   if (toolCallId) ctx.toolCallBlockMapRef.current.set(toolCallId, blockId);
   ctx.setBlocks((prev) => [
     ...prev,
@@ -281,7 +282,7 @@ function upsertPlanBlock(steps: PlanStep[], ctx: EventHandlerCtx): void {
       updated[existingIdx] = { ...updated[existingIdx], data: planData };
       return updated;
     }
-    return [...prev, { id: crypto.randomUUID(), type: "plan", timestamp: now(), data: planData }];
+    return [...prev, { id: randomId(), type: "plan", timestamp: now(), data: planData }];
   });
 }
 
@@ -300,7 +301,7 @@ export function handleToolCallRespond(args: Record<string, unknown>, ctx: EventH
     ctx.setBlocks((prev) => [
       ...prev,
       {
-        id: crypto.randomUUID(),
+        id: randomId(),
         type: "response",
         timestamp: now(),
         data: { content: respondMsg, timestamp: now() },
@@ -319,7 +320,7 @@ function handleToolCallDelegateToAgent(
 ): void {
   const delegateAgentId = (args.agent_id ?? args.agentId ?? "") as string;
   const task = (args.task ?? args.message ?? inputSummary) as string;
-  const blockId = crypto.randomUUID();
+  const blockId = randomId();
   if (toolCallId) ctx.toolCallBlockMapRef.current.set(toolCallId, blockId);
   ctx.setBlocks((prev) => [
     ...prev,
@@ -343,7 +344,7 @@ function handleToolCallGeneric(
   inputSummary: string,
   ctx: EventHandlerCtx,
 ): void {
-  const blockId = crypto.randomUUID();
+  const blockId = randomId();
   if (toolCallId) ctx.toolCallBlockMapRef.current.set(toolCallId, blockId);
   ctx.setBlocks((prev) => [
     ...prev,
@@ -510,7 +511,7 @@ function handleDelegationStarted(event: StreamEvent, ctx: EventHandlerCtx): void
     return [
       ...prev,
       {
-        id: crypto.randomUUID(),
+        id: randomId(),
         type: "delegation",
         timestamp: now(),
         data: { agentId: childAgentId, task, status: "active" },
@@ -658,7 +659,7 @@ function handleIntentAnalysisComplete(event: StreamEvent, ctx: EventHandlerCtx):
     return [
       ...prev,
       {
-        id: crypto.randomUUID(),
+        id: randomId(),
         type: "intent_analysis",
         timestamp: now(),
         data: { analysis: ia },
@@ -693,7 +694,7 @@ export function handleTurnComplete(event: StreamEvent, ctx: EventHandlerCtx): vo
       return [
         ...prev.map((b) => (b.isStreaming ? { ...b, isStreaming: false } : b)),
         {
-          id: crypto.randomUUID(),
+          id: randomId(),
           type: "response",
           timestamp: now(),
           data: { content: finalMessage, timestamp: now() },
@@ -715,7 +716,7 @@ export function handleAgentCompleted(event: StreamEvent, ctx: EventHandlerCtx): 
       return [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: randomId(),
           type: "response",
           timestamp: now(),
           data: { content: result, timestamp: now() },
@@ -749,7 +750,7 @@ function handleSystemOrMessage(event: StreamEvent, ctx: EventHandlerCtx): void {
     ctx.setBlocks((prev) => [
       ...prev,
       {
-        id: crypto.randomUUID(),
+        id: randomId(),
         type: "response",
         timestamp: now(),
         data: { content, timestamp: now() },
@@ -911,7 +912,7 @@ export function useMissionControl() {
       return [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: randomId(),
           type: "response",
           timestamp: now(),
           data: { content: buffered, timestamp: now() },
@@ -1254,7 +1255,7 @@ export function useMissionControl() {
       setBlocks((prev) => [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: randomId(),
           type: "user",
           timestamp: now(),
           data: {

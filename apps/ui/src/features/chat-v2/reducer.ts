@@ -1,3 +1,4 @@
+import { randomId } from "@/shared/utils/randomId";
 import type { QuickChatArtifactRef, QuickChatMessage, QuickChatState, QuickChatInlineChip } from "./types";
 
 export type QuickChatAction =
@@ -30,7 +31,7 @@ function upsertStreamingAssistant(
   return [
     ...messages,
     {
-      id: crypto.randomUUID(),
+      id: randomId(),
       role: "assistant",
       content: text,
       timestamp: Date.now(),
