@@ -17,7 +17,6 @@ import {
   ChevronRight,
   Loader2,
   Brain,
-  Mic,
 } from "lucide-react";
 import {
   getTransport,
@@ -58,7 +57,6 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
     temperature: agent.temperature,
     maxTokens: agent.maxTokens,
     thinkingEnabled: agent.thinkingEnabled,
-    voiceRecordingEnabled: agent.voiceRecordingEnabled,
     instructions: agent.instructions,
     mcps: agent.mcps || [],
     skills: agent.skills || [],
@@ -320,28 +318,6 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
               <div className="skill-toggle__info">
                 <div className="skill-toggle__name">Thinking Enabled</div>
                 <div className="skill-toggle__desc">Allow the model to show reasoning steps</div>
-              </div>
-            </div>
-
-            {/* Voice toggle */}
-            <div
-              className="skill-toggle"
-              role="button"
-              tabIndex={0}
-              onClick={() => setFormData({ ...formData, voiceRecordingEnabled: !formData.voiceRecordingEnabled })}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setFormData({ ...formData, voiceRecordingEnabled: !formData.voiceRecordingEnabled }); }}
-            >
-              <button
-                className={`toggle-switch ${formData.voiceRecordingEnabled ? "toggle-switch--on" : "toggle-switch--off"}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setFormData({ ...formData, voiceRecordingEnabled: !formData.voiceRecordingEnabled });
-                }}
-              />
-              <Mic style={{ width: 16, height: 16, color: "var(--muted-foreground)" }} />
-              <div className="skill-toggle__info">
-                <div className="skill-toggle__name">Voice Recording</div>
-                <div className="skill-toggle__desc">Enable voice input for this agent</div>
               </div>
             </div>
 
