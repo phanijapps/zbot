@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Trash2 } from "lucide-react";
 import type { MemoryFact, MemoryCategory } from "@/services/transport/types";
 
 interface MemoryFactCardProps {
@@ -45,6 +46,7 @@ export function MemoryFactCard({
 
   const handleDelete = async () => {
     if (isDeleting) return;
+    if (typeof window !== "undefined" && !window.confirm(`Delete this ${fact.category} memory?`)) return;
     setIsDeleting(true);
     try {
       onDelete();
@@ -129,6 +131,40 @@ export function MemoryFactCard({
         >
           {confidencePercent}%
         </span>
+        <button
+          type="button"
+          aria-label={`Delete ${fact.category} memory`}
+          title="Delete memory"
+          disabled={isDeleting}
+          onClick={(e) => {
+            e.stopPropagation();
+            void handleDelete();
+          }}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 24,
+            height: 24,
+            padding: 0,
+            background: "transparent",
+            border: "1px solid transparent",
+            borderRadius: "var(--radius-sm)",
+            color: "var(--muted-foreground)",
+            cursor: isDeleting ? "wait" : "pointer",
+            opacity: isDeleting ? 0.5 : 1,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = "var(--destructive)";
+            e.currentTarget.style.background = "var(--destructive-muted)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = "var(--muted-foreground)";
+            e.currentTarget.style.background = "transparent";
+          }}
+        >
+          <Trash2 size={14} />
+        </button>
       </div>
 
       {isExpanded && (
@@ -185,24 +221,6 @@ export function MemoryFactCard({
               <span style={{ opacity: 0.7 }}>Source:</span> {fact.source_summary}
             </div>
           )}
-          <button
-            style={{
-              fontSize: "var(--text-xs)",
-              color: "var(--destructive)",
-              background: "none",
-              border: "none",
-              cursor: isDeleting ? "wait" : "pointer",
-              opacity: isDeleting ? 0.5 : 1,
-              padding: 0,
-            }}
-            onClick={(e) => {
-              e.stopPropagation();
-              handleDelete();
-            }}
-            disabled={isDeleting}
-          >
-            {isDeleting ? "Deleting..." : "Delete"}
-          </button>
         </div>
       )}
     </div>

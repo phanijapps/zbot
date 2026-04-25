@@ -19,6 +19,7 @@ export interface ContentListItem {
 interface Props {
   items: ContentListItem[];
   timewarpDays?: number;
+  onDelete?: (id: string) => void | Promise<void>;
 }
 
 const LABEL: Record<AgeBucket, string> = {
@@ -33,7 +34,7 @@ function visibleBuckets(days: number | undefined): AgeBucket[] {
   return ["today"];
 }
 
-export function ContentList({ items, timewarpDays }: Props) {
+export function ContentList({ items, timewarpDays, onDelete }: Props) {
   const visible = visibleBuckets(timewarpDays);
   const groups: Record<AgeBucket, ContentListItem[]> = {
     today: [],
@@ -52,7 +53,7 @@ export function ContentList({ items, timewarpDays }: Props) {
               <span>{groups[b].length} items</span>
             </h3>
             {groups[b].map((it) => (
-              <MemoryItemCard key={it.id} {...it} />
+              <MemoryItemCard key={it.id} {...it} onDelete={onDelete} />
             ))}
           </section>
         ) : null,

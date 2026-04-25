@@ -15,8 +15,10 @@
   font-size: 11px;
   padding: 3px 10px;
   border-radius: 10px;
-  background: rgba(100, 200, 255, 0.1);
-  color: rgb(140, 220, 255);
+  background: var(--primary-muted);
+  color: var(--fx-accent);
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
 }
 .quick-chat__ward-chip--muted { opacity: 0.5; background: transparent; color: var(--muted-foreground); }
 .quick-chat__actions { display: flex; gap: 8px; align-items: center; }
@@ -77,18 +79,24 @@
   max-width: 80%;
   padding: 10px 14px;
   border-radius: 14px 14px 2px 14px;
-  background: var(--primary, rgba(100, 200, 255, 0.15));
-  color: var(--foreground);
+  background: linear-gradient(135deg, var(--fx-accent), color-mix(in srgb, var(--fx-accent) 60%, #c08bff));
+  color: #02030a;
   font-size: 14px;
+  font-weight: 500;
   white-space: pre-wrap;
+  box-shadow: 0 0 calc(24px * var(--fx-glow)) color-mix(in srgb, var(--fx-accent) 35%, transparent);
 }
-/* Assistant bubble — matches FastChat's rounded card styling. */
+/* Assistant bubble — holo card with accent-tinted border + glow. */
 .quick-chat__assistant {
   max-width: 80%;
   padding: 10px 14px;
   border-radius: 14px 14px 14px 2px;
-  background: var(--card);
-  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(13, 16, 24, 0.85), rgba(10, 12, 20, 0.85));
+  border: 1px solid color-mix(in srgb, var(--fx-accent) 18%, transparent);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.3),
+    0 0 calc(20px * var(--fx-glow)) color-mix(in srgb, var(--fx-accent) 8%, transparent);
+  backdrop-filter: blur(6px);
   color: var(--foreground);
   font-size: 14px;
   line-height: 1.6;
@@ -117,18 +125,19 @@
   gap: 6px;
   padding: 6px 10px;
   border-radius: 6px;
-  background: var(--background-surface);
-  border: 1px solid var(--border);
+  background: rgba(13, 16, 24, 0.7);
+  border: 1px solid color-mix(in srgb, var(--fx-accent) 18%, transparent);
   color: var(--foreground);
   font-size: 12px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
   max-width: 100%;
+  backdrop-filter: blur(4px);
 }
 .quick-chat__artifact-card:hover {
-  border-color: var(--primary);
-  background: var(--background-elevated);
+  border-color: var(--fx-accent);
+  box-shadow: 0 0 calc(12px * var(--fx-glow)) color-mix(in srgb, var(--fx-accent) 22%, transparent);
 }
 .quick-chat__artifact-icon {
   color: var(--primary);
