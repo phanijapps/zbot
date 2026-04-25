@@ -130,26 +130,38 @@ impl<D: DbProvider> LogsRepository<D> {
     ///    `HAVING` filter excludes the subagent entirely.
     pub fn list_sessions(&self, filter: &LogFilter) -> Result<Vec<LogSession>, String> {
         self.db.with_connection(|conn| {
+            // Continuation turns (see `runner::invoke_continuation`) reuse the
+            // root execution id but mint a fresh `<sess>-cont-<hex>`
+            // conversation_id per turn. They group with the root via the
+            // shared exec id (`GROUP BY e.session_id`), but SQLite's
+            // arbitrary pick for the non-aggregated `conversation_id` column
+            // would sometimes display a `-cont-` value as the row's id. The
+            // CTE normalizes each log row's conversation_id to its canonical
+            // session id; the outer query then has a uniform value per group,
+            // so SELECT/JOIN/display all line up regardless of which physical
+            // row SQLite picks.
             let mut sql = String::from(
-                "SELECT
-                    e.session_id,
-                    e.conversation_id,
-                    e.agent_id,
-                    MIN(e.timestamp) as started_at,
-                    MAX(e.timestamp) as ended_at,
-                    COUNT(*) as log_count,
-                    SUM(CASE WHEN e.category = 'token' THEN 1 ELSE 0 END) as token_count,
-                    SUM(CASE WHEN e.category = 'tool_call' THEN 1 ELSE 0 END) as tool_call_count,
-                    SUM(CASE WHEN e.level = 'error' THEN 1 ELSE 0 END) as error_count,
-                    MAX(e.parent_session_id) as parent_session_id,
-                    s.title as session_title,
-                    s.status as session_status,
-                    ae.parent_execution_id as ae_parent,
-                    s.mode as session_mode
-                FROM execution_logs e
-                LEFT JOIN sessions s ON s.id = e.conversation_id
-                LEFT JOIN agent_executions ae ON ae.id = e.session_id
-                WHERE 1=1",
+                "WITH normalized AS (
+                    SELECT
+                        e.session_id,
+                        CASE
+                          -- Anchor to a literal continuation suffix at the
+                          -- end of the string: `-cont-<8 chars>` (runtime
+                          -- always uses the first UUID segment — exactly 8
+                          -- hex chars). The 8 underscores below are LIKE
+                          -- single-char wildcards. Ids that merely contain
+                          -- `-cont-` mid-string don't match.
+                          WHEN e.conversation_id LIKE '%-cont-________'
+                            THEN SUBSTR(e.conversation_id, 1, LENGTH(e.conversation_id) - 14)
+                          ELSE e.conversation_id
+                        END AS conversation_id,
+                        e.agent_id,
+                        e.timestamp,
+                        e.category,
+                        e.level,
+                        e.parent_session_id
+                    FROM execution_logs e
+                    WHERE 1=1",
             );
 
             let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -174,7 +186,28 @@ impl<D: DbProvider> LogsRepository<D> {
                 params_vec.push(Box::new(to_time.clone()));
             }
 
-            sql.push_str(" GROUP BY e.session_id");
+            sql.push_str(
+                ")
+                SELECT
+                    e.session_id,
+                    e.conversation_id,
+                    e.agent_id,
+                    MIN(e.timestamp) as started_at,
+                    MAX(e.timestamp) as ended_at,
+                    COUNT(*) as log_count,
+                    SUM(CASE WHEN e.category = 'token' THEN 1 ELSE 0 END) as token_count,
+                    SUM(CASE WHEN e.category = 'tool_call' THEN 1 ELSE 0 END) as tool_call_count,
+                    SUM(CASE WHEN e.level = 'error' THEN 1 ELSE 0 END) as error_count,
+                    MAX(e.parent_session_id) as parent_session_id,
+                    s.title as session_title,
+                    s.status as session_status,
+                    ae.parent_execution_id as ae_parent,
+                    s.mode as session_mode
+                FROM normalized e
+                LEFT JOIN sessions s ON s.id = e.conversation_id
+                LEFT JOIN agent_executions ae ON ae.id = e.session_id
+                GROUP BY e.session_id",
+            );
             if filter.root_only {
                 sql.push_str(" HAVING MAX(e.parent_session_id) IS NULL");
             }
@@ -706,6 +739,113 @@ mod tests {
             .expect("research session row");
         assert_eq!(chat.mode.as_deref(), Some("fast"));
         assert!(research.mode.is_none());
+    }
+
+    /// Continuation log rows (`<sess>-cont-<hex>`) must collapse into the
+    /// canonical session row so the sidebar shows one entry per session, not
+    /// one per continuation turn. Regression guard for the "delete one,
+    /// another pops up" UX bug.
+    #[test]
+    fn list_sessions_collapses_continuation_conversation_ids() {
+        let repo = setup_repo();
+        let db = repo.db.clone();
+        // The session row exists under the canonical id.
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO sessions (id, status, root_agent_id, title, created_at, mode) \
+                 VALUES ('sess-cont-stem', 'completed', 'root', 'My session', '2026-04-24', 'fast')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        // One log under the canonical conversation_id, plus three continuation
+        // turns each with a distinct -cont- conversation_id but a shared exec.
+        repo.insert_log(&make_log(
+            "exec-shared",
+            "sess-cont-stem",
+            "root",
+            LogLevel::Info,
+            LogCategory::Session,
+            "start",
+        ))
+        .unwrap();
+        for sfx in ["aaaaaaaa", "bbbbbbbb", "cccccccc"] {
+            repo.insert_log(&make_log(
+                "exec-shared",
+                &format!("sess-cont-stem-cont-{}", sfx),
+                "root",
+                LogLevel::Info,
+                LogCategory::Session,
+                "cont",
+            ))
+            .unwrap();
+        }
+
+        // root_only=true should surface exactly one row, keyed on the
+        // canonical id, with the title resolved via the sessions JOIN.
+        let sessions = repo
+            .list_sessions(&LogFilter {
+                root_only: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            sessions.len(),
+            1,
+            "all three continuation turns should collapse into the canonical session row"
+        );
+        let row = &sessions[0];
+        assert_eq!(row.conversation_id, "sess-cont-stem");
+        assert_eq!(row.title.as_deref(), Some("My session"));
+        assert_eq!(row.mode.as_deref(), Some("fast"));
+    }
+
+    /// Two unrelated stems must not bleed into each other when only one of
+    /// them has continuations and they share no logical relationship.
+    #[test]
+    fn list_sessions_continuation_collapse_does_not_merge_distinct_stems() {
+        let repo = setup_repo();
+        repo.insert_log(&make_log(
+            "exec-1",
+            "sess-alpha",
+            "root",
+            LogLevel::Info,
+            LogCategory::Session,
+            "start",
+        ))
+        .unwrap();
+        repo.insert_log(&make_log(
+            "exec-1",
+            "sess-alpha-cont-11111111",
+            "root",
+            LogLevel::Info,
+            LogCategory::Session,
+            "cont",
+        ))
+        .unwrap();
+        repo.insert_log(&make_log(
+            "exec-2",
+            "sess-beta",
+            "root",
+            LogLevel::Info,
+            LogCategory::Session,
+            "start",
+        ))
+        .unwrap();
+
+        let sessions = repo
+            .list_sessions(&LogFilter {
+                root_only: true,
+                ..Default::default()
+            })
+            .unwrap();
+        let ids: std::collections::HashSet<_> =
+            sessions.iter().map(|s| s.conversation_id.clone()).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains("sess-alpha"));
+        assert!(ids.contains("sess-beta"));
     }
 
     #[test]

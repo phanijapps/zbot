@@ -127,14 +127,12 @@ pub async fn init_chat_session(
 
 /// DELETE /api/chat/session
 ///
-/// Archives the current reserved chat session by clearing the
-/// `settings.chat` slot. The underlying DB rows are kept (users can
-/// still recover past conversations through the Logs page). The next
-/// call to `POST /api/chat/init` self-heals into a fresh session.
-///
-/// This is the recovery path for context-window blowouts — the reserved
-/// session has no automatic compaction yet, so heavy users eventually
-/// need to start over.
+/// Hard-deletes the current reserved chat session, every descendant
+/// subagent session it spawned, and all per-session data for that
+/// subtree, then clears the `settings.chat` slot. Memory facts and
+/// the knowledge graph are preserved — only the conversation rows
+/// disappear. The next call to `POST /api/chat/init` self-heals into
+/// a fresh session.
 pub async fn clear_chat_session(
     State(state): State<AppState>,
 ) -> Result<StatusCode, (StatusCode, String)> {
@@ -146,6 +144,28 @@ pub async fn clear_chat_session(
     // No-op if the slot is already empty — still return 204 for idempotency.
     if settings.chat.session_id.is_none() && settings.chat.conversation_id.is_none() {
         return Ok(StatusCode::NO_CONTENT);
+    }
+
+    // Cascade-delete the subtree before clearing the slot. If the cascade
+    // fails, leave the slot intact so the next clear can retry — partial
+    // success (slot cleared but rows still in DB) would be worse.
+    if let Some(session_id) = settings.chat.session_id.clone() {
+        let runner = state.runtime.runner().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Runtime not available".to_string(),
+            )
+        })?;
+        let state_service = runner.state_service();
+        let rows = state_service
+            .delete_session_recursive_cascade(&session_id)
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to delete chat session subtree: {}", e),
+                )
+            })?;
+        tracing::info!(session_id = %session_id, rows, "cleared chat session subtree");
     }
 
     let mut updated = settings.clone();

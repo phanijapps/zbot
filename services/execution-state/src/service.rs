@@ -337,6 +337,16 @@ impl<D: StateDbProvider> StateService<D> {
         self.repo.delete_session_cascade(session_id)
     }
 
+    /// Hard-delete a session **and every descendant subagent session**.
+    ///
+    /// Walks `sessions.parent_session_id` recursively to cover the full
+    /// subtree, then runs the same per-table cascade as
+    /// [`Self::delete_session_cascade`]. Memory and knowledge-graph rows
+    /// are preserved by the same invariant.
+    pub fn delete_session_recursive_cascade(&self, root_session_id: &str) -> Result<usize, String> {
+        self.repo.delete_session_recursive_cascade(root_session_id)
+    }
+
     /// Delete sessions older than a given timestamp.
     pub fn delete_old_sessions(&self, older_than: &str) -> Result<u64, String> {
         self.repo.delete_old_sessions(older_than)
