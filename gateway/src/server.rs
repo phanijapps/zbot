@@ -134,9 +134,23 @@ impl GatewayServer {
         let (shutdown_tx, _) = broadcast::channel(1);
         self.shutdown_tx = Some(shutdown_tx.clone());
 
-        // Start HTTP server
+        // Spawn the WS background tasks (subscription cleanup + event
+        // router) BEFORE any WS transport starts accepting connections.
+        // These used to live inside `WebSocketHandler::run` — moving them
+        // out fixes a regression where the unified-port mode
+        // (`run` disabled by default) left the event router unspawned,
+        // so invokes ran server-side but no tokens reached the UI.
+        self.ws_handler.spawn_background_tasks(&shutdown_tx);
+
+        // Start HTTP server. The WebSocket upgrade route (`/ws`) shares
+        // this listener — mobile clients and single-port deployments
+        // don't need a second firewall hole.
         let http_addr = self.config.http_addr();
-        let http_router = create_http_router(self.config.clone(), self.state.clone());
+        let http_router = create_http_router(
+            self.config.clone(),
+            self.state.clone(),
+            self.ws_handler.clone(),
+        );
         let http_shutdown_rx = shutdown_tx.subscribe();
 
         tokio::spawn(async move {
@@ -160,23 +174,39 @@ impl GatewayServer {
             }
         });
 
-        // Start WebSocket server
-        let ws_addr = self.config.ws_addr();
-        let ws_handler = self.ws_handler.clone();
-        let ws_shutdown_rx = shutdown_tx.subscribe();
+        // Legacy standalone WebSocket port. Kept for one release cycle so
+        // external integrations that hardcoded `ws://host:18790` have a
+        // grace window to migrate to the unified `ws://host:<http>/ws`
+        // endpoint. Disabled by default — flip `legacy_ws_port_enabled`
+        // on the config only if you need the old behavior.
+        if self.config.legacy_ws_port_enabled {
+            let ws_addr = self.config.ws_addr();
+            let ws_handler = self.ws_handler.clone();
+            let ws_shutdown_rx = shutdown_tx.subscribe();
 
-        tokio::spawn(async move {
-            info!("Starting WebSocket server on {}", ws_addr);
-            if let Err(e) = ws_handler.run(&ws_addr, ws_shutdown_rx).await {
-                warn!("WebSocket server error: {}", e);
-            }
-        });
+            tokio::spawn(async move {
+                warn!(
+                    "Starting LEGACY WebSocket server on {} — prefer \
+                     ws://<host>:<http_port>/ws; this bind will be \
+                     removed in a future release",
+                    ws_addr
+                );
+                if let Err(e) = ws_handler.run(&ws_addr, ws_shutdown_rx).await {
+                    warn!("Legacy WebSocket server error: {}", e);
+                }
+            });
 
-        info!(
-            "Gateway started - HTTP: {}, WebSocket: {}",
-            self.config.http_addr(),
-            self.config.ws_addr()
-        );
+            info!(
+                "Gateway started - HTTP+WS: {}, legacy WS: {}",
+                self.config.http_addr(),
+                self.config.ws_addr()
+            );
+        } else {
+            info!(
+                "Gateway started - HTTP+WS (unified): {}",
+                self.config.http_addr()
+            );
+        }
 
         Ok(())
     }

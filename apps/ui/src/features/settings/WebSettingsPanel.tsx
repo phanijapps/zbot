@@ -386,7 +386,7 @@ export function WebSettingsPanel() {
                 <Activity style={{ width: 14, height: 14, color: "var(--primary)", flexShrink: 0 }} />
                 <span>API <code style={{ color: "var(--foreground)" }}>localhost:18791</code></span>
                 <span style={{ opacity: 0.3 }}>|</span>
-                <span>WS <code style={{ color: "var(--foreground)" }}>localhost:18790</code></span>
+                <span>WS <code style={{ color: "var(--foreground)" }}>localhost:18791/ws</code></span>
                 <span style={{ opacity: 0.3 }}>|</span>
                 <span>Data <code style={{ color: "var(--foreground)" }}>~/Documents/zbot/</code></span>
               </div>

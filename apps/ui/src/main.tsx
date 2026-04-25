@@ -17,7 +17,11 @@ const configureGateway = () => {
   if (httpUrl || wsUrl) {
     (window as { __ZERO_CONFIG__?: { httpUrl: string; wsUrl: string } }).__ZERO_CONFIG__ = {
       httpUrl: httpUrl || "http://localhost:18791",
-      wsUrl: wsUrl || "ws://localhost:18790",
+      // Unified-port default: WebSocket upgrade lives at /ws on the HTTP
+      // port. Phones and reverse proxies no longer need a second port
+      // open. Override via ?gateway_ws=... if you're running
+      // --legacy-ws-port-enabled on the daemon.
+      wsUrl: wsUrl || "ws://localhost:18791/ws",
     };
   }
 };

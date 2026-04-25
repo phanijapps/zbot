@@ -35,6 +35,16 @@ pub struct GatewayConfig {
     /// Enable serving the web dashboard.
     #[serde(default = "default_serve_dashboard")]
     pub serve_dashboard: bool,
+
+    /// Bind the legacy standalone WebSocket port (`websocket_port`).
+    ///
+    /// Off by default — the gateway now serves WebSocket traffic on the
+    /// HTTP port at `/ws`, so mobile clients and reverse-proxy setups
+    /// don't need a second firewall hole. Flip this on only if you have
+    /// external integrations that hardcoded `ws://host:18790` and haven't
+    /// migrated yet. Slated for removal in a future release.
+    #[serde(default)]
+    pub legacy_ws_port_enabled: bool,
 }
 
 fn default_serve_dashboard() -> bool {
@@ -66,6 +76,7 @@ impl Default for GatewayConfig {
             ],
             static_dir: None,
             serve_dashboard: true,
+            legacy_ws_port_enabled: false,
         }
     }
 }

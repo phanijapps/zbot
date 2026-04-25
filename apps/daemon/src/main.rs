@@ -67,13 +67,23 @@ use tracing_subscriber::{
 #[command(name = "zerod")]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// WebSocket port
+    /// Legacy standalone WebSocket port.
+    ///
+    /// Off by default — the gateway now serves WebSocket traffic on the
+    /// HTTP port at `/ws`. This value is only used when
+    /// `--legacy-ws-port-enabled` is set.
     #[arg(long, default_value_t = gateway::DEFAULT_WS_PORT)]
     ws_port: u16,
 
-    /// HTTP port
+    /// HTTP port. Also hosts the unified WebSocket upgrade at `/ws`.
     #[arg(long, default_value_t = gateway::DEFAULT_HTTP_PORT)]
     http_port: u16,
+
+    /// Bind the legacy standalone WebSocket port in addition to the
+    /// unified `/ws` endpoint. For external integrations that haven't
+    /// migrated from `ws://host:18790` yet. Slated for removal.
+    #[arg(long)]
+    legacy_ws_port_enabled: bool,
 
     /// Host address to bind to. Default binds to all interfaces so the
     /// daemon is reachable from other devices on the LAN. Override with
@@ -393,6 +403,7 @@ async fn main() -> Result<()> {
             host: args.host.parse()?,
             websocket_port: args.ws_port,
             http_port: args.http_port,
+            legacy_ws_port_enabled: args.legacy_ws_port_enabled,
             ..Default::default()
         }
     };

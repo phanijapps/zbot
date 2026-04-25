@@ -10,9 +10,10 @@ mod common;
 
 use axum_test::TestServer;
 use common::{make_state, now_iso};
-use gateway::{http::create_http_router, GatewayConfig};
+use gateway::{http::create_http_router, websocket::WebSocketHandler, GatewayConfig};
 use gateway_database::MemoryFact;
 use serde_json::Value;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 /// Build a minimal `TestServer` + seed one memory fact whose content contains
@@ -53,7 +54,11 @@ fn setup_with_seeded_fact(agent_id: &str) -> (TestServer, TempDir) {
         .upsert_memory_fact(&fact)
         .expect("upsert fact");
 
-    let router = create_http_router(GatewayConfig::default(), state);
+    let ws_handler = Arc::new(WebSocketHandler::new(
+        state.event_bus.clone(),
+        state.runtime.clone(),
+    ));
+    let router = create_http_router(GatewayConfig::default(), state, ws_handler);
     let server = TestServer::new(router).expect("test server");
 
     (server, dir)

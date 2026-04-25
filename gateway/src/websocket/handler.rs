@@ -49,17 +49,28 @@ impl WebSocketHandler {
         self.sessions.clone()
     }
 
-    /// Run the WebSocket server.
-    pub async fn run(&self, addr: &str, mut shutdown: broadcast::Receiver<()>) -> Result<()> {
-        let listener = TcpListener::bind(addr)
-            .await
-            .map_err(|e| GatewayError::ServerStartup(e.to_string()))?;
+    /// Get the runtime service. Exposed so the Axum-path handler can
+    /// dispatch incoming client messages through the shared forwarder.
+    pub fn runtime(&self) -> Arc<RuntimeService> {
+        self.runtime.clone()
+    }
 
-        info!("WebSocket server listening on {}", addr);
-
-        // Spawn background cleanup task for stale clients
+    /// Spawn the two background tasks that MUST run regardless of which WS
+    /// transport (legacy standalone or unified Axum route) is accepting
+    /// connections:
+    ///
+    ///   1. **Subscription cleanup** — evicts stale clients every 30s.
+    ///   2. **Event router** — drains the `EventBus` and routes each event
+    ///      through `SubscriptionManager` to every subscribed client.
+    ///
+    /// Regression history: these tasks used to be spawned inside
+    /// [`Self::run`]. When the unified-port change defaulted legacy `run`
+    /// to off, the router stopped running — every invoke ran server-side
+    /// but no events reached the UI (silent failure). Extracting them
+    /// here so `Server::start` can spawn them unconditionally.
+    pub fn spawn_background_tasks(&self, shutdown: &broadcast::Sender<()>) {
         let cleanup_subscriptions = self.subscriptions.clone();
-        let mut cleanup_shutdown = shutdown.resubscribe();
+        let mut cleanup_shutdown = shutdown.subscribe();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
             loop {
@@ -80,113 +91,142 @@ impl WebSocketHandler {
             }
         });
 
-        // Spawn central event router - routes events to subscribed clients
         let router_subscriptions = self.subscriptions.clone();
         let router_runtime = self.runtime.clone();
         let mut router_event_rx = self.event_bus.subscribe_all();
-        let mut router_shutdown = shutdown.resubscribe();
+        let mut router_shutdown = shutdown.subscribe();
         tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    result = router_event_rx.recv() => {
-                        match result {
-                            Ok(event) => {
-                                // Debug: log delegation events
-                                if matches!(&event, GatewayEvent::DelegationCompleted { .. } | GatewayEvent::DelegationStarted { .. }) {
-                                    info!("Event router received: {:?}", event);
-                                }
+            Self::run_event_router(
+                router_subscriptions,
+                router_runtime,
+                &mut router_event_rx,
+                &mut router_shutdown,
+            )
+            .await;
+        });
+    }
 
-                                // Check for new root executions on AgentStarted events
-                                // If a new root is detected, update the cache for session-scoped subscribers
-                                if let GatewayEvent::AgentStarted { session_id, execution_id, conversation_id, .. } = &event {
-                                    info!(
-                                        session_id = %session_id,
-                                        execution_id = %execution_id,
-                                        conversation_id = ?conversation_id,
-                                        "AgentStarted event received"
-                                    );
-                                    // Look up the execution to check if it's a root
-                                    if let Some(runner) = router_runtime.runner() {
-                                        let state_service = runner.state_service();
-                                        if let Ok(Some(execution)) = state_service.get_execution(execution_id) {
-                                            // Root executions have no parent_execution_id
-                                            if execution.parent_execution_id.is_none() {
-                                                info!(
-                                                    session_id = %session_id,
-                                                    execution_id = %execution_id,
-                                                    conversation_id = ?conversation_id,
-                                                    "New root execution detected, updating scope caches"
-                                                );
-                                                // Update cache for session_id subscribers
-                                                router_subscriptions
-                                                    .add_root_to_caches(session_id, execution_id)
-                                                    .await;
-                                                            }
-                                        }
-                                    }
-                                }
+    /// Event-router loop extracted so the spawn site above stays readable.
+    async fn run_event_router(
+        router_subscriptions: Arc<SubscriptionManager>,
+        router_runtime: Arc<RuntimeService>,
+        router_event_rx: &mut tokio::sync::broadcast::Receiver<GatewayEvent>,
+        router_shutdown: &mut broadcast::Receiver<()>,
+    ) {
+        loop {
+            tokio::select! {
+                result = router_event_rx.recv() => {
+                    match result {
+                        Ok(event) => {
+                            // Debug: log delegation events
+                            if matches!(&event, GatewayEvent::DelegationCompleted { .. } | GatewayEvent::DelegationStarted { .. }) {
+                                info!("Event router received: {:?}", event);
+                            }
 
-                                // Extract metadata for scope-based filtering
-                                let metadata = gateway_event_to_metadata(&event);
-
-                                // Route events by session_id only.
-                                // Clients auto-subscribe to session_id on invoke, so all events
-                                // are delivered through a single path (no duplicates).
-                                let session_id = event.session_id().map(|s| s.to_string());
-
-                                if let Some(server_msg) = gateway_event_to_server_message(event) {
-                                    let mut total_sent = 0u64;
-
-                                    // Route by session_id (for session-based subscriptions)
-                                    // Uses scoped routing - filters based on subscriber's scope
-                                    if let Some(ref sid) = session_id {
-                                        let result = router_subscriptions
-                                            .route_event_scoped(sid, server_msg.clone(), &metadata)
-                                            .await;
-                                        total_sent += result.sent;
-
-                                        if result.sent > 0 {
-                                            debug!(
-                                                session_id = %sid,
-                                                sent = result.sent,
-                                                "Routed event by session_id (scoped)"
+                            // Check for new root executions on AgentStarted events
+                            // If a new root is detected, update the cache for session-scoped subscribers
+                            if let GatewayEvent::AgentStarted { session_id, execution_id, conversation_id, .. } = &event {
+                                info!(
+                                    session_id = %session_id,
+                                    execution_id = %execution_id,
+                                    conversation_id = ?conversation_id,
+                                    "AgentStarted event received"
+                                );
+                                // Look up the execution to check if it's a root
+                                if let Some(runner) = router_runtime.runner() {
+                                    let state_service = runner.state_service();
+                                    if let Ok(Some(execution)) = state_service.get_execution(execution_id) {
+                                        // Root executions have no parent_execution_id
+                                        if execution.parent_execution_id.is_none() {
+                                            info!(
+                                                session_id = %session_id,
+                                                execution_id = %execution_id,
+                                                conversation_id = ?conversation_id,
+                                                "New root execution detected, updating scope caches"
                                             );
-                                        }
-                                    }
-
-                                    // If no subscribers found, log for debugging
-                                    if total_sent == 0 && session_id.is_some() {
-                                        warn!(
-                                            session_id = ?session_id,
-                                            "No subscribers found for event"
-                                        );
-                                    } else if total_sent > 0 {
-                                        debug!(
-                                            session_id = ?session_id,
-                                            total_sent = total_sent,
-                                            "Event routed successfully"
-                                        );
-                                    }
-
-                                    // Global events (like Pong) with no identifiers - broadcast to all
-                                    if session_id.is_none() {
-                                        router_subscriptions.broadcast_global(server_msg).await;
+                                            // Update cache for session_id subscribers
+                                            router_subscriptions
+                                                .add_root_to_caches(session_id, execution_id)
+                                                .await;
+                                                        }
                                     }
                                 }
                             }
-                            Err(e) => {
-                                error!("Event router receive error: {}", e);
-                                break;
+
+                            // Extract metadata for scope-based filtering
+                            let metadata = gateway_event_to_metadata(&event);
+
+                            // Route events by session_id only.
+                            // Clients auto-subscribe to session_id on invoke, so all events
+                            // are delivered through a single path (no duplicates).
+                            let session_id = event.session_id().map(|s| s.to_string());
+
+                            if let Some(server_msg) = gateway_event_to_server_message(event) {
+                                let mut total_sent = 0u64;
+
+                                // Route by session_id (for session-based subscriptions)
+                                // Uses scoped routing - filters based on subscriber's scope
+                                if let Some(ref sid) = session_id {
+                                    let result = router_subscriptions
+                                        .route_event_scoped(sid, server_msg.clone(), &metadata)
+                                        .await;
+                                    total_sent += result.sent;
+
+                                    if result.sent > 0 {
+                                        debug!(
+                                            session_id = %sid,
+                                            sent = result.sent,
+                                            "Routed event by session_id (scoped)"
+                                        );
+                                    }
+                                }
+
+                                // If no subscribers found, log for debugging
+                                if total_sent == 0 && session_id.is_some() {
+                                    warn!(
+                                        session_id = ?session_id,
+                                        "No subscribers found for event"
+                                    );
+                                } else if total_sent > 0 {
+                                    debug!(
+                                        session_id = ?session_id,
+                                        total_sent = total_sent,
+                                        "Event routed successfully"
+                                    );
+                                }
+
+                                // Global events (like Pong) with no identifiers - broadcast to all
+                                if session_id.is_none() {
+                                    router_subscriptions.broadcast_global(server_msg).await;
+                                }
                             }
                         }
-                    }
-                    _ = router_shutdown.recv() => {
-                        debug!("Event router shutting down");
-                        break;
+                        Err(e) => {
+                            error!("Event router receive error: {}", e);
+                            break;
+                        }
                     }
                 }
+                _ = router_shutdown.recv() => {
+                    debug!("Event router shutting down");
+                    break;
+                }
             }
-        });
+        }
+    }
+
+    /// Run the legacy standalone WebSocket server.
+    ///
+    /// Only called when `GatewayConfig::legacy_ws_port_enabled` is set.
+    /// Background tasks (cleanup + event router) are NOT spawned here any
+    /// more — `Server::start` spawns them unconditionally so the unified
+    /// `/ws` route also routes events correctly.
+    pub async fn run(&self, addr: &str, mut shutdown: broadcast::Receiver<()>) -> Result<()> {
+        let listener = TcpListener::bind(addr)
+            .await
+            .map_err(|e| GatewayError::ServerStartup(e.to_string()))?;
+
+        info!("WebSocket server listening on {}", addr);
 
         loop {
             tokio::select! {
@@ -320,6 +360,19 @@ async fn handle_connection(
     info!("Session {} disconnected", session_id);
 
     Ok(())
+}
+
+/// Public alias for the Axum-path handler so it can dispatch a parsed
+/// [`ClientMessage`] through the shared dispatcher without reimplementing
+/// the per-variant routing.
+pub(super) async fn forward_client_message(
+    session_id: &str,
+    msg: ClientMessage,
+    sessions: &SessionRegistry,
+    runtime: &RuntimeService,
+    subscriptions: Arc<SubscriptionManager>,
+) -> Result<()> {
+    handle_client_message(session_id, msg, sessions, runtime, subscriptions).await
 }
 
 /// Handle a client message.
