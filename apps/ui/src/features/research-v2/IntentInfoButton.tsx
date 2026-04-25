@@ -35,7 +35,7 @@ export function IntentInfoButton({ sessionId }: IntentInfoButtonProps) {
   const [intent, setIntent] = useState<IntentAnalysisJson | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const popoverRef = useRef<HTMLDialogElement | null>(null);
 
   // Click-outside → close.
   useEffect(() => {
@@ -101,7 +101,7 @@ export function IntentInfoButton({ sessionId }: IntentInfoButtonProps) {
         <Info size={14} />
       </button>
       {open && (
-        <div className="intent-info__popover" ref={popoverRef} role="dialog" aria-label="Intent analysis">
+        <dialog open className="intent-info__popover" ref={popoverRef} aria-label="Intent analysis">
           <div className="intent-info__header">
             <span>Intent analysis</span>
             <button
@@ -118,7 +118,7 @@ export function IntentInfoButton({ sessionId }: IntentInfoButtonProps) {
             {error && <div className="intent-info__error">{error}</div>}
             {!loading && !error && <IntentDetails data={intent} />}
           </div>
-        </div>
+        </dialog>
       )}
     </span>
   );
@@ -147,7 +147,7 @@ function IntentDetails({ data }: { data: IntentAnalysisJson | null }) {
           <dt>Hidden intents</dt>
           <dd>
             <ul>
-              {hidden.map((h, i) => <li key={i}>{h}</li>)}
+              {hidden.map((h) => <li key={h}>{h}</li>)}
             </ul>
           </dd>
         </>

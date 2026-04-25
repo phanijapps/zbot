@@ -876,43 +876,43 @@ impl EmbeddingService {
                 ticker.tick().await;
                 let cfg = self.config_snapshot();
                 match cfg.backend {
-                    EmbeddingBackend::Unconfigured => {
-                        // No backend selected — nothing to probe.
-                        continue;
-                    }
-                    EmbeddingBackend::Internal => {
-                        // Nothing to probe; ensure health reflects readiness
-                        // (don't stomp on Reindexing/Pulling transitions).
-                        if matches!(self.health(), Health::OllamaUnreachable) {
-                            self.set_health(Health::Ready);
-                        }
-                    }
-                    EmbeddingBackend::Ollama => {
-                        let Some(ollama) = cfg.ollama.as_ref() else {
-                            continue;
-                        };
-                        // Don't override an in-flight Reindexing/Pulling event.
-                        if matches!(
-                            self.health(),
-                            Health::Reindexing { .. } | Health::Pulling { .. }
-                        ) {
-                            continue;
-                        }
-                        let client = OllamaClient::new(ollama.base_url.clone());
-                        match client.ping().await {
-                            Ok(()) => {
-                                if matches!(self.health(), Health::OllamaUnreachable) {
-                                    self.set_health(Health::Ready);
-                                }
-                            }
-                            Err(_) => {
-                                self.set_health(Health::OllamaUnreachable);
-                            }
-                        }
-                    }
+                    EmbeddingBackend::Unconfigured => continue,
+                    EmbeddingBackend::Internal => self.probe_internal_health(),
+                    EmbeddingBackend::Ollama => self.probe_ollama_health(&cfg).await,
                 }
             }
         })
+    }
+
+    /// `Internal` probe: nothing to ping, just ensure health reflects readiness
+    /// without stomping on in-flight Reindexing/Pulling transitions.
+    fn probe_internal_health(&self) {
+        if matches!(self.health(), Health::OllamaUnreachable) {
+            self.set_health(Health::Ready);
+        }
+    }
+
+    /// `Ollama` probe: ping the configured endpoint and flip
+    /// `Ready <-> OllamaUnreachable`. Honors in-flight Reindexing/Pulling.
+    async fn probe_ollama_health(&self, cfg: &EmbeddingConfig) {
+        let Some(ollama) = cfg.ollama.as_ref() else {
+            return;
+        };
+        if matches!(
+            self.health(),
+            Health::Reindexing { .. } | Health::Pulling { .. }
+        ) {
+            return;
+        }
+        let client = OllamaClient::new(ollama.base_url.clone());
+        match client.ping().await {
+            Ok(()) => {
+                if matches!(self.health(), Health::OllamaUnreachable) {
+                    self.set_health(Health::Ready);
+                }
+            }
+            Err(_) => self.set_health(Health::OllamaUnreachable),
+        }
     }
 
     /// Internal: mark the current config as fully indexed at `dim` and

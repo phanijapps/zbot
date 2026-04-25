@@ -201,6 +201,26 @@ impl Drop for FileWatcher {
 // inotify transport
 // ============================================================================
 
+/// Forward debouncer-emitted Create/Modify/Remove paths to the receiver
+/// channel. Other event kinds are ignored. Extracted to keep `try_inotify`
+/// under the cognitive-complexity threshold.
+fn forward_debounced_events(result: DebounceEventResult, tx: &std::sync::mpsc::Sender<PathBuf>) {
+    let Ok(events) = result else {
+        return;
+    };
+    for event in events {
+        if !matches!(
+            event.kind,
+            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+        ) {
+            continue;
+        }
+        for path in &event.paths {
+            let _ = tx.send(path.clone());
+        }
+    }
+}
+
 fn try_inotify(
     entries: &[WatchEntry],
     debounce_ms: u64,
@@ -214,21 +234,7 @@ fn try_inotify(
     let mut debouncer = new_debouncer(
         Duration::from_millis(debounce_ms),
         None,
-        move |result: DebounceEventResult| {
-            let Ok(events) = result else {
-                return;
-            };
-            for event in events {
-                match event.kind {
-                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
-                        for path in &event.paths {
-                            let _ = tx.send(path.clone());
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        },
+        move |result: DebounceEventResult| forward_debounced_events(result, &tx),
     )
     .map_err(|e| format!("debouncer init failed: {e}"))?;
 

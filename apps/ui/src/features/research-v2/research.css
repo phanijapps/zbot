@@ -481,10 +481,16 @@
 /* Left-align name + ticker, push meta to the right. */
 .subagent-card__agent {
   flex-shrink: 0;
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
 }
 .subagent-card__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin-left: auto;
   flex-shrink: 0;
+  color: var(--muted-foreground);
 }
 .subagent-card__toggle {
   width: 100%;
@@ -513,16 +519,6 @@
 }
 .subagent-card[data-expanded="false"] .subagent-card__header {
   margin-bottom: 0;
-}
-.subagent-card__agent {
-  font-family: ui-monospace, monospace;
-  font-weight: 600;
-}
-.subagent-card__meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted-foreground);
 }
 .subagent-card__section {
   margin-top: 6px;

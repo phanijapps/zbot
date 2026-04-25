@@ -1615,6 +1615,20 @@ struct SessionMetrics {
     distinct_agents: usize,
 }
 
+/// Track distinct `*-agent` tokens mentioned on a line. Extracted to keep
+/// `compute_session_metrics` under the cognitive-complexity threshold.
+fn extract_agent_mentions(line: &str, agents: &mut std::collections::HashSet<String>) {
+    for word in line.split_whitespace() {
+        if !(word.ends_with("-agent") || word.ends_with("-agent,")) {
+            continue;
+        }
+        let clean = word.trim_end_matches(',').trim_matches('"');
+        if clean.len() < 40 {
+            agents.insert(clean.to_string());
+        }
+    }
+}
+
 /// Compute basic metrics from a compiled transcript to help the LLM decide
 /// whether a procedure should be extracted.
 fn compute_session_metrics(transcript: &str) -> SessionMetrics {
@@ -1624,26 +1638,13 @@ fn compute_session_metrics(transcript: &str) -> SessionMetrics {
 
     for line in transcript.lines() {
         let lower = line.to_lowercase();
-
-        // Count delegation markers
         if lower.contains("delegate_to_agent") || line.contains("## From ") {
             delegations += 1;
         }
-
-        // Count explicit tool invocations
         if line.contains("[called:") {
             tool_actions += 1;
         }
-
-        // Track distinct agents mentioned (planner-agent, code-agent, etc.)
-        for word in line.split_whitespace() {
-            if word.ends_with("-agent") || word.ends_with("-agent,") {
-                let clean = word.trim_end_matches(',').trim_matches('"');
-                if clean.len() < 40 {
-                    agents.insert(clean.to_string());
-                }
-            }
-        }
+        extract_agent_mentions(line, &mut agents);
     }
 
     SessionMetrics {

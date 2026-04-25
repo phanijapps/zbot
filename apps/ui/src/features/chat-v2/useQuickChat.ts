@@ -177,7 +177,7 @@ export function useQuickChat() {
       return transport.subscribeConversation(convId, { onEvent });
     });
     return () => {
-      unsubscribe.then((fn) => fn && fn()).catch(() => {
+      unsubscribe.then((fn) => fn?.()).catch(() => {
         /* no-op */
       });
       if (subscribedConvIdRef.current === convId) {

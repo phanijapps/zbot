@@ -147,6 +147,43 @@ pub struct AppState {
     pub config_dir: PathBuf,
 }
 
+/// Boot-time helper: synchronously reconcile vec0 tables to match the
+/// `EmbeddingService` dimension. Extracted from `AppState::new` so the
+/// constructor stays under the cognitive-complexity threshold.
+///
+/// `current_dim == 0` is the `EmbeddingBackend::Unconfigured` sentinel —
+/// the user hasn't picked a backend yet, so we leave the marker-derived
+/// tables in place and let the async reconciler reindex once the user
+/// reconfigures.
+fn sync_reconcile_vec_dim_at_boot(
+    embedding_service: &Arc<EmbeddingService>,
+    knowledge_db: &Arc<gateway_database::KnowledgeDatabase>,
+) {
+    let current_dim = embedding_service.dimensions();
+    if current_dim == 0 {
+        tracing::info!("Embedding backend unconfigured at boot — skipping sync vec0 reconcile");
+        return;
+    }
+    tracing::warn!(
+        dim = current_dim,
+        "Embedding dim mismatch at boot — rebuilding vec0 tables synchronously"
+    );
+    if let Err(e) = knowledge_db.reconcile_vec_tables_dim(current_dim) {
+        tracing::error!(
+            "Synchronous vec0 reconcile failed ({e}); recall may be degraded until the async reindex completes"
+        );
+        return;
+    }
+    if let Err(e) = embedding_service.mark_indexed(current_dim) {
+        tracing::warn!("mark_indexed failed after sync reconcile: {e}; async reindex will retry");
+        return;
+    }
+    tracing::info!(
+        dim = current_dim,
+        "Synchronous vec0 reconcile complete; content repopulates at next sleep cycle"
+    );
+}
+
 impl AppState {
     /// Create a new application state.
     ///
@@ -275,31 +312,7 @@ impl AppState {
         // `KnowledgeDatabase::new` is still usable for FTS-only recall)
         // and let the async reconciler reindex once the user reconfigures.
         if embedding_service.needs_reindex() {
-            let current_dim = embedding_service.dimensions();
-            if current_dim == 0 {
-                tracing::info!(
-                    "Embedding backend unconfigured at boot — skipping sync vec0 reconcile"
-                );
-            } else {
-                tracing::warn!(
-                    dim = current_dim,
-                    "Embedding dim mismatch at boot — rebuilding vec0 tables synchronously"
-                );
-                if let Err(e) = knowledge_db.reconcile_vec_tables_dim(current_dim) {
-                    tracing::error!(
-                        "Synchronous vec0 reconcile failed ({e}); recall may be degraded until the async reindex completes"
-                    );
-                } else if let Err(e) = embedding_service.mark_indexed(current_dim) {
-                    tracing::warn!(
-                        "mark_indexed failed after sync reconcile: {e}; async reindex will retry"
-                    );
-                } else {
-                    tracing::info!(
-                        dim = current_dim,
-                        "Synchronous vec0 reconcile complete; content repopulates at next sleep cycle"
-                    );
-                }
-            }
+            sync_reconcile_vec_dim_at_boot(&embedding_service, &knowledge_db);
         }
         // Hand downstream (distillation, recall, memory_fact_store, etc.) a
         // LiveEmbeddingClient wrapper so they follow ArcSwap backend changes

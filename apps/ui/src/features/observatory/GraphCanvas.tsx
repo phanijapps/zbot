@@ -261,7 +261,7 @@ export function GraphCanvas({
     gSel
       .selectAll<SVGCircleElement, SimNode>("g.graph-node circle")
       .classed("graph-node--selected", (_d, i, nodes) => {
-        const parent = (nodes[i] as SVGCircleElement).parentNode as Element | null;
+        const parent = nodes[i].parentNode as Element | null;
         if (!parent) return false;
         const datum = select<Element, SimNode>(parent).datum();
         return datum?.entity.id === selectedEntityId;
@@ -282,7 +282,7 @@ export function GraphCanvas({
       .selectAll<SVGTextElement, SimNode>("text.graph-label")
       .classed("graph-label--dimmed", (_d, i, nodes) => {
         if (!hasTerm) return false;
-        const parent = (nodes[i] as SVGTextElement).parentNode as Element | null;
+        const parent = nodes[i].parentNode as Element | null;
         if (!parent) return false;
         const datum = select<Element, SimNode>(parent).datum();
         return !matchesHighlight(datum.entity, highlightTerm!);

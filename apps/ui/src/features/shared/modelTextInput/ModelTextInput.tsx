@@ -31,7 +31,7 @@ export function ModelTextInput({
   placeholder = "provider default",
   id,
   disabled = false,
-}: ModelTextInputProps) {
+}: Readonly<ModelTextInputProps>) {
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(-1);
   // inputValue tracks what is displayed in the input and used for filtering.

@@ -138,18 +138,18 @@ interface EventHandlerCtx {
   setActiveWard: React.Dispatch<React.SetStateAction<{ name: string; content: string } | null>>;
   setIntentAnalysis: React.Dispatch<React.SetStateAction<IntentAnalysis | null>>;
   setActiveSessionId: React.Dispatch<React.SetStateAction<string | null>>;
-  toolCallBlockMapRef: React.MutableRefObject<Map<string, string>>;
-  executionAgentMapRef: React.MutableRefObject<Map<string, string>>;
-  titleFallbackTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
-  lastUserMessageRef: React.MutableRefObject<string>;
-  streamingBufferRef: React.MutableRefObject<string>;
-  rafIdRef: React.MutableRefObject<number | null>;
+  toolCallBlockMapRef: React.RefObject<Map<string, string>>;
+  executionAgentMapRef: React.RefObject<Map<string, string>>;
+  titleFallbackTimerRef: React.RefObject<ReturnType<typeof setTimeout> | null>;
+  lastUserMessageRef: React.RefObject<string>;
+  streamingBufferRef: React.RefObject<string>;
+  rafIdRef: React.RefObject<number | null>;
   flushTokenBuffer: () => void;
   startDurationTimer: () => void;
   stopDurationTimer: () => void;
   generateFallbackTitle: (message: string) => string;
   bumpArtifactsRefresh: () => void;
-  activeSessionIdRef: React.MutableRefObject<string | null>;
+  activeSessionIdRef: React.RefObject<string | null>;
 }
 
 // Export for unit tests.
@@ -199,9 +199,7 @@ function handleTokenEvent(event: StreamEvent, ctx: EventHandlerCtx): void {
   const delta = (event.delta ?? event.content ?? "") as string;
   if (delta) {
     ctx.streamingBufferRef.current += delta;
-    if (ctx.rafIdRef.current === null) {
-      ctx.rafIdRef.current = requestAnimationFrame(ctx.flushTokenBuffer);
-    }
+    ctx.rafIdRef.current ??= requestAnimationFrame(ctx.flushTokenBuffer);
   }
   // Track tokens from any available field
   const totalTok = (event.total_tokens ?? event.tokens_in ?? event.token_count) as number | undefined;

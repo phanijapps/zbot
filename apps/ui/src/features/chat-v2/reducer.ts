@@ -19,7 +19,7 @@ function upsertStreamingAssistant(
   replace: boolean,
 ): QuickChatMessage[] {
   const last = messages[messages.length - 1];
-  if (last && last.role === "assistant" && last.streaming) {
+  if (last?.role === "assistant" && last.streaming) {
     const updated: QuickChatMessage = {
       ...last,
       content: replace ? text : last.content + text,
