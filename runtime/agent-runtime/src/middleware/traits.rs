@@ -144,6 +144,17 @@ pub struct MiddlewareContext {
     /// Execution state from the tool context (skills, etc.)
     /// This allows middleware to make skill-aware decisions during compaction.
     pub execution_state: ExecutionState,
+    /// Current `app:plan` session state, if the agent has called
+    /// `update_plan` during this session. Shape:
+    /// `{ explanation?: String, plan: [{ step, status }] }`. Populated by
+    /// the executor from `ctx.get_state("app:plan")` when building the
+    /// context. `None` when no plan exists yet.
+    ///
+    /// Consumed by the plan-block middleware to inject a pinned
+    /// structured anchor just after the system prompt — the anchor
+    /// survives context-editing compaction so long-running tool loops
+    /// don't lose sight of the goal + checklist.
+    pub plan_state: Option<Value>,
 }
 
 impl MiddlewareContext {
@@ -164,7 +175,18 @@ impl MiddlewareContext {
             estimated_tokens: 0,
             metadata: Value::Object(Default::default()),
             execution_state: ExecutionState::default(),
+            plan_state: None,
         }
+    }
+
+    /// Set the current plan state (what the agent's last `update_plan`
+    /// call produced). Populated by the executor before running
+    /// middleware, consumed by [`super::plan_block::PlanBlockMiddleware`]
+    /// to render a pinned anchor.
+    #[must_use]
+    pub fn with_plan_state(mut self, plan_state: Option<Value>) -> Self {
+        self.plan_state = plan_state;
+        self
     }
 
     /// Set message and token counts

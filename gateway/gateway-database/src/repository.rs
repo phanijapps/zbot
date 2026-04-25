@@ -279,6 +279,7 @@ impl ConversationRepository {
                     }],
                     tool_calls,
                     tool_call_id: m.tool_call_id.clone(),
+                    is_summary: false,
                 }
             })
             .collect()

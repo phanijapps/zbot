@@ -32,6 +32,7 @@
 pub mod config;
 pub mod context_editing;
 pub mod pipeline;
+pub mod plan_block;
 pub mod summarization;
 pub mod token_counter;
 pub mod traits;
@@ -43,6 +44,7 @@ pub use config::{
 pub(crate) use context_editing::compress_old_assistant_messages;
 pub use context_editing::ContextEditingMiddleware;
 pub use pipeline::MiddlewarePipeline;
+pub use plan_block::{extract_plan_state, PlanBlockMiddleware};
 pub use summarization::SummarizationMiddleware;
 pub use traits::{
     EventMiddleware, ExecutionState, MiddlewareContext, MiddlewareEffect, PreProcessMiddleware,

@@ -85,13 +85,18 @@ pub(crate) fn compress_old_assistant_messages(messages: &mut [ChatMessage], keep
         if message.role == "assistant" {
             turn_counter += 1;
 
-            // Skip already-compressed messages
-            if message.text_content().starts_with("[Turn") {
+            // Skip already-compressed messages. The `is_summary` flag is
+            // authoritative — set by `compress_assistant_message` on the
+            // output. The earlier implementation sniffed
+            // `text.starts_with("[Turn ")` which broke if the summary
+            // prefix ever changed.
+            if message.is_summary {
                 continue;
             }
 
             let compressed = compress_assistant_message(message, turn_counter);
             message.content = vec![Part::Text { text: compressed }];
+            message.is_summary = true;
             // Keep tool_calls intact — the LLM API requires them for tool result pairing
         }
     }
@@ -502,24 +507,28 @@ mod tests {
                 content: vec![Part::Text { text: "Search for something".to_string() }],
                 tool_calls: None,
                 tool_call_id: None,
+                is_summary: false,
             },
             ChatMessage {
                 role: "assistant".to_string(),
                 content: vec![Part::Text { text: String::new() }],
                 tool_calls: Some(vec![tool1, tool2]),
                 tool_call_id: None,
+                is_summary: false,
             },
             ChatMessage {
                 role: "tool".to_string(),
                 content: vec![Part::Text { text: "Search result: lots of text here that should be cleared when context editing kicks in".to_string() }],
                 tool_calls: None,
                 tool_call_id: Some("call_1".to_string()),
+                is_summary: false,
             },
             ChatMessage {
                 role: "tool".to_string(),
                 content: vec![Part::Text { text: "2".to_string() }],
                 tool_calls: None,
                 tool_call_id: Some("call_2".to_string()),
+                is_summary: false,
             },
         ]
     }
@@ -634,6 +643,7 @@ mod tests {
                 }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
+                is_summary: false,
             },
             ChatMessage {
                 role: "tool".to_string(),
@@ -642,6 +652,7 @@ mod tests {
                 }],
                 tool_calls: None,
                 tool_call_id: Some("call_skill_1".to_string()),
+                is_summary: false,
             },
         ];
 
@@ -697,6 +708,7 @@ mod tests {
                 }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
+                is_summary: false,
             },
             ChatMessage {
                 role: "tool".to_string(),
@@ -705,6 +717,7 @@ mod tests {
                 }],
                 tool_calls: None,
                 tool_call_id: Some("call_skill_1".to_string()),
+                is_summary: false,
             },
         ];
 
@@ -758,6 +771,7 @@ mod tests {
                 }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
+                is_summary: false,
             },
             ChatMessage {
                 role: "tool".to_string(),
@@ -766,6 +780,7 @@ mod tests {
                 }],
                 tool_calls: None,
                 tool_call_id: Some("call_skill_1".to_string()),
+                is_summary: false,
             },
         ];
 
@@ -824,6 +839,7 @@ mod tests {
                 }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
+                is_summary: false,
             },
             ChatMessage {
                 role: "tool".to_string(),
@@ -832,6 +848,7 @@ mod tests {
                 }],
                 tool_calls: None,
                 tool_call_id: Some("call_skill_1".to_string()),
+                is_summary: false,
             },
             ChatMessage {
                 role: "assistant".to_string(),
@@ -840,6 +857,7 @@ mod tests {
                 }],
                 tool_calls: Some(vec![resource_tool_call]),
                 tool_call_id: None,
+                is_summary: false,
             },
             ChatMessage {
                 role: "tool".to_string(),
@@ -848,6 +866,7 @@ mod tests {
                 }],
                 tool_calls: None,
                 tool_call_id: Some("call_resource_1".to_string()),
+                is_summary: false,
             },
         ];
 
@@ -909,6 +928,7 @@ mod tests {
                 }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
+                is_summary: false,
             },
             ChatMessage {
                 role: "tool".to_string(),
@@ -917,6 +937,7 @@ mod tests {
                 }],
                 tool_calls: None,
                 tool_call_id: Some("call_skill_1".to_string()),
+                is_summary: false,
             },
             ChatMessage {
                 role: "assistant".to_string(),
@@ -925,6 +946,7 @@ mod tests {
                 }],
                 tool_calls: Some(vec![resource_tool_call]),
                 tool_call_id: None,
+                is_summary: false,
             },
             ChatMessage {
                 role: "tool".to_string(),
@@ -933,6 +955,7 @@ mod tests {
                 }],
                 tool_calls: None,
                 tool_call_id: Some("call_resource_1".to_string()),
+                is_summary: false,
             },
         ];
 
@@ -978,6 +1001,7 @@ mod tests {
             }],
             tool_calls: Some(vec![tool1, tool2]),
             tool_call_id: None,
+            is_summary: false,
         };
 
         let compressed = compress_assistant_message(&msg, 3);
@@ -996,6 +1020,7 @@ mod tests {
             content: vec![Part::Text { text: "I'll help you with that. Let me think about the best approach for implementing this feature. We need to consider several factors including performance and maintainability.".to_string() }],
             tool_calls: None,
             tool_call_id: None,
+            is_summary: false,
         };
 
         let compressed = compress_assistant_message(&msg, 5);
@@ -1022,36 +1047,42 @@ mod tests {
                 content: vec![Part::Text { text: "Create the files".to_string() }],
                 tool_calls: None,
                 tool_call_id: None,
+                is_summary: false,
             },
             ChatMessage {
                 role: "assistant".to_string(),
                 content: vec![Part::Text { text: "I'll create main.rs and read lib.rs for you. Let me start with the main file.".to_string() }],
                 tool_calls: Some(vec![tool1, tool2]),
                 tool_call_id: None,
+                is_summary: false,
             },
             ChatMessage {
                 role: "tool".to_string(),
                 content: vec![Part::Text { text: "[cleared]".to_string() }],
                 tool_calls: None,
                 tool_call_id: Some("call_1".to_string()),
+                is_summary: false,
             },
             ChatMessage {
                 role: "tool".to_string(),
                 content: vec![Part::Text { text: "[cleared]".to_string() }],
                 tool_calls: None,
                 tool_call_id: Some("call_2".to_string()),
+                is_summary: false,
             },
             ChatMessage {
                 role: "user".to_string(),
                 content: vec![Part::Text { text: "Now add tests".to_string() }],
                 tool_calls: None,
                 tool_call_id: None,
+                is_summary: false,
             },
             ChatMessage {
                 role: "assistant".to_string(),
                 content: vec![Part::Text { text: "I'll add tests now.".to_string() }],
                 tool_calls: None,
                 tool_call_id: None,
+                is_summary: false,
             },
         ];
 
@@ -1081,6 +1112,7 @@ mod tests {
             }],
             tool_calls: Some(vec![tool]),
             tool_call_id: None,
+            is_summary: false,
         };
 
         let compressed = compress_assistant_message(&msg, 1);
@@ -1122,6 +1154,7 @@ mod tests {
                     json!({ "path": format!("src/module_{i}.py") }),
                 )]),
                 tool_call_id: None,
+                is_summary: false,
             });
             messages.push(ChatMessage {
                 role: "tool".to_string(),
@@ -1130,6 +1163,7 @@ mod tests {
                 }],
                 tool_calls: None,
                 tool_call_id: Some(format!("call_{i}")),
+                is_summary: false,
             });
         }
         messages

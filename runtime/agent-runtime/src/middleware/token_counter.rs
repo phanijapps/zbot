@@ -309,6 +309,7 @@ mod tests {
             }],
             tool_calls: None,
             tool_call_id: None,
+            is_summary: false,
         };
         let without_tc = estimate_message_tokens(&msg, "gpt-4-turbo");
 
