@@ -32,8 +32,7 @@ import { MemoryPage } from "./features/memory";
 import { ObservatoryPage } from "./features/observatory";
 import { QuickChat } from "./features/chat-v2";
 import { ResearchPage } from "./features/research-v2";
-// ChatSlider removed — chat is now the home route, no longer in a slide-over
-import { ThemeToggle } from "./components/ThemeToggle";
+import { AccentPicker } from "./components/AccentPicker";
 
 // ============================================================================
 // Types
@@ -222,8 +221,9 @@ interface WebAppShellProps {
   connectionStatus: ConnectionStatus;
 }
 
-// Navigation structure with groups
-interface NavItem {
+// Flat top-bar nav — no groups, no Main/Manage/System split.
+// Order matches the design system kit (Research first, Settings last).
+export interface NavItem {
   to: string;
   label: string;
   icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
@@ -231,84 +231,55 @@ interface NavItem {
   badge?: string;
 }
 
-interface NavGroup {
-  label?: string;
-  items: NavItem[];
-}
-
-const navGroups: NavGroup[] = [
-  {
-    // Main group - no label
-    items: [
-      { to: "/chat", label: "Chat", icon: MessageSquare },
-      { to: "/research", label: "Research", icon: Search, matchPrefix: true },
-      { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-      { to: "/logs", label: "Logs", icon: Eye },
-      { to: "/memory", label: "Memory", icon: Brain },
-      { to: "/observatory", label: "Observatory", icon: Network },
-    ],
-  },
-  {
-    label: "Manage",
-    items: [
-      { to: "/agents", label: "Agents", icon: Bot },
-      { to: "/integrations", label: "Integrations", icon: Plug },
-    ],
-  },
-  {
-    label: "System",
-    items: [
-      { to: "/settings", label: "Settings", icon: Settings },
-    ],
-  },
+export const navItems: NavItem[] = [
+  { to: "/research", label: "Research", icon: Search, matchPrefix: true },
+  { to: "/chat", label: "Quick chat", icon: MessageSquare },
+  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/agents", label: "Agents", icon: Bot },
+  { to: "/memory", label: "Memory", icon: Brain },
+  { to: "/logs", label: "Logs", icon: Eye },
+  { to: "/observatory", label: "Observatory", icon: Network },
+  { to: "/integrations", label: "Integrations", icon: Plug },
+  { to: "/settings", label: "Settings", icon: Settings },
 ];
 
-function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+export function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
+  const [sheetOpen, setSheetOpen] = useState(false);
   const location = useLocation();
-  // Close the mobile drawer whenever the route changes.
-  useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
+  // Close the mobile sheet whenever the route changes.
+  useEffect(() => { setSheetOpen(false); }, [location.pathname]);
+
   return (
-    <div className={`app-shell${mobileNavOpen ? " app-shell--nav-open" : ""}`}>
-      <button
-        type="button"
-        className="app-shell__nav-toggle"
-        aria-label={mobileNavOpen ? "Close navigation" : "Open navigation"}
-        aria-expanded={mobileNavOpen}
-        onClick={() => setMobileNavOpen((v) => !v)}
-      >
-        <Menu size={20} />
-      </button>
-      {mobileNavOpen && (
+    <div className="app-shell">
+      <span className="app-shell__reticle app-shell__reticle--tl" aria-hidden="true" />
+      <span className="app-shell__reticle app-shell__reticle--tr" aria-hidden="true" />
+      <span className="app-shell__reticle app-shell__reticle--bl" aria-hidden="true" />
+      <span className="app-shell__reticle app-shell__reticle--br" aria-hidden="true" />
+
+      <header className="topbar">
+        <Link to="/research" className="topbar__brand" aria-label="z-Bot home">
+          <span className="topbar__brand-mark">z</span>
+          <span className="topbar__brand-name">z-<b>Bot</b></span>
+        </Link>
+
         <button
           type="button"
-          className="app-shell__nav-backdrop"
-          aria-label="Close navigation"
-          onClick={() => setMobileNavOpen(false)}
-        />
-      )}
-      <nav className="sidebar">
-        <div className="sidebar__header">
-          <div className="sidebar__logo">
-            <img src="/logo-dark.svg" alt="z-Bot" className="sidebar__logo-img" />
-          </div>
-        </div>
+          className="topbar__menu-toggle"
+          aria-label={sheetOpen ? "Close menu" : "Open menu"}
+          aria-expanded={sheetOpen}
+          onClick={() => setSheetOpen((v) => !v)}
+        >
+          <Menu size={18} />
+        </button>
 
-        <div className="sidebar__nav">
-          {navGroups.map((group, groupIndex) => (
-            <div key={groupIndex} className="sidebar__group">
-              {group.label && (
-                <div className="sidebar__group-label">{group.label}</div>
-              )}
-              {group.items.map((item) => (
-                <NavLink key={item.to} to={item.to} label={item.label} icon={item.icon} matchPrefix={item.matchPrefix} badge={item.badge} />
-              ))}
-            </div>
+        <nav className="topbar__nav" aria-label="Primary">
+          {navItems.map((item) => (
+            <NavLink key={item.to} to={item.to} label={item.label} icon={item.icon} matchPrefix={item.matchPrefix} badge={item.badge} />
           ))}
-        </div>
+        </nav>
 
-        <div className="sidebar__footer">
-          <ThemeToggle />
+        <div className="topbar__right">
+          <AccentPicker />
           <div className="connection-status">
             <div className={`connection-status__dot ${
               connectionStatus.connected
@@ -316,13 +287,30 @@ function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
                 : 'connection-status__dot--disconnected'
             }`} />
             <span className="connection-status__text">
-              {connectionStatus.connected ? "Connected" : "Disconnected"}
+              {connectionStatus.connected ? "Connected · zerod" : "Disconnected"}
             </span>
           </div>
         </div>
+      </header>
+
+      {sheetOpen && (
+        <button
+          type="button"
+          className="topbar__sheet-backdrop topbar__sheet-backdrop--open"
+          aria-label="Close menu"
+          onClick={() => setSheetOpen(false)}
+        />
+      )}
+      <nav
+        className={`topbar__sheet${sheetOpen ? " topbar__sheet--open" : ""}`}
+        aria-label="Mobile primary"
+      >
+        {navItems.map((item) => (
+          <NavLink key={item.to} to={item.to} label={item.label} icon={item.icon} matchPrefix={item.matchPrefix} badge={item.badge} />
+        ))}
       </nav>
 
-      <main className="flex-1 overflow-hidden">{children}</main>
+      <main className="app-shell__main">{children}</main>
     </div>
   );
 }

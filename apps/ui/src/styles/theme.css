@@ -1,57 +1,70 @@
 /* ============================================================================
-   DESIGN TOKENS
-   All design decisions are centralized here.
-   Components use these tokens via CSS custom properties.
-   To change the look, edit THIS file only.
+   DESIGN TOKENS — Futuristic Dark
+   Single dark theme inspired by the z-Bot Design System (claude.ai/design).
+   Cyan/violet accent stack on a deep void background. Holo borders, glow halos.
+
+   The four `--fx-*` vars are runtime-tunable from the AccentPicker UI:
+     --fx-accent  master accent color (cyan default; violet/amber/magenta presets)
+     --fx-glow    box/text-shadow blur multiplier (0..2)
+     --fx-grid    page-grid line opacity (0..0.18)
+     --fx-scan    scanline overlay opacity (0..1)
    ============================================================================ */
 
 @custom-variant dark (&:is(.dark *));
 
 :root {
   /* ========================================================================
-     COLORS - Semantic color palette
+     RUNTIME-TUNABLE EFFECTS
+     ======================================================================== */
+  --fx-accent: #7df9ff;
+  --fx-glow: 1;
+  --fx-grid: 0.04;
+  --fx-scan: 0.3;
+
+  /* ========================================================================
+     COLORS — Semantic palette
      ======================================================================== */
 
-  /* Backgrounds */
-  --background: #f6f3ee;
-  --background-surface: #ffffff;
-  --background-elevated: #f0ece6;
-  --sidebar: #1a1714;
+  /* Backgrounds (deep void → holo surface → elevated) */
+  --background: #07080d;
+  --background-surface: #0d1018;
+  --background-elevated: #131826;
+  --sidebar: rgba(7, 9, 18, 0.85);
 
-  /* Foreground hierarchy */
-  --foreground: #1a1714;
-  --muted-foreground: #8a8278;
-  --subtle-foreground: #aaa39a;
-  --dim-foreground: #b5afa5;
+  /* Foreground hierarchy (4 stops) */
+  --foreground: #e6f0ff;
+  --muted-foreground: #7d8db0;
+  --subtle-foreground: #5a6788;
+  --dim-foreground: #3e4868;
 
-  /* Borders */
-  --border: #e8e2d9;
-  --border-hover: #c8956c;
+  /* Borders — barely-there, accent-tinted */
+  --border: rgba(120, 160, 255, 0.10);
+  --border-hover: var(--fx-accent);
 
-  /* Primary accent (copper) */
-  --primary: #a07d52;
-  --primary-foreground: #ffffff;
-  --primary-hover: #8a6b45;
-  --primary-muted: rgba(160,125,82,0.12);
-  --primary-subtle: rgba(160,125,82,0.06);
+  /* Primary accent — driven by --fx-accent (live-mutated by picker) */
+  --primary: var(--fx-accent);
+  --primary-foreground: #03060f;
+  --primary-hover: color-mix(in srgb, var(--fx-accent) 80%, white);
+  --primary-muted: color-mix(in srgb, var(--fx-accent) 14%, transparent);
+  --primary-subtle: color-mix(in srgb, var(--fx-accent) 6%, transparent);
 
-  /* Semantic colors */
-  --success: #3a8a3a;
-  --success-muted: rgba(58,138,58,0.1);
-  --warning: #9a7520;
-  --warning-muted: rgba(154,117,32,0.1);
-  --destructive: #cc4040;
-  --destructive-muted: rgba(204,64,64,0.1);
+  /* Semantic colors — bright on dark */
+  --success: #4cf2c2;
+  --success-muted: rgba(76, 242, 194, 0.12);
+  --warning: #ffce5a;
+  --warning-muted: rgba(255, 206, 90, 0.12);
+  --destructive: #ff5d7a;
+  --destructive-muted: rgba(255, 93, 122, 0.12);
 
-  /* Additional palette */
-  --blue: #4a8ac4;
-  --blue-muted: rgba(74,138,196,0.1);
-  --purple: #7a60b0;
-  --purple-muted: rgba(122,96,176,0.1);
-  --teal: #3a9a90;
-  --teal-muted: rgba(58,154,144,0.1);
+  /* Additional palette — agent avatar tints */
+  --blue: #6aa9ff;
+  --blue-muted: rgba(106, 169, 255, 0.14);
+  --purple: #c08bff;
+  --purple-muted: rgba(192, 139, 255, 0.14);
+  --teal: var(--fx-accent);
+  --teal-muted: color-mix(in srgb, var(--fx-accent) 14%, transparent);
 
-  /* Backwards-compat aliases — remove after full migration */
+  /* Backwards-compat aliases — preserved so existing components reskin cleanly */
   --card: var(--background-surface);
   --card-foreground: var(--foreground);
   --popover: var(--background-elevated);
@@ -59,27 +72,27 @@
   --muted: var(--background-elevated);
   --secondary: var(--background-elevated);
   --secondary-foreground: var(--foreground);
-  --secondary-hover: var(--border);
+  --secondary-hover: rgba(120, 160, 255, 0.08);
   --accent: var(--primary);
   --accent-foreground: var(--primary-foreground);
   --input: var(--border);
   --input-background: var(--background-surface);
   --ring: var(--primary);
   --ring-muted: var(--border);
-  --overlay: rgba(0, 0, 0, 0.5);
+  --overlay: rgba(0, 0, 0, 0.6);
   --selection: var(--primary-muted);
   --selection-border: var(--primary);
   --destructive-foreground: #ffffff;
-  --destructive-hover: #b33636;
-  --success-foreground: #ffffff;
-  --success-hover: #2f7a2f;
-  --warning-foreground: #ffffff;
-  --warning-hover: #836818;
-  --sidebar-foreground: #f0ebe4;
+  --destructive-hover: color-mix(in srgb, var(--destructive) 80%, white);
+  --success-foreground: #03060f;
+  --success-hover: color-mix(in srgb, var(--success) 80%, white);
+  --warning-foreground: #03060f;
+  --warning-hover: color-mix(in srgb, var(--warning) 80%, white);
+  --sidebar-foreground: #e6f0ff;
   --sidebar-accent: var(--primary-muted);
   --sidebar-accent-hover: var(--primary-subtle);
-  --sidebar-muted: #8a8278;
-  --sidebar-border: var(--border);
+  --sidebar-muted: #95a5c8;
+  --sidebar-border: rgba(120, 160, 255, 0.12);
 
   /* ========================================================================
      TYPOGRAPHY
@@ -98,7 +111,7 @@
   --text-3xl: 1.875rem;    /* 30px */
 
   /* ========================================================================
-     SPACING - Consistent spacing scale
+     SPACING
      ======================================================================== */
   --spacing-0-5: 0.125rem;  /* 2px */
   --spacing-1: 0.25rem;     /* 4px */
@@ -123,17 +136,19 @@
   --radius-full: 9999px;
 
   /* ========================================================================
-     SHADOWS
+     SHADOWS — minimal in dark theme (1px borders carry elevation;
+     accent-tinted glow halos are layered separately in components)
      ======================================================================== */
-  --shadow-card: 0 1px 2px rgba(55, 53, 47, 0.04), 0 3px 8px rgba(55, 53, 47, 0.04);
-  --shadow-card-hover: 0 2px 6px rgba(55, 53, 47, 0.06), 0 6px 16px rgba(55, 53, 47, 0.06);
-  --shadow-modal: 0 4px 16px rgba(55, 53, 47, 0.1), 0 12px 32px rgba(55, 53, 47, 0.12);
-  --shadow-dropdown: 0 4px 16px rgba(55, 53, 47, 0.08);
+  --shadow-card: none;
+  --shadow-card-hover: 0 0 calc(20px * var(--fx-glow)) color-mix(in srgb, var(--fx-accent) 8%, transparent);
+  --shadow-modal: 0 4px 24px rgba(0, 0, 0, 0.5);
+  --shadow-dropdown: 0 4px 16px rgba(0, 0, 0, 0.4);
 
   /* ========================================================================
      LAYOUT DIMENSIONS
      ======================================================================== */
-  --sidebar-width: 14rem;           /* 224px */
+  --sidebar-width: 14rem;           /* 224px (legacy — top-bar shell uses --topbar-height) */
+  --topbar-height: 44px;
   --panel-sidebar-width: 18rem;     /* 288px */
   --content-max-width: 64rem;       /* 1024px */
   --content-narrow-width: 32rem;    /* 512px */
@@ -142,104 +157,17 @@
   --modal-lg-width: 36rem;          /* 576px */
 
   /* ========================================================================
-     CHARTS (for data visualization)
+     CHARTS
      ======================================================================== */
-  --chart-1: #C17D3F;
-  --chart-2: #4EA04E;
-  --chart-3: #B8892E;
-  --chart-4: #B85C5C;
-  --chart-5: #5C8EB8;
-}
-
-/* ============================================================================
-   DARK MODE
-   ============================================================================ */
-.dark {
-  /* Backgrounds */
-  --background: #141210;
-  --background-surface: #1a1816;
-  --background-elevated: #201e1b;
-  --sidebar: #0d0c0a;
-
-  /* Foreground hierarchy */
-  --foreground: #f0ebe4;
-  --muted-foreground: #777777;
-  --subtle-foreground: #555555;
-  --dim-foreground: #444444;
-
-  /* Borders */
-  --border: rgba(255,255,255,0.06);
-  --border-hover: rgba(200,149,108,0.25);
-
-  /* Primary accent (copper) */
-  --primary: #c8956c;
-  --primary-foreground: #0d0c0a;
-  --primary-hover: #d4a57c;
-  --primary-muted: rgba(200,149,108,0.12);
-  --primary-subtle: rgba(200,149,108,0.06);
-
-  /* Semantic colors */
-  --success: #4ea04e;
-  --success-muted: rgba(78,160,78,0.1);
-  --warning: #b8892e;
-  --warning-muted: rgba(184,137,46,0.1);
-  --destructive: #cc4040;
-  --destructive-muted: rgba(204,64,64,0.1);
-
-  /* Additional palette */
-  --blue: #63b3ed;
-  --blue-muted: rgba(99,179,237,0.1);
-  --purple: #a882dc;
-  --purple-muted: rgba(168,130,220,0.1);
-  --teal: #4fd1c5;
-  --teal-muted: rgba(79,209,197,0.1);
-
-  /* Backwards-compat aliases — remove after full migration */
-  --card: var(--background-surface);
-  --card-foreground: var(--foreground);
-  --popover: var(--background-elevated);
-  --popover-foreground: var(--foreground);
-  --muted: var(--background-elevated);
-  --secondary: var(--background-elevated);
-  --secondary-foreground: var(--foreground);
-  --secondary-hover: rgba(255,255,255,0.08);
-  --accent: var(--primary);
-  --accent-foreground: var(--primary-foreground);
-  --input: var(--border);
-  --input-background: var(--background-surface);
-  --ring: var(--primary);
-  --ring-muted: rgba(255,255,255,0.08);
-  --overlay: rgba(0, 0, 0, 0.6);
-  --selection: var(--primary-muted);
-  --selection-border: var(--primary);
-  --destructive-foreground: #ffffff;
-  --destructive-hover: #dd5555;
-  --success-foreground: #ffffff;
-  --success-hover: #5eb85e;
-  --warning-foreground: #ffffff;
-  --warning-hover: #d4a03a;
-  --sidebar-foreground: #f0ebe4;
-  --sidebar-accent: var(--primary-muted);
-  --sidebar-accent-hover: var(--primary-subtle);
-  --sidebar-muted: #777777;
-  --sidebar-border: rgba(255,255,255,0.06);
-
-  /* Shadows */
-  --shadow-card: none;
-  --shadow-card-hover: none;
-  --shadow-modal: 0 4px 24px rgba(0, 0, 0, 0.4);
-  --shadow-dropdown: 0 4px 16px rgba(0, 0, 0, 0.3);
-
-  --chart-1: #D4945A;
-  --chart-2: #6BC46D;
-  --chart-3: #D4A04A;
-  --chart-4: #C47070;
-  --chart-5: #6BA3C4;
+  --chart-1: var(--fx-accent);
+  --chart-2: #4cf2c2;
+  --chart-3: #c08bff;
+  --chart-4: #ff5d7a;
+  --chart-5: #6aa9ff;
 }
 
 /* ============================================================================
    TAILWIND THEME INTEGRATION
-   Maps CSS variables to Tailwind's theming system
    ============================================================================ */
 @theme inline {
   --font-sans: var(--font-body);
@@ -298,12 +226,9 @@
   --radius-lg: var(--radius-lg);
   --radius-xl: var(--radius-xl);
   --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-muted: var(--sidebar-muted);
 }
 
@@ -315,7 +240,6 @@
     border-color: var(--border);
   }
 
-  /* Text selection colors */
   ::selection {
     background-color: var(--primary);
     color: var(--primary-foreground);
@@ -331,6 +255,7 @@
     font-size: 15px;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    background-color: #02030a;
   }
 
   body {

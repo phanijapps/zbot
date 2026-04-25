@@ -117,11 +117,13 @@
   align-self: flex-end;
   max-width: 80%;
   padding: 10px 14px;
-  background: var(--primary-muted);
+  background: linear-gradient(135deg, var(--fx-accent), color-mix(in srgb, var(--fx-accent) 60%, #c08bff));
   border-radius: 14px 14px 2px 14px;
   font-size: 14px;
-  color: var(--foreground);
+  font-weight: 500;
+  color: #02030a;
   white-space: pre-wrap;
+  box-shadow: 0 0 calc(24px * var(--fx-glow)) color-mix(in srgb, var(--fx-accent) 35%, transparent);
 }
 
 /* --- Assistant turn bubble ----------------------------------------------- */
@@ -135,8 +137,12 @@
   max-width: 80%;
   padding: 14px 16px;
   border-radius: 14px 14px 14px 2px;
-  background: var(--card);
-  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(13, 16, 24, 0.85), rgba(10, 12, 20, 0.85));
+  border: 1px solid color-mix(in srgb, var(--fx-accent) 18%, transparent);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.3),
+    0 0 calc(20px * var(--fx-glow)) color-mix(in srgb, var(--fx-accent) 8%, transparent);
+  backdrop-filter: blur(6px);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -312,8 +318,16 @@
 }
 
 .research-page__intent-classification {
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--muted-foreground);
+}
+.research-page__intent-classification strong {
+  color: var(--fx-accent);
+  font-weight: 600;
+  text-shadow: 0 0 calc(8px * var(--fx-glow)) color-mix(in srgb, var(--fx-accent) 60%, transparent);
 }
 
 /* --- Composer -------------------------------------------------------------- */
@@ -333,8 +347,12 @@
 .agent-turn-block {
   padding: 12px 14px;
   border-radius: 8px;
-  background: var(--background-surface);
-  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(13, 16, 24, 0.85), rgba(10, 12, 20, 0.85));
+  border: 1px solid color-mix(in srgb, var(--fx-accent) 18%, transparent);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.3),
+    0 0 calc(20px * var(--fx-glow)) color-mix(in srgb, var(--fx-accent) 8%, transparent);
+  backdrop-filter: blur(6px);
 }
 
 .agent-turn-block__header {
@@ -452,9 +470,14 @@
 .subagent-card {
   padding: 10px 12px;
   border-radius: 6px;
-  background: var(--background-surface);
-  border: 1px solid var(--border);
+  background: rgba(7, 9, 18, 0.6);
+  border: 1px solid color-mix(in srgb, var(--fx-accent) 14%, transparent);
   position: relative;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.subagent-card:hover {
+  border-color: color-mix(in srgb, var(--fx-accent) 30%, transparent);
+  box-shadow: 0 0 calc(14px * var(--fx-glow)) color-mix(in srgb, var(--fx-accent) 12%, transparent);
 }
 .subagent-card-tree {
   display: flex;
@@ -802,19 +825,22 @@
   display: inline-flex;
   gap: 6px;
   align-items: center;
-  padding: 4px 10px;
-  border: 1px solid var(--border);
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--fx-accent) 18%, transparent);
   border-radius: var(--radius-sm);
-  background: var(--card);
+  background: rgba(13, 16, 24, 0.7);
   color: var(--foreground);
   cursor: pointer;
   white-space: nowrap;
   font: inherit;
+  font-family: var(--font-mono);
   font-size: 12px;
-  transition: background 120ms ease;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+  backdrop-filter: blur(4px);
 }
 .research-artifact-chip:hover {
-  background: var(--muted);
+  border-color: var(--fx-accent);
+  box-shadow: 0 0 calc(12px * var(--fx-glow)) color-mix(in srgb, var(--fx-accent) 22%, transparent);
 }
 .research-artifact-chip:focus-visible {
   outline: 2px solid var(--ring);
