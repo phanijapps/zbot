@@ -73,4 +73,16 @@ describe("ModelTextInput", () => {
     fireEvent.keyDown(input, { key: "Escape" });
     expect(screen.queryByRole("listbox")).toBeNull();
   });
+
+  it("uses div elements for the listbox + options (Sonar S6842 — non-interactive ul/li shouldn't carry interactive roles)", () => {
+    render(
+      <ModelTextInput value="" onChange={() => {}} suggestions={["gpt-4", "gpt-4o"]} id="m" />,
+    );
+    fireEvent.focus(screen.getByRole("combobox"));
+    const listbox = screen.getByRole("listbox");
+    expect(listbox.tagName).toBe("DIV");
+    const options = screen.getAllByRole("option");
+    expect(options.length).toBeGreaterThan(0);
+    for (const opt of options) expect(opt.tagName).toBe("DIV");
+  });
 });

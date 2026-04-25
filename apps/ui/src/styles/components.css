@@ -223,7 +223,6 @@
 .topbar__sheet-backdrop {
   display: none;
   position: fixed;
-  top: var(--topbar-height);
   inset: var(--topbar-height) 0 0 0;
   z-index: 20;
   background: rgba(0, 0, 0, 0.5);

@@ -29,34 +29,35 @@ describe("<ArtifactStrip>", () => {
 
   it("renders a single chip when artifacts has one entry", () => {
     render(<ArtifactStrip artifacts={refs(1)} onOpen={vi.fn()} />);
-    const chips = screen.getAllByRole("listitem");
-    expect(chips).toHaveLength(1);
-    expect(chips[0].textContent).toContain("file-0.md");
+    const items = screen.getAllByRole("listitem");
+    expect(items).toHaveLength(1);
+    expect(items[0].textContent).toContain("file-0.md");
   });
 
   it("renders three chips when artifacts has three entries", () => {
     render(<ArtifactStrip artifacts={refs(3)} onOpen={vi.fn()} />);
-    const chips = screen.getAllByRole("listitem");
-    expect(chips).toHaveLength(3);
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
   });
 
-  it("clicking a chip calls onOpen with the matching artifact", () => {
+  it("clicking the inner chip button calls onOpen with the matching artifact", () => {
     const onOpen = vi.fn();
     const artifacts = refs(3);
     render(<ArtifactStrip artifacts={artifacts} onOpen={onOpen} />);
-    const chips = screen.getAllByRole("listitem");
-    fireEvent.click(chips[1]);
+    const buttons = screen.getAllByRole("button", { name: /open artifact/i });
+    fireEvent.click(buttons[1]);
     expect(onOpen).toHaveBeenCalledTimes(1);
     expect(onOpen).toHaveBeenCalledWith(artifacts[1]);
   });
 
-  it("each chip is a <button type=button> with aria-label including the filename", () => {
+  it("each chip is a <button type=button> nested inside an <li> listitem", () => {
     render(<ArtifactStrip artifacts={refs(2)} onOpen={vi.fn()} />);
-    const buttons = screen.getAllByRole("listitem") as HTMLButtonElement[];
-    for (const btn of buttons) {
-      expect(btn.tagName).toBe("BUTTON");
-      expect(btn.type).toBe("button");
-      expect(btn.getAttribute("aria-label")).toMatch(/Open artifact file-\d\.md/);
+    const items = screen.getAllByRole("listitem");
+    for (const li of items) {
+      expect(li.tagName).toBe("LI");
+      const btn = li.querySelector("button");
+      expect(btn).not.toBeNull();
+      expect(btn?.getAttribute("type")).toBe("button");
+      expect(btn?.getAttribute("aria-label")).toMatch(/Open artifact file-\d\.md/);
     }
   });
 
@@ -64,5 +65,12 @@ describe("<ArtifactStrip>", () => {
     render(<ArtifactStrip artifacts={refs(1)} onOpen={vi.fn()} />);
     const list = screen.getByRole("list");
     expect(list.getAttribute("aria-label")).toBe("Session artifacts");
+    // Sonar S6843: container is a real <ul>, not a div with role=list, and the
+    // chip button doesn't carry role=listitem (interactive role on a button).
+    expect(list.tagName).toBe("UL");
+    const buttons = screen.getAllByRole("button", { name: /open artifact/i });
+    for (const btn of buttons) {
+      expect(btn.getAttribute("role")).toBeNull();
+    }
   });
 });

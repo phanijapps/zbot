@@ -56,7 +56,7 @@ const AGENT_EMOJIS = [
 function getAgentEmoji(id: string): string {
   let hash = 0;
   for (let i = 0; i < id.length; i++) {
-    hash = Math.trunc((hash << 5) - hash + id.charCodeAt(i));
+    hash = Math.trunc((hash << 5) - hash + (id.codePointAt(i) ?? 0));
   }
   return AGENT_EMOJIS[Math.abs(hash) % AGENT_EMOJIS.length];
 }

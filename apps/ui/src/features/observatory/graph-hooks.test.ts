@@ -43,8 +43,7 @@ beforeEach(() => {
       statusText: "OK",
     })
   );
-  // @ts-expect-error — overriding global fetch for the test
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 });
 
 afterEach(() => {

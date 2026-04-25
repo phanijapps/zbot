@@ -229,7 +229,7 @@ function SessionCard({
           )}
         </div>
 
-        <div className="flex items-center gap-1 flex-shrink-0" role="group" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-1 flex-shrink-0" role="toolbar" aria-label="Session controls" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
           {showControls && canPause && onPause && (
             <button
               className="btn btn--secondary btn--sm"
@@ -697,7 +697,7 @@ export function WebOpsDashboard() {
                 onChange={(e) => setAutoRefresh(e.target.checked)}
                 className="rounded"
               />
-              Auto-refresh
+              <span>Auto-refresh</span>
             </label>
             <button
               className="btn btn--secondary btn--md"

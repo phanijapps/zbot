@@ -22,7 +22,7 @@ describe("MemoryItemCard — delete button", () => {
   let confirmSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true) as unknown as ReturnType<typeof vi.spyOn>;
   });
 
   afterEach(() => {
@@ -67,15 +67,18 @@ describe("MemoryItemCard — delete button", () => {
   });
 
   it("disables the delete button while a delete is in flight", async () => {
-    let resolve: (() => void) | null = null;
+    let resolveDelete: (() => void) | undefined;
     const onDelete = vi.fn(
-      () => new Promise<void>((res) => { resolve = res; })
+      (): Promise<void> =>
+        new Promise<void>((res) => {
+          resolveDelete = res;
+        })
     );
     render(<MemoryItemCard {...baseProps({ onDelete })} />);
     const btn = screen.getByRole("button", { name: /delete preference memory/i });
     fireEvent.click(btn);
     await waitFor(() => expect(btn).toBeDisabled());
-    resolve?.();
+    if (resolveDelete) (resolveDelete as () => void)();
     await waitFor(() => expect(btn).not.toBeDisabled());
   });
 });

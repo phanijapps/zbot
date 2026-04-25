@@ -33,7 +33,7 @@ export function ContentDeck({ data, timewarpDays, onDeleteFact }: Props) {
         {data.summary?.description && (
           <div className="memory-deck__summary">{data.summary.description}</div>
         )}
-        <nav
+        <div
           className="memory-deck__tabs"
           role="tablist"
           aria-label="Content tabs"
@@ -60,7 +60,7 @@ export function ContentDeck({ data, timewarpDays, onDeleteFact }: Props) {
           >
             Graph ↗
           </a>
-        </nav>
+        </div>
       </header>
       <div className="memory-deck__body">
         {tab === "facts" ? (

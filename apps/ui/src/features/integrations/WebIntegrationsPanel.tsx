@@ -46,7 +46,7 @@ const PLUGIN_EMOJIS = [
 function getMcpEmoji(id: string): string {
   let hash = 0;
   for (let i = 0; i < id.length; i++) {
-    hash = Math.trunc((hash << 5) - hash + id.charCodeAt(i));
+    hash = Math.trunc((hash << 5) - hash + (id.codePointAt(i) ?? 0));
   }
   return MCP_EMOJIS[Math.abs(hash) % MCP_EMOJIS.length];
 }
@@ -54,7 +54,7 @@ function getMcpEmoji(id: string): string {
 function getPluginEmoji(id: string): string {
   let hash = 0;
   for (let i = 0; i < id.length; i++) {
-    hash = Math.trunc((hash << 5) - hash + id.charCodeAt(i));
+    hash = Math.trunc((hash << 5) - hash + (id.codePointAt(i) ?? 0));
   }
   return PLUGIN_EMOJIS[Math.abs(hash) % PLUGIN_EMOJIS.length];
 }

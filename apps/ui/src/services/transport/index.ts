@@ -90,13 +90,20 @@ const GATEWAY_HTTP_PORT = 18791;
 const LEGACY_GATEWAY_WS_PORT = 18790;
 
 /**
- * Build default gateway URLs from the current page's hostname.
+ * Build default gateway URLs from the current page's origin.
  *
- * Unified-port mode: the WebSocket rides on the same port as HTTP via
- * the `/ws` upgrade path. A phone loading the UI at
- * `http://192.168.1.5:18791/research` therefore connects to
- * `ws://192.168.1.5:18791/ws` — no second firewall hole and no
- * reverse-proxy reconfig needed.
+ * **Browser default is same-origin.** Both production (daemon serves UI +
+ * API on the same port — typically 18791) and dev (Vite proxies `/api` and
+ * `/ws` to the daemon) use the page origin verbatim:
+ *   - `httpUrl: ""` so `fetch("${httpUrl}/api/foo")` resolves to a relative
+ *     `/api/foo` against the page origin
+ *   - `wsUrl: ws(s)://<page-host:port>/ws` reuses the page hostname AND port
+ *     so phones loading `http://192.168.1.5:18791/` get
+ *     `ws://192.168.1.5:18791/ws` automatically — no port mismatch, no
+ *     second firewall hole, no CORS preflight
+ *
+ * SSR / no-window fallback keeps the historical localhost defaults so unit
+ * tests (and any non-browser caller) keep their previous behavior.
  *
  * `LEGACY_GATEWAY_WS_PORT` is retained as a named constant for anyone
  * running the daemon with `--legacy-ws-port-enabled`; they can point the
@@ -110,12 +117,12 @@ function defaultConfig(): TransportConfig {
       wsUrl: `ws://localhost:${GATEWAY_HTTP_PORT}/ws`,
     };
   }
-  const host = window.location.hostname || "localhost";
   const wsProto = window.location.protocol === "https:" ? "wss" : "ws";
-  const httpProto = window.location.protocol === "https:" ? "https" : "http";
+  // window.location.host = "hostname:port" (port elided for default :80/:443).
+  // Always reuse it so we never disagree with the page origin.
   return {
-    httpUrl: `${httpProto}://${host}:${GATEWAY_HTTP_PORT}`,
-    wsUrl: `${wsProto}://${host}:${GATEWAY_HTTP_PORT}/ws`,
+    httpUrl: "",
+    wsUrl: `${wsProto}://${window.location.host}/ws`,
   };
 }
 

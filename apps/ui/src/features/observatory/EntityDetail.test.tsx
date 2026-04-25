@@ -26,6 +26,7 @@ function makeEntity(overrides: Partial<GraphEntity> = {}): GraphEntity {
     properties: { role: "founder" },
     first_seen_at: "2026-01-15T00:00:00Z",
     last_seen_at: "2026-04-20T00:00:00Z",
+    ...overrides,
   } as GraphEntity;
 }
 
