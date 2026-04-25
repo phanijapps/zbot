@@ -49,7 +49,15 @@ export function useLogSessions(filters?: LogFilter): UseLogSessionsResult {
         if (cancelled) return;
 
         if (result.success && result.data) {
-          setSessions(result.data);
+          // Defense-in-depth: even though the gateway honours `root_only`,
+          // we drop any row that carries a non-empty `parent_session_id`
+          // before storing it. The /research drawer applies the same belt-
+          // and-braces filter (see useSessionsList.ts). If the gateway
+          // query ever regresses again, the sidebar still stays clean.
+          const rows = filters?.root_only
+            ? result.data.filter((s) => !s.parent_session_id)
+            : result.data;
+          setSessions(rows);
         } else {
           setError(result.error || "Failed to load sessions");
         }
