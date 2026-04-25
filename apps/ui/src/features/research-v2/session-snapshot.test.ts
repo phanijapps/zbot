@@ -270,11 +270,65 @@ describe("snapshotSession — completed session", () => {
     listLogSessions.mockResolvedValueOnce({ success: true, data: [runningRow] });
     getSessionMessages.mockResolvedValueOnce({ success: true, data: [] });
     listSessionArtifacts.mockResolvedValueOnce({ success: true, data: [] });
+    // Session-level truth must also say running — the snapshot status is
+    // now sourced from /state.isLive first, with /logs/sessions as a
+    // fallback (see session-snapshot.ts for why).
+    getSessionState.mockResolvedValueOnce({
+      success: true,
+      data: {
+        session: { id: "", title: null, status: "running", startedAt: "", durationMs: 0, tokenCount: 0, model: null },
+        userMessage: null,
+        phase: "executing",
+        response: null,
+        intentAnalysis: null,
+        ward: null,
+        recalledFacts: [],
+        plan: [],
+        subagents: [],
+        isLive: true,
+      },
+    });
 
     const snap = await snapshotSession(makeTransport(), SESSION_ID);
     expect(snap).not.toBeNull();
     expect(snap!.status).toBe("running");
     expect(snap!.conversationId).toBeNull();
+  });
+
+  it("live mid-flight session: /state.isLive=true wins even when root row shows completed", async () => {
+    // Regression: reopened session where the root execution completed its
+    // first pass but subagents + continuation are still in flight.
+    // /logs/sessions reports the root row's "completed" status; /state
+    // reports isLive=true. The WS subscribe guard keys on
+    // snap.status === "running", so choosing the wrong source silenced
+    // live updates on reopen.
+    const completedRootRow = makeRow({
+      session_id: ROOT_EXEC,
+      status: "completed" as SessionStatus,
+      parent_session_id: undefined,
+    });
+    listLogSessions.mockResolvedValueOnce({ success: true, data: [completedRootRow] });
+    getSessionMessages.mockResolvedValueOnce({ success: true, data: [] });
+    listSessionArtifacts.mockResolvedValueOnce({ success: true, data: [] });
+    getSessionState.mockResolvedValueOnce({
+      success: true,
+      data: {
+        session: { id: "", title: null, status: "running", startedAt: "", durationMs: 0, tokenCount: 0, model: null },
+        userMessage: null,
+        phase: "executing",
+        response: null,
+        intentAnalysis: null,
+        ward: null,
+        recalledFacts: [],
+        plan: [],
+        subagents: [],
+        isLive: true,
+      },
+    });
+
+    const snap = await snapshotSession(makeTransport(), SESSION_ID);
+    expect(snap).not.toBeNull();
+    expect(snap!.status).toBe("running");
   });
 });
 

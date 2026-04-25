@@ -108,7 +108,27 @@ export async function snapshotSession(
   // that look like prompts but shouldn't render.
   const userMessages = buildUserMessages(messages, rootRow.session_id);
   const title = pickTitle(sessionRows);
-  const status = mapRootStatus(rootRow.status);
+  // Session-level truth wins over per-execution status on reopen.
+  //
+  // `/api/logs/sessions` reports the *root execution's* status. That row
+  // flips to "completed" as soon as the root's first pass ends — even
+  // while subagents are still running and a continuation turn is pending.
+  // Using it as the hydrate status was silencing the WS subscribe guard
+  // (`state.status === "running"`) on reopened live sessions: we'd load
+  // the history, then sit polling HTTP forever because the subscription
+  // never fired.
+  //
+  // `/api/sessions/:id/state.isLive` is computed server-side each request
+  // by checking for any running executions attached to the session, so
+  // it's the freshest signal we have. Prefer it; fall back to the
+  // session-level status on the same endpoint; fall back to the
+  // per-execution row only when `/state` is unavailable (older backends).
+  const status: ResearchStatus =
+    stateRes.success && stateRes.data
+      ? stateRes.data.isLive
+        ? "running"
+        : mapRootStatus(stateRes.data.session.status)
+      : mapRootStatus(rootRow.status);
   const wardName = stateRes.success && stateRes.data?.ward?.name
     ? stateRes.data.ward.name
     : null;
