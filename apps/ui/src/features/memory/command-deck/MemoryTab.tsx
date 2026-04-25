@@ -65,6 +65,15 @@ export function MemoryTab({ agentId }: Props) {
     await refresh();
   }
 
+  async function deleteFact(factId: string) {
+    const transport = await getTransport();
+    const result = await transport.deleteMemory(agentId, factId);
+    if (result.success) await refresh();
+    else if (typeof window !== "undefined") {
+      window.alert(`Failed to delete memory: ${result.error ?? "unknown error"}`);
+    }
+  }
+
   return (
     <div className="memory-tab-deck">
       <div className="memory-tab-deck__top">
@@ -96,11 +105,15 @@ export function MemoryTab({ agentId }: Props) {
               </div>
             </header>
             <div className="memory-deck__body">
-              <SearchResults data={search.data} loading={search.loading} />
+              <SearchResults
+                data={search.data}
+                loading={search.loading}
+                onDeleteFact={deleteFact}
+              />
             </div>
           </div>
         ) : (
-          <ContentDeck data={data} timewarpDays={days} />
+          <ContentDeck data={data} timewarpDays={days} onDeleteFact={deleteFact} />
         )}
         <WriteRail
           wardId={activeId}

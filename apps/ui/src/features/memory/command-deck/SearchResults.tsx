@@ -9,6 +9,7 @@ import { MemoryItemCard } from "./MemoryItemCard";
 interface Props {
   data: HybridSearchResponse | null;
   loading: boolean;
+  onDeleteFact?: (id: string) => void | Promise<void>;
 }
 
 type TypeKey = "facts" | "wiki" | "procedures" | "episodes";
@@ -19,7 +20,7 @@ const TYPE_LABELS: Record<TypeKey, string> = {
   episodes: "Episodes",
 };
 
-export function SearchResults({ data, loading }: Props) {
+export function SearchResults({ data, loading, onDeleteFact }: Props) {
   if (loading && !data) {
     return <div className="memory-empty">Searching…</div>;
   }
@@ -51,6 +52,7 @@ export function SearchResults({ data, loading }: Props) {
             age_bucket={"today"}
             match_source={h.match_source}
             ward_id={h.ward_id}
+            onDelete={onDeleteFact}
           />
         ))}
       </TypeSection>

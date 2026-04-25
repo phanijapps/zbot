@@ -14,9 +14,10 @@ const TAB_LABELS: Record<Tab, string> = {
 interface Props {
   data: WardContent | null;
   timewarpDays?: number;
+  onDeleteFact?: (id: string) => void | Promise<void>;
 }
 
-export function ContentDeck({ data, timewarpDays }: Props) {
+export function ContentDeck({ data, timewarpDays, onDeleteFact }: Props) {
   const [tab, setTab] = useState<Tab>("facts");
   if (!data)
     return (
@@ -63,7 +64,7 @@ export function ContentDeck({ data, timewarpDays }: Props) {
       </header>
       <div className="memory-deck__body">
         {tab === "facts" ? (
-          <ContentList items={data.facts} timewarpDays={timewarpDays} />
+          <ContentList items={data.facts} timewarpDays={timewarpDays} onDelete={onDeleteFact} />
         ) : tab === "wiki" ? (
           <WikiList items={data.wiki} />
         ) : tab === "procedures" ? (
