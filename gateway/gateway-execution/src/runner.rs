@@ -38,8 +38,8 @@ use super::invoke::micro_recall::MicroRecallContext;
 use super::invoke::working_memory_middleware;
 use super::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
-    spawn_batch_writer_with_repo, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
-    ToolCallAccumulator, WorkingMemory, WorkspaceCache,
+    spawn_batch_writer_with_repo, AgentLoader, BatchWriterHandle, ExecutorBuilder,
+    ResponseAccumulator, StreamContext, ToolCallAccumulator, WorkingMemory, WorkspaceCache,
 };
 use super::lifecycle::{
     complete_execution, crash_execution, emit_agent_started, get_or_create_session,
@@ -127,24 +127,469 @@ pub struct ExecutionRunner {
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 }
 
+/// All inputs needed to construct an [`ExecutionRunner`].
+///
+/// Replaces the previous 18-positional-argument `with_connector_registry`
+/// constructor. Using a struct literal at the call site means:
+///
+/// - Adding a new dependency is one line here + one line at every caller,
+///   no positional reshuffling.
+/// - Same-type `Option<Arc<...>>` fields (connector_registry vs bridge_registry
+///   vs memory_repo) can't be silently swapped — the field name is checked at
+///   compile time.
+/// - Callers that only want the minimum can lean on `Default::default()` for
+///   the optional integrations.
+pub struct ExecutionRunnerConfig {
+    // --- Required services ---
+    pub event_bus: Arc<EventBus>,
+    pub agent_service: Arc<AgentService>,
+    pub provider_service: Arc<ProviderService>,
+    pub paths: SharedVaultPaths,
+    pub conversation_repo: Arc<ConversationRepository>,
+    pub mcp_service: Arc<McpService>,
+    pub skill_service: Arc<gateway_services::SkillService>,
+    pub log_service: Arc<LogService<DatabaseManager>>,
+    pub state_service: Arc<StateService<DatabaseManager>>,
+
+    // --- Optional integrations ---
+    pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
+    pub workspace_cache: WorkspaceCache,
+    pub memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    pub distiller: Option<Arc<super::distillation::SessionDistiller>>,
+    pub memory_recall: Option<Arc<super::recall::MemoryRecall>>,
+    pub bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
+    pub bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
+    pub embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+
+    // --- Resource control ---
+    pub max_parallel_agents: u32,
+}
+
+/// Inputs for [`invoke_continuation`]. Previously 24 positional arguments,
+/// with eight same-type `Option<Arc<…>>` dependencies in a row
+/// (memory_repo, embedding_client, distiller, memory_recall,
+/// model_registry, graph_storage, kg_episode_repo, ingestion_adapter,
+/// goal_adapter) — the densest silent-swap cluster in the file. A
+/// psychopath adding a 25th dependency to the old signature had an even
+/// chance of scrambling which optional dep routed where.
+struct ContinuationArgs<'a> {
+    session_id: &'a str,
+    root_agent_id: &'a str,
+    event_bus: Arc<EventBus>,
+    agent_service: Arc<AgentService>,
+    provider_service: Arc<ProviderService>,
+    mcp_service: Arc<McpService>,
+    skill_service: Arc<gateway_services::SkillService>,
+    paths: SharedVaultPaths,
+    conversation_repo: Arc<ConversationRepository>,
+    handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
+    delegation_registry: Arc<DelegationRegistry>,
+    delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
+    log_service: Arc<LogService<DatabaseManager>>,
+    state_service: Arc<StateService<DatabaseManager>>,
+    workspace_cache: WorkspaceCache,
+    memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+    distiller: Option<Arc<super::distillation::SessionDistiller>>,
+    memory_recall: Option<Arc<super::recall::MemoryRecall>>,
+    model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
+    graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+    ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
+    goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+}
+
+/// Borrowed inputs for [`ExecutionRunner::run_intent_analysis`]. Same
+/// life-cycle + field conventions as the other runner context structs.
+struct IntentAnalysisCtx<'a> {
+    agent: &'a gateway_services::agents::Agent,
+    provider: &'a gateway_services::providers::Provider,
+    config: &'a ExecutionConfig,
+    session_id: &'a str,
+    execution_id: &'a str,
+    is_root: bool,
+    user_message: Option<&'a str>,
+    fact_store: Option<&'a Arc<dyn zero_core::MemoryFactStore>>,
+}
+
+/// What [`ExecutionRunner::run_intent_analysis`] returns on success — the
+/// downstream consumers of intent analysis inside `create_executor`.
+struct IntentOutcome {
+    recommended_skills: Vec<String>,
+    instructions_injection: String,
+}
+
+/// Borrowed inputs for [`ExecutionRunner::create_executor`]. Previously
+/// 8 positional args with *four* silent-swap hazards:
+///
+/// - `session_id: &str` ↔ `execution_id: &str` (same type, consecutive)
+/// - `ward_id: Option<&str>` ↔ `user_message: Option<&str>` (same type,
+///   adjacent)
+/// - `is_root: bool` (Boolean trap)
+///
+/// Named-field construction makes all four compile-checkable.
+struct CreateExecutorArgs<'a> {
+    agent: &'a gateway_services::agents::Agent,
+    provider: &'a gateway_services::providers::Provider,
+    config: &'a ExecutionConfig,
+    session_id: &'a str,
+    ward_id: Option<&'a str>,
+    is_root: bool,
+    user_message: Option<&'a str>,
+    execution_id: &'a str,
+}
+
+/// Prepend recalled facts to `history` as a system message at position 0.
+///
+/// Uses the most recent user message in `history` as the recall query so the
+/// recalled facts are relevant to the task at hand (vs. a hardcoded placeholder).
+/// No-op when `memory_recall` is `None`, the recall call errors, or it returns
+/// no items.
+async fn prepend_continuation_recall(
+    history: &mut Vec<ChatMessage>,
+    memory_recall: Option<&Arc<super::recall::MemoryRecall>>,
+    agent_id: &str,
+    ward_id: Option<&str>,
+) {
+    let Some(recall) = memory_recall else {
+        return;
+    };
+
+    // Use the last user message as the recall query.
+    let query = history
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.text_content())
+        .unwrap_or_else(|| "continuation recall".to_string());
+
+    match recall
+        .recall_unified(agent_id, &query, ward_id, &[], 10)
+        .await
+    {
+        Ok(items) if !items.is_empty() => {
+            let formatted = crate::recall::format_scored_items(&items);
+            if !formatted.is_empty() {
+                history.insert(0, ChatMessage::system(formatted));
+            }
+            tracing::info!(
+                item_count = items.len(),
+                "Recalled unified context for continuation"
+            );
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("Continuation recall failed: {}", e),
+    }
+}
+
+/// Build the system-message prompt that seeds a continuation turn.
+///
+/// If the session has a ward and `specs/{topic}/plan.md` exists, inject the
+/// plan's full text with a "just find-next-step + delegate" directive so the
+/// continuation agent doesn't redo analysis. Otherwise emit the terse "delegate
+/// the next step immediately" nudge.
+///
+/// Side effect: when a plan is found and a fact store is available, the plan
+/// text is written to `ctx.<session_id>.plan` so subagents can fetch it via
+/// `memory(get_fact, …)` without re-reading the file.
+async fn build_continuation_message(
+    paths: &SharedVaultPaths,
+    session_id: &str,
+    ward_id: Option<&str>,
+    fact_store: Option<&Arc<dyn zero_core::MemoryFactStore>>,
+) -> String {
+    let plan_hint = ward_id.and_then(|wid| {
+        let specs_dir = paths.vault_dir().join("wards").join(wid).join("specs");
+        find_latest_plan(&specs_dir)
+    });
+
+    let Some(plan) = plan_hint else {
+        return "[Delegation completed. Delegate the next step in your plan immediately. \
+                 Do NOT read files or analyze — just delegate.]"
+            .to_string();
+    };
+
+    // Populate session ctx with the plan so subagents can fetch it via
+    // memory(get_fact, key="ctx.<sid>.plan") instead of re-reading the specs
+    // file each turn.
+    if let (Some(fs), Some(ward)) = (fact_store, ward_id) {
+        crate::session_ctx::writer::plan_snapshot(fs, session_id, ward, &plan).await;
+    }
+
+    format!(
+        "[DELEGATION COMPLETED. YOUR PLAN IS BELOW.\n\
+         DO NOT read files. DO NOT analyze. DO NOT use shell.\n\
+         Just find the next step that hasn't been done and delegate it NOW.\n\
+         One action only: delegate_to_agent.]\n\n{}",
+        plan
+    )
+}
+
+/// Wire the mid-session recall hook onto an [`AgentExecutor`] if the owning
+/// runner has a [`MemoryRecall`] configured with `mid_session_recall.enabled`.
+///
+/// Same closure body is wired at two points — after a root executor is built
+/// in `create_executor`, and after a continuation executor is built in
+/// `invoke_continuation`. Extracted here so the ~55-line `set_recall_hook`
+/// invocation lives in exactly one place; either call site that forgets it
+/// must explicitly opt out rather than silently diverge.
+fn attach_mid_session_recall_hook(
+    executor: &mut AgentExecutor,
+    memory_recall: Option<&Arc<super::recall::MemoryRecall>>,
+    agent_id: &str,
+    ward_id: Option<&str>,
+) {
+    let Some(recall) = memory_recall else {
+        return;
+    };
+    let mid_cfg = &recall.config().mid_session_recall;
+    if !mid_cfg.enabled {
+        return;
+    }
+
+    let recall = Arc::clone(recall);
+    let agent_id = agent_id.to_string();
+    let ward = ward_id.map(String::from);
+    let min_novelty = mid_cfg.min_novelty_score;
+    let every_n = mid_cfg.every_n_turns as u32;
+
+    executor.set_recall_hook(
+        Box::new(
+            move |query: &str, already_injected: &std::collections::HashSet<String>| {
+                let recall = Arc::clone(&recall);
+                let agent_id = agent_id.clone();
+                let ward = ward.clone();
+                let query = query.to_string();
+                let already_injected = already_injected.clone();
+                Box::pin(async move {
+                    let facts = recall.recall(&agent_id, &query, 5, ward.as_deref()).await?;
+                    // Filter out already-injected facts and low-novelty results.
+                    let novel: Vec<_> = facts
+                        .into_iter()
+                        .filter(|f| !already_injected.contains(&f.fact.key))
+                        .filter(|f| f.score >= min_novelty)
+                        .collect();
+                    if novel.is_empty() {
+                        return Ok(agent_runtime::RecallHookResult {
+                            system_message: String::new(),
+                            fact_keys: Vec::new(),
+                        });
+                    }
+                    let keys: Vec<String> = novel.iter().map(|f| f.fact.key.clone()).collect();
+                    let lines: Vec<String> = novel
+                        .iter()
+                        .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
+                        .collect();
+                    Ok(agent_runtime::RecallHookResult {
+                        system_message: format!(
+                            "[Memory Refresh] Relevant facts for current context:\n{}",
+                            lines.join("\n")
+                        ),
+                        fact_keys: keys,
+                    })
+                })
+            },
+        ),
+        every_n,
+        std::collections::HashSet::new(),
+    );
+    tracing::debug!(every_n_turns = every_n, "Mid-session recall hook wired");
+}
+
+/// Per-turn state mutated by the stream-event handler closure inside
+/// `spawn_execution_task`. Pulled into a struct so each event-type handler
+/// takes `&mut EventAccumulator` + a few deps, instead of a 10-parameter
+/// signature per handler — and so the (>400-line) closure body shrinks to
+/// a flat dispatcher.
+struct EventAccumulator {
+    tool_acc: ToolCallAccumulator,
+    turn_tool_calls: Vec<serde_json::Value>,
+    turn_text: String,
+    working_memory: WorkingMemory,
+    pending_recall_triggers: Vec<(super::invoke::micro_recall::MicroRecallTrigger, u32)>,
+    current_tool_name: String,
+}
+
+/// Borrowed dependencies the stream-event handlers need to observe but not
+/// mutate. Constructed once per spawn, passed by reference into each handler.
+struct EventHandlerDeps<'a> {
+    batch_writer: &'a BatchWriterHandle,
+    session_id: &'a str,
+    execution_id: &'a str,
+    agent_id: &'a str,
+    handle: &'a ExecutionHandle,
+    kg_episode_repo: Option<&'a Arc<gateway_database::KgEpisodeRepository>>,
+    graph_storage: Option<&'a Arc<knowledge_graph::GraphStorage>>,
+}
+
+/// Handle a `StreamEvent::ToolCallStart` — record the call, update the
+/// current tool name, and append to the per-turn tool-call list.
+fn handle_tool_call_start(
+    acc: &mut EventAccumulator,
+    tool_id: &str,
+    tool_name: &str,
+    args: &serde_json::Value,
+) {
+    acc.tool_acc
+        .start_call(tool_id.to_string(), tool_name.to_string(), args.clone());
+    acc.current_tool_name = tool_name.to_string();
+    acc.turn_tool_calls.push(serde_json::json!({
+        "tool_id": tool_id,
+        "tool_name": tool_name,
+        "args": args,
+    }));
+}
+
+/// Handle a `StreamEvent::ToolResult` — flush the pending assistant turn,
+/// emit the tool message, update working memory, fire-and-forget graph
+/// extraction, and collect micro-recall triggers for post-stream execution.
+fn handle_tool_result(
+    acc: &mut EventAccumulator,
+    deps: &EventHandlerDeps<'_>,
+    tool_id: &str,
+    result: &str,
+    error: Option<&str>,
+) {
+    acc.tool_acc
+        .complete_call(tool_id, result.to_string(), error.map(String::from));
+
+    // Emit the assistant message for this turn (with accumulated tool_calls)
+    if !acc.turn_tool_calls.is_empty() {
+        let tc_json = serde_json::to_string(&acc.turn_tool_calls).unwrap_or_default();
+        let content = if acc.turn_text.is_empty() {
+            "[tool calls]".to_string()
+        } else {
+            std::mem::take(&mut acc.turn_text)
+        };
+        deps.batch_writer.session_message(
+            deps.session_id,
+            deps.execution_id,
+            "assistant",
+            &content,
+            Some(&tc_json),
+            None,
+        );
+        acc.turn_tool_calls.clear();
+    }
+
+    // Emit tool result message
+    let tool_content = match error {
+        Some(err) => format!("Error: {}", err),
+        None => result.to_string(),
+    };
+    deps.batch_writer.session_message(
+        deps.session_id,
+        deps.execution_id,
+        "tool",
+        &tool_content,
+        None,
+        Some(tool_id),
+    );
+
+    // Update working memory from tool result
+    working_memory_middleware::process_tool_result(
+        &mut acc.working_memory,
+        &acc.current_tool_name,
+        result,
+        error,
+        deps.handle.current_iteration(),
+    );
+
+    // Phase 6d: real-time graph extraction from tool output.
+    // Non-blocking — fires in a background task so the execution
+    // loop never waits.
+    if let (Some(ep_repo), Some(graph)) = (deps.kg_episode_repo, deps.graph_storage) {
+        let tool_name_cl = acc.current_tool_name.clone();
+        let tool_id_cl = tool_id.to_string();
+        let result_cl = result.to_string();
+        let session_id_cl = deps.session_id.to_string();
+        let agent_id_cl = deps.agent_id.to_string();
+        let ep_repo_cl = ep_repo.clone();
+        let graph_cl = graph.clone();
+        tokio::spawn(async move {
+            crate::tool_result_extractor::extract_and_persist(
+                &tool_name_cl,
+                &tool_id_cl,
+                &result_cl,
+                &session_id_cl,
+                &agent_id_cl,
+                ep_repo_cl.as_ref(),
+                &graph_cl,
+            )
+            .await;
+        });
+    }
+
+    // Detect micro-recall triggers (sync) — executed after stream completes
+    let triggers = working_memory_middleware::detect_recall_triggers(
+        &acc.working_memory,
+        &acc.current_tool_name,
+        result,
+        error,
+    );
+    let iter = deps.handle.current_iteration();
+    for trigger in triggers {
+        acc.pending_recall_triggers.push((trigger, iter));
+    }
+}
+
+/// Owned inputs for [`ExecutionRunner::spawn_execution_task`] — three
+/// consecutive `String` ids (message, session_id, execution_id) in the
+/// old positional signature were a silent-swap waiting to happen.
+struct ExecutionTaskArgs {
+    executor: AgentExecutor,
+    handle: ExecutionHandle,
+    config: ExecutionConfig,
+    message: String,
+    session_id: String,
+    execution_id: String,
+    history: Vec<ChatMessage>,
+    recommended_skills: Vec<String>,
+}
+
+/// Borrowed-reference bundle for the nested `spawn_with_notification` helper
+/// inside `spawn_delegation_handler`. All fields are `&Arc<_>` (or `&T`) —
+/// the helper `.clone()`s each one for the `tokio::spawn` it owns internally.
+///
+/// The previous 22-positional-arg version of the helper was called at three
+/// sites inside the delegation loop; a field-swap between same-type
+/// `Option<Arc<…>>` slots (memory_repo vs graph_storage vs ingestion_adapter)
+/// would have been a silent runtime regression with no compile signal.
+struct SpawnNotificationDeps<'a> {
+    event_bus: &'a Arc<EventBus>,
+    agent_service: &'a Arc<AgentService>,
+    provider_service: &'a Arc<ProviderService>,
+    mcp_service: &'a Arc<McpService>,
+    skill_service: &'a Arc<gateway_services::SkillService>,
+    paths: &'a SharedVaultPaths,
+    conversation_repo: &'a Arc<ConversationRepository>,
+    handles: &'a Arc<RwLock<HashMap<String, ExecutionHandle>>>,
+    delegation_registry: &'a Arc<DelegationRegistry>,
+    delegation_tx: &'a mpsc::UnboundedSender<DelegationRequest>,
+    log_service: &'a Arc<LogService<DatabaseManager>>,
+    state_service: &'a Arc<StateService<DatabaseManager>>,
+    workspace_cache: &'a WorkspaceCache,
+    delegation_semaphore: &'a Arc<Semaphore>,
+    memory_repo: &'a Option<Arc<gateway_database::MemoryRepository>>,
+    embedding_client: &'a Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+    memory_recall: &'a Option<Arc<super::recall::MemoryRecall>>,
+    rate_limiters: &'a Arc<
+        std::sync::RwLock<
+            std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
+        >,
+    >,
+    graph_storage: &'a Option<Arc<knowledge_graph::GraphStorage>>,
+    ingestion_adapter: &'a Option<Arc<dyn agent_tools::IngestionAccess>>,
+    goal_adapter: &'a Option<Arc<dyn agent_tools::GoalAccess>>,
+}
+
 impl ExecutionRunner {
-    /// Create a new execution runner.
+    /// Create a new execution runner from a [`ExecutionRunnerConfig`].
     ///
-    /// This initializes the runner and spawns a background task for
-    /// processing delegation requests from running agents.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        event_bus: Arc<EventBus>,
-        agent_service: Arc<AgentService>,
-        provider_service: Arc<ProviderService>,
-        paths: SharedVaultPaths,
-        conversation_repo: Arc<ConversationRepository>,
-        mcp_service: Arc<McpService>,
-        skill_service: Arc<gateway_services::SkillService>,
-        log_service: Arc<LogService<DatabaseManager>>,
-        state_service: Arc<StateService<DatabaseManager>>,
-    ) -> Self {
-        Self::with_connector_registry(
+    /// Initializes the runner and spawns background tasks for processing
+    /// delegation + continuation requests.
+    pub fn with_config(config: ExecutionRunnerConfig) -> Self {
+        let ExecutionRunnerConfig {
             event_bus,
             agent_service,
             provider_service,
@@ -154,40 +599,17 @@ impl ExecutionRunner {
             skill_service,
             log_service,
             state_service,
-            None,
-            Arc::new(tokio::sync::RwLock::new(None)),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            2, // default max_parallel_agents
-        )
-    }
+            connector_registry,
+            workspace_cache,
+            memory_repo,
+            distiller,
+            memory_recall,
+            bridge_registry,
+            bridge_outbox,
+            embedding_client,
+            max_parallel_agents,
+        } = config;
 
-    #[allow(clippy::too_many_arguments)]
-    /// Create a new execution runner with connector registry for response routing.
-    pub fn with_connector_registry(
-        event_bus: Arc<EventBus>,
-        agent_service: Arc<AgentService>,
-        provider_service: Arc<ProviderService>,
-        paths: SharedVaultPaths,
-        conversation_repo: Arc<ConversationRepository>,
-        mcp_service: Arc<McpService>,
-        skill_service: Arc<gateway_services::SkillService>,
-        log_service: Arc<LogService<DatabaseManager>>,
-        state_service: Arc<StateService<DatabaseManager>>,
-        connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
-        workspace_cache: WorkspaceCache,
-        memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
-        distiller: Option<Arc<super::distillation::SessionDistiller>>,
-        memory_recall: Option<Arc<super::recall::MemoryRecall>>,
-        bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
-        bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
-        embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
-        max_parallel_agents: u32,
-    ) -> Self {
         // Create channel for delegation requests
         let (delegation_tx, delegation_rx) = mpsc::unbounded_channel::<DelegationRequest>();
 
@@ -340,60 +762,35 @@ impl ExecutionRunner {
             /// Acquires the global semaphore permit, runs `spawn_delegated_agent`,
             /// then signals the handler loop via `done_tx` so the next queued
             /// request for the same session can be dispatched.
-            #[allow(clippy::too_many_arguments)]
             fn spawn_with_notification(
                 request: DelegationRequest,
-                event_bus: &Arc<EventBus>,
-                agent_service: &Arc<AgentService>,
-                provider_service: &Arc<ProviderService>,
-                mcp_service: &Arc<McpService>,
-                skill_service: &Arc<gateway_services::SkillService>,
-                paths: &SharedVaultPaths,
-                conversation_repo: &Arc<ConversationRepository>,
-                handles: &Arc<RwLock<HashMap<String, ExecutionHandle>>>,
-                delegation_registry: &Arc<DelegationRegistry>,
-                delegation_tx: &mpsc::UnboundedSender<DelegationRequest>,
-                log_service: &Arc<LogService<DatabaseManager>>,
-                state_service: &Arc<StateService<DatabaseManager>>,
-                workspace_cache: &WorkspaceCache,
-                delegation_semaphore: &Arc<Semaphore>,
-                memory_repo: &Option<Arc<gateway_database::MemoryRepository>>,
-                embedding_client: &Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
-                memory_recall: &Option<Arc<super::recall::MemoryRecall>>,
-                rate_limiters: &Arc<
-                    std::sync::RwLock<
-                        std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
-                    >,
-                >,
-                graph_storage: &Option<Arc<knowledge_graph::GraphStorage>>,
-                ingestion_adapter: &Option<Arc<dyn agent_tools::IngestionAccess>>,
-                goal_adapter: &Option<Arc<dyn agent_tools::GoalAccess>>,
+                deps: &SpawnNotificationDeps<'_>,
                 done_tx: mpsc::UnboundedSender<String>,
             ) {
                 let session_id = request.session_id.clone();
 
                 // Clone all Arcs for the spawned task
-                let event_bus = event_bus.clone();
-                let agent_service = agent_service.clone();
-                let provider_service = provider_service.clone();
-                let mcp_service = mcp_service.clone();
-                let skill_service = skill_service.clone();
-                let paths = paths.clone();
-                let conversation_repo = conversation_repo.clone();
-                let handles = handles.clone();
-                let delegation_registry = delegation_registry.clone();
-                let delegation_tx = delegation_tx.clone();
-                let log_service = log_service.clone();
-                let state_service = state_service.clone();
-                let workspace_cache = workspace_cache.clone();
-                let delegation_semaphore = delegation_semaphore.clone();
-                let memory_repo = memory_repo.clone();
-                let embedding_client = embedding_client.clone();
-                let memory_recall = memory_recall.clone();
-                let rate_limiters = rate_limiters.clone();
-                let graph_storage = graph_storage.clone();
-                let ingestion_adapter = ingestion_adapter.clone();
-                let goal_adapter = goal_adapter.clone();
+                let event_bus = deps.event_bus.clone();
+                let agent_service = deps.agent_service.clone();
+                let provider_service = deps.provider_service.clone();
+                let mcp_service = deps.mcp_service.clone();
+                let skill_service = deps.skill_service.clone();
+                let paths = deps.paths.clone();
+                let conversation_repo = deps.conversation_repo.clone();
+                let handles = deps.handles.clone();
+                let delegation_registry = deps.delegation_registry.clone();
+                let delegation_tx = deps.delegation_tx.clone();
+                let log_service = deps.log_service.clone();
+                let state_service = deps.state_service.clone();
+                let workspace_cache = deps.workspace_cache.clone();
+                let delegation_semaphore = deps.delegation_semaphore.clone();
+                let memory_repo = deps.memory_repo.clone();
+                let embedding_client = deps.embedding_client.clone();
+                let memory_recall = deps.memory_recall.clone();
+                let rate_limiters = deps.rate_limiters.clone();
+                let graph_storage = deps.graph_storage.clone();
+                let ingestion_adapter = deps.ingestion_adapter.clone();
+                let goal_adapter = deps.goal_adapter.clone();
 
                 tokio::spawn(async move {
                     let semaphore = delegation_semaphore.clone();
@@ -439,6 +836,32 @@ impl ExecutionRunner {
                 });
             }
 
+            // One shared borrow bundle for all spawn_with_notification call
+            // sites — avoids repeating the 21-field list three times.
+            let deps = SpawnNotificationDeps {
+                event_bus: &event_bus,
+                agent_service: &agent_service,
+                provider_service: &provider_service,
+                mcp_service: &mcp_service,
+                skill_service: &skill_service,
+                paths: &paths,
+                conversation_repo: &conversation_repo,
+                handles: &handles,
+                delegation_registry: &delegation_registry,
+                delegation_tx: &delegation_tx,
+                log_service: &log_service,
+                state_service: &state_service,
+                workspace_cache: &workspace_cache,
+                delegation_semaphore: &delegation_semaphore,
+                memory_repo: &memory_repo,
+                embedding_client: &embedding_client,
+                memory_recall: &memory_recall,
+                rate_limiters: &rate_limiters,
+                graph_storage: &graph_storage_for_delegation,
+                ingestion_adapter: &ingestion_adapter_for_delegation,
+                goal_adapter: &goal_adapter_for_delegation,
+            };
+
             loop {
                 tokio::select! {
                     Some(request) = rx.recv() => {
@@ -451,20 +874,7 @@ impl ExecutionRunner {
                                 child_agent = %request.child_agent_id,
                                 "Parallel delegation — bypassing per-session queue"
                             );
-                            spawn_with_notification(
-                                request,
-                                &event_bus, &agent_service, &provider_service,
-                                &mcp_service, &skill_service, &paths,
-                                &conversation_repo, &handles, &delegation_registry,
-                                &delegation_tx, &log_service, &state_service,
-                                &workspace_cache, &delegation_semaphore,
-                                &memory_repo, &embedding_client,
-                                &memory_recall, &rate_limiters,
-                                &graph_storage_for_delegation,
-                                &ingestion_adapter_for_delegation,
-                                &goal_adapter_for_delegation,
-                                done_tx.clone(),
-                            );
+                            spawn_with_notification(request, &deps, done_tx.clone());
                         } else if active_sessions.contains(&session_id) {
                             // Sequential: queue behind active delegation
                             tracing::info!(
@@ -484,20 +894,7 @@ impl ExecutionRunner {
                             );
                             active_sessions.insert(session_id.clone());
 
-                            spawn_with_notification(
-                                request,
-                                &event_bus, &agent_service, &provider_service,
-                                &mcp_service, &skill_service, &paths,
-                                &conversation_repo, &handles, &delegation_registry,
-                                &delegation_tx, &log_service, &state_service,
-                                &workspace_cache, &delegation_semaphore,
-                                &memory_repo, &embedding_client,
-                                &memory_recall, &rate_limiters,
-                                &graph_storage_for_delegation,
-                                &ingestion_adapter_for_delegation,
-                                &goal_adapter_for_delegation,
-                                done_tx.clone(),
-                            );
+                            spawn_with_notification(request, &deps, done_tx.clone());
                         }
                     }
                     Some(completed_session) = done_rx.recv() => {
@@ -514,20 +911,7 @@ impl ExecutionRunner {
                                 );
                                 active_sessions.insert(completed_session.clone());
 
-                                spawn_with_notification(
-                                    next,
-                                    &event_bus, &agent_service, &provider_service,
-                                    &mcp_service, &skill_service, &paths,
-                                    &conversation_repo, &handles, &delegation_registry,
-                                    &delegation_tx, &log_service, &state_service,
-                                    &workspace_cache, &delegation_semaphore,
-                                    &memory_repo, &embedding_client,
-                                    &memory_recall, &rate_limiters,
-                                    &graph_storage_for_delegation,
-                                    &ingestion_adapter_for_delegation,
-                                    &goal_adapter_for_delegation,
-                                    done_tx.clone(),
-                                );
+                                spawn_with_notification(next, &deps, done_tx.clone());
                             }
                             if queued.get(&completed_session).map(|q| q.is_empty()).unwrap_or(true) {
                                 queued.remove(&completed_session);
@@ -597,35 +981,37 @@ impl ExecutionRunner {
 
                         // Invoke the root agent to continue
                         // The agent will see full session context including callbacks
-                        if let Err(e) = invoke_continuation(
-                            &session_id,
-                            &root_agent_id,
-                            event_bus.clone(),
-                            agent_service.clone(),
-                            provider_service.clone(),
-                            mcp_service.clone(),
-                            skill_service.clone(),
-                            paths.clone(),
-                            conversation_repo.clone(),
-                            handles.clone(),
-                            delegation_registry.clone(),
-                            delegation_tx.clone(),
-                            log_service.clone(),
-                            state_service.clone(),
-                            workspace_cache.clone(),
-                            memory_repo.clone(),
-                            embedding_client.clone(),
-                            distiller.clone(),
-                            memory_recall.clone(),
-                            // Read the live registry at fire time, not
-                            // a stale capture. `load_full()` already
-                            // returns `Option<Arc<ModelRegistry>>`.
-                            model_registry.load_full(),
-                            graph_storage.clone(),
-                            kg_episode_repo.clone(),
-                            ingestion_adapter.clone(),
-                            goal_adapter.clone(),
-                        )
+                        if let Err(e) = invoke_continuation(ContinuationArgs {
+                            session_id: &session_id,
+                            root_agent_id: &root_agent_id,
+                            event_bus: event_bus.clone(),
+                            agent_service: agent_service.clone(),
+                            provider_service: provider_service.clone(),
+                            mcp_service: mcp_service.clone(),
+                            skill_service: skill_service.clone(),
+                            paths: paths.clone(),
+                            conversation_repo: conversation_repo.clone(),
+                            handles: handles.clone(),
+                            delegation_registry: delegation_registry.clone(),
+                            delegation_tx: delegation_tx.clone(),
+                            log_service: log_service.clone(),
+                            state_service: state_service.clone(),
+                            workspace_cache: workspace_cache.clone(),
+                            memory_repo: memory_repo.clone(),
+                            embedding_client: embedding_client.clone(),
+                            distiller: distiller.clone(),
+                            memory_recall: memory_recall.clone(),
+                            // Read the live registry at fire time, not a
+                            // stale capture. `load_full()` returns
+                            // `Option<Arc<ModelRegistry>>` — exactly the
+                            // shape `ContinuationArgs.model_registry`
+                            // expects, so no extra unwrap dance needed.
+                            model_registry: model_registry.load_full(),
+                            graph_storage: graph_storage.clone(),
+                            kg_episode_repo: kg_episode_repo.clone(),
+                            ingestion_adapter: ingestion_adapter.clone(),
+                            goal_adapter: goal_adapter.clone(),
+                        })
                         .await
                         {
                             tracing::error!(
@@ -824,16 +1210,16 @@ impl ExecutionRunner {
 
         // Create executor (restore ward_id from existing session if available)
         let (executor, recommended_skills) = match self
-            .create_executor(
-                &agent,
-                &provider,
-                &config,
-                &session_id,
-                setup.ward_id.as_deref(),
-                true,
-                Some(&message),
-                &execution_id,
-            )
+            .create_executor(CreateExecutorArgs {
+                agent: &agent,
+                provider: &provider,
+                config: &config,
+                session_id: &session_id,
+                ward_id: setup.ward_id.as_deref(),
+                is_root: true,
+                user_message: Some(&message),
+                execution_id: &execution_id,
+            })
             .await
         {
             Ok(result) => result,
@@ -888,33 +1274,32 @@ impl ExecutionRunner {
         }
 
         // Spawn execution task
-        self.spawn_execution_task(
+        self.spawn_execution_task(ExecutionTaskArgs {
             executor,
-            handle_clone,
+            handle: handle_clone,
             config,
             message,
-            session_id.clone(),
+            session_id: session_id.clone(),
             execution_id,
             history,
             recommended_skills,
-        );
+        });
 
         Ok((handle, session_id))
     }
 
     /// Spawn the async execution task.
-    #[allow(clippy::too_many_arguments)]
-    fn spawn_execution_task(
-        &self,
-        executor: AgentExecutor,
-        handle: ExecutionHandle,
-        config: ExecutionConfig,
-        message: String,
-        session_id: String,
-        execution_id: String,
-        mut history: Vec<ChatMessage>,
-        recommended_skills: Vec<String>,
-    ) {
+    fn spawn_execution_task(&self, args: ExecutionTaskArgs) {
+        let ExecutionTaskArgs {
+            executor,
+            handle,
+            config,
+            message,
+            session_id,
+            execution_id,
+            mut history,
+            recommended_skills,
+        } = args;
         let event_bus = self.event_bus.clone();
         let agent_id = config.agent_id.clone();
         let conversation_id = config.conversation_id.clone();
@@ -960,22 +1345,22 @@ impl ExecutionRunner {
             .with_recommended_skills(recommended_skills.clone());
 
             let mut response_acc = ResponseAccumulator::new();
-            let mut tool_acc = ToolCallAccumulator::new();
 
             // Append user message to session stream BEFORE execution
             batch_writer.session_message(&session_id, &execution_id, "user", &message, None, None);
 
-            // Track per-turn tool calls for assistant message emission
-            let session_id_inner = session_id.clone();
-            let execution_id_inner = execution_id.clone();
-            let batch_writer_inner = batch_writer.clone();
-            // Track tool calls for the current assistant turn
-            let mut turn_tool_calls: Vec<serde_json::Value> = Vec::new();
-            // Track accumulated text for the current assistant turn
-            let mut turn_text = String::new();
+            // Per-turn mutable state — kept in one struct so the event
+            // handlers take `&mut EventAccumulator` instead of 10 parameters.
+            let mut acc = EventAccumulator {
+                tool_acc: ToolCallAccumulator::new(),
+                turn_tool_calls: Vec::new(),
+                turn_text: String::new(),
+                working_memory: WorkingMemory::new(1500),
+                pending_recall_triggers: Vec::new(),
+                current_tool_name: String::new(),
+            };
 
-            // Initialize working memory and seed from recalled corrections
-            let mut working_memory = WorkingMemory::new(1500);
+            // Seed working memory from recalled corrections (system messages)
             for msg in &history {
                 if msg.role == "system" {
                     let content = msg.text_content();
@@ -985,7 +1370,7 @@ impl ExecutionRunner {
                             if trimmed.starts_with("[correction]")
                                 || trimmed.starts_with("[pattern]")
                             {
-                                working_memory.add_correction(trimmed);
+                                acc.working_memory.add_correction(trimmed);
                             }
                         }
                     }
@@ -993,33 +1378,39 @@ impl ExecutionRunner {
             }
 
             // Inject working memory into history if it has content
-            if !working_memory.is_empty() {
-                history.push(ChatMessage::system(working_memory.format_for_prompt()));
+            if !acc.working_memory.is_empty() {
+                history.push(ChatMessage::system(acc.working_memory.format_for_prompt()));
             }
 
-            // Track current tool name for working memory middleware
-            let mut current_tool_name = String::new();
-
-            // Phase 6d: clones for real-time tool-result extraction (fire-and-forget).
+            // Immutable handler deps — constructed once, borrowed into each
+            // event handler call.
+            let session_id_inner = session_id.clone();
+            let execution_id_inner = execution_id.clone();
+            let agent_id_inner = agent_id.clone();
+            let batch_writer_inner = batch_writer.clone();
             let kg_episode_repo_inner = kg_episode_repo.clone();
             let graph_storage_inner = graph_storage.clone();
-            let agent_id_inner = agent_id.clone();
 
-            // Collect micro-recall triggers during stream (sync closure cannot run async)
-            let mut pending_recall_triggers: Vec<(
-                super::invoke::micro_recall::MicroRecallTrigger,
-                u32,
-            )> = Vec::new();
-
-            // Execute with streaming
+            // Execute with streaming — closure dispatches into free-fn
+            // handlers defined at module scope (handle_tool_call_start,
+            // handle_tool_result). Keeps the spawn body flat.
             let result = executor
                 .execute_stream(&message, &history, |event| {
-                    // Check for stop request
                     if handle.is_stop_requested() {
                         return;
                     }
 
                     handle.increment();
+
+                    let deps = EventHandlerDeps {
+                        batch_writer: &batch_writer_inner,
+                        session_id: &session_id_inner,
+                        execution_id: &execution_id_inner,
+                        agent_id: &agent_id_inner,
+                        handle: &handle,
+                        kg_episode_repo: kg_episode_repo_inner.as_ref(),
+                        graph_storage: graph_storage_inner.as_ref(),
+                    };
 
                     // Stream messages to session as they happen
                     match &event {
@@ -1028,109 +1419,15 @@ impl ExecutionRunner {
                             tool_name,
                             args,
                             ..
-                        } => {
-                            tool_acc.start_call(tool_id.clone(), tool_name.clone(), args.clone());
-                            current_tool_name = tool_name.clone();
-                            // Accumulate tool call for the current assistant message
-                            turn_tool_calls.push(serde_json::json!({
-                                "tool_id": tool_id,
-                                "tool_name": tool_name,
-                                "args": args,
-                            }));
-                        }
+                        } => handle_tool_call_start(&mut acc, tool_id, tool_name, args),
                         agent_runtime::StreamEvent::ToolResult {
                             tool_id,
                             result,
                             error,
                             ..
-                        } => {
-                            tool_acc.complete_call(tool_id, result.clone(), error.clone());
-
-                            // Emit the assistant message for this turn (with accumulated tool_calls)
-                            if !turn_tool_calls.is_empty() {
-                                let tc_json =
-                                    serde_json::to_string(&turn_tool_calls).unwrap_or_default();
-                                let content = if turn_text.is_empty() {
-                                    "[tool calls]".to_string()
-                                } else {
-                                    std::mem::take(&mut turn_text)
-                                };
-                                batch_writer_inner.session_message(
-                                    &session_id_inner,
-                                    &execution_id_inner,
-                                    "assistant",
-                                    &content,
-                                    Some(&tc_json),
-                                    None,
-                                );
-                                turn_tool_calls.clear();
-                            }
-
-                            // Emit tool result message
-                            let tool_content = if let Some(err) = error {
-                                format!("Error: {}", err)
-                            } else {
-                                result.clone()
-                            };
-                            batch_writer_inner.session_message(
-                                &session_id_inner,
-                                &execution_id_inner,
-                                "tool",
-                                &tool_content,
-                                None,
-                                Some(tool_id),
-                            );
-
-                            // Update working memory from tool result
-                            working_memory_middleware::process_tool_result(
-                                &mut working_memory,
-                                &current_tool_name,
-                                result,
-                                error.as_deref(),
-                                handle.current_iteration(),
-                            );
-
-                            // Phase 6d: real-time graph extraction from tool output.
-                            // Non-blocking — fires in a background task so the
-                            // execution loop never waits.
-                            if let (Some(ref ep_repo), Some(ref graph)) =
-                                (&kg_episode_repo_inner, &graph_storage_inner)
-                            {
-                                let tool_name_cl = current_tool_name.clone();
-                                let tool_id_cl = tool_id.clone();
-                                let result_cl = result.clone();
-                                let session_id_cl = session_id_inner.clone();
-                                let agent_id_cl = agent_id_inner.clone();
-                                let ep_repo_cl = ep_repo.clone();
-                                let graph_cl = graph.clone();
-                                tokio::spawn(async move {
-                                    crate::tool_result_extractor::extract_and_persist(
-                                        &tool_name_cl,
-                                        &tool_id_cl,
-                                        &result_cl,
-                                        &session_id_cl,
-                                        &agent_id_cl,
-                                        ep_repo_cl.as_ref(),
-                                        &graph_cl,
-                                    )
-                                    .await;
-                                });
-                            }
-
-                            // Detect micro-recall triggers (sync) — executed after stream completes
-                            let triggers = working_memory_middleware::detect_recall_triggers(
-                                &working_memory,
-                                &current_tool_name,
-                                result,
-                                error.as_deref(),
-                            );
-                            let iter = handle.current_iteration();
-                            for trigger in triggers {
-                                pending_recall_triggers.push((trigger, iter));
-                            }
-                        }
+                        } => handle_tool_result(&mut acc, &deps, tool_id, result, error.as_deref()),
                         agent_runtime::StreamEvent::Token { content, .. } => {
-                            turn_text.push_str(content);
+                            acc.turn_text.push_str(content);
                         }
                         _ => {}
                     }
@@ -1151,15 +1448,15 @@ impl ExecutionRunner {
                 .await;
 
             // Execute micro-recall triggers collected during the stream
-            if !pending_recall_triggers.is_empty() {
+            if !acc.pending_recall_triggers.is_empty() {
                 let recall_ctx = MicroRecallContext {
                     memory_repo: memory_repo.clone(),
                     graph_storage: graph_storage.clone(),
                     agent_id: agent_id.clone(),
                 };
-                for (trigger, iter) in &pending_recall_triggers {
+                for (trigger, iter) in &acc.pending_recall_triggers {
                     working_memory_middleware::execute_micro_recall_triggers(
-                        &mut working_memory,
+                        &mut acc.working_memory,
                         std::slice::from_ref(trigger),
                         &recall_ctx,
                         *iter,
@@ -1173,19 +1470,19 @@ impl ExecutionRunner {
             tracing::info!(
                 execution_id = %execution_id,
                 response_len = accumulated_response.len(),
-                tool_calls_count = tool_acc.len(),
+                tool_calls_count = acc.tool_acc.len(),
                 "Execution stream completed"
             );
 
             // Emit any remaining text that wasn't flushed as part of a tool-call turn.
             // If turn_text is empty, the response was already written when the last
             // ToolResult (e.g., from the respond tool) flushed it. Don't write again.
-            if !turn_text.is_empty() {
+            if !acc.turn_text.is_empty() {
                 batch_writer.session_message(
                     &session_id,
                     &execution_id,
                     "assistant",
-                    &turn_text,
+                    &acc.turn_text,
                     None,
                     None,
                 );
@@ -1645,21 +1942,23 @@ impl ExecutionRunner {
     }
 
     /// Create an executor for the agent using the ExecutorBuilder.
-    #[allow(clippy::too_many_arguments)]
     ///
     /// Returns the executor and any recommended skill IDs from intent analysis
     /// (empty when analysis is skipped or fails).
     async fn create_executor(
         &self,
-        agent: &gateway_services::agents::Agent,
-        provider: &gateway_services::providers::Provider,
-        config: &ExecutionConfig,
-        session_id: &str,
-        ward_id: Option<&str>,
-        is_root: bool,
-        user_message: Option<&str>,
-        execution_id: &str,
+        args: CreateExecutorArgs<'_>,
     ) -> Result<(AgentExecutor, Vec<String>), String> {
+        let CreateExecutorArgs {
+            agent,
+            provider,
+            config,
+            session_id,
+            ward_id,
+            is_root,
+            user_message,
+            execution_id,
+        } = args;
         // Collect available agents and skills for executor state
         let available_agents = collect_agents_summary(&self.agent_service).await;
         let available_skills = collect_skills_summary(&self.skill_service).await;
@@ -1747,220 +2046,23 @@ impl ExecutionRunner {
         // so we query by execution_id to find prior intent logs.
         let mut agent_for_build = agent.clone();
         let mut recommended_skills: Vec<String> = Vec::new();
-        let already_analyzed = if is_root {
-            self.log_service.has_intent_log(execution_id)
-        } else {
-            false
-        };
-        let is_chat_mode = config.is_chat_mode();
-        if is_root && already_analyzed && !is_chat_mode {
-            // Notify UI that intent analysis was skipped (continuation turn)
-            self.event_bus
-                .publish(gateway_events::GatewayEvent::IntentAnalysisSkipped {
-                    session_id: session_id.to_string(),
-                    execution_id: execution_id.to_string(),
-                })
-                .await;
-            tracing::debug!("Intent analysis skipped (already analyzed for this execution)");
-        }
-        if is_root && !already_analyzed && !is_chat_mode {
-            if let Some(ref fs) = fact_store_for_indexing {
-                // Index resources (fast DB upsert — no LLM call)
-                index_resources(
-                    fs.as_ref(),
-                    &self.skill_service,
-                    &self.agent_service,
-                    &self.paths,
-                )
-                .await;
-                tracing::info!("Resource indexing complete (skills, agents, wards)");
-
-                // Run intent analysis if user message is present
-                if let Some(msg) = user_message {
-                    // Emit started event so UI can show "Analyzing..."
-                    self.event_bus
-                        .publish(gateway_events::GatewayEvent::IntentAnalysisStarted {
-                            session_id: session_id.to_string(),
-                            execution_id: execution_id.to_string(),
-                        })
-                        .await;
-
-                    // Build temporary LLM client for analysis
-                    let llm_config = agent_runtime::LlmConfig::new(
-                        provider.base_url.clone(),
-                        provider.api_key.clone(),
-                        agent.model.clone(),
-                        provider.id.clone().unwrap_or_else(|| provider.name.clone()),
-                    )
-                    .with_max_tokens(2048); // Intent analysis JSON is 1-2KB — keep max_tokens low for speed
-                    match agent_runtime::OpenAiClient::new(llm_config) {
-                        Ok(raw_client) => {
-                            let retrying = agent_runtime::RetryingLlmClient::new(
-                                std::sync::Arc::new(raw_client),
-                                agent_runtime::RetryPolicy::default(),
-                            );
-
-                            let system_prompt =
-                                crate::middleware::intent_analysis::load_intent_analysis_prompt(
-                                    &self.paths,
-                                );
-                            match analyze_intent(
-                                &retrying,
-                                msg,
-                                fs.as_ref(),
-                                self.memory_recall.as_ref().map(|r| r.as_ref()),
-                                &system_prompt,
-                            )
-                            .await
-                            {
-                                Ok(analysis) => {
-                                    tracing::info!(
-                                        primary_intent = %analysis.primary_intent,
-                                        approach = %analysis.execution_strategy.approach,
-                                        "Intent analysis succeeded"
-                                    );
-
-                                    // Emit IntentAnalysisComplete event
-                                    self.event_bus
-                                        .publish(GatewayEvent::IntentAnalysisComplete {
-                                            session_id: session_id.to_string(),
-                                            execution_id: execution_id.to_string(),
-                                            primary_intent: analysis.primary_intent.clone(),
-                                            hidden_intents: analysis.hidden_intents.clone(),
-                                            recommended_skills: analysis.recommended_skills.clone(),
-                                            recommended_agents: analysis.recommended_agents.clone(),
-                                            ward_recommendation: serde_json::to_value(
-                                                &analysis.ward_recommendation,
-                                            )
-                                            .unwrap_or_default(),
-                                            execution_strategy: serde_json::to_value(
-                                                &analysis.execution_strategy,
-                                            )
-                                            .unwrap_or_default(),
-                                        })
-                                        .await;
-
-                                    // Phase 2b: populate session ctx with the intent-analyzer's
-                                    // decision + verbatim user prompt. Subagents spawned later
-                                    // can fetch these via memory(get_fact, key="ctx.<sid>.intent")
-                                    // without re-reading the original message.
-                                    if let Some(ref fs) = fact_store_for_indexing {
-                                        let ward = analysis.ward_recommendation.ward_name.as_str();
-                                        let intent_json = serde_json::to_value(&analysis)
-                                            .unwrap_or(serde_json::Value::Null);
-                                        crate::session_ctx::writer::intent_snapshot(
-                                            fs,
-                                            session_id,
-                                            ward,
-                                            &intent_json,
-                                            msg,
-                                        )
-                                        .await;
-                                    }
-
-                                    // Log for session replay
-                                    if let Ok(meta) = serde_json::to_value(&analysis) {
-                                        let log_entry = api_logs::ExecutionLog::new(
-                                            execution_id,
-                                            session_id,
-                                            &config.agent_id,
-                                            api_logs::LogLevel::Info,
-                                            api_logs::LogCategory::Intent,
-                                            format!("Intent: {}", analysis.primary_intent),
-                                        )
-                                        .with_metadata(meta);
-                                        let _ = self.log_service.log(log_entry);
-                                    }
-
-                                    // Capture recommended skills for post-execution scaffolding
-                                    recommended_skills = analysis.recommended_skills.clone();
-
-                                    // Collect spec guidance from recommended skills' ward_setup
-                                    let spec_guidance = {
-                                        let mut guidances = Vec::new();
-                                        for skill_name in &analysis.recommended_skills {
-                                            if let Ok(Some(ws)) =
-                                                self.skill_service.get_ward_setup(skill_name).await
-                                            {
-                                                if let Some(ref g) = ws.spec_guidance {
-                                                    guidances.push(g.clone());
-                                                }
-                                            }
-                                        }
-                                        if guidances.is_empty() {
-                                            None
-                                        } else {
-                                            Some(guidances.join("\n\n"))
-                                        }
-                                    };
-
-                                    // Inject intent analysis into agent instructions
-                                    // so the agent can follow ward/skill/strategy recommendations
-                                    agent_for_build.instructions.push_str(
-                                        &format_intent_injection(
-                                            &analysis,
-                                            spec_guidance.as_deref(),
-                                            user_message,
-                                        ),
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Intent analysis failed (non-fatal): {}", e);
-                                    // Fallback: emit minimal analysis so UI gets a block
-                                    // and agent receives ward naming guidance
-                                    self.event_bus
-                                        .publish(GatewayEvent::IntentAnalysisComplete {
-                                            session_id: session_id.to_string(),
-                                            execution_id: execution_id.to_string(),
-                                            primary_intent: "general".to_string(),
-                                            hidden_intents: vec![],
-                                            recommended_skills: vec![],
-                                            recommended_agents: vec![],
-                                            ward_recommendation: serde_json::json!({
-                                                "action": "create_new",
-                                                "ward_name": "scratch",
-                                                "subdirectory": null,
-                                                "reason": "Intent analysis failed — using scratch ward"
-                                            }),
-                                            execution_strategy: serde_json::json!({
-                                                "approach": "simple",
-                                                "explanation": "Intent analysis unavailable"
-                                            }),
-                                        })
-                                        .await;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to create LLM client for intent analysis: {}",
-                                e
-                            );
-                            // Fallback: emit minimal analysis event
-                            self.event_bus
-                                .publish(GatewayEvent::IntentAnalysisComplete {
-                                    session_id: session_id.to_string(),
-                                    execution_id: execution_id.to_string(),
-                                    primary_intent: "general".to_string(),
-                                    hidden_intents: vec![],
-                                    recommended_skills: vec![],
-                                    recommended_agents: vec![],
-                                    ward_recommendation: serde_json::json!({
-                                        "action": "create_new",
-                                        "ward_name": "scratch",
-                                        "subdirectory": null,
-                                        "reason": "LLM client creation failed — using scratch ward"
-                                    }),
-                                    execution_strategy: serde_json::json!({
-                                        "approach": "simple",
-                                        "explanation": "Intent analysis unavailable (no LLM client)"
-                                    }),
-                                })
-                                .await;
-                        }
-                    }
-                }
-            }
+        let outcome = self
+            .run_intent_analysis(IntentAnalysisCtx {
+                agent,
+                provider,
+                config,
+                session_id,
+                execution_id,
+                is_root,
+                user_message,
+                fact_store: fact_store_for_indexing.as_ref(),
+            })
+            .await;
+        if let Some(out) = outcome {
+            recommended_skills = out.recommended_skills;
+            agent_for_build
+                .instructions
+                .push_str(&out.instructions_injection);
         }
 
         // Flag if placeholder specs exist — delegate tool uses this to block ad-hoc delegations
@@ -1996,63 +2098,242 @@ impl ExecutionRunner {
             )
             .await?;
 
-        // Wire mid-session recall hook so the executor refreshes memory every N turns.
-        if let Some(recall) = &self.memory_recall {
-            let mid_cfg = &recall.config().mid_session_recall;
-            if mid_cfg.enabled {
-                let recall = Arc::clone(recall);
-                let agent_id = agent.id.clone();
-                let ward = ward_id.map(String::from);
-                let min_novelty = mid_cfg.min_novelty_score;
-                let every_n = mid_cfg.every_n_turns as u32;
-
-                executor.set_recall_hook(
-                    Box::new(
-                        move |query: &str, already_injected: &std::collections::HashSet<String>| {
-                            let recall = Arc::clone(&recall);
-                            let agent_id = agent_id.clone();
-                            let ward = ward.clone();
-                            let query = query.to_string();
-                            let already_injected = already_injected.clone();
-                            Box::pin(async move {
-                                let facts =
-                                    recall.recall(&agent_id, &query, 5, ward.as_deref()).await?;
-                                // Filter out already-injected facts and low-novelty results
-                                let novel: Vec<_> = facts
-                                    .into_iter()
-                                    .filter(|f| !already_injected.contains(&f.fact.key))
-                                    .filter(|f| f.score >= min_novelty)
-                                    .collect();
-                                if novel.is_empty() {
-                                    return Ok(agent_runtime::RecallHookResult {
-                                        system_message: String::new(),
-                                        fact_keys: Vec::new(),
-                                    });
-                                }
-                                let keys: Vec<String> =
-                                    novel.iter().map(|f| f.fact.key.clone()).collect();
-                                let lines: Vec<String> = novel
-                                    .iter()
-                                    .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
-                                    .collect();
-                                Ok(agent_runtime::RecallHookResult {
-                                    system_message: format!(
-                                        "[Memory Refresh] Relevant facts for current context:\n{}",
-                                        lines.join("\n")
-                                    ),
-                                    fact_keys: keys,
-                                })
-                            })
-                        },
-                    ),
-                    every_n,
-                    std::collections::HashSet::new(),
-                );
-                tracing::debug!(every_n_turns = every_n, "Mid-session recall hook wired");
-            }
-        }
+        attach_mid_session_recall_hook(
+            &mut executor,
+            self.memory_recall.as_ref(),
+            &agent.id,
+            ward_id,
+        );
 
         Ok((executor, recommended_skills))
+    }
+
+    /// Run the intent-analysis sub-pipeline that was previously inlined into
+    /// `create_executor` (~220 LOC, 5 levels deep). Sequence:
+    ///
+    ///   1. Skip entirely for non-root, chat-mode, or re-entry executions.
+    ///      For re-entry, emit `IntentAnalysisSkipped` so the UI still gets
+    ///      a block.
+    ///   2. Run fast DB resource-indexing (skills/agents/wards) against
+    ///      the provided fact store.
+    ///   3. Emit `IntentAnalysisStarted`, build a temporary LLM client,
+    ///      call `analyze_intent`.
+    ///   4. On success: emit `IntentAnalysisComplete`, snapshot to session
+    ///      ctx, log for replay, return the injected agent-instructions
+    ///      suffix + recommended_skills to the caller.
+    ///   5. On LLM-client or analysis failure: emit the "scratch ward"
+    ///      fallback `IntentAnalysisComplete` shape and return `None`.
+    ///
+    /// Returning `Option<IntentOutcome>` instead of mutating out-params
+    /// keeps the caller simple: `if let Some(out) = …` applies the
+    /// instructions suffix; otherwise the agent continues unchanged.
+    async fn run_intent_analysis(&self, ctx: IntentAnalysisCtx<'_>) -> Option<IntentOutcome> {
+        let IntentAnalysisCtx {
+            agent,
+            provider,
+            config,
+            session_id,
+            execution_id,
+            is_root,
+            user_message,
+            fact_store,
+        } = ctx;
+
+        // Guard: non-root or chat-mode — never run intent analysis.
+        if !is_root || config.is_chat_mode() {
+            return None;
+        }
+
+        // Already analyzed (e.g. continuation turn): emit Skipped so the
+        // UI renders a block, then return.
+        if self.log_service.has_intent_log(execution_id) {
+            self.event_bus
+                .publish(gateway_events::GatewayEvent::IntentAnalysisSkipped {
+                    session_id: session_id.to_string(),
+                    execution_id: execution_id.to_string(),
+                })
+                .await;
+            tracing::debug!("Intent analysis skipped (already analyzed for this execution)");
+            return None;
+        }
+
+        let fs = fact_store?;
+        let msg = user_message?;
+
+        // Index resources (fast DB upsert — no LLM call). Runs before
+        // analyze_intent so the analyzer has the latest capability index.
+        index_resources(
+            fs.as_ref(),
+            &self.skill_service,
+            &self.agent_service,
+            &self.paths,
+        )
+        .await;
+        tracing::info!("Resource indexing complete (skills, agents, wards)");
+
+        // Emit started event so UI can show "Analyzing..."
+        self.event_bus
+            .publish(gateway_events::GatewayEvent::IntentAnalysisStarted {
+                session_id: session_id.to_string(),
+                execution_id: execution_id.to_string(),
+            })
+            .await;
+
+        // Build temporary LLM client for analysis.
+        let llm_config = agent_runtime::LlmConfig::new(
+            provider.base_url.clone(),
+            provider.api_key.clone(),
+            agent.model.clone(),
+            provider.id.clone().unwrap_or_else(|| provider.name.clone()),
+        )
+        .with_max_tokens(2048); // Intent analysis JSON is 1-2KB — keep max_tokens low for speed
+
+        let raw_client = match agent_runtime::OpenAiClient::new(llm_config) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Failed to create LLM client for intent analysis: {}", e);
+                self.emit_intent_fallback_complete(
+                    session_id,
+                    execution_id,
+                    "LLM client creation failed — using scratch ward",
+                    "Intent analysis unavailable (no LLM client)",
+                )
+                .await;
+                return None;
+            }
+        };
+
+        let retrying = agent_runtime::RetryingLlmClient::new(
+            std::sync::Arc::new(raw_client),
+            agent_runtime::RetryPolicy::default(),
+        );
+        let system_prompt =
+            crate::middleware::intent_analysis::load_intent_analysis_prompt(&self.paths);
+
+        let analysis = match analyze_intent(
+            &retrying,
+            msg,
+            fs.as_ref(),
+            self.memory_recall.as_ref().map(|r| r.as_ref()),
+            &system_prompt,
+        )
+        .await
+        {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::warn!("Intent analysis failed (non-fatal): {}", e);
+                self.emit_intent_fallback_complete(
+                    session_id,
+                    execution_id,
+                    "Intent analysis failed — using scratch ward",
+                    "Intent analysis unavailable",
+                )
+                .await;
+                return None;
+            }
+        };
+
+        tracing::info!(
+            primary_intent = %analysis.primary_intent,
+            approach = %analysis.execution_strategy.approach,
+            "Intent analysis succeeded"
+        );
+
+        // Emit IntentAnalysisComplete event with the real analysis.
+        self.event_bus
+            .publish(GatewayEvent::IntentAnalysisComplete {
+                session_id: session_id.to_string(),
+                execution_id: execution_id.to_string(),
+                primary_intent: analysis.primary_intent.clone(),
+                hidden_intents: analysis.hidden_intents.clone(),
+                recommended_skills: analysis.recommended_skills.clone(),
+                recommended_agents: analysis.recommended_agents.clone(),
+                ward_recommendation: serde_json::to_value(&analysis.ward_recommendation)
+                    .unwrap_or_default(),
+                execution_strategy: serde_json::to_value(&analysis.execution_strategy)
+                    .unwrap_or_default(),
+            })
+            .await;
+
+        // Phase 2b: populate session ctx with the intent-analyzer's
+        // decision + verbatim user prompt. Subagents spawned later can
+        // fetch these via memory(get_fact, key="ctx.<sid>.intent") without
+        // re-reading the original message.
+        let ward = analysis.ward_recommendation.ward_name.as_str();
+        let intent_json = serde_json::to_value(&analysis).unwrap_or(serde_json::Value::Null);
+        crate::session_ctx::writer::intent_snapshot(fs, session_id, ward, &intent_json, msg).await;
+
+        // Log for session replay.
+        if let Ok(meta) = serde_json::to_value(&analysis) {
+            let log_entry = api_logs::ExecutionLog::new(
+                execution_id,
+                session_id,
+                &config.agent_id,
+                api_logs::LogLevel::Info,
+                api_logs::LogCategory::Intent,
+                format!("Intent: {}", analysis.primary_intent),
+            )
+            .with_metadata(meta);
+            let _ = self.log_service.log(log_entry);
+        }
+
+        // Collect spec guidance from recommended skills' ward_setup.
+        let spec_guidance = {
+            let mut guidances = Vec::new();
+            for skill_name in &analysis.recommended_skills {
+                if let Ok(Some(ws)) = self.skill_service.get_ward_setup(skill_name).await {
+                    if let Some(ref g) = ws.spec_guidance {
+                        guidances.push(g.clone());
+                    }
+                }
+            }
+            if guidances.is_empty() {
+                None
+            } else {
+                Some(guidances.join("\n\n"))
+            }
+        };
+
+        Some(IntentOutcome {
+            recommended_skills: analysis.recommended_skills.clone(),
+            instructions_injection: format_intent_injection(
+                &analysis,
+                spec_guidance.as_deref(),
+                Some(msg),
+            ),
+        })
+    }
+
+    /// Emit the fallback `IntentAnalysisComplete` event used when the LLM
+    /// client can't be built or the analysis call fails — keeps the UI
+    /// unblocked and steers the agent toward the `scratch` ward.
+    async fn emit_intent_fallback_complete(
+        &self,
+        session_id: &str,
+        execution_id: &str,
+        ward_reason: &str,
+        strategy_explanation: &str,
+    ) {
+        self.event_bus
+            .publish(GatewayEvent::IntentAnalysisComplete {
+                session_id: session_id.to_string(),
+                execution_id: execution_id.to_string(),
+                primary_intent: "general".to_string(),
+                hidden_intents: vec![],
+                recommended_skills: vec![],
+                recommended_agents: vec![],
+                ward_recommendation: serde_json::json!({
+                    "action": "create_new",
+                    "ward_name": "scratch",
+                    "subdirectory": null,
+                    "reason": ward_reason,
+                }),
+                execution_strategy: serde_json::json!({
+                    "approach": "simple",
+                    "explanation": strategy_explanation,
+                }),
+            })
+            .await;
     }
 
     /// Emit an error event.
@@ -2085,33 +2366,33 @@ impl ExecutionRunner {
 /// - Original user message
 /// - Previous assistant responses
 /// - Callback messages from completed subagents (as system messages)
-#[allow(clippy::too_many_arguments)]
-async fn invoke_continuation(
-    session_id: &str,
-    root_agent_id: &str,
-    event_bus: Arc<EventBus>,
-    agent_service: Arc<AgentService>,
-    provider_service: Arc<ProviderService>,
-    mcp_service: Arc<McpService>,
-    skill_service: Arc<gateway_services::SkillService>,
-    paths: SharedVaultPaths,
-    conversation_repo: Arc<ConversationRepository>,
-    handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
-    _delegation_registry: Arc<DelegationRegistry>,
-    delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
-    log_service: Arc<LogService<DatabaseManager>>,
-    state_service: Arc<StateService<DatabaseManager>>,
-    workspace_cache: WorkspaceCache,
-    memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
-    embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
-    distiller: Option<Arc<super::distillation::SessionDistiller>>,
-    memory_recall: Option<Arc<super::recall::MemoryRecall>>,
-    model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
-    graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
-    kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
-    ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
-    goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
-) -> Result<(), String> {
+async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<(), String> {
+    let ContinuationArgs {
+        session_id,
+        root_agent_id,
+        event_bus,
+        agent_service,
+        provider_service,
+        mcp_service,
+        skill_service,
+        paths,
+        conversation_repo,
+        handles,
+        delegation_registry: _delegation_registry,
+        delegation_tx,
+        log_service,
+        state_service,
+        workspace_cache,
+        memory_repo,
+        embedding_client,
+        distiller,
+        memory_recall,
+        model_registry,
+        graph_storage,
+        kg_episode_repo,
+        ingestion_adapter,
+        goal_adapter,
+    } = args;
     // Generate a new conversation ID for this continuation turn
     let conversation_id = format!(
         "{}-cont-{}",
@@ -2175,41 +2456,16 @@ async fn invoke_continuation(
         .flatten()
         .and_then(|s| s.ward_id);
 
-    // Recall domain-relevant facts for continuation context.
-    // Use the last user message from history as the recall query (instead of a
-    // hardcoded placeholder) so the recalled facts are relevant to the actual task.
-    let continuation_recall_query = history
-        .iter()
-        .rev()
-        .find(|m| m.role == "user")
-        .map(|m| m.text_content())
-        .unwrap_or_else(|| "continuation recall".to_string());
-
-    if let Some(recall) = &memory_recall {
-        match recall
-            .recall_unified(
-                root_agent_id,
-                &continuation_recall_query,
-                session_ward_id.as_deref(),
-                &[],
-                10,
-            )
-            .await
-        {
-            Ok(items) if !items.is_empty() => {
-                let formatted = crate::recall::format_scored_items(&items);
-                if !formatted.is_empty() {
-                    history.insert(0, ChatMessage::system(formatted));
-                }
-                tracing::info!(
-                    item_count = items.len(),
-                    "Recalled unified context for continuation"
-                );
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!("Continuation recall failed: {}", e),
-        }
-    }
+    // Prepend recalled facts (if any) to history as a system message at
+    // position 0 — formatted by `format_scored_items`. No-op when
+    // memory_recall is None, recall fails, or returns nothing.
+    prepend_continuation_recall(
+        &mut history,
+        memory_recall.as_ref(),
+        root_agent_id,
+        session_ward_id.as_deref(),
+    )
+    .await;
 
     tracing::info!(
         session_id = %session_id,
@@ -2276,93 +2532,21 @@ async fn invoke_continuation(
         )
         .await?;
 
-    // Wire mid-session recall hook for continuation executor.
-    if let Some(recall) = &memory_recall {
-        let mid_cfg = &recall.config().mid_session_recall;
-        if mid_cfg.enabled {
-            let recall = Arc::clone(recall);
-            let agent_id = root_agent_id.to_string();
-            let ward = session_ward_id.clone();
-            let min_novelty = mid_cfg.min_novelty_score;
-            let every_n = mid_cfg.every_n_turns as u32;
+    attach_mid_session_recall_hook(
+        &mut executor,
+        memory_recall.as_ref(),
+        root_agent_id,
+        session_ward_id.as_deref(),
+    );
 
-            executor.set_recall_hook(
-                Box::new(
-                    move |query: &str, already_injected: &std::collections::HashSet<String>| {
-                        let recall = Arc::clone(&recall);
-                        let agent_id = agent_id.clone();
-                        let ward = ward.clone();
-                        let query = query.to_string();
-                        let already_injected = already_injected.clone();
-                        Box::pin(async move {
-                            let facts =
-                                recall.recall(&agent_id, &query, 5, ward.as_deref()).await?;
-                            let novel: Vec<_> = facts
-                                .into_iter()
-                                .filter(|f| !already_injected.contains(&f.fact.key))
-                                .filter(|f| f.score >= min_novelty)
-                                .collect();
-                            if novel.is_empty() {
-                                return Ok(agent_runtime::RecallHookResult {
-                                    system_message: String::new(),
-                                    fact_keys: Vec::new(),
-                                });
-                            }
-                            let keys: Vec<String> =
-                                novel.iter().map(|f| f.fact.key.clone()).collect();
-                            let lines: Vec<String> = novel
-                                .iter()
-                                .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
-                                .collect();
-                            Ok(agent_runtime::RecallHookResult {
-                                system_message: format!(
-                                    "[Memory Refresh] Relevant facts for current context:\n{}",
-                                    lines.join("\n")
-                                ),
-                                fact_keys: keys,
-                            })
-                        })
-                    },
-                ),
-                every_n,
-                std::collections::HashSet::new(),
-            );
-            tracing::debug!(
-                every_n_turns = every_n,
-                "Mid-session recall hook wired (continuation)"
-            );
-        }
-    }
-
-    // Build a focused continuation message with the plan injected.
-    // Search specs/**/plan.md (planner saves to specs/{domain_task}/plan.md).
-    let continuation_message = {
-        let plan_hint = session_ward_id.as_ref().and_then(|ward_id| {
-            let specs_dir = paths.vault_dir().join("wards").join(ward_id).join("specs");
-            find_latest_plan(&specs_dir)
-        });
-
-        if let Some(plan) = plan_hint {
-            // Phase 2b: also populate session ctx with the plan so
-            // subagents can fetch it via memory(get_fact, key="ctx.<sid>.plan")
-            // instead of re-reading the specs file each turn.
-            if let (Some(fs), Some(ward)) = (fact_store_for_ctx.as_ref(), session_ward_id.as_ref())
-            {
-                crate::session_ctx::writer::plan_snapshot(fs, session_id, ward, &plan).await;
-            }
-            format!(
-                "[DELEGATION COMPLETED. YOUR PLAN IS BELOW.\n\
-                 DO NOT read files. DO NOT analyze. DO NOT use shell.\n\
-                 Just find the next step that hasn't been done and delegate it NOW.\n\
-                 One action only: delegate_to_agent.]\n\n{}",
-                plan
-            )
-        } else {
-            "[Delegation completed. Delegate the next step in your plan immediately. \
-             Do NOT read files or analyze — just delegate.]"
-                .to_string()
-        }
-    };
+    // Build a focused continuation message with the plan injected if one exists.
+    let continuation_message = build_continuation_message(
+        &paths,
+        session_id,
+        session_ward_id.as_deref(),
+        fact_store_for_ctx.as_ref(),
+    )
+    .await;
 
     // Spawn execution task
     let session_id_clone = session_id.to_string();

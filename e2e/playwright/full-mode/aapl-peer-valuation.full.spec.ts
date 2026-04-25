@@ -13,13 +13,13 @@ test.describe("aapl-peer-valuation (Mode Full)", () => {
   // needs either synthetic-response fallback in mock-llm or a richer
   // fixture captured against a tool-result-per-turn loop.
   test("real zerod delegates to planner-agent and renders recorded artifact", async ({ page }) => {
-    await page.goto(handle.uiUrl("/research-v2"));
+    await page.goto(handle.uiUrl("/research"));
 
     await page.locator("textarea").fill("Run an AAPL peer valuation.");
     await page.locator('button[title="Send message"]').click();
 
     await expect.poll(() => page.url(), { timeout: 15_000 })
-      .toMatch(/\/research-v2\/sess-/);
+      .toMatch(/\/research\/sess-/);
 
     // Title reflects the intent / recorded session title.
     await expect(page.locator("header, [class*='title'], h1").first())
