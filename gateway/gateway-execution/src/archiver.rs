@@ -392,3 +392,195 @@ impl SessionArchiver {
         })
     }
 }
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gateway_services::VaultPaths;
+    use rusqlite::params;
+    use tempfile::TempDir;
+
+    /// Build an in-memory archiver against a tempdir-backed DB.
+    /// Returns the archiver, the DB handle (so tests can seed rows), and
+    /// the tempdir guard (kept alive for the test's duration).
+    fn fresh() -> (SessionArchiver, Arc<DatabaseManager>, TempDir) {
+        let tmp = TempDir::new().expect("tempdir");
+        let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        let db = Arc::new(DatabaseManager::new(paths).expect("db init"));
+        let archive_dir = tmp.path().join("archives");
+        let archiver = SessionArchiver::new(db.clone(), archive_dir);
+        (archiver, db, tmp)
+    }
+
+    /// Insert a session row with the chosen `status`, `archived` flag, and
+    /// `completed_at`. `completed_at` accepts a SQLite-compatible datetime
+    /// string (e.g. `datetime('now', '-30 days')`) by passing the modifier.
+    fn seed_session(
+        db: &Arc<DatabaseManager>,
+        id: &str,
+        status: &str,
+        archived: i64,
+        age_days: i64,
+    ) {
+        db.with_connection(|conn| {
+            // Use SQLite's datetime() so the comparison in the WHERE clause
+            // (`s.completed_at < datetime('now', ?1)`) operates on the same
+            // wall clock the archiver uses.
+            let completed_at: String = conn.query_row(
+                &format!("SELECT datetime('now', '-{age_days} days')"),
+                [],
+                |row| row.get(0),
+            )?;
+            conn.execute(
+                "INSERT INTO sessions (id, status, root_agent_id, created_at, completed_at, archived) \
+                 VALUES (?1, ?2, 'root', datetime('now'), ?3, ?4)",
+                params![id, status, completed_at, archived],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    /// Insert a `distillation_runs` row for the session.
+    fn seed_distillation_run(db: &Arc<DatabaseManager>, session_id: &str, status: &str) {
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO distillation_runs \
+                   (id, session_id, status, facts_extracted, entities_extracted, relationships_extracted, episode_created, retry_count, created_at) \
+                 VALUES (?1, ?2, ?3, 0, 0, 0, 0, 0, datetime('now'))",
+                params![format!("dr-{session_id}"), session_id, status],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    /// Run `archive_old_sessions` and return the set of session IDs that
+    /// were selected. Use a tiny `older_than_days` so tests with seeded
+    /// `age_days >= 1` are eligible.
+    fn archive(archiver: &SessionArchiver) -> Vec<String> {
+        archiver
+            .archive_old_sessions(1)
+            .expect("archive run ok")
+            .into_iter()
+            .map(|r| r.session_id)
+            .collect()
+    }
+
+    #[test]
+    fn archives_only_completed_or_crashed_sessions() {
+        let (archiver, db, _tmp) = fresh();
+        // Mix of statuses, all 30 days old, all with successful distillation.
+        seed_session(&db, "s-running", "running", 0, 30);
+        seed_session(&db, "s-paused", "paused", 0, 30);
+        seed_session(&db, "s-completed", "completed", 0, 30);
+        seed_session(&db, "s-crashed", "crashed", 0, 30);
+        for id in &["s-running", "s-paused", "s-completed", "s-crashed"] {
+            seed_distillation_run(&db, id, "success");
+        }
+
+        let archived = archive(&archiver);
+        let mut a = archived.clone();
+        a.sort();
+        assert_eq!(
+            a,
+            vec!["s-completed".to_string(), "s-crashed".to_string()],
+            "only terminal sessions should archive: {archived:?}"
+        );
+    }
+
+    #[test]
+    fn skips_sessions_already_archived() {
+        let (archiver, db, _tmp) = fresh();
+        seed_session(&db, "s-fresh", "completed", 0, 30);
+        seed_session(&db, "s-already", "completed", 1, 30);
+        seed_distillation_run(&db, "s-fresh", "success");
+        seed_distillation_run(&db, "s-already", "success");
+
+        let archived = archive(&archiver);
+        assert_eq!(archived, vec!["s-fresh".to_string()]);
+    }
+
+    #[test]
+    fn skips_sessions_younger_than_threshold() {
+        let (archiver, db, _tmp) = fresh();
+        // Threshold = 1 day. age 0 is younger; age 30 is older.
+        seed_session(&db, "s-recent", "completed", 0, 0);
+        seed_session(&db, "s-old", "completed", 0, 30);
+        seed_distillation_run(&db, "s-recent", "success");
+        seed_distillation_run(&db, "s-old", "success");
+
+        let archived = archive(&archiver);
+        assert_eq!(archived, vec!["s-old".to_string()]);
+    }
+
+    #[test]
+    fn requires_distillation_runs_status_success() {
+        let (archiver, db, _tmp) = fresh();
+        seed_session(&db, "s-ok", "completed", 0, 30);
+        seed_session(&db, "s-failed-distill", "completed", 0, 30);
+        seed_session(&db, "s-skipped-distill", "completed", 0, 30);
+        seed_distillation_run(&db, "s-ok", "success");
+        seed_distillation_run(&db, "s-failed-distill", "failed");
+        seed_distillation_run(&db, "s-skipped-distill", "skipped");
+
+        let archived = archive(&archiver);
+        assert_eq!(
+            archived,
+            vec!["s-ok".to_string()],
+            "non-success distillation_runs must be excluded: {archived:?}"
+        );
+    }
+
+    #[test]
+    fn skips_sessions_with_no_distillation_run_record() {
+        let (archiver, db, _tmp) = fresh();
+        // Session is otherwise eligible — but no distillation_runs row.
+        // INNER JOIN should drop it.
+        seed_session(&db, "s-no-distill", "completed", 0, 30);
+
+        let archived = archive(&archiver);
+        assert!(
+            archived.is_empty(),
+            "session without distillation_runs row must NOT archive: {archived:?}"
+        );
+    }
+
+    #[test]
+    fn archives_nothing_when_pool_empty() {
+        let (archiver, _db, _tmp) = fresh();
+        let archived = archive(&archiver);
+        assert!(archived.is_empty());
+    }
+
+    #[test]
+    fn full_eligibility_matrix() {
+        // All four conditions must hold simultaneously. Verify each axis
+        // independently disqualifies one of an otherwise-identical pair.
+        let (archiver, db, _tmp) = fresh();
+        // The one session that satisfies ALL four conditions:
+        seed_session(&db, "s-pass", "completed", 0, 30);
+        seed_distillation_run(&db, "s-pass", "success");
+
+        // Plus one fail-on-each-axis decoy:
+        seed_session(&db, "s-fail-status", "running", 0, 30);
+        seed_distillation_run(&db, "s-fail-status", "success");
+        seed_session(&db, "s-fail-archived", "completed", 1, 30);
+        seed_distillation_run(&db, "s-fail-archived", "success");
+        seed_session(&db, "s-fail-age", "completed", 0, 0);
+        seed_distillation_run(&db, "s-fail-age", "success");
+        seed_session(&db, "s-fail-distill", "completed", 0, 30);
+        seed_distillation_run(&db, "s-fail-distill", "permanently_failed");
+
+        let archived = archive(&archiver);
+        assert_eq!(
+            archived,
+            vec!["s-pass".to_string()],
+            "exactly one session matches all four conditions: {archived:?}"
+        );
+    }
+}
