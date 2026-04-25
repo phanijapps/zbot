@@ -107,6 +107,27 @@ impl<D: DbProvider> LogsRepository<D> {
     // =========================================================================
 
     /// List sessions with optional filtering.
+    ///
+    /// `root_only` filters out subagent executions. The filter is applied via
+    /// `HAVING MAX(e.parent_session_id) IS NULL` (post-aggregation) rather
+    /// than the more obvious `WHERE ae.parent_execution_id IS NULL` for two
+    /// independently-fatal reasons documented in
+    /// `memory-bank/defects/logs_root_only_subagents_leak.md`:
+    ///
+    /// 1. Some subagent executions write to `execution_logs` but never
+    ///    insert into `agent_executions` (older runtime paths, crash
+    ///    recovery, pre-migration data). A `LEFT JOIN` against the missing
+    ///    `agent_executions` row resolves `parent_execution_id` to NULL,
+    ///    which a `WHERE … IS NULL` filter then incorrectly admits as a
+    ///    root.
+    /// 2. Subagents commonly emit one initial log row before
+    ///    `parent_session_id` is wired into context. Across the rows of a
+    ///    single session, `parent_session_id` is mixed: NULL on row 1,
+    ///    set on rows 2..N. A pre-aggregation filter would let the NULL
+    ///    row through and `GROUP BY` would still emit the subagent.
+    ///    Aggregating with `MAX(parent_session_id)` collapses to non-NULL
+    ///    whenever *any* log row recorded a parent, so the post-aggregation
+    ///    `HAVING` filter excludes the subagent entirely.
     pub fn list_sessions(&self, filter: &LogFilter) -> Result<Vec<LogSession>, String> {
         self.db.with_connection(|conn| {
             let mut sql = String::from(
@@ -153,11 +174,11 @@ impl<D: DbProvider> LogsRepository<D> {
                 params_vec.push(Box::new(to_time.clone()));
             }
 
+            sql.push_str(" GROUP BY e.session_id");
             if filter.root_only {
-                sql.push_str(" AND ae.parent_execution_id IS NULL");
+                sql.push_str(" HAVING MAX(e.parent_session_id) IS NULL");
             }
-
-            sql.push_str(" GROUP BY e.session_id ORDER BY started_at DESC");
+            sql.push_str(" ORDER BY started_at DESC");
 
             if let Some(limit) = filter.limit {
                 sql.push_str(&format!(" LIMIT {}", limit));
@@ -211,10 +232,12 @@ impl<D: DbProvider> LogsRepository<D> {
             // `execution_logs` schema stores in the `conversation_id` column
             // (the `session_id` column holds `exec-*` execution ids). When
             // called with a sess-* we need to resolve to the *root* execution
-            // id; the execution_logs table unfortunately stores
-            // parent_session_id as NULL for subagent logs too, so we rely on
-            // the `agent_executions` table (which is the source of truth for
-            // parent_execution_id) to pick out the root.
+            // id. We use `agent_executions.parent_execution_id IS NULL` to
+            // pick the root execution row, falling back below if no
+            // `agent_executions` row exists for the resolved id (some
+            // subagents emit logs without ever inserting into
+            // `agent_executions` — see `list_sessions` above and
+            // `memory-bank/defects/logs_root_only_subagents_leak.md`).
             let mut stmt = conn.prepare(
                 "SELECT
                     e.session_id,
@@ -764,5 +787,188 @@ mod tests {
         // Verify session query returns None
         let session = repo.get_session("sess-del").unwrap();
         assert!(session.is_none());
+    }
+
+    // ------------------------------------------------------------------------
+    // Regression tests for the /logs sidebar `root_only` filter.
+    //
+    // The `agent_executions` table is NOT a reliable source of "is this row a
+    // root?" — some subagents write to `execution_logs` without ever inserting
+    // into `agent_executions` (older runtime paths, crash recovery, pre-
+    // migration data). The filter has to derive root-ness from the log rows
+    // themselves, via `MAX(parent_session_id) IS NULL` after `GROUP BY`.
+    // See `memory-bank/defects/logs_root_only_subagents_leak.md`.
+    // ------------------------------------------------------------------------
+
+    /// Insert a row into `agent_executions`. Test-only helper; the test schema
+    /// stores only the three columns the `list_sessions` JOIN reads.
+    fn insert_agent_execution(
+        repo: &LogsRepository<TestDbProvider>,
+        id: &str,
+        session_id: &str,
+        parent_execution_id: Option<&str>,
+    ) {
+        repo.db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO agent_executions (id, session_id, parent_execution_id) VALUES (?1, ?2, ?3)",
+                    params![id, session_id, parent_execution_id],
+                )?;
+                Ok(())
+            })
+            .expect("seed agent_executions");
+    }
+
+    /// Insert a log row carrying a specific `parent_session_id`. The default
+    /// `make_log` helper leaves it NULL, which is fine for roots but not for
+    /// subagents.
+    fn insert_log_with_parent(
+        repo: &LogsRepository<TestDbProvider>,
+        session_id: &str,
+        conversation_id: &str,
+        agent_id: &str,
+        parent_session_id: Option<&str>,
+    ) {
+        let mut log = ExecutionLog::new(
+            session_id,
+            conversation_id,
+            agent_id,
+            LogLevel::Info,
+            LogCategory::Session,
+            "tick",
+        );
+        log.parent_session_id = parent_session_id.map(String::from);
+        repo.insert_log(&log).unwrap();
+    }
+
+    /// Subagent has logs but **no** `agent_executions` row at all (a real
+    /// state observed in production data). The pre-fix filter
+    /// `WHERE ae.parent_execution_id IS NULL` lets it through because the
+    /// LEFT JOIN resolves the missing row to NULL. The post-fix filter must
+    /// exclude it via `MAX(parent_session_id) IS NULL` in HAVING.
+    #[test]
+    fn root_only_excludes_subagent_with_no_agent_executions_row() {
+        let repo = setup_repo();
+
+        // Root: logs + agent_executions row with NULL parent.
+        insert_log_with_parent(&repo, "exec-root", "conv-root", "root", None);
+        insert_agent_execution(&repo, "exec-root", "conv-root", None);
+
+        // Subagent: logs that reference the root as parent_session_id, but
+        // NO matching agent_executions row.
+        insert_log_with_parent(
+            &repo,
+            "exec-child-orphan",
+            "conv-root",
+            "builder-agent",
+            Some("exec-root"),
+        );
+
+        let sessions = repo
+            .list_sessions(&LogFilter {
+                root_only: true,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let returned_ids: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
+        assert_eq!(
+            returned_ids,
+            vec!["exec-root"],
+            "root_only must exclude subagents that lack an agent_executions row"
+        );
+    }
+
+    /// Subagent has *some* log rows with `parent_session_id = NULL` (e.g. the
+    /// first init log, before context wiring) and the rest set. A naive
+    /// per-row filter would let the NULL row pass and GROUP BY would still
+    /// emit the subagent. The aggregate `MAX(parent_session_id) IS NULL`
+    /// (NULLs ignored by SQLite's MAX) collapses the mixed group to non-NULL
+    /// and the HAVING clause excludes it.
+    #[test]
+    fn root_only_excludes_subagent_with_mixed_null_parent_session_id_rows() {
+        let repo = setup_repo();
+
+        insert_log_with_parent(&repo, "exec-root", "conv-root", "root", None);
+        insert_agent_execution(&repo, "exec-root", "conv-root", None);
+
+        // Subagent: 1 row with NULL parent (early init), 2 with parent set.
+        insert_log_with_parent(&repo, "exec-child", "conv-root", "planner-agent", None);
+        insert_log_with_parent(
+            &repo,
+            "exec-child",
+            "conv-root",
+            "planner-agent",
+            Some("exec-root"),
+        );
+        insert_log_with_parent(
+            &repo,
+            "exec-child",
+            "conv-root",
+            "planner-agent",
+            Some("exec-root"),
+        );
+        // And insert a matching agent_executions row to also rule out
+        // accidental leniency from the JOIN side.
+        insert_agent_execution(&repo, "exec-child", "conv-root", Some("exec-root"));
+
+        let sessions = repo
+            .list_sessions(&LogFilter {
+                root_only: true,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let returned_ids: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
+        assert_eq!(
+            returned_ids,
+            vec!["exec-root"],
+            "root_only must exclude subagents whose parent_session_id is set on any log row"
+        );
+    }
+
+    /// Sanity: a real root (parent_session_id NULL on every log row) is
+    /// included.
+    #[test]
+    fn root_only_includes_pure_root_session() {
+        let repo = setup_repo();
+
+        for _ in 0..3 {
+            insert_log_with_parent(&repo, "exec-root", "conv-root", "root", None);
+        }
+        insert_agent_execution(&repo, "exec-root", "conv-root", None);
+
+        let sessions = repo
+            .list_sessions(&LogFilter {
+                root_only: true,
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "exec-root");
+        assert!(sessions[0].parent_session_id.is_none());
+    }
+
+    /// Without `root_only`, both roots and subagents come back — the filter
+    /// must be opt-in, not always-on.
+    #[test]
+    fn root_only_off_returns_subagents_too() {
+        let repo = setup_repo();
+
+        insert_log_with_parent(&repo, "exec-root", "conv-root", "root", None);
+        insert_log_with_parent(
+            &repo,
+            "exec-child",
+            "conv-root",
+            "builder-agent",
+            Some("exec-root"),
+        );
+
+        let sessions = repo.list_sessions(&LogFilter::default()).unwrap();
+
+        let mut ids: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["exec-child", "exec-root"]);
     }
 }
