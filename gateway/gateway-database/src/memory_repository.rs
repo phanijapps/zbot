@@ -319,14 +319,15 @@ impl MemoryRepository {
         self.db.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO skill_index_state
-                    (name, source_root, file_path, mtime_unix, size_bytes, last_indexed_unix)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                    (name, source_root, file_path, mtime_unix, size_bytes, last_indexed_unix, format_version)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT(name) DO UPDATE SET
                     source_root = excluded.source_root,
                     file_path = excluded.file_path,
                     mtime_unix = excluded.mtime_unix,
                     size_bytes = excluded.size_bytes,
-                    last_indexed_unix = excluded.last_indexed_unix",
+                    last_indexed_unix = excluded.last_indexed_unix,
+                    format_version = excluded.format_version",
                 params![
                     row.name,
                     row.source_root,
@@ -334,6 +335,7 @@ impl MemoryRepository {
                     row.mtime_unix,
                     row.size_bytes,
                     row.last_indexed_unix,
+                    row.format_version,
                 ],
             )?;
             Ok(())
@@ -344,7 +346,8 @@ impl MemoryRepository {
     pub fn list_skill_index_state(&self) -> Result<Vec<SkillIndexRow>, String> {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT name, source_root, file_path, mtime_unix, size_bytes, last_indexed_unix
+                "SELECT name, source_root, file_path, mtime_unix, size_bytes,
+                        last_indexed_unix, format_version
                  FROM skill_index_state",
             )?;
             let rows = stmt.query_map([], |row| {
@@ -355,6 +358,7 @@ impl MemoryRepository {
                     mtime_unix: row.get(3)?,
                     size_bytes: row.get(4)?,
                     last_indexed_unix: row.get(5)?,
+                    format_version: row.get(6)?,
                 })
             })?;
             rows.collect::<Result<Vec<_>, _>>()

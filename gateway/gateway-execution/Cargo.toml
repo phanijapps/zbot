@@ -58,6 +58,9 @@ regex = { workspace = true }
 # Hashing (for ward artifact indexer content dedup)
 sha2 = "0.10"
 
+# Home directory resolution for $HOME/.agents/skills root.
+dirs = "5"
+
 # Utilities
 uuid = { workspace = true }
 chrono = { workspace = true }

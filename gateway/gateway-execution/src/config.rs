@@ -41,6 +41,18 @@ impl FileSystemContext for GatewayFileSystem {
         Some(self.vault_dir.join("skills"))
     }
 
+    /// Skills load from the vault first (writable, user-owned) and then
+    /// from `$HOME/.agents/skills/` (read-only, externally installed).
+    /// Mirrors `gateway_services::VaultPaths::skills_dirs()` so the runtime
+    /// loader sees the same roots the indexer does.
+    fn skills_dirs(&self) -> Vec<PathBuf> {
+        let mut roots = vec![self.vault_dir.join("skills")];
+        if let Some(agent_root) = dirs::home_dir().map(|h| h.join(".agents").join("skills")) {
+            roots.push(agent_root);
+        }
+        roots
+    }
+
     fn agents_dir(&self) -> Option<PathBuf> {
         Some(self.vault_dir.join("agents"))
     }

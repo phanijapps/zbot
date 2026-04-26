@@ -24,6 +24,11 @@ pub struct SkillIndexRow {
     pub size_bytes: i64,
     /// DB write time of the row, seconds since the Unix epoch.
     pub last_indexed_unix: i64,
+    /// Embedding-content schema version. The reindex diff treats any
+    /// row whose stored version disagrees with the running code's
+    /// `CURRENT_INDEX_FORMAT_VERSION` as "modified", forcing one
+    /// re-embed pass after a content-format change.
+    pub format_version: i64,
 }
 
 /// Abstract interface for durable memory fact storage.

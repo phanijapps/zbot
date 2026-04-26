@@ -575,6 +575,15 @@ pub struct SkillReindexStats {
     pub unchanged: usize,
 }
 
+/// Embedding-content schema version. Bump when `SkillFileInfo.indexed_content`
+/// changes shape — the diff treats any row whose stored version is lower as
+/// "modified" so a one-time re-embed pass picks up the new content.
+///
+/// History:
+/// - v1: `"<id> | <description> | category: <cat>"` (composite — dir name in vector)
+/// - v2: `<description>` (semantic intent only; lexical lookup via FTS5 key)
+const CURRENT_INDEX_FORMAT_VERSION: i64 = 2;
+
 /// Count agents + wards on disk for the (still count-based) staleness
 /// check on those resources. Skills are tracked per-row by
 /// `reindex_skills` and intentionally excluded from this counter.
@@ -626,7 +635,8 @@ pub async fn reindex_skills(
             }
             Some(existing)
                 if existing.mtime_unix != info.mtime_unix
-                    || existing.size_bytes != info.size_bytes as i64 =>
+                    || existing.size_bytes != info.size_bytes as i64
+                    || existing.format_version != CURRENT_INDEX_FORMAT_VERSION =>
             {
                 upsert_skill(fact_store, info, now).await;
                 stats.modified += 1;
@@ -683,6 +693,7 @@ async fn upsert_skill(
         mtime_unix: info.mtime_unix,
         size_bytes: info.size_bytes as i64,
         last_indexed_unix: now_unix,
+        format_version: CURRENT_INDEX_FORMAT_VERSION,
     };
     if let Err(e) = fact_store.upsert_skill_index(row).await {
         tracing::warn!("upsert_skill_index failed for {}: {}", info.id, e);
@@ -1317,6 +1328,7 @@ mod tests {
             mtime_unix: 1_700_000_000,
             size_bytes: alpha_size,
             last_indexed_unix: 1_700_000_000,
+            format_version: CURRENT_INDEX_FORMAT_VERSION,
         }]);
 
         let service = make_skill_service(vec![vault.path().to_path_buf()]);
@@ -1348,6 +1360,7 @@ mod tests {
                 mtime_unix: 1_700_000_000,
                 size_bytes: std::fs::metadata(&alpha_md).unwrap().len() as i64,
                 last_indexed_unix: 1_700_000_000,
+                format_version: CURRENT_INDEX_FORMAT_VERSION,
             },
             SkillIndexRow {
                 name: "beta".to_string(),
@@ -1356,6 +1369,7 @@ mod tests {
                 mtime_unix: 1_700_000_000,
                 size_bytes: std::fs::metadata(&beta_md).unwrap().len() as i64,
                 last_indexed_unix: 1_700_000_000,
+                format_version: CURRENT_INDEX_FORMAT_VERSION,
             },
         ]);
 
@@ -1390,6 +1404,7 @@ mod tests {
             mtime_unix: 1_700_000_000,
             size_bytes: 1, // wrong on purpose
             last_indexed_unix: 1_700_000_000,
+            format_version: CURRENT_INDEX_FORMAT_VERSION,
         }]);
 
         let service = make_skill_service(vec![vault.path().to_path_buf()]);
@@ -1419,6 +1434,7 @@ mod tests {
                     .as_secs() as i64,
                 size_bytes: std::fs::metadata(&alpha_md).unwrap().len() as i64,
                 last_indexed_unix: 1_700_000_000,
+                format_version: CURRENT_INDEX_FORMAT_VERSION,
             },
             SkillIndexRow {
                 name: "gone".to_string(),
@@ -1431,6 +1447,7 @@ mod tests {
                 mtime_unix: 1_700_000_000,
                 size_bytes: 100,
                 last_indexed_unix: 1_700_000_000,
+                format_version: CURRENT_INDEX_FORMAT_VERSION,
             },
         ]);
 
@@ -1534,6 +1551,52 @@ mod tests {
         assert_eq!(stats.added, 1);
     }
 
+    /// Bumping `CURRENT_INDEX_FORMAT_VERSION` must force a re-embed
+    /// even when mtime + size are unchanged. This is how a content
+    /// schema change (e.g. switching to description-only embeddings)
+    /// propagates to existing rows on first run after upgrade.
+    #[tokio::test]
+    async fn reindex_skills_format_version_bump_forces_reembed() {
+        let vault = tempfile::TempDir::new().unwrap();
+        let alpha_md = write_skill_md(vault.path(), "alpha", "desc");
+        touch_with_mtime(&alpha_md, 1_700_000_000);
+
+        let store = RecordingFactStore::new();
+        // Seed a row with the OLD format_version (1) — same mtime + size
+        // as the file on disk, so without the version check the diff
+        // would say "unchanged" and skip re-embedding.
+        store.seed_index(vec![SkillIndexRow {
+            name: "alpha".to_string(),
+            source_root: "vault".to_string(),
+            file_path: alpha_md.to_string_lossy().to_string(),
+            mtime_unix: 1_700_000_000,
+            size_bytes: std::fs::metadata(&alpha_md).unwrap().len() as i64,
+            last_indexed_unix: 1_700_000_000,
+            format_version: 1, // legacy schema
+        }]);
+
+        let service = make_skill_service(vec![vault.path().to_path_buf()]);
+        let stats = reindex_skills(&store, &service).await;
+        assert_eq!(
+            stats.modified, 1,
+            "format-version bump must trigger re-embed"
+        );
+        assert_eq!(stats.unchanged, 0);
+
+        let snap = store.snapshot();
+        assert_eq!(snap.saves.len(), 1);
+        // After the re-embed, the stored row should carry the new version.
+        let post = store
+            .state
+            .lock()
+            .unwrap()
+            .index_state
+            .get("alpha")
+            .cloned()
+            .expect("row");
+        assert_eq!(post.format_version, CURRENT_INDEX_FORMAT_VERSION);
+    }
+
     /// `count_agent_and_ward_resources` returns the sum of agent files
     /// and ward subdirectories (count-based staleness for those still
     /// uses the legacy approach).
@@ -1564,6 +1627,7 @@ mod tests {
             mtime_unix: 1_700_000_000,
             size_bytes: std::fs::metadata(&alpha_md).unwrap().len() as i64,
             last_indexed_unix: 1_700_000_000,
+            format_version: CURRENT_INDEX_FORMAT_VERSION,
         }]);
 
         // Now swap: drop alpha, add beta. Same count, but the diff must

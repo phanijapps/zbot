@@ -230,6 +230,34 @@ impl Tool for LoadSkillTool {
 }
 
 impl LoadSkillTool {
+    /// Resolve a skill name to its on-disk directory. Walks every root
+    /// returned by `FileSystemContext::skills_dirs()` in priority order
+    /// (vault first, then `$HOME/.agents/skills` etc.) and returns the
+    /// first root whose `<root>/<name>/SKILL.md` exists.
+    fn resolve_skill_dir(&self, skill_name: &str) -> Result<std::path::PathBuf> {
+        let roots = self.fs.skills_dirs();
+        if roots.is_empty() {
+            return Err(zero_core::ZeroError::Tool(
+                "Skills directory not configured".to_string(),
+            ));
+        }
+        for root in &roots {
+            let candidate = root.join(skill_name);
+            if candidate.join("SKILL.md").exists() {
+                return Ok(candidate);
+            }
+        }
+        let searched: Vec<String> = roots
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        Err(zero_core::ZeroError::Tool(format!(
+            "Skill '{}' not found in any configured skills root (searched: {})",
+            skill_name,
+            searched.join(", ")
+        )))
+    }
+
     /// Load the main SKILL.md file for a skill
     async fn load_main_skill(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let skill_name = args
@@ -237,11 +265,7 @@ impl LoadSkillTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'skill' parameter".to_string()))?;
 
-        let skills_dir = self.fs.skills_dir().ok_or_else(|| {
-            zero_core::ZeroError::Tool("Skills directory not configured".to_string())
-        })?;
-
-        let skill_dir = skills_dir.join(skill_name);
+        let skill_dir = self.resolve_skill_dir(skill_name)?;
         let skill_file = skill_dir.join("SKILL.md");
 
         if !skill_file.exists() {
@@ -282,10 +306,6 @@ impl LoadSkillTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'file' parameter".to_string()))?;
 
-        let skills_dir = self.fs.skills_dir().ok_or_else(|| {
-            zero_core::ZeroError::Tool("Skills directory not configured".to_string())
-        })?;
-
         // Parse path and get skill name
         let (skill_name_from_path, relative_path, is_explicit) = self.parse_skill_path(file_path);
 
@@ -302,7 +322,9 @@ impl LoadSkillTool {
                 .to_string()
         };
 
-        let skill_dir = skills_dir.join(&skill_name);
+        // Walk all configured roots so resource files in `~/.agents/skills`
+        // resolve too — same priority order as the main SKILL.md loader.
+        let skill_dir = self.resolve_skill_dir(&skill_name)?;
         let full_path = skill_dir.join(&relative_path);
 
         // Security: Ensure path doesn't escape skill directory
@@ -435,5 +457,131 @@ fn is_binary_file(filename: &str) -> bool {
         BINARY_EXTENSIONS.contains(&ext.to_lowercase().as_str())
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+    use zero_core::FileSystemContext;
+
+    /// Test FileSystemContext that returns a configurable list of skills
+    /// roots. Mirrors what `GatewayFileSystem` does in production but
+    /// without dragging in a real vault.
+    struct TestFs {
+        roots: Vec<PathBuf>,
+    }
+
+    impl FileSystemContext for TestFs {
+        fn conversation_dir(&self, _conversation_id: &str) -> Option<PathBuf> {
+            None
+        }
+        fn outputs_dir(&self) -> Option<PathBuf> {
+            None
+        }
+        fn skills_dir(&self) -> Option<PathBuf> {
+            self.roots.first().cloned()
+        }
+        fn skills_dirs(&self) -> Vec<PathBuf> {
+            self.roots.clone()
+        }
+        fn agents_dir(&self) -> Option<PathBuf> {
+            None
+        }
+        fn python_executable(&self) -> Option<PathBuf> {
+            None
+        }
+    }
+
+    fn write_skill(root: &std::path::Path, name: &str, body: &str) {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {body}\n---\n\n{body}\n"),
+        )
+        .unwrap();
+    }
+
+    fn make_tool(roots: Vec<PathBuf>) -> LoadSkillTool {
+        LoadSkillTool::new(Arc::new(TestFs { roots }))
+    }
+
+    #[test]
+    fn resolve_finds_skill_in_vault_only() {
+        let vault = TempDir::new().unwrap();
+        write_skill(vault.path(), "alpha", "vault skill");
+        let tool = make_tool(vec![vault.path().to_path_buf()]);
+
+        let dir = tool.resolve_skill_dir("alpha").expect("resolve ok");
+        assert_eq!(dir, vault.path().join("alpha"));
+    }
+
+    #[test]
+    fn resolve_finds_skill_in_agent_root() {
+        let vault = TempDir::new().unwrap();
+        let agent = TempDir::new().unwrap();
+        write_skill(agent.path(), "managed", "agent skill");
+        let tool = make_tool(vec![vault.path().to_path_buf(), agent.path().to_path_buf()]);
+
+        let dir = tool.resolve_skill_dir("managed").expect("resolve ok");
+        assert_eq!(
+            dir,
+            agent.path().join("managed"),
+            "agent-root skill must be found when vault has nothing matching"
+        );
+    }
+
+    #[test]
+    fn resolve_vault_wins_on_collision() {
+        let vault = TempDir::new().unwrap();
+        let agent = TempDir::new().unwrap();
+        write_skill(vault.path(), "shared", "vault copy");
+        write_skill(agent.path(), "shared", "agent copy");
+        let tool = make_tool(vec![vault.path().to_path_buf(), agent.path().to_path_buf()]);
+
+        let dir = tool.resolve_skill_dir("shared").expect("resolve ok");
+        assert_eq!(
+            dir,
+            vault.path().join("shared"),
+            "vault root takes priority over the agent root"
+        );
+    }
+
+    #[test]
+    fn resolve_returns_clear_error_when_missing_in_all_roots() {
+        let vault = TempDir::new().unwrap();
+        let agent = TempDir::new().unwrap();
+        let tool = make_tool(vec![vault.path().to_path_buf(), agent.path().to_path_buf()]);
+
+        let err = tool.resolve_skill_dir("ghost").expect_err("must error");
+        let msg = format!("{err}");
+        assert!(msg.contains("not found"), "got: {msg}");
+        // Both roots should be mentioned so the user knows where we looked.
+        assert!(
+            msg.contains(vault.path().to_string_lossy().as_ref())
+                && msg.contains(agent.path().to_string_lossy().as_ref()),
+            "error must list every searched root, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_tolerates_missing_root_directory() {
+        let vault = TempDir::new().unwrap();
+        write_skill(vault.path(), "alpha", "vault skill");
+        let nonexistent = vault.path().join("not-a-real-path");
+        let tool = make_tool(vec![vault.path().to_path_buf(), nonexistent]);
+
+        let dir = tool.resolve_skill_dir("alpha").expect("resolve ok");
+        assert_eq!(dir, vault.path().join("alpha"));
+    }
+
+    #[test]
+    fn resolve_errors_when_no_roots_configured() {
+        let tool = make_tool(vec![]);
+        let err = tool.resolve_skill_dir("alpha").expect_err("must error");
+        assert!(format!("{err}").contains("not configured"), "got: {err}");
     }
 }

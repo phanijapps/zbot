@@ -914,6 +914,7 @@ mod tests {
             mtime_unix: mtime,
             size_bytes: size,
             last_indexed_unix: mtime,
+            format_version: 2,
         }
     }
 

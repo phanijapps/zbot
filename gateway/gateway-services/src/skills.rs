@@ -273,17 +273,23 @@ impl SkillService {
             .unwrap_or(0);
         let size_bytes = meta.len();
 
-        // Read just the frontmatter to recover description + category for
-        // the embedding content. Cheap (file is already in page cache).
+        // Read just the frontmatter to recover the description for the
+        // embedding content. Cheap (file is already in page cache).
         let content = fs::read_to_string(skill_md).map_err(|e| format!("read failed: {e}"))?;
         let (frontmatter, _) = parse_skill_frontmatter(&content)?;
         let description = frontmatter.description;
-        let category = frontmatter
-            .category
-            .unwrap_or_else(|| "general".to_string());
         let _ = skill_dir;
 
-        let indexed_content = format!("{} | {} | category: {}", id, description, category);
+        // Embedding content is the description ONLY — semantic intent.
+        // Lexical lookup by skill id continues to work via FTS5 on the
+        // `key` column (`skill:<id>` tokenizes naturally). Falling back
+        // to the id when the description is empty avoids embedding an
+        // empty string, which produces a useless vector.
+        let indexed_content = if description.trim().is_empty() {
+            id.to_string()
+        } else {
+            description
+        };
         Ok(SkillFileInfo {
             id: id.to_string(),
             source,
@@ -803,12 +809,40 @@ mod tests {
         assert!(info[0].mtime_unix > 0);
         assert!(info[0].size_bytes > 0);
         assert!(info[0].file_path.ends_with("agent-only/SKILL.md"));
-        assert!(info[0].indexed_content.contains("agent-only"));
+        // indexed_content is the *description only*, not the id —
+        // semantic intent goes to the vector arm; lexical lookup by
+        // id happens via FTS5 on the `key` column.
+        assert_eq!(info[0].indexed_content, "managed");
 
         assert_eq!(info[1].id, "shared");
         assert_eq!(info[1].source, SkillSource::Vault);
         assert!(info[1].file_path.starts_with(vault.path()));
-        assert!(info[1].indexed_content.contains("vault copy"));
+        assert_eq!(info[1].indexed_content, "vault copy");
+    }
+
+    /// Description fallback: when frontmatter has no description, the
+    /// embedding content falls back to the skill id so we never embed
+    /// an empty string (which would produce a useless vector).
+    #[tokio::test]
+    async fn list_for_index_falls_back_to_id_when_description_empty() {
+        let dir = TempDir::new().expect("tmp");
+        let skill_dir = dir.path().join("nodescr");
+        fs::create_dir_all(&skill_dir).expect("mkdir");
+        // Frontmatter present but description is empty.
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: nodescr\ndescription: \"\"\n---\n\nbody\n",
+        )
+        .expect("write");
+
+        let service = SkillService::with_roots(vec![dir.path().to_path_buf()]);
+        let info = service.list_for_index();
+        assert_eq!(info.len(), 1);
+        assert_eq!(info[0].id, "nodescr");
+        assert_eq!(
+            info[0].indexed_content, "nodescr",
+            "empty description must fall back to id, not produce an empty embedding"
+        );
     }
 
     /// Single-root constructor still works (backwards compat path).
