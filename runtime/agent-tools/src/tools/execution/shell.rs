@@ -223,6 +223,15 @@ impl ShellTool {
             ));
         }
 
+        // Block privilege escalation. Checked before the allowlist so that
+        // wrapper invocations from inside a python interpreter that shell
+        // out are still caught. Privilege escalation hangs on an
+        // interactive password prompt the agent cannot answer, so we
+        // reject loudly with a recovery hint instead of stalling.
+        if let Some(token) = finds_privilege_escalation(&command_normalized) {
+            return Err(ZeroError::Tool(privilege_escalation_message(token)));
+        }
+
         // Allowlist: commands that bypass validation to avoid false positives
         for prefix in Self::ALLOWED_PREFIXES {
             if command_normalized.starts_with(prefix) {
@@ -583,6 +592,63 @@ impl Tool for ShellTool {
 // FILE-WRITING DETECTION
 // ============================================================================
 
+/// Privilege-escalation tokens we refuse at command position. Lowercase
+/// to match `command_normalized`. Order doesn't matter — we compare for
+/// exact equality after tokenization, so longer tokens never accidentally
+/// shadow shorter ones.
+const PRIVILEGE_ESCALATION_TOKENS: &[&str] = &["sudo", "su", "pkexec", "doas"];
+
+/// Return the first privilege-escalation token that appears at a shell
+/// command position, or `None` if none do.
+///
+/// Command positions are: the very first token of the line, or the first
+/// token after a separator that begins a new command:
+/// `;`, `&&`, `||`, `|`, backtick, `$(`, or a bare `(` subshell open.
+///
+/// Tokenizes by splitting the command on those separators and taking
+/// the first whitespace-separated token of each segment. Comparison is
+/// **exact equality** — `sudoku.py`, `pseudo`, `subprocess`, and
+/// `submitting` all stay clear of the list. The token has any trailing
+/// `)` (from `$(sudo)` style invocations) trimmed before comparison.
+fn finds_privilege_escalation(command_normalized: &str) -> Option<&'static str> {
+    use std::sync::OnceLock;
+    // One regex matches every shell separator that begins a new
+    // command. Compiled once, reused across calls.
+    static SEPARATOR_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = SEPARATOR_RE
+        .get_or_init(|| regex::Regex::new(r"&&|\|\||[;|`(]|\$\(").expect("static regex"));
+
+    for segment in re.split(command_normalized) {
+        let Some(raw) = segment.split_whitespace().next() else {
+            continue;
+        };
+        // Trim trailing `)` so `cmd $(sudo)` is caught (token before trim
+        // would be `sudo)`).
+        let token = raw.trim_end_matches(')');
+        for &t in PRIVILEGE_ESCALATION_TOKENS {
+            if token == t {
+                return Some(t);
+            }
+        }
+    }
+    None
+}
+
+/// Build the agent-readable error returned when a privilege-escalation
+/// token is detected. Names concrete recovery paths so the agent
+/// self-corrects without user intervention.
+fn privilege_escalation_message(token: &str) -> String {
+    format!(
+        "This shell tool refuses `{token}`. Privilege escalation isn't \
+         available in this environment — the call would hang on a \
+         password prompt. Pick a non-privileged path: install into a \
+         user-writable location (`pip install --user`, `npm install \
+         --prefix`, `~/.local`, a venv), use a user-level service \
+         (`systemctl --user`), or ask the user to perform the \
+         privileged step themselves."
+    )
+}
+
 /// Detect shell commands that write files — these should use `write_file` / `edit_file` instead.
 fn is_file_writing_command(command: &str) -> bool {
     let cmd = command.to_lowercase();
@@ -674,6 +740,115 @@ mod tests {
         assert!(ShellTool::validate_command("dd of=/dev/sda").is_err());
         assert!(ShellTool::validate_command("format c:").is_err());
         assert!(ShellTool::validate_command("sudo su").is_err());
+    }
+
+    // -----------------------------------------------------------------
+    // Privilege escalation guard
+    // Token-position match — `sudoku.py` must pass, `sudo apt` must fail.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn priv_sudo_at_command_start_rejected() {
+        let err = ShellTool::validate_command("sudo apt install foo")
+            .expect_err("sudo at start must be rejected");
+        let msg = format!("{err}");
+        assert!(msg.contains("sudo"), "got: {msg}");
+    }
+
+    #[test]
+    fn priv_su_dash_rejected() {
+        assert!(ShellTool::validate_command("su -").is_err());
+        assert!(ShellTool::validate_command("su -c 'whoami'").is_err());
+        assert!(ShellTool::validate_command("su username").is_err());
+    }
+
+    #[test]
+    fn priv_sudo_after_pipe_rejected() {
+        assert!(ShellTool::validate_command("echo y | sudo apt install foo").is_err());
+    }
+
+    #[test]
+    fn priv_sudo_after_and_rejected() {
+        assert!(ShellTool::validate_command("cd /tmp && sudo systemctl restart bar").is_err());
+    }
+
+    #[test]
+    fn priv_sudo_after_or_rejected() {
+        assert!(ShellTool::validate_command("test -d /etc || sudo mkdir /etc/foo").is_err());
+    }
+
+    #[test]
+    fn priv_sudo_after_semicolon_rejected() {
+        assert!(ShellTool::validate_command("date; sudo whoami").is_err());
+    }
+
+    #[test]
+    fn priv_sudo_in_command_substitution_rejected() {
+        assert!(ShellTool::validate_command("echo $(sudo whoami)").is_err());
+        assert!(ShellTool::validate_command("echo `sudo whoami`").is_err());
+    }
+
+    #[test]
+    fn priv_sudo_in_subshell_rejected() {
+        assert!(ShellTool::validate_command("(sudo apt update)").is_err());
+    }
+
+    #[test]
+    fn priv_pkexec_rejected() {
+        assert!(ShellTool::validate_command("pkexec systemctl restart foo").is_err());
+    }
+
+    #[test]
+    fn priv_doas_rejected() {
+        assert!(ShellTool::validate_command("doas pkg_add ripgrep").is_err());
+    }
+
+    #[test]
+    fn priv_sudoku_filename_allowed() {
+        // Substring would have caught this; token-position must not.
+        assert!(ShellTool::validate_command("python sudoku.py").is_ok());
+    }
+
+    #[test]
+    fn priv_pseudo_token_allowed() {
+        // `pseudo` is not `sudo`; `subprocess` / `submit` / `subset` are not `su`.
+        assert!(ShellTool::validate_command("pseudo --help").is_ok());
+        assert!(ShellTool::validate_command("subprocess foo").is_ok());
+        assert!(ShellTool::validate_command("submit job").is_ok());
+        assert!(ShellTool::validate_command("subset data.csv").is_ok());
+    }
+
+    #[test]
+    fn priv_sudo_inside_string_arg_allowed() {
+        // The token after `echo` is `"use`, not `sudo` — passes.
+        assert!(ShellTool::validate_command("echo \"use sudo for X\"").is_ok());
+    }
+
+    #[test]
+    fn priv_error_message_lists_recovery_paths() {
+        let err = ShellTool::validate_command("sudo apt install foo").expect_err("must error");
+        let msg = format!("{err}");
+        // Agent must see at least one concrete alternative so it
+        // self-corrects without nudging.
+        assert!(
+            msg.contains("--user")
+                || msg.contains("--prefix")
+                || msg.contains("~/.local")
+                || msg.contains("venv"),
+            "error must name at least one recovery path; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn priv_finds_returns_token_for_diagnostics() {
+        // White-box test on the helper so the matched token is what we
+        // claim it is — used by the error message.
+        assert_eq!(finds_privilege_escalation("sudo whoami"), Some("sudo"));
+        assert_eq!(finds_privilege_escalation("su -"), Some("su"));
+        assert_eq!(finds_privilege_escalation("pkexec foo"), Some("pkexec"));
+        assert_eq!(finds_privilege_escalation("doas foo"), Some("doas"));
+        assert_eq!(finds_privilege_escalation("ls -la"), None);
+        assert_eq!(finds_privilege_escalation("python sudoku.py"), None);
     }
 
     #[test]
