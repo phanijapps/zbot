@@ -42,6 +42,7 @@ regex = "1"
 thiserror = { workspace = true }
 parking_lot = "0.12"
 arc-swap = "1"
+dirs = "5"
 
 # File watching for hot-reload
 notify = "7"

@@ -87,6 +87,10 @@ pub async fn create_skill(
             .instructions
             .unwrap_or_else(|| "You are a helpful skill.".to_string()),
         created_at: None,
+        // Created skills always land in the vault; SkillService::create
+        // overrides this anyway, but we set it explicitly so the struct
+        // initializer is complete.
+        source: gateway_services::SkillSource::Vault,
     };
 
     match state.skills.create(skill).await {
@@ -131,6 +135,7 @@ pub async fn update_skill(
         category: request.category.unwrap_or(existing.category),
         instructions: request.instructions.unwrap_or(existing.instructions),
         created_at: existing.created_at,
+        source: existing.source,
     };
 
     match state.skills.update(&id, updated).await {

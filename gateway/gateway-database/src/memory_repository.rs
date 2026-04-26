@@ -44,6 +44,12 @@ pub fn sanitize_fts_query(raw: &str) -> String {
 // TYPES
 // ============================================================================
 
+// `SkillIndexRow` is defined in `zero-core::memory` so the
+// `MemoryFactStore` trait can use it in its method signatures without a
+// reverse dependency on this crate. Re-exported via this module so existing
+// callers that imported it from `gateway-database` keep working.
+pub use zero_core::memory::SkillIndexRow;
+
 /// A structured memory fact extracted from session distillation or manual save.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryFact {
@@ -141,6 +147,12 @@ impl MemoryRepository {
     #[allow(dead_code)]
     fn vec_index(&self) -> &Arc<dyn VectorIndex> {
         &self.vec_index
+    }
+
+    /// Test-only accessor for the underlying KnowledgeDatabase.
+    #[cfg(test)]
+    pub(crate) fn db_for_tests(&self) -> Arc<crate::KnowledgeDatabase> {
+        self.db.clone()
     }
 
     // =========================================================================
@@ -259,6 +271,106 @@ impl MemoryRepository {
             self.vec_index.delete(id)?;
         }
         Ok(deleted)
+    }
+
+    /// Delete every memory fact matching `(category, key)` (and their vec0
+    /// rows). Returns the number of facts removed. Used by the skill
+    /// reindexer to clear ghost embeddings when a skill is removed from
+    /// disk.
+    pub fn delete_facts_by_key(&self, category: &str, key: &str) -> Result<usize, String> {
+        // Collect ids first so we can also drop their vec0 rows.
+        let ids: Vec<String> = self.db.with_connection(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT id FROM memory_facts WHERE category = ?1 AND key = ?2")?;
+            let rows = stmt.query_map(params![category, key], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })?;
+
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        // Delete rows. The `trg_facts_delete_vec` trigger handles the vec0
+        // cleanup automatically; the explicit `vec_index.delete` below is
+        // belt-and-suspenders for VectorIndex implementations that bypass
+        // SQLite triggers (e.g. test stubs).
+        let count = self.db.with_connection(|conn| {
+            let mut total = 0usize;
+            for id in &ids {
+                total += conn.execute("DELETE FROM memory_facts WHERE id = ?1", params![id])?;
+            }
+            Ok(total)
+        })?;
+
+        for id in &ids {
+            let _ = self.vec_index.delete(id);
+        }
+
+        Ok(count)
+    }
+
+    // =========================================================================
+    // SKILL INDEX STATE
+    // Per-skill staleness tracker for the incremental skill reindex.
+    // =========================================================================
+
+    /// Insert or replace one row in `skill_index_state`.
+    pub fn upsert_skill_index_state(&self, row: &SkillIndexRow) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO skill_index_state
+                    (name, source_root, file_path, mtime_unix, size_bytes, last_indexed_unix)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(name) DO UPDATE SET
+                    source_root = excluded.source_root,
+                    file_path = excluded.file_path,
+                    mtime_unix = excluded.mtime_unix,
+                    size_bytes = excluded.size_bytes,
+                    last_indexed_unix = excluded.last_indexed_unix",
+                params![
+                    row.name,
+                    row.source_root,
+                    row.file_path,
+                    row.mtime_unix,
+                    row.size_bytes,
+                    row.last_indexed_unix,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// List every row in `skill_index_state` for the diff at session start.
+    pub fn list_skill_index_state(&self) -> Result<Vec<SkillIndexRow>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT name, source_root, file_path, mtime_unix, size_bytes, last_indexed_unix
+                 FROM skill_index_state",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(SkillIndexRow {
+                    name: row.get(0)?,
+                    source_root: row.get(1)?,
+                    file_path: row.get(2)?,
+                    mtime_unix: row.get(3)?,
+                    size_bytes: row.get(4)?,
+                    last_indexed_unix: row.get(5)?,
+                })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+    }
+
+    /// Remove a single skill from the staleness tracker. Used after the
+    /// reindexer notices the on-disk file is gone.
+    pub fn delete_skill_index_state(&self, name: &str) -> Result<bool, String> {
+        self.db.with_connection(|conn| {
+            let n = conn.execute(
+                "DELETE FROM skill_index_state WHERE name = ?1",
+                params![name],
+            )?;
+            Ok(n > 0)
+        })
     }
 
     /// Get a single memory fact by ID.

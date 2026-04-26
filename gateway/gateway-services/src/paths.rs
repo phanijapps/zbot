@@ -115,9 +115,28 @@ impl VaultPaths {
         self.vault_dir.join("agents")
     }
 
-    /// Path to skills directory
+    /// Path to the vault-owned skills directory.
     pub fn skills_dir(&self) -> PathBuf {
         self.vault_dir.join("skills")
+    }
+
+    /// Path to the system-wide agent-installed skills directory
+    /// (`$HOME/.agent/skills`). Online services and CLI installers drop
+    /// skills here. Not tied to any single vault.
+    ///
+    /// Returns `/.agent/skills` if `$HOME` cannot be resolved — that path
+    /// won't exist on a real system, so the indexer treats it as empty.
+    pub fn agent_skills_dir() -> PathBuf {
+        dirs::home_dir()
+            .map(|h| h.join(".agent").join("skills"))
+            .unwrap_or_else(|| PathBuf::from("/.agent/skills"))
+    }
+
+    /// Skills roots in priority order: vault first (user-owned, mutable),
+    /// then `$HOME/.agent/skills` (managed, read-only). When the same
+    /// skill name appears in both, the loader keeps the vault copy.
+    pub fn skills_dirs(&self) -> Vec<PathBuf> {
+        vec![self.skills_dir(), Self::agent_skills_dir()]
     }
 
     /// Path to wards directory (contains agent data, session data, and scratch ward)
@@ -262,6 +281,35 @@ mod tests {
         assert_eq!(
             paths.ward_dir("root"),
             dir.path().join("wards").join("root")
+        );
+    }
+
+    #[test]
+    fn test_skills_dirs_returns_two_in_priority_order() {
+        let dir = tempdir().unwrap();
+        let paths = VaultPaths::new(dir.path().to_path_buf());
+
+        let roots = paths.skills_dirs();
+        assert_eq!(roots.len(), 2, "expected vault + agent dir");
+        assert_eq!(roots[0], paths.skills_dir(), "vault must come first");
+        assert_eq!(
+            roots[1],
+            VaultPaths::agent_skills_dir(),
+            "agent skills dir must come second"
+        );
+    }
+
+    #[test]
+    fn test_agent_skills_dir_is_under_home() {
+        // Either we get $HOME/.agent/skills, or — in a sandbox without HOME —
+        // the documented fallback. Both ends in `.agent/skills` so the
+        // contract is stable for callers.
+        let p = VaultPaths::agent_skills_dir();
+        let s = p.to_string_lossy();
+        assert!(
+            s.ends_with(".agent/skills"),
+            "agent_skills_dir must end with .agent/skills, got {}",
+            s
         );
     }
 
