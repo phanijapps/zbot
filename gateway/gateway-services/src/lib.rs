@@ -46,5 +46,8 @@ pub use settings::{
     AppSettings, ChatConfig, DistillationConfig, ExecutionSettings, MultimodalConfig,
     OrchestratorConfig, SettingsService,
 };
-pub use skills::{SkillFrontmatter, SkillService, WardAgentsMdConfig, WardSetup};
+pub use skills::{
+    Skill, SkillFileInfo, SkillFrontmatter, SkillService, SkillSource, WardAgentsMdConfig,
+    WardSetup,
+};
 pub use watcher::{FileWatcher, WatchConfig};
