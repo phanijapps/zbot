@@ -1,8 +1,8 @@
 //! # Runner
 //!
 //! Session orchestration. Decomposed from a 3,067-LOC god module into
-//! five focused units. **Read `AGENTS.md` in this directory before
-//! adding code here.** (AGENTS.md is added in Task 6.)
+//! six focused units. **Read `AGENTS.md` in this directory before
+//! adding code here.**
 
 mod continuation_watcher;
 pub(super) mod core;
