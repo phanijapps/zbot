@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc, RwLock, Semaphore};
+use tokio::sync::{mpsc, RwLock, Semaphore};
 
 /// Callback invoked after session creation but before any events are emitted.
 /// Receives the session_id so the caller can set up subscriptions before events fire.
@@ -102,8 +102,8 @@ pub struct ExecutionRunner {
     embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     /// Model capabilities registry for context window and capability lookups.
     ///
-    /// Stored in an `ArcSwapOption` so readers pre-captured by
-    /// `spawn_continuation_handler` (runner.rs:221, before
+    /// Stored in an `ArcSwapOption` so the `RunnerContinuationInvoker`
+    /// pre-captured by `ContinuationWatcher` (constructed before
     /// [`Self::set_model_registry`] is called from `runtime.rs:145`) can
     /// still observe the registry once it's installed. A plain
     /// `Option<Arc<ModelRegistry>>` would freeze as `None` in any
@@ -172,31 +172,31 @@ pub struct ExecutionRunnerConfig {
 /// goal_adapter) — the densest silent-swap cluster in the file. A
 /// psychopath adding a 25th dependency to the old signature had an even
 /// chance of scrambling which optional dep routed where.
-struct ContinuationArgs<'a> {
-    session_id: &'a str,
-    root_agent_id: &'a str,
-    event_bus: Arc<EventBus>,
-    agent_service: Arc<AgentService>,
-    provider_service: Arc<ProviderService>,
-    mcp_service: Arc<McpService>,
-    skill_service: Arc<gateway_services::SkillService>,
-    paths: SharedVaultPaths,
-    conversation_repo: Arc<ConversationRepository>,
-    handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
-    delegation_registry: Arc<DelegationRegistry>,
-    delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
-    log_service: Arc<LogService<DatabaseManager>>,
-    state_service: Arc<StateService<DatabaseManager>>,
-    workspace_cache: WorkspaceCache,
-    memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
-    embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
-    distiller: Option<Arc<crate::distillation::SessionDistiller>>,
-    memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
-    model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
-    graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
-    kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
-    ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
-    goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+pub(super) struct ContinuationArgs<'a> {
+    pub(super) session_id: &'a str,
+    pub(super) root_agent_id: &'a str,
+    pub(super) event_bus: Arc<EventBus>,
+    pub(super) agent_service: Arc<AgentService>,
+    pub(super) provider_service: Arc<ProviderService>,
+    pub(super) mcp_service: Arc<McpService>,
+    pub(super) skill_service: Arc<gateway_services::SkillService>,
+    pub(super) paths: SharedVaultPaths,
+    pub(super) conversation_repo: Arc<ConversationRepository>,
+    pub(super) handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
+    pub(super) delegation_registry: Arc<DelegationRegistry>,
+    pub(super) delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
+    pub(super) log_service: Arc<LogService<DatabaseManager>>,
+    pub(super) state_service: Arc<StateService<DatabaseManager>>,
+    pub(super) workspace_cache: WorkspaceCache,
+    pub(super) memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    pub(super) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+    pub(super) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
+    pub(super) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
+    pub(super) model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
+    pub(super) graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    pub(super) kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+    pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
+    pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 }
 
 /// Borrowed inputs for [`ExecutionRunner::run_intent_analysis`]. Same
@@ -648,8 +648,14 @@ impl ExecutionRunner {
         // Spawn delegation handler task
         runner.spawn_delegation_handler(delegation_rx);
 
-        // Spawn continuation handler task
-        runner.spawn_continuation_handler();
+        // Spawn continuation watcher — extracted from the old inline
+        // `spawn_continuation_handler` closure so the event-loop logic
+        // is testable independently.
+        super::continuation_watcher::ContinuationWatcher {
+            event_bus: runner.event_bus.clone(),
+            invoker: Arc::new(runner.make_continuation_invoker()),
+        }
+        .spawn();
 
         runner
     }
@@ -924,116 +930,88 @@ impl ExecutionRunner {
         });
     }
 
-    /// Spawn a background task that handles continuation after delegations complete.
+    /// Build a [`RunnerContinuationInvoker`] from this runner's fields.
     ///
-    /// When all delegations for a session complete, this handler invokes the root
-    /// agent to continue processing with the accumulated context (including callbacks).
-    fn spawn_continuation_handler(&self) {
-        let event_bus = self.event_bus.clone();
-        let agent_service = self.agent_service.clone();
-        let provider_service = self.provider_service.clone();
-        let mcp_service = self.mcp_service.clone();
-        let skill_service = self.skill_service.clone();
-        let paths = self.paths.clone();
-        let conversation_repo = self.conversation_repo.clone();
-        let handles = self.handles.clone();
-        let delegation_registry = self.delegation_registry.clone();
-        let delegation_tx = self.delegation_tx.clone();
-        let log_service = self.log_service.clone();
-        let state_service = self.state_service.clone();
-        let workspace_cache = self.workspace_cache.clone();
-        let memory_repo = self.memory_repo.clone();
-        let embedding_client = self.embedding_client.clone();
-        let distiller = self.distiller.clone();
-        let memory_recall = self.memory_recall.clone();
-        // Clone the ArcSwap handle — NOT its inner value. Subsequent
-        // `.load_full()` calls read whatever [`Self::set_model_registry`]
-        // has installed. This is the fix for the capture-before-init bug
-        // where `Option<Arc<_>>` froze at `None` inside the spawn closure.
-        let model_registry = self.model_registry.clone();
-        let graph_storage = self.graph_storage.clone();
-        let kg_episode_repo = self.kg_episode_repo.clone();
-        let ingestion_adapter = self.ingestion_adapter.clone();
-        let goal_adapter = self.goal_adapter.clone();
+    /// Called from `with_config` to wire the `ContinuationWatcher` before
+    /// the runner is wrapped in `Arc`. Each field is cloned — the
+    /// `model_registry` ArcSwap handle is cloned (not its inner value)
+    /// so late-stored registries are visible at fire time.
+    fn make_continuation_invoker(&self) -> super::continuation_watcher::RunnerContinuationInvoker {
+        super::continuation_watcher::RunnerContinuationInvoker {
+            event_bus: self.event_bus.clone(),
+            agent_service: self.agent_service.clone(),
+            provider_service: self.provider_service.clone(),
+            mcp_service: self.mcp_service.clone(),
+            skill_service: self.skill_service.clone(),
+            paths: self.paths.clone(),
+            handles: self.handles.clone(),
+            conversation_repo: self.conversation_repo.clone(),
+            delegation_registry: self.delegation_registry.clone(),
+            delegation_tx: self.delegation_tx.clone(),
+            log_service: self.log_service.clone(),
+            state_service: self.state_service.clone(),
+            workspace_cache: self.workspace_cache.clone(),
+            memory_repo: self.memory_repo.clone(),
+            embedding_client: self.embedding_client.clone(),
+            distiller: self.distiller.clone(),
+            memory_recall: self.memory_recall.clone(),
+            model_registry: self.model_registry.clone(),
+            graph_storage: self.graph_storage.clone(),
+            kg_episode_repo: self.kg_episode_repo.clone(),
+            ingestion_adapter: self.ingestion_adapter.clone(),
+            goal_adapter: self.goal_adapter.clone(),
+        }
+    }
 
-        // Subscribe to all events to catch SessionContinuationReady
-        let mut event_rx = event_bus.subscribe_all();
+    /// Bridge from [`crate::runner::SessionInvoker::spawn_continuation`] to
+    /// [`invoke_continuation`].
+    ///
+    /// Clears the continuation flag (to prevent double-trigger), then
+    /// assembles `ContinuationArgs` from `&self` exactly as the old
+    /// `spawn_continuation_handler` did and calls `invoke_continuation`.
+    ///
+    /// `pub(crate)` — only the `SessionInvoker` impl in
+    /// `session_invoker.rs` calls this.
+    pub(crate) async fn invoke_continuation_for_watcher(
+        &self,
+        session_id: String,
+        root_agent_id: String,
+    ) -> Result<(), String> {
+        // Clear continuation flag to prevent double-trigger.
+        if let Err(e) = self.state_service.clear_continuation(&session_id) {
+            tracing::warn!("Failed to clear continuation flag: {}", e);
+        }
 
-        tokio::spawn(async move {
-            loop {
-                match event_rx.recv().await {
-                    Ok(GatewayEvent::SessionContinuationReady {
-                        session_id,
-                        root_agent_id,
-                        root_execution_id,
-                    }) => {
-                        tracing::info!(
-                            session_id = %session_id,
-                            root_agent_id = %root_agent_id,
-                            root_execution_id = %root_execution_id,
-                            "Continuation triggered - invoking root agent"
-                        );
-
-                        // Clear continuation flag to prevent double-trigger
-                        if let Err(e) = state_service.clear_continuation(&session_id) {
-                            tracing::warn!("Failed to clear continuation flag: {}", e);
-                        }
-
-                        // Invoke the root agent to continue
-                        // The agent will see full session context including callbacks
-                        if let Err(e) = invoke_continuation(ContinuationArgs {
-                            session_id: &session_id,
-                            root_agent_id: &root_agent_id,
-                            event_bus: event_bus.clone(),
-                            agent_service: agent_service.clone(),
-                            provider_service: provider_service.clone(),
-                            mcp_service: mcp_service.clone(),
-                            skill_service: skill_service.clone(),
-                            paths: paths.clone(),
-                            conversation_repo: conversation_repo.clone(),
-                            handles: handles.clone(),
-                            delegation_registry: delegation_registry.clone(),
-                            delegation_tx: delegation_tx.clone(),
-                            log_service: log_service.clone(),
-                            state_service: state_service.clone(),
-                            workspace_cache: workspace_cache.clone(),
-                            memory_repo: memory_repo.clone(),
-                            embedding_client: embedding_client.clone(),
-                            distiller: distiller.clone(),
-                            memory_recall: memory_recall.clone(),
-                            // Read the live registry at fire time, not a
-                            // stale capture. `load_full()` returns
-                            // `Option<Arc<ModelRegistry>>` — exactly the
-                            // shape `ContinuationArgs.model_registry`
-                            // expects, so no extra unwrap dance needed.
-                            model_registry: model_registry.load_full(),
-                            graph_storage: graph_storage.clone(),
-                            kg_episode_repo: kg_episode_repo.clone(),
-                            ingestion_adapter: ingestion_adapter.clone(),
-                            goal_adapter: goal_adapter.clone(),
-                        })
-                        .await
-                        {
-                            tracing::error!(
-                                session_id = %session_id,
-                                error = %e,
-                                "Failed to invoke continuation"
-                            );
-                        }
-                    }
-                    Ok(_) => {
-                        // Ignore other events
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!("Continuation handler lagged by {} events", n);
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        tracing::info!("Event bus closed, stopping continuation handler");
-                        break;
-                    }
-                }
-            }
-        });
+        invoke_continuation(ContinuationArgs {
+            session_id: &session_id,
+            root_agent_id: &root_agent_id,
+            event_bus: self.event_bus.clone(),
+            agent_service: self.agent_service.clone(),
+            provider_service: self.provider_service.clone(),
+            mcp_service: self.mcp_service.clone(),
+            skill_service: self.skill_service.clone(),
+            paths: self.paths.clone(),
+            conversation_repo: self.conversation_repo.clone(),
+            handles: self.handles.clone(),
+            delegation_registry: self.delegation_registry.clone(),
+            delegation_tx: self.delegation_tx.clone(),
+            log_service: self.log_service.clone(),
+            state_service: self.state_service.clone(),
+            workspace_cache: self.workspace_cache.clone(),
+            memory_repo: self.memory_repo.clone(),
+            embedding_client: self.embedding_client.clone(),
+            distiller: self.distiller.clone(),
+            memory_recall: self.memory_recall.clone(),
+            // Read the live registry at call time, not a stale capture.
+            // `load_full()` returns `Option<Arc<ModelRegistry>>` — exactly
+            // the shape `ContinuationArgs.model_registry` expects.
+            model_registry: self.model_registry.load_full(),
+            graph_storage: self.graph_storage.clone(),
+            kg_episode_repo: self.kg_episode_repo.clone(),
+            ingestion_adapter: self.ingestion_adapter.clone(),
+            goal_adapter: self.goal_adapter.clone(),
+        })
+        .await
     }
 
     /// Invoke an agent with a message.
@@ -2366,7 +2344,7 @@ impl ExecutionRunner {
 /// - Original user message
 /// - Previous assistant responses
 /// - Callback messages from completed subagents (as system messages)
-async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<(), String> {
+pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<(), String> {
     let ContinuationArgs {
         session_id,
         root_agent_id,
@@ -2971,9 +2949,9 @@ mod model_registry_late_binding_tests {
     //! Regression tests for the capture-before-init bug that caused
     //! `context_window_tokens = 8192` on the continuation path.
     //!
-    //! The failure mode: `spawn_continuation_handler` clones
-    //! `self.model_registry` into a long-lived task BEFORE
-    //! `set_model_registry` runs. When the field was a plain
+    //! The failure mode: `RunnerContinuationInvoker` clones
+    //! `self.model_registry` (the ArcSwap handle) inside `with_config`
+    //! BEFORE `set_model_registry` runs. When the field was a plain
     //! `Option<Arc<_>>`, the captured clone froze as `None` and every
     //! continuation-path executor fell back to the 8192 default at
     //! `invoke/executor.rs:423`. After the fix the field is an
@@ -3003,8 +2981,8 @@ mod model_registry_late_binding_tests {
         // Step 1: field initialized empty (mirrors `ExecutionRunner::new`).
         let field: Arc<ArcSwapOption<ModelRegistry>> = Arc::new(ArcSwapOption::from(None));
 
-        // Step 2: `spawn_continuation_handler` clones the handle into a
-        // long-lived task BEFORE the setter runs.
+        // Step 2: `RunnerContinuationInvoker` clones the handle inside
+        // `with_config` BEFORE the setter runs.
         let captured = field.clone();
         assert!(captured.load_full().is_none(), "field starts empty");
 
@@ -3027,7 +3005,7 @@ mod model_registry_late_binding_tests {
 
     /// Multiple pre-captured clones (e.g. multiple background tasks)
     /// each see the latest stored value. Mirrors the real topology:
-    /// spawn_delegation_handler + spawn_continuation_handler + others.
+    /// spawn_delegation_handler + ContinuationWatcher + others.
     #[test]
     fn multiple_captures_all_observe_late_store() {
         let field: Arc<ArcSwapOption<ModelRegistry>> = Arc::new(ArcSwapOption::from(None));

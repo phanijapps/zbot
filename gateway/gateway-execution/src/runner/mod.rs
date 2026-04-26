@@ -4,9 +4,11 @@
 //! five focused units. **Read `AGENTS.md` in this directory before
 //! adding code here.** (AGENTS.md is added in Task 6.)
 
+mod continuation_watcher;
 mod core;
 mod session_invoker;
 
+pub use continuation_watcher::ContinuationWatcher;
 pub use core::*;
 pub use session_invoker::SessionInvoker;
 #[cfg(any(test, feature = "test-stubs"))]
