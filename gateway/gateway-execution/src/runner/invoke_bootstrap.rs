@@ -72,7 +72,23 @@ pub(super) struct InvokeBootstrap {
     pub workspace_cache: WorkspaceCache,
 }
 
-/// Output of [`InvokeBootstrap::setup`]. Contains everything that lives
+/// Output of [`InvokeBootstrap::begin_setup`]. Carries the state that phase 2
+/// ([`InvokeBootstrap::finish_setup`]) needs and that the caller needs to pass
+/// to the `on_session_ready` callback.
+///
+/// The caller fires the callback after receiving this value and BEFORE calling
+/// [`InvokeBootstrap::finish_setup`], so the subscriber is registered before
+/// `AgentStarted`, `IntentAnalysisStarted`, and `IntentAnalysisComplete` fire.
+pub(super) struct PartialSetup {
+    pub session_id: String,
+    pub execution_id: String,
+    pub handle: ExecutionHandle,
+    /// Ward ID resolved during phase 1; forwarded to phase 2 for executor
+    /// construction and placeholder-spec injection.
+    pub ward_id: Option<String>,
+}
+
+/// Output of [`InvokeBootstrap::finish_setup`]. Contains everything that lives
 /// across the seam between bootstrap and stream execution.
 pub(super) struct SetupResult {
     pub session_id: String,
@@ -122,42 +138,36 @@ struct IntentOutcome {
 // ============================================================================
 
 impl InvokeBootstrap {
-    /// Run the per-session setup. Returns a [`SetupResult`] whose fields are
-    /// fed into `ExecutionStream::run` by the caller in `invoke_with_callback`.
+    /// Phase 1: create or resume the session, persist routing, start the
+    /// execution record, and store the handle. Returns BEFORE any agent or
+    /// intent events fire so the caller can register subscribers first.
     ///
-    /// # What this does (verbatim pre-extraction logic)
+    /// # Ordering contract
     ///
-    /// 1. Create or resume the session + execution records.
-    /// 2. Persist routing fields (thread_id, connector_id, respond_to).
-    /// 3. Start the execution and log it.
-    /// 4. Store the handle in `self.handles`.
-    /// 5. Emit `AgentStarted`.
-    /// 6. Load agent + provider config.
-    /// 7. Load the session conversation history.
-    /// 8. Optionally prepend graph-powered recall to history.
-    /// 9. Build the `AgentExecutor` (intent analysis, ward setup, etc.).
-    /// 10. Optionally inject mandatory planning action for placeholder specs.
-    ///
-    /// The `on_session_ready` callback is **not** invoked here; the caller
-    /// fires it after `setup()` returns and before spawning the stream, which
-    /// preserves the original ordering.
-    pub(super) async fn setup(
+    /// ```text
+    /// begin_setup  [get_or_create_session, persist_routing,
+    ///               start_execution, store_handle]
+    /// → on_session_ready CALLBACK (caller fires this)
+    /// → finish_setup [emit_agent_started, load_agent, run_intent_analysis,
+    ///                 inject_placeholder, build executor]
+    /// → tokio::spawn
+    /// ```
+    pub(super) async fn begin_setup(
         &self,
         config: &mut ExecutionConfig,
-        message: &str,
-    ) -> Result<SetupResult, String> {
+    ) -> Result<PartialSetup, String> {
         let handle = ExecutionHandle::new(config.max_iterations);
-        let handle_clone = handle.clone();
 
         // Get or create session and execution
-        let setup = get_or_create_session(
+        let session_setup = get_or_create_session(
             &self.state_service,
             &config.agent_id,
             config.session_id.as_deref(),
             config.source,
         );
-        let session_id = setup.session_id;
-        let execution_id = setup.execution_id;
+        let session_id = session_setup.session_id;
+        let execution_id = session_setup.execution_id;
+        let ward_id = session_setup.ward_id;
 
         // If session has a persisted mode, use it (overrides invoke mode)
         if let Ok(Some(session)) = self.state_service.get_session(&session_id) {
@@ -197,7 +207,35 @@ impl InvokeBootstrap {
             handles.insert(config.conversation_id.clone(), handle.clone());
         }
 
-        // Emit start event
+        Ok(PartialSetup {
+            session_id,
+            execution_id,
+            handle,
+            ward_id,
+        })
+    }
+
+    /// Phase 2: emit `AgentStarted`, load the agent, run intent analysis,
+    /// inject placeholder specs, and build the executor. Receives the
+    /// [`PartialSetup`] produced by [`Self::begin_setup`].
+    ///
+    /// The caller MUST fire the `on_session_ready` callback between
+    /// `begin_setup` and `finish_setup` so all events emitted here are
+    /// visible to the subscriber.
+    pub(super) async fn finish_setup(
+        &self,
+        config: &ExecutionConfig,
+        message: &str,
+        partial: PartialSetup,
+    ) -> Result<SetupResult, String> {
+        let PartialSetup {
+            session_id,
+            execution_id,
+            handle,
+            ward_id,
+        } = partial;
+
+        // Emit start event — subscriber is already registered at this point.
         emit_agent_started(
             &self.event_bus,
             &config.agent_id,
@@ -241,16 +279,9 @@ impl InvokeBootstrap {
         // gated on mode; memory must reach every session. Chat mode uses a smaller budget
         // to keep latency low.
         if let Some(recall) = &self.memory_recall {
-            let _ = &session_id; // retained for future recall-log wiring
             let top_k = if config.is_chat_mode() { 5 } else { 10 };
             match recall
-                .recall_unified(
-                    &config.agent_id,
-                    message,
-                    setup.ward_id.as_deref(),
-                    &[],
-                    top_k,
-                )
+                .recall_unified(&config.agent_id, message, ward_id.as_deref(), &[], top_k)
                 .await
             {
                 Ok(items) if !items.is_empty() => {
@@ -289,7 +320,7 @@ impl InvokeBootstrap {
                 provider: &provider,
                 config,
                 session_id: &session_id,
-                ward_id: setup.ward_id.as_deref(),
+                ward_id: ward_id.as_deref(),
                 is_root: true,
                 user_message: Some(message),
                 execution_id: &execution_id,
@@ -305,13 +336,8 @@ impl InvokeBootstrap {
         };
 
         // Inject mandatory first action for graph tasks with placeholder specs
-        if let Some(ref ward_id) = setup.ward_id {
-            let specs_dir = self
-                .paths
-                .vault_dir()
-                .join("wards")
-                .join(ward_id)
-                .join("specs");
+        if let Some(ref wid) = ward_id {
+            let specs_dir = self.paths.vault_dir().join("wards").join(wid).join("specs");
             if specs_dir.exists() {
                 let has_placeholders = std::fs::read_dir(&specs_dir)
                     .ok()
@@ -342,7 +368,7 @@ impl InvokeBootstrap {
                          Follow the pipeline in your planning shard: delegate to data-analyst with max_iterations=40 \
                          to fill the specs and analyze core/. Do NOT load skills, create plans, or write code yourself.".to_string()
                     ));
-                    tracing::info!(ward = %ward_id, "Injected mandatory planning action for graph task");
+                    tracing::info!(ward = %wid, "Injected mandatory planning action for graph task");
                 }
             }
         }
@@ -351,7 +377,7 @@ impl InvokeBootstrap {
             session_id,
             execution_id,
             executor,
-            handle: handle_clone,
+            handle,
             history,
             recommended_skills,
         })

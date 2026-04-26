@@ -600,24 +600,39 @@ impl ExecutionRunner {
 
     /// Invoke an agent with an optional session-ready callback.
     ///
-    /// The callback fires after session creation but before any events are
-    /// emitted, allowing the caller to set up subscriptions before intent
-    /// analysis events fire.
+    /// The callback fires after session creation but BEFORE any agent or intent
+    /// events are emitted, so the caller's subscriber sees every event from
+    /// `AgentStarted` onward.
+    ///
+    /// # Event ordering
+    ///
+    /// ```text
+    /// begin_setup  [get_or_create_session, persist_routing,
+    ///               start_execution, store_handle]
+    /// → on_session_ready CALLBACK  ← subscriber registers HERE
+    /// → finish_setup [emit_agent_started, load_agent, run_intent_analysis,
+    ///                 inject_placeholder, build executor]
+    /// → tokio::spawn
+    /// ```
     pub async fn invoke_with_callback(
         &self,
         mut config: ExecutionConfig,
         message: String,
         on_session_ready: Option<OnSessionReady>,
     ) -> Result<(ExecutionHandle, String), String> {
-        // Run per-session setup (session creation, history loading, executor build).
-        let setup = self.bootstrap.setup(&mut config, &message).await?;
+        // Phase 1: create session + handle, BEFORE any events fire.
+        let partial = self.bootstrap.begin_setup(&mut config).await?;
 
-        // Fire the optional session-ready callback BEFORE spawning the stream
-        // (preserves the original ordering — caller subscribes to events before
-        // any are emitted).
+        // Subscriber registers HERE — captures every event from AgentStarted onward.
         if let Some(cb) = on_session_ready {
-            cb(setup.session_id.clone()).await;
+            cb(partial.session_id.clone()).await;
         }
+
+        // Phase 2: emit AgentStarted, load agent, intent analysis, build executor.
+        let setup = self
+            .bootstrap
+            .finish_setup(&config, &message, partial)
+            .await?;
 
         // Assemble the per-execution stream + context exactly as the old call site did.
         let stream = super::execution_stream::ExecutionStream {
