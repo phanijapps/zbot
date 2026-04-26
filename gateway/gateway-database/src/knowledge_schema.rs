@@ -289,6 +289,21 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
     PRIMARY KEY (content_hash, model)
 );
 
+-- Per-skill staleness tracker for the incremental reindex. One row per
+-- visible skill (after vault-wins dedup). The reindexer compares this
+-- table against the on-disk skill set at session start: new rows get
+-- embedded, missing rows get deleted, mismatched (mtime, size) tuples
+-- get re-embedded. When the DB is wiped, the table is empty → every
+-- on-disk skill is treated as new and reindexed cleanly.
+CREATE TABLE IF NOT EXISTS skill_index_state (
+    name              TEXT PRIMARY KEY,
+    source_root       TEXT NOT NULL,        -- 'vault' | 'agent'
+    file_path         TEXT NOT NULL,
+    mtime_unix        INTEGER NOT NULL,
+    size_bytes        INTEGER NOT NULL,
+    last_indexed_unix INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS kg_episode_payloads (
     episode_id TEXT PRIMARY KEY,
     text TEXT NOT NULL,
