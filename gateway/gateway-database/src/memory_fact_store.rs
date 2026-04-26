@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use agent_runtime::llm::embedding::{content_hash, EmbeddingClient};
-use zero_core::MemoryFactStore;
+use zero_core::{MemoryFactStore, SkillIndexRow};
 
 use crate::memory_repository::{MemoryFact, MemoryRepository};
 
@@ -48,6 +48,14 @@ impl GatewayMemoryFactStore {
             memory_repo,
             embedding_client,
         }
+    }
+
+    /// Test-only accessor for the underlying knowledge DB. Used by
+    /// integration tests that need to count rows in tables that aren't
+    /// otherwise reachable through the trait.
+    #[cfg(test)]
+    pub(crate) fn knowledge_db_for_tests(&self) -> Arc<crate::KnowledgeDatabase> {
+        self.memory_repo.db_for_tests()
     }
 
     /// Mark similar facts as contradicted by the new fact with the given `key`.
@@ -597,6 +605,22 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             .collect();
         Ok(json!({ "primitives": primitives }))
     }
+
+    async fn delete_facts_by_key(&self, category: &str, key: &str) -> Result<usize, String> {
+        self.memory_repo.delete_facts_by_key(category, key)
+    }
+
+    async fn list_skill_index(&self) -> Result<Vec<SkillIndexRow>, String> {
+        self.memory_repo.list_skill_index_state()
+    }
+
+    async fn upsert_skill_index(&self, row: SkillIndexRow) -> Result<(), String> {
+        self.memory_repo.upsert_skill_index_state(&row)
+    }
+
+    async fn delete_skill_index(&self, name: &str) -> Result<bool, String> {
+        self.memory_repo.delete_skill_index_state(name)
+    }
 }
 
 #[cfg(test)]
@@ -876,5 +900,182 @@ mod tests {
             .unwrap();
 
         assert_eq!(got["content"], "handoff v2");
+    }
+
+    // ========================================================================
+    // Skill index state tests (per-skill staleness tracker)
+    // ========================================================================
+
+    fn skill_row(name: &str, mtime: i64, size: i64) -> SkillIndexRow {
+        SkillIndexRow {
+            name: name.to_string(),
+            source_root: "vault".to_string(),
+            file_path: format!("/skills/{name}/SKILL.md"),
+            mtime_unix: mtime,
+            size_bytes: size,
+            last_indexed_unix: mtime,
+            format_version: 2,
+        }
+    }
+
+    #[tokio::test]
+    async fn skill_index_state_round_trips() {
+        let store = create_test_store();
+        store
+            .upsert_skill_index(skill_row("alpha", 100, 200))
+            .await
+            .unwrap();
+        let rows = store.list_skill_index().await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "alpha");
+        assert_eq!(rows[0].mtime_unix, 100);
+        assert_eq!(rows[0].size_bytes, 200);
+    }
+
+    #[tokio::test]
+    async fn skill_index_state_upsert_replaces_on_conflict() {
+        let store = create_test_store();
+        store
+            .upsert_skill_index(skill_row("alpha", 100, 200))
+            .await
+            .unwrap();
+        store
+            .upsert_skill_index(skill_row("alpha", 999, 999))
+            .await
+            .unwrap();
+        let rows = store.list_skill_index().await.unwrap();
+        assert_eq!(rows.len(), 1, "no duplicate row");
+        assert_eq!(rows[0].mtime_unix, 999);
+        assert_eq!(rows[0].size_bytes, 999);
+    }
+
+    #[tokio::test]
+    async fn skill_index_state_delete_removes_row() {
+        let store = create_test_store();
+        store
+            .upsert_skill_index(skill_row("alpha", 100, 200))
+            .await
+            .unwrap();
+        let removed = store.delete_skill_index("alpha").await.unwrap();
+        assert!(removed);
+        let rows = store.list_skill_index().await.unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn skill_index_state_delete_missing_returns_false() {
+        let store = create_test_store();
+        let removed = store.delete_skill_index("never-existed").await.unwrap();
+        assert!(!removed);
+    }
+
+    #[tokio::test]
+    async fn list_skill_index_empty_db_returns_empty_vec() {
+        let store = create_test_store();
+        let rows = store.list_skill_index().await.unwrap();
+        assert!(rows.is_empty());
+    }
+
+    /// Regression: `delete_facts_by_key` must remove every matching
+    /// `memory_facts` row. Verifies the SQL deletion path that backs
+    /// the skill reindexer's ghost cleanup.
+    #[tokio::test]
+    async fn delete_facts_by_key_removes_memory_facts_rows() {
+        let store = create_test_store();
+
+        store
+            .save_fact(
+                "root",
+                "skill",
+                "skill:web-reader",
+                "web-reader | reads URLs",
+                1.0,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(count_table(&store, "memory_facts"), 1);
+
+        let deleted = store
+            .delete_facts_by_key("skill", "skill:web-reader")
+            .await
+            .unwrap();
+        assert_eq!(deleted, 1);
+        assert_eq!(count_table(&store, "memory_facts"), 0);
+    }
+
+    /// Regression: when a `memory_facts` row is deleted, the cleanup
+    /// trigger (`trg_facts_delete_vec`) must drop its `memory_facts_index`
+    /// vec0 row. Without this, ghost embeddings would haunt search
+    /// results forever.
+    ///
+    /// We exercise the trigger directly by:
+    ///   1. Inserting a row into `memory_facts` via `save_fact`.
+    ///   2. Inserting a matching row into `memory_facts_index` via the
+    ///      vector index (the test fixture skips embedding by default).
+    ///   3. Calling `delete_facts_by_key` and asserting both rows go.
+    #[tokio::test]
+    async fn delete_cascades_to_vec0_via_trigger() {
+        let store = create_test_store();
+
+        store
+            .save_fact("root", "skill", "skill:hash", "h", 1.0, None)
+            .await
+            .unwrap();
+
+        // Look up the fact id and seed a matching vec0 row directly.
+        let fact_id: String = store
+            .knowledge_db_for_tests()
+            .with_connection(|conn| {
+                let id: String = conn.query_row(
+                    "SELECT id FROM memory_facts WHERE key = 'skill:hash'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok(id)
+            })
+            .unwrap();
+
+        store
+            .knowledge_db_for_tests()
+            .with_connection(|conn| {
+                let zero_emb = vec![0.0_f32; 384];
+                let bytes: Vec<u8> = zero_emb.iter().flat_map(|f| f.to_le_bytes()).collect();
+                conn.execute(
+                    "INSERT INTO memory_facts_index (fact_id, embedding) VALUES (?1, ?2)",
+                    rusqlite::params![fact_id, bytes],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(count_table(&store, "memory_facts_index"), 1);
+
+        store
+            .delete_facts_by_key("skill", "skill:hash")
+            .await
+            .unwrap();
+
+        assert_eq!(count_table(&store, "memory_facts"), 0);
+        assert_eq!(
+            count_table(&store, "memory_facts_index"),
+            0,
+            "trg_facts_delete_vec must have cleaned the vec0 row"
+        );
+    }
+
+    fn count_table(store: &GatewayMemoryFactStore, table: &str) -> i64 {
+        // GatewayMemoryFactStore.memory_repo is private; use the same
+        // KnowledgeDatabase the test fixture built. Construct a fresh
+        // KnowledgeDatabase against the same directory by piggy-backing
+        // on the public path the store already exposes via its repo's
+        // shared connection.
+        let sql = format!("SELECT COUNT(*) FROM {table}");
+        store
+            .knowledge_db_for_tests()
+            .with_connection(|conn| {
+                let count: i64 = conn.query_row(&sql, [], |row| row.get(0))?;
+                Ok(count)
+            })
+            .unwrap()
     }
 }

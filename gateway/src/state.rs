@@ -198,10 +198,12 @@ impl AppState {
         }
 
         let agents_dir = paths.agents_dir();
-        let skills_dir = paths.skills_dir();
+        let skills_roots = paths.skills_dirs();
         let event_bus = Arc::new(EventBus::new());
         let agents = Arc::new(AgentService::new(agents_dir));
-        let skills = Arc::new(SkillService::new(skills_dir));
+        // Load skills from the vault first, then $HOME/.agents/skills.
+        // Vault wins when both roots provide a skill with the same name.
+        let skills = Arc::new(SkillService::with_roots(skills_roots));
         let provider_service = Arc::new(ProviderService::new(paths.clone()));
         let mcp_service = Arc::new(McpService::new(paths.clone()));
 
@@ -643,7 +645,7 @@ impl AppState {
     pub fn minimal(config_dir: PathBuf) -> Self {
         let paths = Arc::new(VaultPaths::new(config_dir.clone()));
         let agents_dir = paths.agents_dir();
-        let skills_dir = paths.skills_dir();
+        let skills_roots = paths.skills_dirs();
         let event_bus = Arc::new(EventBus::new());
 
         // Initialize SQLite database for conversation persistence
@@ -681,7 +683,7 @@ impl AppState {
 
         Self {
             agents: Arc::new(AgentService::new(agents_dir)),
-            skills: Arc::new(SkillService::new(skills_dir)),
+            skills: Arc::new(SkillService::with_roots(skills_roots)),
             provider_service: Arc::new(ProviderService::new(paths.clone())),
             mcp_service: Arc::new(McpService::new(paths.clone())),
             runtime: Arc::new(RuntimeService::new(event_bus.clone())),

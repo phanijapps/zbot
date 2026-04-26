@@ -15,8 +15,22 @@ pub trait FileSystemContext: Send + Sync {
     /// Get the outputs directory
     fn outputs_dir(&self) -> Option<PathBuf>;
 
-    /// Get the skills directory
+    /// Get the (writable) skills directory.
+    ///
+    /// Most callers should prefer [`skills_dirs`](Self::skills_dirs), which
+    /// also includes externally-installed roots like `$HOME/.agents/skills`.
+    /// This method exists for create / update / delete operations that must
+    /// target a single writable root.
     fn skills_dir(&self) -> Option<PathBuf>;
+
+    /// Get every skills root in priority order (vault first, external
+    /// roots after). Returns at least one path when `skills_dir()` is
+    /// `Some`. Implementers can override to include additional read-only
+    /// roots — the runtime `LoadSkillTool` walks the list and resolves a
+    /// skill against the first root containing a matching `SKILL.md`.
+    fn skills_dirs(&self) -> Vec<PathBuf> {
+        self.skills_dir().into_iter().collect()
+    }
 
     /// Get the agents directory
     fn agents_dir(&self) -> Option<PathBuf>;

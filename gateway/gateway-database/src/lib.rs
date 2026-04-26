@@ -37,7 +37,7 @@ pub use knowledge_schema::{
     drop_and_recreate_vec_tables_at_dim, list_vec_table_presence, REQUIRED_VEC_TABLES,
 };
 pub use memory_fact_store::GatewayMemoryFactStore;
-pub use memory_repository::{MemoryFact, MemoryRepository, ScoredFact};
+pub use memory_repository::{MemoryFact, MemoryRepository, ScoredFact, SkillIndexRow};
 pub use procedure_repository::{Procedure, ProcedureRepository};
 pub use recall_log_repository::RecallLogRepository;
 pub use repository::{ConversationRepository, Message};

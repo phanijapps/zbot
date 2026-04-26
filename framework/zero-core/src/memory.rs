@@ -6,6 +6,31 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
+/// One row in the per-skill staleness tracker. Lives in `zero-core`
+/// (rather than `gateway-database`) so this trait can use it without
+/// dragging the SQLite stack into agent-tools.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillIndexRow {
+    /// Skill identifier (directory name, after vault-wins dedup).
+    pub name: String,
+    /// `'vault'` or `'agent'` — diagnostic only, not a join key.
+    pub source_root: String,
+    /// Absolute path to `<root>/<name>/SKILL.md` as last indexed.
+    pub file_path: String,
+    /// `SKILL.md` mtime in seconds since the Unix epoch as last indexed.
+    pub mtime_unix: i64,
+    /// `SKILL.md` size in bytes as last indexed. Breaks ties when two
+    /// edits within the same second produce different content.
+    pub size_bytes: i64,
+    /// DB write time of the row, seconds since the Unix epoch.
+    pub last_indexed_unix: i64,
+    /// Embedding-content schema version. The reindex diff treats any
+    /// row whose stored version disagrees with the running code's
+    /// `CURRENT_INDEX_FORMAT_VERSION` as "modified", forcing one
+    /// re-embed pass after a content-format change.
+    pub format_version: i64,
+}
+
 /// Abstract interface for durable memory fact storage.
 ///
 /// Implementations can wrap a database (SQLite via `MemoryRepository`),
@@ -127,5 +152,35 @@ pub trait MemoryFactStore: Send + Sync {
     /// Default implementation returns an empty array.
     async fn list_primitives(&self, _ward_id: &str) -> Result<Value, String> {
         Ok(serde_json::json!({ "primitives": [] }))
+    }
+
+    // =========================================================================
+    // SKILL INDEX STATE
+    // Per-skill staleness tracker for the incremental skill reindex.
+    // Default implementations return empty / no-op, so stores that don't
+    // care (mocks, in-memory) inherit safe behavior without code changes.
+    // =========================================================================
+
+    /// Delete every fact matching `(category, key)`. Used by the skill
+    /// reindexer to clear ghost embeddings when a skill is removed from
+    /// disk. Returns the number of rows deleted.
+    async fn delete_facts_by_key(&self, _category: &str, _key: &str) -> Result<usize, String> {
+        Ok(0)
+    }
+
+    /// Read every row from the per-skill staleness tracker. Returns an
+    /// empty Vec when the table is missing or empty (e.g. fresh DB).
+    async fn list_skill_index(&self) -> Result<Vec<SkillIndexRow>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Insert or replace one row in the per-skill staleness tracker.
+    async fn upsert_skill_index(&self, _row: SkillIndexRow) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Delete a single row from the per-skill staleness tracker.
+    async fn delete_skill_index(&self, _name: &str) -> Result<bool, String> {
+        Ok(false)
     }
 }

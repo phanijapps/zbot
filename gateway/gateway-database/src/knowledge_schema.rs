@@ -26,10 +26,30 @@ pub fn initialize_knowledge_database(conn: &Connection) -> Result<(), rusqlite::
     conn.execute_batch(SCHEMA_SQL)?;
     conn.execute_batch(V23_WIKI_FTS_SQL)?;
     conn.execute_batch(V24_GLOBAL_SCOPE_BACKFILL_SQL)?;
+    add_skill_index_format_version_if_missing(conn)?;
     conn.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?1, datetime('now'))",
         rusqlite::params![SCHEMA_VERSION],
     )?;
+    Ok(())
+}
+
+/// Add `format_version` to `skill_index_state` if the table predates it.
+/// SQLite doesn't support `ADD COLUMN IF NOT EXISTS`, so we check the
+/// table's column list first. The default `1` matches what existing
+/// rows would have logically had, so the reindex diff naturally treats
+/// them as stale (current code constant is `2`) and re-embeds once.
+fn add_skill_index_format_version_if_missing(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare("PRAGMA table_info(skill_index_state)")?;
+    let column_exists = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "format_version");
+    if !column_exists {
+        conn.execute_batch(
+            "ALTER TABLE skill_index_state ADD COLUMN format_version INTEGER NOT NULL DEFAULT 1",
+        )?;
+    }
     Ok(())
 }
 
@@ -287,6 +307,26 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
     embedding BLOB NOT NULL,
     created_at TEXT NOT NULL,
     PRIMARY KEY (content_hash, model)
+);
+
+-- Per-skill staleness tracker for the incremental reindex. One row per
+-- visible skill (after vault-wins dedup). The reindexer compares this
+-- table against the on-disk skill set at session start: new rows get
+-- embedded, missing rows get deleted, mismatched (mtime, size, format)
+-- tuples get re-embedded. When the DB is wiped, the table is empty →
+-- every on-disk skill is treated as new and reindexed cleanly.
+--
+-- `format_version` records the embedding-content schema. Code bumps the
+-- in-process constant when it changes how it builds the indexed text;
+-- rows with an older version are forced to re-embed once.
+CREATE TABLE IF NOT EXISTS skill_index_state (
+    name              TEXT PRIMARY KEY,
+    source_root       TEXT NOT NULL,        -- 'vault' | 'agent'
+    file_path         TEXT NOT NULL,
+    mtime_unix        INTEGER NOT NULL,
+    size_bytes        INTEGER NOT NULL,
+    last_indexed_unix INTEGER NOT NULL,
+    format_version    INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS kg_episode_payloads (
