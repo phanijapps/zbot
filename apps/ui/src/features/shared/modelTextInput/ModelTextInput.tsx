@@ -121,6 +121,14 @@ export function ModelTextInput({
         onKeyDown={handleKeyDown}
       />
       {open && filtered.length > 0 && (
+        // NOSONAR(typescript:S6819): combobox + listbox is the W3C ARIA
+        // authoring pattern for filterable autocomplete with free-text
+        // input. <select size=…> renders the OS-native list (no custom
+        // hover styling, no programmatic open/close, no
+        // aria-activedescendant), and <datalist> hands rendering
+        // entirely to the browser, dropping the custom keyboard/mouse
+        // affordances we ship here. Keeping the listbox role is the
+        // accessible-and-correct choice for this UX.
         <div
           id={listId}
           ref={listRef}
@@ -132,6 +140,12 @@ export function ModelTextInput({
               key={s}
               id={`${listId}-opt-${i}`}
               role="option"
+              // tabIndex={-1} keeps each option focusable programmatically
+              // (required by typescript:S6852 — every interactive role
+              // must be in the focus tree) without putting it in the
+              // tab order — DOM focus stays on the input, the listbox
+              // navigation happens via aria-activedescendant.
+              tabIndex={-1}
               aria-selected={i === highlight}
               className={
                 "model-text-input__item" +
