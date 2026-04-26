@@ -87,7 +87,7 @@ impl SessionInvoker for RunnerContinuationInvoker {
         _config: ExecutionConfig,
         _message: String,
     ) -> Result<(), String> {
-        unimplemented!("RunnerContinuationInvoker only handles continuations")
+        Err("RunnerContinuationInvoker only handles continuations; spawn_session must be routed via a session-capable invoker".to_string())
     }
 
     async fn spawn_continuation(
@@ -135,7 +135,7 @@ impl SessionInvoker for RunnerContinuationInvoker {
         _request: DelegationRequest,
         _permit: Option<OwnedSemaphorePermit>,
     ) -> Result<(), String> {
-        unimplemented!("RunnerContinuationInvoker only handles continuations")
+        Err("RunnerContinuationInvoker only handles continuations; spawn_delegation must be routed via DelegationDispatcher's invoker".to_string())
     }
 }
 

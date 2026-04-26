@@ -172,11 +172,13 @@ impl DelegationDispatcher {
         tokio::spawn(async move {
             let permit = semaphore.acquire_owned().await.ok();
 
+            let child_agent_id = request.child_agent_id.clone();
             let result = invoker.spawn_delegation(request, permit).await;
 
             if let Err(e) = &result {
                 tracing::error!(
                     session_id = %session_id,
+                    agent = %child_agent_id,
                     error = %e,
                     "Delegation failed"
                 );
@@ -238,7 +240,7 @@ impl SessionInvoker for RunnerDelegationInvoker {
         _config: ExecutionConfig,
         _message: String,
     ) -> Result<(), String> {
-        unimplemented!("RunnerDelegationInvoker only handles delegations")
+        Err("RunnerDelegationInvoker only handles delegations; spawn_session must be routed via a session-capable invoker".to_string())
     }
 
     async fn spawn_continuation(
@@ -246,7 +248,7 @@ impl SessionInvoker for RunnerDelegationInvoker {
         _session_id: String,
         _root_agent_id: String,
     ) -> Result<(), String> {
-        unimplemented!("RunnerDelegationInvoker only handles delegations")
+        Err("RunnerDelegationInvoker only handles delegations; spawn_continuation must be routed via ContinuationWatcher's invoker".to_string())
     }
 
     async fn spawn_delegation(
