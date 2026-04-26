@@ -513,7 +513,7 @@ impl ExecutionStream {
                 .await;
 
                 // Cancel any orphaned delegations for this session
-                super::core::cancel_session_delegations(
+                cancel_session_delegations(
                     &session_id,
                     &self.delegation_registry,
                     &self.handles,
@@ -539,5 +539,103 @@ impl ExecutionStream {
         }
 
         Ok(())
+    }
+}
+
+// ============================================================================
+// ORPHAN DELEGATION CLEANUP
+// ============================================================================
+
+/// Cancel all in-flight delegations for a session.
+/// Called when root execution crashes to prevent orphaned subagents.
+async fn cancel_session_delegations(
+    session_id: &str,
+    delegation_registry: &DelegationRegistry,
+    handles: &RwLock<HashMap<String, crate::handle::ExecutionHandle>>,
+    state_service: &execution_state::StateService<DatabaseManager>,
+) {
+    let active = delegation_registry.get_by_session_id(session_id);
+
+    if active.is_empty() {
+        return;
+    }
+
+    tracing::info!(
+        session_id = %session_id,
+        count = active.len(),
+        "Cancelling orphaned delegations"
+    );
+
+    for (child_conv_id, _ctx) in &active {
+        // Stop the execution handle
+        {
+            let handles_guard = handles.read().await;
+            if let Some(handle) = handles_guard.get(child_conv_id) {
+                handle.stop();
+            }
+        }
+
+        // Remove from registry
+        delegation_registry.remove(child_conv_id);
+
+        // Decrement pending_delegations so session can complete
+        if let Err(e) = state_service.complete_delegation(session_id) {
+            tracing::debug!("Failed to decrement pending_delegations: {}", e);
+        }
+    }
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use api_logs::LogService;
+    use execution_state::StateService;
+    use gateway_database::{ConversationRepository, DatabaseManager};
+    use gateway_events::EventBus;
+    use gateway_services::VaultPaths;
+    use tokio::sync::{mpsc, RwLock};
+
+    #[test]
+    fn execution_stream_constructs_with_minimum_required_deps() {
+        // Compile-as-assertion: locks in the field list as the dependency
+        // contract. End-to-end coverage lives in the e2e suite (Tasks 7+8).
+        #[allow(deprecated)]
+        let dir = tempfile::tempdir().unwrap();
+        #[allow(deprecated)]
+        let path = dir.into_path();
+        let paths = Arc::new(VaultPaths::new(path));
+        let db = Arc::new(DatabaseManager::new(paths.clone()).unwrap());
+        let state = Arc::new(StateService::new(db.clone()));
+        let logs = Arc::new(LogService::new(db.clone()));
+        let convo = Arc::new(ConversationRepository::new(db));
+        let bus = Arc::new(EventBus::new());
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let registry = Arc::new(crate::delegation::DelegationRegistry::new());
+        let handles = Arc::new(RwLock::new(HashMap::new()));
+
+        let _ = ExecutionStream {
+            event_bus: bus,
+            state_service: state,
+            log_service: logs,
+            conversation_repo: convo,
+            delegation_tx: tx,
+            delegation_registry: registry,
+            handles,
+            distiller: None,
+            kg_episode_repo: None,
+            graph_storage: None,
+            paths,
+            memory_repo: None,
+            connector_registry: None,
+            bridge_registry: None,
+            bridge_outbox: None,
+        };
     }
 }

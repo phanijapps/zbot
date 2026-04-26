@@ -845,7 +845,7 @@ impl ExecutionRunner {
 
         // Spawn execution task
         {
-            let stream = crate::runner::ExecutionStream {
+            let stream = super::execution_stream::ExecutionStream {
                 event_bus: self.event_bus.clone(),
                 state_service: self.state_service.clone(),
                 log_service: self.log_service.clone(),
@@ -862,7 +862,7 @@ impl ExecutionRunner {
                 bridge_registry: self.bridge_registry.clone(),
                 bridge_outbox: self.bridge_outbox.clone(),
             };
-            let ctx = crate::runner::ExecutionContext {
+            let ctx = super::execution_stream::ExecutionContext {
                 execution_id,
                 session_id: session_id.clone(),
                 agent_id: config.agent_id.clone(),
@@ -2085,51 +2085,6 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
     });
 
     Ok(())
-}
-
-// ============================================================================
-// ORPHAN DELEGATION CLEANUP
-// ============================================================================
-
-/// Cancel all in-flight delegations for a session.
-/// Called when root execution completes or crashes to prevent orphaned subagents.
-pub(super) async fn cancel_session_delegations(
-    session_id: &str,
-    delegation_registry: &crate::delegation::DelegationRegistry,
-    handles: &tokio::sync::RwLock<
-        std::collections::HashMap<String, crate::handle::ExecutionHandle>,
-    >,
-    state_service: &execution_state::StateService<gateway_database::DatabaseManager>,
-) {
-    let active = delegation_registry.get_by_session_id(session_id);
-
-    if active.is_empty() {
-        return;
-    }
-
-    tracing::info!(
-        session_id = %session_id,
-        count = active.len(),
-        "Cancelling orphaned delegations"
-    );
-
-    for (child_conv_id, _ctx) in &active {
-        // Stop the execution handle
-        {
-            let handles_guard = handles.read().await;
-            if let Some(handle) = handles_guard.get(child_conv_id) {
-                handle.stop();
-            }
-        }
-
-        // Remove from registry
-        delegation_registry.remove(child_conv_id);
-
-        // Decrement pending_delegations so session can complete
-        if let Err(e) = state_service.complete_delegation(session_id) {
-            tracing::debug!("Failed to decrement pending_delegations: {}", e);
-        }
-    }
 }
 
 // ============================================================================
