@@ -1,5 +1,6 @@
 // ============================================================================
-// randomId — verify the v4 shape, fallback chain, and non-secure-context safety
+// randomId — verify the v4 shape, fallback chain, and explicit failure when
+// no crypto API is reachable.
 // ============================================================================
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -22,19 +23,15 @@ describe("randomId", () => {
 });
 
 describe("randomId — fallback chain", () => {
-  let originalCrypto: Crypto | undefined;
+  let originalCrypto: PropertyDescriptor | undefined;
 
   beforeEach(() => {
-    originalCrypto = globalThis.crypto;
+    originalCrypto = Object.getOwnPropertyDescriptor(globalThis, "crypto");
   });
 
   afterEach(() => {
     if (originalCrypto) {
-      Object.defineProperty(globalThis, "crypto", {
-        value: originalCrypto,
-        configurable: true,
-        writable: true,
-      });
+      Object.defineProperty(globalThis, "crypto", originalCrypto);
     }
   });
 
@@ -53,7 +50,7 @@ describe("randomId — fallback chain", () => {
     expect(id).toMatch(V4_SHAPE);
   });
 
-  it("falls back when crypto.randomUUID throws (some browsers throw outside secure contexts)", () => {
+  it("falls back when crypto.randomUUID throws (some browsers define it but throw outside secure contexts)", () => {
     const mockGetRandomValues = vi.fn((arr: Uint8Array) => {
       for (let i = 0; i < arr.length; i++) arr[i] = (i + 1) * 7;
       return arr;
@@ -73,13 +70,49 @@ describe("randomId — fallback chain", () => {
     expect(id).toMatch(V4_SHAPE);
   });
 
-  it("falls back to Math.random when crypto is entirely undefined", () => {
+  it("uses window.msCrypto when window.crypto is missing (legacy IE 11)", () => {
+    const mockGetRandomValues = vi.fn((arr: Uint8Array) => {
+      for (let i = 0; i < arr.length; i++) arr[i] = (i * 11) & 0xff;
+      return arr;
+    });
     Object.defineProperty(globalThis, "crypto", {
       value: undefined,
       configurable: true,
       writable: true,
     });
-    const id = randomId();
-    expect(id).toMatch(V4_SHAPE);
+    Object.defineProperty(globalThis, "msCrypto", {
+      value: { getRandomValues: mockGetRandomValues },
+      configurable: true,
+      writable: true,
+    });
+    try {
+      const id = randomId();
+      expect(mockGetRandomValues).toHaveBeenCalled();
+      expect(id).toMatch(V4_SHAPE);
+    } finally {
+      Object.defineProperty(globalThis, "msCrypto", {
+        value: undefined,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
+  it("throws explicitly when neither crypto nor msCrypto is available (no silent Math.random fallback)", () => {
+    Object.defineProperty(globalThis, "crypto", {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
+    expect(() => randomId()).toThrow(/no crypto API available/);
+  });
+
+  it("throws when crypto exists but getRandomValues is missing", () => {
+    Object.defineProperty(globalThis, "crypto", {
+      value: { /* no randomUUID, no getRandomValues */ },
+      configurable: true,
+      writable: true,
+    });
+    expect(() => randomId()).toThrow(/getRandomValues is unavailable/);
   });
 });
