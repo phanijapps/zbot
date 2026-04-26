@@ -29,7 +29,7 @@ use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{broadcast, mpsc, OwnedSemaphorePermit, RwLock};
 
 use crate::config::ExecutionConfig;
 use crate::delegation::{DelegationRegistry, DelegationRequest};
@@ -128,6 +128,14 @@ impl SessionInvoker for RunnerContinuationInvoker {
             goal_adapter: self.goal_adapter.clone(),
         })
         .await
+    }
+
+    async fn spawn_delegation(
+        &self,
+        _request: DelegationRequest,
+        _permit: Option<OwnedSemaphorePermit>,
+    ) -> Result<(), String> {
+        unimplemented!("RunnerContinuationInvoker only handles continuations")
     }
 }
 

@@ -130,6 +130,13 @@ async fn watcher_continues_after_invoker_error() {
             self.0.fetch_add(1, Ordering::SeqCst);
             Err("simulated".into())
         }
+        async fn spawn_delegation(
+            &self,
+            _: gateway_execution::delegation::DelegationRequest,
+            _: Option<tokio::sync::OwnedSemaphorePermit>,
+        ) -> Result<(), String> {
+            unimplemented!("not used in this test")
+        }
     }
 
     let counter = Arc::new(AtomicU32::new(0));

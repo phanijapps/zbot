@@ -1,21 +1,29 @@
 //! # SessionInvoker
 //!
 //! Narrow seam runner handlers depend on instead of holding
-//! `Arc<ExecutionRunner>`. Two methods, one per spawn shape:
+//! `Arc<ExecutionRunner>`. Three methods, one per spawn shape:
 //!
-//! - `spawn_session` — fresh session (used by DelegationDispatcher
-//!   and direct API callers).
+//! - `spawn_session` — fresh session (used by direct API callers).
 //! - `spawn_continuation` — resume an existing root execution
 //!   (used by ContinuationWatcher). Routes to `invoke_continuation`
 //!   on the real impl, which reactivates the session, loads
 //!   history, prepends recall, builds the continuation message
 //!   with plan injection, and runs the re-delegation + distillation
 //!   tail-effects.
+//! - `spawn_delegation` — spawn a delegated subagent from a
+//!   `DelegationRequest` (used by `DelegationDispatcher`). Does far
+//!   more than `spawn_session`: creates a child session, registers
+//!   the delegation context, emits delegation events, injects ward
+//!   context + subagent rules + recall priming, and handles the
+//!   `OwnedSemaphorePermit` that gates global concurrency.
 
 use crate::config::ExecutionConfig;
 use async_trait::async_trait;
 #[cfg(any(test, feature = "test-stubs"))]
 use std::sync::Mutex;
+use tokio::sync::OwnedSemaphorePermit;
+
+use crate::delegation::DelegationRequest;
 
 #[async_trait]
 pub trait SessionInvoker: Send + Sync {
@@ -33,6 +41,20 @@ pub trait SessionInvoker: Send + Sync {
         session_id: String,
         root_agent_id: String,
     ) -> Result<(), String>;
+
+    /// Spawn a delegated subagent. `permit` is the already-acquired
+    /// global concurrency permit; it is held for the duration of the
+    /// child execution by the impl.
+    ///
+    /// The full `spawn_delegated_agent` pipeline runs here: child
+    /// session creation, delegation registry, event emission, ward
+    /// context injection, recall priming, executor build + run,
+    /// success/failure callbacks, and continuation trigger.
+    async fn spawn_delegation(
+        &self,
+        request: DelegationRequest,
+        permit: Option<OwnedSemaphorePermit>,
+    ) -> Result<(), String>;
 }
 
 /// Test-only impl that records every call. Handlers under test inject
@@ -42,6 +64,7 @@ pub trait SessionInvoker: Send + Sync {
 pub struct StubSessionInvoker {
     pub calls: Mutex<Vec<(ExecutionConfig, String)>>,
     pub continuation_calls: Mutex<Vec<(String, String)>>, // (session_id, root_agent_id)
+    pub delegation_calls: Mutex<Vec<DelegationRequest>>,
 }
 
 #[cfg(any(test, feature = "test-stubs"))]
@@ -50,6 +73,7 @@ impl StubSessionInvoker {
         Self {
             calls: Mutex::new(Vec::new()),
             continuation_calls: Mutex::new(Vec::new()),
+            delegation_calls: Mutex::new(Vec::new()),
         }
     }
 }
@@ -80,6 +104,15 @@ impl SessionInvoker for StubSessionInvoker {
             .push((session_id, root_agent_id));
         Ok(())
     }
+
+    async fn spawn_delegation(
+        &self,
+        request: DelegationRequest,
+        _permit: Option<OwnedSemaphorePermit>,
+    ) -> Result<(), String> {
+        self.delegation_calls.lock().unwrap().push(request);
+        Ok(())
+    }
 }
 
 // The real impl for `ExecutionRunner` lives below — wraps existing invoke().
@@ -98,6 +131,16 @@ impl SessionInvoker for ExecutionRunner {
     ) -> Result<(), String> {
         self.make_continuation_invoker()
             .spawn_continuation(session_id, root_agent_id)
+            .await
+    }
+
+    async fn spawn_delegation(
+        &self,
+        request: DelegationRequest,
+        permit: Option<OwnedSemaphorePermit>,
+    ) -> Result<(), String> {
+        self.make_delegation_invoker()
+            .spawn_delegation(request, permit)
             .await
     }
 }

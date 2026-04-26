@@ -6,10 +6,12 @@
 
 mod continuation_watcher;
 mod core;
+mod delegation_dispatcher;
 mod session_invoker;
 
 pub use continuation_watcher::ContinuationWatcher;
 pub use core::*;
+pub use delegation_dispatcher::DelegationDispatcher;
 pub use session_invoker::SessionInvoker;
 #[cfg(any(test, feature = "test-stubs"))]
 pub use session_invoker::StubSessionInvoker;
