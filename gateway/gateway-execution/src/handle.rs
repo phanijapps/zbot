@@ -82,12 +82,6 @@ impl ExecutionHandle {
         self.iteration.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// Reset iteration counter.
-    #[allow(dead_code)]
-    pub fn reset(&self) {
-        self.iteration.store(0, Ordering::SeqCst);
-    }
-
     /// Add more iterations for continuation.
     pub fn add_iterations(&self, additional: u32) {
         self.max_iterations.fetch_add(additional, Ordering::SeqCst);

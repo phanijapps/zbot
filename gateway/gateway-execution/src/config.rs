@@ -242,22 +242,8 @@ impl ExecutionConfig {
     }
 
     /// Returns true if this execution is in chat mode (skip pipeline, keep memory).
-    ///
-    /// Prefer this over `is_fast_mode` — "chat" names the user-facing mode and
-    /// avoids conflating "skip memory" with "skip pipeline".
     pub fn is_chat_mode(&self) -> bool {
         matches!(self.session_mode(), SessionMode::Chat)
-    }
-
-    /// Deprecated alias for [`Self::is_chat_mode`]. Kept for migration.
-    ///
-    /// Historically "fast mode" gated BOTH memory injection and the pipeline.
-    /// Memory injection is now unconditional; only pipeline depth is gated.
-    #[deprecated(
-        note = "Use is_chat_mode() — semantics now mean 'skip pipeline', not 'skip memory'"
-    )]
-    pub fn is_fast_mode(&self) -> bool {
-        self.is_chat_mode()
     }
 }
 
@@ -455,16 +441,5 @@ mod tests {
         // flagged by this test flipping.
         let fs = GatewayFileSystem::new(PathBuf::from("/v"));
         assert!(fs.python_executable().is_none());
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn is_fast_mode_deprecated_alias_still_tracks_is_chat_mode() {
-        // Kept for migration; the two must stay in lockstep until removed.
-        let cfg = ExecutionConfig::new("root".into(), "c".into(), PathBuf::from("/tmp"))
-            .with_mode("fast".into());
-        assert_eq!(cfg.is_fast_mode(), cfg.is_chat_mode());
-        let default = ExecutionConfig::new("root".into(), "c".into(), PathBuf::from("/tmp"));
-        assert_eq!(default.is_fast_mode(), default.is_chat_mode());
     }
 }
