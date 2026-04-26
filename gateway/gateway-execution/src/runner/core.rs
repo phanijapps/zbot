@@ -34,12 +34,10 @@ use crate::middleware::intent_analysis::{
 pub use crate::config::ExecutionConfig;
 use crate::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
 pub use crate::handle::ExecutionHandle;
-use crate::invoke::micro_recall::MicroRecallContext;
-use crate::invoke::working_memory_middleware;
 use crate::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
-    spawn_batch_writer_with_repo, AgentLoader, BatchWriterHandle, ExecutorBuilder,
-    ResponseAccumulator, StreamContext, ToolCallAccumulator, WorkingMemory, WorkspaceCache,
+    spawn_batch_writer_with_repo, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
+    ToolCallAccumulator, WorkspaceCache,
 };
 use crate::lifecycle::{
     complete_execution, crash_execution, emit_agent_started, get_or_create_session,
@@ -394,157 +392,6 @@ fn attach_mid_session_recall_hook(
         std::collections::HashSet::new(),
     );
     tracing::debug!(every_n_turns = every_n, "Mid-session recall hook wired");
-}
-
-/// Per-turn state mutated by the stream-event handler closure inside
-/// `spawn_execution_task`. Pulled into a struct so each event-type handler
-/// takes `&mut EventAccumulator` + a few deps, instead of a 10-parameter
-/// signature per handler — and so the (>400-line) closure body shrinks to
-/// a flat dispatcher.
-struct EventAccumulator {
-    tool_acc: ToolCallAccumulator,
-    turn_tool_calls: Vec<serde_json::Value>,
-    turn_text: String,
-    working_memory: WorkingMemory,
-    pending_recall_triggers: Vec<(crate::invoke::micro_recall::MicroRecallTrigger, u32)>,
-    current_tool_name: String,
-}
-
-/// Borrowed dependencies the stream-event handlers need to observe but not
-/// mutate. Constructed once per spawn, passed by reference into each handler.
-struct EventHandlerDeps<'a> {
-    batch_writer: &'a BatchWriterHandle,
-    session_id: &'a str,
-    execution_id: &'a str,
-    agent_id: &'a str,
-    handle: &'a ExecutionHandle,
-    kg_episode_repo: Option<&'a Arc<gateway_database::KgEpisodeRepository>>,
-    graph_storage: Option<&'a Arc<knowledge_graph::GraphStorage>>,
-}
-
-/// Handle a `StreamEvent::ToolCallStart` — record the call, update the
-/// current tool name, and append to the per-turn tool-call list.
-fn handle_tool_call_start(
-    acc: &mut EventAccumulator,
-    tool_id: &str,
-    tool_name: &str,
-    args: &serde_json::Value,
-) {
-    acc.tool_acc
-        .start_call(tool_id.to_string(), tool_name.to_string(), args.clone());
-    acc.current_tool_name = tool_name.to_string();
-    acc.turn_tool_calls.push(serde_json::json!({
-        "tool_id": tool_id,
-        "tool_name": tool_name,
-        "args": args,
-    }));
-}
-
-/// Handle a `StreamEvent::ToolResult` — flush the pending assistant turn,
-/// emit the tool message, update working memory, fire-and-forget graph
-/// extraction, and collect micro-recall triggers for post-stream execution.
-fn handle_tool_result(
-    acc: &mut EventAccumulator,
-    deps: &EventHandlerDeps<'_>,
-    tool_id: &str,
-    result: &str,
-    error: Option<&str>,
-) {
-    acc.tool_acc
-        .complete_call(tool_id, result.to_string(), error.map(String::from));
-
-    // Emit the assistant message for this turn (with accumulated tool_calls)
-    if !acc.turn_tool_calls.is_empty() {
-        let tc_json = serde_json::to_string(&acc.turn_tool_calls).unwrap_or_default();
-        let content = if acc.turn_text.is_empty() {
-            "[tool calls]".to_string()
-        } else {
-            std::mem::take(&mut acc.turn_text)
-        };
-        deps.batch_writer.session_message(
-            deps.session_id,
-            deps.execution_id,
-            "assistant",
-            &content,
-            Some(&tc_json),
-            None,
-        );
-        acc.turn_tool_calls.clear();
-    }
-
-    // Emit tool result message
-    let tool_content = match error {
-        Some(err) => format!("Error: {}", err),
-        None => result.to_string(),
-    };
-    deps.batch_writer.session_message(
-        deps.session_id,
-        deps.execution_id,
-        "tool",
-        &tool_content,
-        None,
-        Some(tool_id),
-    );
-
-    // Update working memory from tool result
-    working_memory_middleware::process_tool_result(
-        &mut acc.working_memory,
-        &acc.current_tool_name,
-        result,
-        error,
-        deps.handle.current_iteration(),
-    );
-
-    // Phase 6d: real-time graph extraction from tool output.
-    // Non-blocking — fires in a background task so the execution
-    // loop never waits.
-    if let (Some(ep_repo), Some(graph)) = (deps.kg_episode_repo, deps.graph_storage) {
-        let tool_name_cl = acc.current_tool_name.clone();
-        let tool_id_cl = tool_id.to_string();
-        let result_cl = result.to_string();
-        let session_id_cl = deps.session_id.to_string();
-        let agent_id_cl = deps.agent_id.to_string();
-        let ep_repo_cl = ep_repo.clone();
-        let graph_cl = graph.clone();
-        tokio::spawn(async move {
-            crate::tool_result_extractor::extract_and_persist(
-                &tool_name_cl,
-                &tool_id_cl,
-                &result_cl,
-                &session_id_cl,
-                &agent_id_cl,
-                ep_repo_cl.as_ref(),
-                &graph_cl,
-            )
-            .await;
-        });
-    }
-
-    // Detect micro-recall triggers (sync) — executed after stream completes
-    let triggers = working_memory_middleware::detect_recall_triggers(
-        &acc.working_memory,
-        &acc.current_tool_name,
-        result,
-        error,
-    );
-    let iter = deps.handle.current_iteration();
-    for trigger in triggers {
-        acc.pending_recall_triggers.push((trigger, iter));
-    }
-}
-
-/// Owned inputs for [`ExecutionRunner::spawn_execution_task`] — three
-/// consecutive `String` ids (message, session_id, execution_id) in the
-/// old positional signature were a silent-swap waiting to happen.
-struct ExecutionTaskArgs {
-    executor: AgentExecutor,
-    handle: ExecutionHandle,
-    config: ExecutionConfig,
-    message: String,
-    session_id: String,
-    execution_id: String,
-    history: Vec<ChatMessage>,
-    recommended_skills: Vec<String>,
 }
 
 impl ExecutionRunner {
@@ -997,355 +844,42 @@ impl ExecutionRunner {
         }
 
         // Spawn execution task
-        self.spawn_execution_task(ExecutionTaskArgs {
-            executor,
-            handle: handle_clone,
-            config,
-            message,
-            session_id: session_id.clone(),
-            execution_id,
-            history,
-            recommended_skills,
-        });
+        {
+            let stream = crate::runner::ExecutionStream {
+                event_bus: self.event_bus.clone(),
+                state_service: self.state_service.clone(),
+                log_service: self.log_service.clone(),
+                conversation_repo: self.conversation_repo.clone(),
+                delegation_tx: self.delegation_tx.clone(),
+                delegation_registry: self.delegation_registry.clone(),
+                handles: self.handles.clone(),
+                distiller: self.distiller.clone(),
+                kg_episode_repo: self.kg_episode_repo.clone(),
+                graph_storage: self.graph_storage.clone(),
+                paths: self.paths.clone(),
+                memory_repo: self.memory_repo.clone(),
+                connector_registry: self.connector_registry.clone(),
+                bridge_registry: self.bridge_registry.clone(),
+                bridge_outbox: self.bridge_outbox.clone(),
+            };
+            let ctx = crate::runner::ExecutionContext {
+                execution_id,
+                session_id: session_id.clone(),
+                agent_id: config.agent_id.clone(),
+                conversation_id: config.conversation_id.clone(),
+                handle: handle_clone,
+                respond_to: config.respond_to.clone(),
+                thread_id: config.thread_id.clone(),
+                message,
+                history,
+                recommended_skills,
+            };
+            tokio::spawn(async move {
+                let _ = stream.run(ctx, executor).await;
+            });
+        }
 
         Ok((handle, session_id))
-    }
-
-    /// Spawn the async execution task.
-    fn spawn_execution_task(&self, args: ExecutionTaskArgs) {
-        let ExecutionTaskArgs {
-            executor,
-            handle,
-            config,
-            message,
-            session_id,
-            execution_id,
-            mut history,
-            recommended_skills,
-        } = args;
-        let event_bus = self.event_bus.clone();
-        let agent_id = config.agent_id.clone();
-        let conversation_id = config.conversation_id.clone();
-        let conversation_repo = self.conversation_repo.clone();
-        let log_service = self.log_service.clone();
-        let state_service = self.state_service.clone();
-        let delegation_tx = self.delegation_tx.clone();
-        let connector_registry = self.connector_registry.clone();
-        let bridge_registry = self.bridge_registry.clone();
-        let bridge_outbox = self.bridge_outbox.clone();
-        let respond_to = config.respond_to.clone();
-        let thread_id = config.thread_id.clone();
-        let distiller = self.distiller.clone();
-        let paths = self.paths.clone();
-        let delegation_registry = self.delegation_registry.clone();
-        let handles = self.handles.clone();
-        let _skill_service = self.skill_service.clone();
-        let memory_repo = self.memory_repo.clone();
-        let graph_storage = self.graph_storage.clone();
-        let kg_episode_repo = self.kg_episode_repo.clone();
-
-        tokio::spawn(async move {
-            // Create batch writer for non-blocking DB writes (with conversation repo for session messages)
-            let batch_writer = spawn_batch_writer_with_repo(
-                state_service.clone(),
-                log_service.clone(),
-                Some(conversation_repo.clone()),
-            );
-
-            // Create stream context for event processing
-            let stream_ctx = StreamContext::new(
-                agent_id.clone(),
-                conversation_id.clone(),
-                session_id.clone(),
-                execution_id.clone(),
-                event_bus.clone(),
-                log_service.clone(),
-                state_service.clone(),
-                delegation_tx,
-                paths.vault_dir().clone(),
-            )
-            .with_batch_writer(batch_writer.clone())
-            .with_recommended_skills(recommended_skills.clone());
-
-            let mut response_acc = ResponseAccumulator::new();
-
-            // Append user message to session stream BEFORE execution
-            batch_writer.session_message(&session_id, &execution_id, "user", &message, None, None);
-
-            // Per-turn mutable state — kept in one struct so the event
-            // handlers take `&mut EventAccumulator` instead of 10 parameters.
-            let mut acc = EventAccumulator {
-                tool_acc: ToolCallAccumulator::new(),
-                turn_tool_calls: Vec::new(),
-                turn_text: String::new(),
-                working_memory: WorkingMemory::new(1500),
-                pending_recall_triggers: Vec::new(),
-                current_tool_name: String::new(),
-            };
-
-            // Seed working memory from recalled corrections (system messages)
-            for msg in &history {
-                if msg.role == "system" {
-                    let content = msg.text_content();
-                    if content.contains("Recalled") || content.contains("correction") {
-                        for line in content.lines() {
-                            let trimmed = line.trim().trim_start_matches("- ");
-                            if trimmed.starts_with("[correction]")
-                                || trimmed.starts_with("[pattern]")
-                            {
-                                acc.working_memory.add_correction(trimmed);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Inject working memory into history if it has content
-            if !acc.working_memory.is_empty() {
-                history.push(ChatMessage::system(acc.working_memory.format_for_prompt()));
-            }
-
-            // Immutable handler deps — constructed once, borrowed into each
-            // event handler call.
-            let session_id_inner = session_id.clone();
-            let execution_id_inner = execution_id.clone();
-            let agent_id_inner = agent_id.clone();
-            let batch_writer_inner = batch_writer.clone();
-            let kg_episode_repo_inner = kg_episode_repo.clone();
-            let graph_storage_inner = graph_storage.clone();
-
-            // Execute with streaming — closure dispatches into free-fn
-            // handlers defined at module scope (handle_tool_call_start,
-            // handle_tool_result). Keeps the spawn body flat.
-            let result = executor
-                .execute_stream(&message, &history, |event| {
-                    if handle.is_stop_requested() {
-                        return;
-                    }
-
-                    handle.increment();
-
-                    let deps = EventHandlerDeps {
-                        batch_writer: &batch_writer_inner,
-                        session_id: &session_id_inner,
-                        execution_id: &execution_id_inner,
-                        agent_id: &agent_id_inner,
-                        handle: &handle,
-                        kg_episode_repo: kg_episode_repo_inner.as_ref(),
-                        graph_storage: graph_storage_inner.as_ref(),
-                    };
-
-                    // Stream messages to session as they happen
-                    match &event {
-                        agent_runtime::StreamEvent::ToolCallStart {
-                            tool_id,
-                            tool_name,
-                            args,
-                            ..
-                        } => handle_tool_call_start(&mut acc, tool_id, tool_name, args),
-                        agent_runtime::StreamEvent::ToolResult {
-                            tool_id,
-                            result,
-                            error,
-                            ..
-                        } => handle_tool_result(&mut acc, &deps, tool_id, result, error.as_deref()),
-                        agent_runtime::StreamEvent::Token { content, .. } => {
-                            acc.turn_text.push_str(content);
-                        }
-                        _ => {}
-                    }
-
-                    // Process the event (logging, delegation, token tracking)
-                    let (gateway_event, response_delta) = process_stream_event(&stream_ctx, &event);
-
-                    // Accumulate response content
-                    if let Some(delta) = response_delta {
-                        response_acc.append(&delta);
-                    }
-
-                    // Broadcast the gateway event (if not an internal-only event)
-                    if let Some(event) = gateway_event {
-                        broadcast_event(stream_ctx.event_bus.clone(), event);
-                    }
-                })
-                .await;
-
-            // Execute micro-recall triggers collected during the stream
-            if !acc.pending_recall_triggers.is_empty() {
-                let recall_ctx = MicroRecallContext {
-                    memory_repo: memory_repo.clone(),
-                    graph_storage: graph_storage.clone(),
-                    agent_id: agent_id.clone(),
-                };
-                for (trigger, iter) in &acc.pending_recall_triggers {
-                    working_memory_middleware::execute_micro_recall_triggers(
-                        &mut acc.working_memory,
-                        std::slice::from_ref(trigger),
-                        &recall_ctx,
-                        *iter,
-                    )
-                    .await;
-                }
-            }
-
-            let accumulated_response = response_acc.into_response();
-
-            tracing::info!(
-                execution_id = %execution_id,
-                response_len = accumulated_response.len(),
-                tool_calls_count = acc.tool_acc.len(),
-                "Execution stream completed"
-            );
-
-            // Emit any remaining text that wasn't flushed as part of a tool-call turn.
-            // If turn_text is empty, the response was already written when the last
-            // ToolResult (e.g., from the respond tool) flushed it. Don't write again.
-            if !acc.turn_text.is_empty() {
-                batch_writer.session_message(
-                    &session_id,
-                    &execution_id,
-                    "assistant",
-                    &acc.turn_text,
-                    None,
-                    None,
-                );
-
-                // Log the response for session replay
-                let response_log = api_logs::ExecutionLog::new(
-                    &execution_id,
-                    &session_id,
-                    &agent_id,
-                    api_logs::LogLevel::Info,
-                    api_logs::LogCategory::Response,
-                    &accumulated_response,
-                );
-                batch_writer.log(response_log);
-            }
-
-            // Handle completion
-            match result {
-                Ok(()) => {
-                    // Check if this execution spawned delegations that are still active.
-                    // Use session.pending_delegations (set synchronously in handle_delegation)
-                    // rather than delegation_registry (populated asynchronously by spawn).
-                    let has_active_delegations = state_service
-                        .get_session(&session_id)
-                        .ok()
-                        .flatten()
-                        .map(|s| s.has_pending_delegations())
-                        .unwrap_or(false);
-
-                    if has_active_delegations {
-                        // Root paused for delegation — do NOT complete execution.
-                        // The continuation callback will handle completion.
-                        tracing::info!(
-                            session_id = %session_id,
-                            "Root paused for delegation — skipping execution completion"
-                        );
-
-                        // Request continuation so the session resumes when delegations complete
-                        if let Err(e) = state_service.request_continuation(&session_id) {
-                            tracing::warn!("Failed to request continuation: {}", e);
-                        }
-
-                        // Aggregate tokens so UI shows progress
-                        if let Err(e) = state_service.aggregate_session_tokens(&session_id) {
-                            tracing::warn!("Failed to aggregate session tokens: {}", e);
-                        }
-                    } else {
-                        // Normal completion — no active delegations
-                        complete_execution(CompleteExecution {
-                            state_service: &state_service,
-                            log_service: &log_service,
-                            event_bus: &event_bus,
-                            execution_id: &execution_id,
-                            session_id: &session_id,
-                            agent_id: &agent_id,
-                            conversation_id: &conversation_id,
-                            response: Some(accumulated_response),
-                            connector_registry: connector_registry.as_ref(),
-                            respond_to: respond_to.as_ref(),
-                            thread_id: thread_id.as_deref(),
-                            bridge_registry: bridge_registry.as_ref(),
-                            bridge_outbox: bridge_outbox.as_ref(),
-                        })
-                        .await;
-                    }
-
-                    // Ward AGENTS.md and memory-bank/ are curated manually by agents;
-                    // the runtime no longer rewrites them post-execution.
-                    let session_ward = state_service
-                        .get_session(&session_id)
-                        .ok()
-                        .flatten()
-                        .and_then(|s| s.ward_id);
-
-                    // Fire-and-forget session distillation, followed by ward artifact indexing.
-                    if let Some(distiller) = distiller.as_ref() {
-                        let distiller = distiller.clone();
-                        let sid = session_id.clone();
-                        let aid = agent_id.clone();
-                        let ward_id_for_indexer = session_ward.clone();
-                        let kg_episode_repo_for_indexer = kg_episode_repo.clone();
-                        let graph_storage_for_indexer = graph_storage.clone();
-                        let paths_for_indexer = paths.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = distiller.distill(&sid, &aid).await {
-                                tracing::warn!("Session distillation failed: {}", e);
-                            }
-                            run_ward_artifact_indexer(
-                                &ward_id_for_indexer,
-                                &sid,
-                                &aid,
-                                kg_episode_repo_for_indexer.as_ref(),
-                                graph_storage_for_indexer.as_ref(),
-                                &paths_for_indexer,
-                            )
-                            .await;
-                        });
-                    }
-                }
-                Err(e) => {
-                    // Crash execution and emit events
-                    crash_execution(CrashExecution {
-                        state_service: &state_service,
-                        log_service: &log_service,
-                        event_bus: &event_bus,
-                        execution_id: &execution_id,
-                        session_id: &session_id,
-                        agent_id: &agent_id,
-                        conversation_id: &conversation_id,
-                        error: &e.to_string(),
-                        crash_session: true, // crash session for root execution
-                    })
-                    .await;
-
-                    // Cancel any orphaned delegations for this session
-                    cancel_session_delegations(
-                        &session_id,
-                        &delegation_registry,
-                        &handles,
-                        &state_service,
-                    )
-                    .await;
-                }
-            }
-
-            // Check if stopped
-            if handle.is_stop_requested() {
-                stop_execution(StopExecution {
-                    state_service: &state_service,
-                    log_service: &log_service,
-                    event_bus: &event_bus,
-                    execution_id: &execution_id,
-                    session_id: &session_id,
-                    agent_id: &agent_id,
-                    conversation_id: &conversation_id,
-                    iteration: handle.current_iteration(),
-                })
-                .await;
-            }
-        });
     }
 
     /// Stop an execution by conversation ID.
@@ -2559,7 +2093,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
 
 /// Cancel all in-flight delegations for a session.
 /// Called when root execution completes or crashes to prevent orphaned subagents.
-async fn cancel_session_delegations(
+pub(super) async fn cancel_session_delegations(
     session_id: &str,
     delegation_registry: &crate::delegation::DelegationRegistry,
     handles: &tokio::sync::RwLock<
@@ -2658,7 +2192,7 @@ fn find_latest_plan(specs_dir: &std::path::Path) -> Option<String> {
 /// Skips when the session has no ward (scratch), the KG episode repo is not wired,
 /// graph storage is unavailable, or the ward path does not exist on disk. All errors
 /// from the indexer are logged and never propagate — this must not crash the pipeline.
-async fn run_ward_artifact_indexer(
+pub(super) async fn run_ward_artifact_indexer(
     ward_id: &Option<String>,
     session_id: &str,
     agent_id: &str,
