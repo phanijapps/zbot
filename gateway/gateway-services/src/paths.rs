@@ -121,19 +121,19 @@ impl VaultPaths {
     }
 
     /// Path to the system-wide agent-installed skills directory
-    /// (`$HOME/.agent/skills`). Online services and CLI installers drop
+    /// (`$HOME/.agents/skills`). Online services and CLI installers drop
     /// skills here. Not tied to any single vault.
     ///
-    /// Returns `/.agent/skills` if `$HOME` cannot be resolved — that path
+    /// Returns `/.agents/skills` if `$HOME` cannot be resolved — that path
     /// won't exist on a real system, so the indexer treats it as empty.
     pub fn agent_skills_dir() -> PathBuf {
         dirs::home_dir()
-            .map(|h| h.join(".agent").join("skills"))
-            .unwrap_or_else(|| PathBuf::from("/.agent/skills"))
+            .map(|h| h.join(".agents").join("skills"))
+            .unwrap_or_else(|| PathBuf::from("/.agents/skills"))
     }
 
     /// Skills roots in priority order: vault first (user-owned, mutable),
-    /// then `$HOME/.agent/skills` (managed, read-only). When the same
+    /// then `$HOME/.agents/skills` (managed, read-only). When the same
     /// skill name appears in both, the loader keeps the vault copy.
     pub fn skills_dirs(&self) -> Vec<PathBuf> {
         vec![self.skills_dir(), Self::agent_skills_dir()]
@@ -301,14 +301,14 @@ mod tests {
 
     #[test]
     fn test_agent_skills_dir_is_under_home() {
-        // Either we get $HOME/.agent/skills, or — in a sandbox without HOME —
-        // the documented fallback. Both ends in `.agent/skills` so the
+        // Either we get $HOME/.agents/skills, or — in a sandbox without HOME —
+        // the documented fallback. Both end in `.agents/skills` so the
         // contract is stable for callers.
         let p = VaultPaths::agent_skills_dir();
         let s = p.to_string_lossy();
         assert!(
-            s.ends_with(".agent/skills"),
-            "agent_skills_dir must end with .agent/skills, got {}",
+            s.ends_with(".agents/skills"),
+            "agent_skills_dir must end with .agents/skills, got {}",
             s
         );
     }

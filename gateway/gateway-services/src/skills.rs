@@ -17,7 +17,7 @@ use tokio::sync::RwLock;
 pub enum SkillSource {
     /// User-owned skill under `<vault>/skills/`. Mutable.
     Vault,
-    /// Externally-installed skill under `$HOME/.agent/skills/`. Read-only
+    /// Externally-installed skill under `$HOME/.agents/skills/`. Read-only
     /// from this service — managed by whatever installer dropped it there.
     Agent,
 }
@@ -105,7 +105,7 @@ pub struct SkillFrontmatter {
 ///
 /// The first root is the **mutable vault root** — all create / update /
 /// delete operations target it. Subsequent roots are read-only sources
-/// (e.g. `$HOME/.agent/skills/`). When a skill name appears in multiple
+/// (e.g. `$HOME/.agents/skills/`). When a skill name appears in multiple
 /// roots, the one from the highest-priority (earliest) root wins; the
 /// shadowed copy is silently skipped.
 pub struct SkillService {
@@ -360,7 +360,7 @@ impl SkillService {
 
     /// Create a new skill. Always writes to the vault root. Returns an
     /// error if a skill with the same name already exists in the vault.
-    /// Skills shadowed in `~/.agent/skills/` are unaffected — the new
+    /// Skills shadowed in `~/.agents/skills/` are unaffected — the new
     /// vault entry will shadow them on the next list.
     pub async fn create(&self, skill: Skill) -> Result<Skill, String> {
         let vault = self.vault_root();
@@ -574,7 +574,7 @@ fn ensure_writable(source: SkillSource, op: &str, id: &str) -> Result<(), String
     match source {
         SkillSource::Vault => Ok(()),
         SkillSource::Agent => Err(format!(
-            "Cannot {op} skill '{id}': it is managed by ~/.agent/skills (read-only)"
+            "Cannot {op} skill '{id}': it is managed by ~/.agents/skills (read-only)"
         )),
     }
 }

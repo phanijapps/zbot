@@ -201,7 +201,7 @@ impl AppState {
         let skills_roots = paths.skills_dirs();
         let event_bus = Arc::new(EventBus::new());
         let agents = Arc::new(AgentService::new(agents_dir));
-        // Load skills from the vault first, then $HOME/.agent/skills.
+        // Load skills from the vault first, then $HOME/.agents/skills.
         // Vault wins when both roots provide a skill with the same name.
         let skills = Arc::new(SkillService::with_roots(skills_roots));
         let provider_service = Arc::new(ProviderService::new(paths.clone()));
