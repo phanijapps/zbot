@@ -936,7 +936,9 @@ impl ExecutionRunner {
     /// the runner is wrapped in `Arc`. Each field is cloned — the
     /// `model_registry` ArcSwap handle is cloned (not its inner value)
     /// so late-stored registries are visible at fire time.
-    fn make_continuation_invoker(&self) -> super::continuation_watcher::RunnerContinuationInvoker {
+    pub(super) fn make_continuation_invoker(
+        &self,
+    ) -> super::continuation_watcher::RunnerContinuationInvoker {
         super::continuation_watcher::RunnerContinuationInvoker {
             event_bus: self.event_bus.clone(),
             agent_service: self.agent_service.clone(),
@@ -961,57 +963,6 @@ impl ExecutionRunner {
             ingestion_adapter: self.ingestion_adapter.clone(),
             goal_adapter: self.goal_adapter.clone(),
         }
-    }
-
-    /// Bridge from [`crate::runner::SessionInvoker::spawn_continuation`] to
-    /// [`invoke_continuation`].
-    ///
-    /// Clears the continuation flag (to prevent double-trigger), then
-    /// assembles `ContinuationArgs` from `&self` exactly as the old
-    /// `spawn_continuation_handler` did and calls `invoke_continuation`.
-    ///
-    /// `pub(crate)` — only the `SessionInvoker` impl in
-    /// `session_invoker.rs` calls this.
-    pub(crate) async fn invoke_continuation_for_watcher(
-        &self,
-        session_id: String,
-        root_agent_id: String,
-    ) -> Result<(), String> {
-        // Clear continuation flag to prevent double-trigger.
-        if let Err(e) = self.state_service.clear_continuation(&session_id) {
-            tracing::warn!("Failed to clear continuation flag: {}", e);
-        }
-
-        invoke_continuation(ContinuationArgs {
-            session_id: &session_id,
-            root_agent_id: &root_agent_id,
-            event_bus: self.event_bus.clone(),
-            agent_service: self.agent_service.clone(),
-            provider_service: self.provider_service.clone(),
-            mcp_service: self.mcp_service.clone(),
-            skill_service: self.skill_service.clone(),
-            paths: self.paths.clone(),
-            conversation_repo: self.conversation_repo.clone(),
-            handles: self.handles.clone(),
-            delegation_registry: self.delegation_registry.clone(),
-            delegation_tx: self.delegation_tx.clone(),
-            log_service: self.log_service.clone(),
-            state_service: self.state_service.clone(),
-            workspace_cache: self.workspace_cache.clone(),
-            memory_repo: self.memory_repo.clone(),
-            embedding_client: self.embedding_client.clone(),
-            distiller: self.distiller.clone(),
-            memory_recall: self.memory_recall.clone(),
-            // Read the live registry at call time, not a stale capture.
-            // `load_full()` returns `Option<Arc<ModelRegistry>>` — exactly
-            // the shape `ContinuationArgs.model_registry` expects.
-            model_registry: self.model_registry.load_full(),
-            graph_storage: self.graph_storage.clone(),
-            kg_episode_repo: self.kg_episode_repo.clone(),
-            ingestion_adapter: self.ingestion_adapter.clone(),
-            goal_adapter: self.goal_adapter.clone(),
-        })
-        .await
     }
 
     /// Invoke an agent with a message.

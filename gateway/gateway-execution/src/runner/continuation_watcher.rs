@@ -10,7 +10,7 @@
 //! ## Spec deviations (intentional)
 //! - Struct has 2 fields (`event_bus`, `invoker`), not 3. `state_service`
 //!   was dropped because `clear_continuation` is now called inside
-//!   `ExecutionRunner::invoke_continuation_for_watcher` — the impl already
+//!   `RunnerContinuationInvoker::spawn_continuation` — the impl already
 //!   has access to `state_service` and clearing there keeps the watcher
 //!   free of that dependency.
 //! - `RunnerContinuationInvoker` is a private companion that holds the
@@ -187,10 +187,10 @@ impl ContinuationWatcher {
             .spawn_continuation(session_id.clone(), root_agent_id)
             .await
         {
-            tracing::warn!(
+            tracing::error!(
                 session_id = %session_id,
                 error = %e,
-                "ContinuationWatcher: spawn_continuation failed; continuation skipped"
+                "ContinuationWatcher: spawn_continuation failed"
             );
         }
     }

@@ -96,11 +96,8 @@ impl SessionInvoker for ExecutionRunner {
         session_id: String,
         root_agent_id: String,
     ) -> Result<(), String> {
-        // Route through the existing private invoke_continuation pathway.
-        // The runner already has every field invoke_continuation needs;
-        // this method constructs the ContinuationArgs from &self
-        // and delegates.
-        self.invoke_continuation_for_watcher(session_id, root_agent_id)
+        self.make_continuation_invoker()
+            .spawn_continuation(session_id, root_agent_id)
             .await
     }
 }
