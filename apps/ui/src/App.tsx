@@ -12,7 +12,6 @@ import {
   Loader2,
   AlertCircle,
   RefreshCw,
-  Eye,
   LayoutDashboard,
   Plug,
   Brain,
@@ -26,12 +25,11 @@ import { SetupWizard, SetupGuard } from "./features/setup";
 import { WebAgentsPanel } from "./features/agent/WebAgentsPanel";
 import { WebSettingsPanel } from "./features/settings/WebSettingsPanel";
 import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPanel";
-import { WebLogsPanel } from "./features/logs/WebLogsPanel";
-import { WebOpsDashboard } from "./features/ops/WebOpsDashboard";
 import { MemoryPage } from "./features/memory";
 import { ObservatoryPage } from "./features/observatory";
 import { QuickChat } from "./features/chat-v2";
 import { ResearchPage } from "./features/research-v2";
+import { MissionControlPage } from "./features/mission-control";
 import { AccentPicker } from "./components/AccentPicker";
 
 // ============================================================================
@@ -183,8 +181,10 @@ function App() {
               <WebAppShell connectionStatus={connectionStatus}>
                 <Routes>
                   <Route path="/" element={<Navigate to="/research" replace />} />
-                  <Route path="/dashboard" element={<WebOpsDashboard />} />
-                  <Route path="/logs" element={<WebLogsPanel />} />
+                  <Route path="/mission-control" element={<MissionControlPage />} />
+                  {/* Legacy redirects — Dashboard + Logs are now Mission Control. */}
+                  <Route path="/dashboard" element={<Navigate to="/mission-control" replace />} />
+                  <Route path="/logs" element={<Navigate to="/mission-control" replace />} />
                   <Route path="/memory" element={<MemoryPage />} />
                   <Route path="/observatory" element={<ObservatoryPage />} />
                   <Route path="/agents" element={<WebAgentsPanel />} />
@@ -234,10 +234,9 @@ export interface NavItem {
 export const navItems: NavItem[] = [
   { to: "/research", label: "Research", icon: Search, matchPrefix: true },
   { to: "/chat", label: "Quick chat", icon: MessageSquare },
-  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/mission-control", label: "Mission Control", icon: LayoutDashboard },
   { to: "/agents", label: "Agents", icon: Bot },
   { to: "/memory", label: "Memory", icon: Brain },
-  { to: "/logs", label: "Logs", icon: Eye },
   { to: "/observatory", label: "Observatory", icon: Network },
   { to: "/integrations", label: "Integrations", icon: Plug },
   { to: "/settings", label: "Settings", icon: Settings },
