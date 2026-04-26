@@ -1,55 +1,53 @@
-//! # SessionInvoker
+//! # Narrow invoker traits
 //!
-//! Narrow seam runner handlers depend on instead of holding
-//! `Arc<ExecutionRunner>`. Three methods, one per spawn shape:
+//! Three single-method traits replacing the original three-method
+//! `SessionInvoker`. Each handler depends on exactly the trait it needs:
 //!
-//! - `spawn_session` — fresh session (used by direct API callers).
-//! - `spawn_continuation` — resume an existing root execution
-//!   (used by ContinuationWatcher). Routes to `invoke_continuation`
-//!   on the real impl, which reactivates the session, loads
-//!   history, prepends recall, builds the continuation message
-//!   with plan injection, and runs the re-delegation + distillation
-//!   tail-effects.
-//! - `spawn_delegation` — spawn a delegated subagent from a
-//!   `DelegationRequest` (used by `DelegationDispatcher`). Does far
-//!   more than `spawn_session`: creates a child session, registers
-//!   the delegation context, emits delegation events, injects ward
-//!   context + subagent rules + recall priming, and handles the
-//!   `OwnedSemaphorePermit` that gates global concurrency.
+//! - [`SessionSpawner`]    — fresh session (direct API callers).
+//! - [`ContinuationSpawner`] — resume an existing root execution
+//!   (used by [`super::continuation_watcher::ContinuationWatcher`]).
+//! - [`DelegationSpawner`] — spawn a delegated subagent from a
+//!   [`DelegationRequest`] (used by [`super::delegation_dispatcher::DelegationDispatcher`]).
+//!
+//! [`ExecutionRunner`] implements all three so it can be passed wherever
+//! any of the traits is required. The companion structs
+//! (`RunnerContinuationInvoker`, `RunnerDelegationInvoker`) implement
+//! exactly ONE trait each — no more typed-error stubs.
 
-use crate::config::ExecutionConfig;
 use async_trait::async_trait;
-#[cfg(any(test, feature = "test-stubs"))]
-use std::sync::Mutex;
 use tokio::sync::OwnedSemaphorePermit;
 
+use crate::config::ExecutionConfig;
 use crate::delegation::DelegationRequest;
 
-#[async_trait]
-pub trait SessionInvoker: Send + Sync {
-    /// Spawn (or resume) a session. Wraps whatever the runner needs to
-    /// do internally — handler callers pass config + message and don't
-    /// see the bootstrap → stream pipeline.
-    async fn spawn_session(&self, config: ExecutionConfig, message: String) -> Result<(), String>;
+// ============================================================================
+// Narrow traits
+// ============================================================================
 
-    /// Resume an existing root execution. The handler does NOT pass a
-    /// message — the impl loads history, prepends recall, and builds
-    /// the continuation message itself (preserves the legacy
-    /// `invoke_continuation` flow).
+/// Spawn a fresh root session.
+#[async_trait]
+pub trait SessionSpawner: Send + Sync {
+    async fn spawn_session(&self, config: ExecutionConfig, message: String) -> Result<(), String>;
+}
+
+/// Resume an existing root execution (continuation path).
+///
+/// The impl loads history, prepends recall, and builds the continuation
+/// message itself — callers do NOT supply a message.
+#[async_trait]
+pub trait ContinuationSpawner: Send + Sync {
     async fn spawn_continuation(
         &self,
         session_id: String,
         root_agent_id: String,
     ) -> Result<(), String>;
+}
 
-    /// Spawn a delegated subagent. `permit` is the already-acquired
-    /// global concurrency permit; it is held for the duration of the
-    /// child execution by the impl.
-    ///
-    /// The full `spawn_delegated_agent` pipeline runs here: child
-    /// session creation, delegation registry, event emission, ward
-    /// context injection, recall priming, executor build + run,
-    /// success/failure callbacks, and continuation trigger.
+/// Spawn a delegated subagent. `permit` is the already-acquired global
+/// concurrency permit; the impl holds it for the duration of the child
+/// execution.
+#[async_trait]
+pub trait DelegationSpawner: Send + Sync {
     async fn spawn_delegation(
         &self,
         request: DelegationRequest,
@@ -57,9 +55,16 @@ pub trait SessionInvoker: Send + Sync {
     ) -> Result<(), String>;
 }
 
-/// Test-only impl that records every call. Handlers under test inject
-/// this instead of the real `ExecutionRunner` so loop logic can be
-/// exercised without booting the executor pipeline.
+// ============================================================================
+// Test stubs
+// ============================================================================
+
+/// Test-only stub that records every call. Implements all three traits so
+/// it can be injected into any handler under test without booting the real
+/// executor pipeline.
+#[cfg(any(test, feature = "test-stubs"))]
+use std::sync::Mutex;
+
 #[cfg(any(test, feature = "test-stubs"))]
 pub struct StubSessionInvoker {
     pub calls: Mutex<Vec<(ExecutionConfig, String)>>,
@@ -87,12 +92,16 @@ impl Default for StubSessionInvoker {
 
 #[cfg(any(test, feature = "test-stubs"))]
 #[async_trait]
-impl SessionInvoker for StubSessionInvoker {
+impl SessionSpawner for StubSessionInvoker {
     async fn spawn_session(&self, config: ExecutionConfig, message: String) -> Result<(), String> {
         self.calls.lock().unwrap().push((config, message));
         Ok(())
     }
+}
 
+#[cfg(any(test, feature = "test-stubs"))]
+#[async_trait]
+impl ContinuationSpawner for StubSessionInvoker {
     async fn spawn_continuation(
         &self,
         session_id: String,
@@ -104,7 +113,11 @@ impl SessionInvoker for StubSessionInvoker {
             .push((session_id, root_agent_id));
         Ok(())
     }
+}
 
+#[cfg(any(test, feature = "test-stubs"))]
+#[async_trait]
+impl DelegationSpawner for StubSessionInvoker {
     async fn spawn_delegation(
         &self,
         request: DelegationRequest,
@@ -115,15 +128,21 @@ impl SessionInvoker for StubSessionInvoker {
     }
 }
 
-// The real impl for `ExecutionRunner` lives below — wraps existing invoke().
+// ============================================================================
+// ExecutionRunner impls (all three traits — it's the "do everything" type)
+// ============================================================================
+
 use super::core::ExecutionRunner;
 
 #[async_trait]
-impl SessionInvoker for ExecutionRunner {
+impl SessionSpawner for ExecutionRunner {
     async fn spawn_session(&self, config: ExecutionConfig, message: String) -> Result<(), String> {
         self.invoke(config, message).await.map(|_| ())
     }
+}
 
+#[async_trait]
+impl ContinuationSpawner for ExecutionRunner {
     async fn spawn_continuation(
         &self,
         session_id: String,
@@ -133,7 +152,10 @@ impl SessionInvoker for ExecutionRunner {
             .spawn_continuation(session_id, root_agent_id)
             .await
     }
+}
 
+#[async_trait]
+impl DelegationSpawner for ExecutionRunner {
     async fn spawn_delegation(
         &self,
         request: DelegationRequest,

@@ -7,13 +7,13 @@
 //! ## Architecture
 //!
 //! `DelegationDispatcher` is a 3-field struct: it holds only the concurrency
-//! semaphore, the inbound request channel, and a `SessionInvoker`. Everything
+//! semaphore, the inbound request channel, and a [`DelegationSpawner`]. Everything
 //! else (the 21 deps that `spawn_delegated_agent` needs) lives inside the
 //! `RunnerDelegationInvoker` companion, which is constructed by
 //! `ExecutionRunner::make_delegation_invoker()` and injected at wire-up time.
 //!
-//! This keeps the dispatcher testable with a `StubSessionInvoker` (3 fields
-//! → 3 things to mock) while keeping the production path complete.
+//! This keeps the dispatcher testable with a `StubSessionInvoker` (one trait
+//! method per stub) while keeping the production path complete.
 //!
 //! ## Queue semantics
 //!
@@ -37,18 +37,17 @@ use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPat
 use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio::task::JoinHandle;
 
-use crate::config::ExecutionConfig;
 use crate::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
 use crate::handle::ExecutionHandle;
 use crate::invoke::WorkspaceCache;
-use crate::runner::session_invoker::SessionInvoker;
+use crate::runner::session_invoker::DelegationSpawner;
 
 /// Dispatcher that enforces per-session sequential ordering and global
 /// concurrency cap for subagent delegations.
 pub struct DelegationDispatcher {
     pub delegation_rx: mpsc::UnboundedReceiver<DelegationRequest>,
     pub delegation_semaphore: Arc<Semaphore>,
-    pub invoker: Arc<dyn SessionInvoker>,
+    pub invoker: Arc<dyn DelegationSpawner>,
 }
 
 impl DelegationDispatcher {
@@ -195,7 +194,7 @@ impl DelegationDispatcher {
 // ============================================================================
 
 /// Companion to `ExecutionRunner` that holds the subset of runner fields
-/// needed to call `spawn_delegated_agent`, implementing `SessionInvoker`
+/// needed to call `spawn_delegated_agent`, implementing [`DelegationSpawner`]
 /// so `DelegationDispatcher` remains decoupled from the concrete runner type.
 ///
 /// Constructed via [`ExecutionRunner::make_delegation_invoker`] inside
@@ -234,23 +233,7 @@ pub(crate) struct RunnerDelegationInvoker {
 }
 
 #[async_trait]
-impl SessionInvoker for RunnerDelegationInvoker {
-    async fn spawn_session(
-        &self,
-        _config: ExecutionConfig,
-        _message: String,
-    ) -> Result<(), String> {
-        Err("RunnerDelegationInvoker only handles delegations; spawn_session must be routed via a session-capable invoker".to_string())
-    }
-
-    async fn spawn_continuation(
-        &self,
-        _session_id: String,
-        _root_agent_id: String,
-    ) -> Result<(), String> {
-        Err("RunnerDelegationInvoker only handles delegations; spawn_continuation must be routed via ContinuationWatcher's invoker".to_string())
-    }
-
+impl DelegationSpawner for RunnerDelegationInvoker {
     async fn spawn_delegation(
         &self,
         request: DelegationRequest,

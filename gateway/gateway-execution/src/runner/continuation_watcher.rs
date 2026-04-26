@@ -1,7 +1,7 @@
 //! # ContinuationWatcher
 //!
 //! 2-field handler that listens for [`GatewayEvent::SessionContinuationReady`]
-//! and invokes the session continuation path through [`SessionInvoker`].
+//! and invokes the session continuation path through [`ContinuationSpawner`].
 //!
 //! Extracted from the inline `spawn_continuation_handler` closure in
 //! `ExecutionRunner::new` so that the event-loop contract can be tested
@@ -20,7 +20,7 @@
 
 use super::core::invoke_continuation;
 use super::core::ContinuationArgs;
-use super::session_invoker::SessionInvoker;
+use super::session_invoker::ContinuationSpawner;
 use api_logs::LogService;
 use async_trait::async_trait;
 use execution_state::StateService;
@@ -29,9 +29,8 @@ use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc, OwnedSemaphorePermit, RwLock};
+use tokio::sync::{broadcast, mpsc, RwLock};
 
-use crate::config::ExecutionConfig;
 use crate::delegation::{DelegationRegistry, DelegationRequest};
 use crate::handle::ExecutionHandle;
 use crate::invoke::WorkspaceCache;
@@ -41,8 +40,8 @@ use crate::invoke::WorkspaceCache;
 // ============================================================================
 
 /// Companion to `ExecutionRunner` that holds the subset of runner fields
-/// needed to call `invoke_continuation`, implementing `SessionInvoker` so
-/// `ContinuationWatcher` remains decoupled from the concrete runner type.
+/// needed to call `invoke_continuation`, implementing [`ContinuationSpawner`]
+/// so `ContinuationWatcher` remains decoupled from the concrete runner type.
 ///
 /// Constructed via [`ExecutionRunner::make_continuation_invoker`] inside
 /// `with_config` — before the runner is wrapped in `Arc` — so that each
@@ -81,15 +80,7 @@ pub(crate) struct RunnerContinuationInvoker {
 }
 
 #[async_trait]
-impl SessionInvoker for RunnerContinuationInvoker {
-    async fn spawn_session(
-        &self,
-        _config: ExecutionConfig,
-        _message: String,
-    ) -> Result<(), String> {
-        Err("RunnerContinuationInvoker only handles continuations; spawn_session must be routed via a session-capable invoker".to_string())
-    }
-
+impl ContinuationSpawner for RunnerContinuationInvoker {
     async fn spawn_continuation(
         &self,
         session_id: String,
@@ -129,14 +120,6 @@ impl SessionInvoker for RunnerContinuationInvoker {
         })
         .await
     }
-
-    async fn spawn_delegation(
-        &self,
-        _request: DelegationRequest,
-        _permit: Option<OwnedSemaphorePermit>,
-    ) -> Result<(), String> {
-        Err("RunnerContinuationInvoker only handles continuations; spawn_delegation must be routed via DelegationDispatcher's invoker".to_string())
-    }
 }
 
 // ============================================================================
@@ -144,10 +127,10 @@ impl SessionInvoker for RunnerContinuationInvoker {
 // ============================================================================
 
 /// Listens for `SessionContinuationReady` events and invokes the continuation
-/// path via the injected `SessionInvoker`.
+/// path via the injected [`ContinuationSpawner`].
 pub struct ContinuationWatcher {
     pub event_bus: Arc<EventBus>,
-    pub invoker: Arc<dyn SessionInvoker>,
+    pub invoker: Arc<dyn ContinuationSpawner>,
 }
 
 impl ContinuationWatcher {
@@ -190,7 +173,7 @@ impl ContinuationWatcher {
         })
     }
 
-    async fn handle(invoker: &dyn SessionInvoker, session_id: String, root_agent_id: String) {
+    async fn handle(invoker: &dyn ContinuationSpawner, session_id: String, root_agent_id: String) {
         if let Err(e) = invoker
             .spawn_continuation(session_id.clone(), root_agent_id)
             .await

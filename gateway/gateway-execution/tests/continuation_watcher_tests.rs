@@ -11,7 +11,7 @@
 use execution_state::StateService;
 use gateway_database::DatabaseManager;
 use gateway_events::{EventBus, GatewayEvent};
-use gateway_execution::runner::{ContinuationWatcher, StubSessionInvoker};
+use gateway_execution::runner::{ContinuationSpawner, ContinuationWatcher, StubSessionInvoker};
 use gateway_services::VaultPaths;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -114,34 +114,19 @@ async fn watcher_invokes_session_on_continuation_ready_event() {
 /// processing subsequent events (it does not crash or stop).
 #[tokio::test]
 async fn watcher_continues_after_invoker_error() {
-    // A failing invoker that counts calls.
+    // A failing invoker that counts calls — implements only ContinuationSpawner.
     struct FailingInvoker(Arc<AtomicU32>);
 
     #[async_trait::async_trait]
-    impl gateway_execution::runner::SessionInvoker for FailingInvoker {
-        async fn spawn_session(
-            &self,
-            _: gateway_execution::config::ExecutionConfig,
-            _: String,
-        ) -> Result<(), String> {
-            unimplemented!("not used in this test")
-        }
+    impl ContinuationSpawner for FailingInvoker {
         async fn spawn_continuation(&self, _: String, _: String) -> Result<(), String> {
             self.0.fetch_add(1, Ordering::SeqCst);
             Err("simulated".into())
         }
-        async fn spawn_delegation(
-            &self,
-            _: gateway_execution::delegation::DelegationRequest,
-            _: Option<tokio::sync::OwnedSemaphorePermit>,
-        ) -> Result<(), String> {
-            unimplemented!("not used in this test")
-        }
     }
 
     let counter = Arc::new(AtomicU32::new(0));
-    let failing: Arc<dyn gateway_execution::runner::SessionInvoker> =
-        Arc::new(FailingInvoker(counter.clone()));
+    let failing: Arc<dyn ContinuationSpawner> = Arc::new(FailingInvoker(counter.clone()));
 
     let bus = Arc::new(EventBus::new());
     let watcher = ContinuationWatcher {

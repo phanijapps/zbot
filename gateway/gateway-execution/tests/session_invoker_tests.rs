@@ -1,11 +1,11 @@
-//! SessionInvoker — trait surface + stub recording.
+//! Narrow invoker traits — stub recording tests.
 //!
 //! Run with: cargo test -p gateway-execution --test session_invoker_tests --features test-stubs
 
 #![cfg(feature = "test-stubs")]
 
 use gateway_execution::config::ExecutionConfig;
-use gateway_execution::runner::{SessionInvoker, StubSessionInvoker};
+use gateway_execution::runner::{SessionSpawner, StubSessionInvoker};
 use std::path::PathBuf;
 
 #[tokio::test]
