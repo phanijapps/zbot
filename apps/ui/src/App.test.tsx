@@ -21,10 +21,13 @@ describe("navItems (top-bar order)", () => {
     const labels = navItems.map((i) => i.label);
     expect(labels).toContain("Research");
     expect(labels).toContain("Quick chat");
-    expect(labels).toContain("Dashboard");
+    expect(labels).toContain("Mission Control");
     expect(labels).toContain("Agents");
     expect(labels).toContain("Memory");
-    expect(labels).toContain("Logs");
+    // Dashboard + Logs are consolidated into Mission Control (PR adds the
+    // /dashboard and /logs redirects). Asserting they're absent locks that in.
+    expect(labels).not.toContain("Dashboard");
+    expect(labels).not.toContain("Logs");
     expect(labels).toContain("Observatory");
     expect(labels).toContain("Integrations");
     expect(labels).toContain("Settings");

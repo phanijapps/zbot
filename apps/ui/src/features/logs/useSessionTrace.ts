@@ -100,10 +100,14 @@ function extractAgentFromMessage(message: string): string | undefined {
   return match ? match[1].trim() : undefined;
 }
 
-function extractMetaField(log: ExecutionLog, field: string): string | undefined {
+export function extractMetaField(log: ExecutionLog, field: string): string | undefined {
   if (!log.metadata) return undefined;
   const val = log.metadata[field];
   if (val === undefined || val === null) return undefined;
+  // Objects/arrays must be JSON-stringified — String({}) yields "[object Object]",
+  // which then surfaces verbatim in the tool detail popover (and bypasses the
+  // pretty-printer because it has nothing valid to parse).
+  if (typeof val === "object") return JSON.stringify(val);
   return String(val);
 }
 
