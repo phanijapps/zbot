@@ -8,6 +8,7 @@ mod continuation_watcher;
 pub(super) mod core;
 mod delegation_dispatcher;
 mod execution_stream;
+mod invoke_bootstrap;
 mod session_invoker;
 
 pub use continuation_watcher::ContinuationWatcher;

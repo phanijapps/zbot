@@ -26,10 +26,6 @@ use tokio::sync::{mpsc, RwLock, Semaphore};
 pub type OnSessionReady =
     Box<dyn FnOnce(String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
 
-use crate::middleware::intent_analysis::{
-    analyze_intent, format_intent_injection, index_resources,
-};
-
 // Import types from sibling modules
 pub use crate::config::ExecutionConfig;
 use crate::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
@@ -40,8 +36,8 @@ use crate::invoke::{
     ToolCallAccumulator, WorkspaceCache,
 };
 use crate::lifecycle::{
-    complete_execution, crash_execution, emit_agent_started, get_or_create_session,
-    start_execution, stop_execution, CompleteExecution, CrashExecution, StopExecution,
+    complete_execution, crash_execution, emit_agent_started, stop_execution, CompleteExecution,
+    CrashExecution, StopExecution,
 };
 
 // ============================================================================
@@ -123,6 +119,10 @@ pub struct ExecutionRunner {
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     /// Adapter for the `goal` agent tool. Wired via [`Self::set_goal_adapter`].
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+    /// Pre-session setup delegate. Holds the dependency set needed by
+    /// `invoke_with_callback`'s bootstrap phase, extracted here so
+    /// `setup()` can be tested and read independently of the full runner.
+    bootstrap: super::invoke_bootstrap::InvokeBootstrap,
 }
 
 /// All inputs needed to construct an [`ExecutionRunner`].
@@ -195,46 +195,6 @@ pub(super) struct ContinuationArgs<'a> {
     pub(super) kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
-}
-
-/// Borrowed inputs for [`ExecutionRunner::run_intent_analysis`]. Same
-/// life-cycle + field conventions as the other runner context structs.
-struct IntentAnalysisCtx<'a> {
-    agent: &'a gateway_services::agents::Agent,
-    provider: &'a gateway_services::providers::Provider,
-    config: &'a ExecutionConfig,
-    session_id: &'a str,
-    execution_id: &'a str,
-    is_root: bool,
-    user_message: Option<&'a str>,
-    fact_store: Option<&'a Arc<dyn zero_core::MemoryFactStore>>,
-}
-
-/// What [`ExecutionRunner::run_intent_analysis`] returns on success — the
-/// downstream consumers of intent analysis inside `create_executor`.
-struct IntentOutcome {
-    recommended_skills: Vec<String>,
-    instructions_injection: String,
-}
-
-/// Borrowed inputs for [`ExecutionRunner::create_executor`]. Previously
-/// 8 positional args with *four* silent-swap hazards:
-///
-/// - `session_id: &str` ↔ `execution_id: &str` (same type, consecutive)
-/// - `ward_id: Option<&str>` ↔ `user_message: Option<&str>` (same type,
-///   adjacent)
-/// - `is_root: bool` (Boolean trap)
-///
-/// Named-field construction makes all four compile-checkable.
-struct CreateExecutorArgs<'a> {
-    agent: &'a gateway_services::agents::Agent,
-    provider: &'a gateway_services::providers::Provider,
-    config: &'a ExecutionConfig,
-    session_id: &'a str,
-    ward_id: Option<&'a str>,
-    is_root: bool,
-    user_message: Option<&'a str>,
-    execution_id: &'a str,
 }
 
 /// Prepend recalled facts to `history` as a system message at position 0.
@@ -331,7 +291,7 @@ async fn build_continuation_message(
 /// `invoke_continuation`. Extracted here so the ~55-line `set_recall_hook`
 /// invocation lives in exactly one place; either call site that forgets it
 /// must explicitly opt out rather than silently diverge.
-fn attach_mid_session_recall_hook(
+pub(super) fn attach_mid_session_recall_hook(
     executor: &mut AgentExecutor,
     memory_recall: Option<&Arc<crate::recall::MemoryRecall>>,
     agent_id: &str,
@@ -424,6 +384,48 @@ impl ExecutionRunner {
         // Create channel for delegation requests
         let (delegation_tx, delegation_rx) = mpsc::unbounded_channel::<DelegationRequest>();
 
+        // Shared data structures — constructed once and Arc-cloned into both the
+        // runner fields and the bootstrap.
+        let handles: Arc<RwLock<HashMap<String, ExecutionHandle>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        let delegation_registry = Arc::new(DelegationRegistry::new());
+        let delegation_semaphore = Arc::new(Semaphore::new(max_parallel_agents as usize));
+        let model_registry: Arc<arc_swap::ArcSwapOption<gateway_services::models::ModelRegistry>> =
+            Arc::new(arc_swap::ArcSwapOption::from(None));
+        let rate_limiters: std::sync::Arc<
+            std::sync::RwLock<
+                std::collections::HashMap<
+                    String,
+                    std::sync::Arc<agent_runtime::ProviderRateLimiter>,
+                >,
+            >,
+        > = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+
+        let bootstrap = super::invoke_bootstrap::InvokeBootstrap {
+            agent_service: agent_service.clone(),
+            provider_service: provider_service.clone(),
+            mcp_service: mcp_service.clone(),
+            skill_service: skill_service.clone(),
+            state_service: state_service.clone(),
+            log_service: log_service.clone(),
+            conversation_repo: conversation_repo.clone(),
+            paths: paths.clone(),
+            memory_repo: memory_repo.clone(),
+            memory_recall: memory_recall.clone(),
+            embedding_client: embedding_client.clone(),
+            model_registry: model_registry.clone(),
+            rate_limiters: rate_limiters.clone(),
+            connector_registry: connector_registry.clone(),
+            bridge_registry: bridge_registry.clone(),
+            bridge_outbox: bridge_outbox.clone(),
+            graph_storage: None,
+            ingestion_adapter: None,
+            goal_adapter: None,
+            event_bus: event_bus.clone(),
+            handles: handles.clone(),
+            workspace_cache: workspace_cache.clone(),
+        };
+
         let runner = Self {
             event_bus,
             agent_service,
@@ -431,9 +433,9 @@ impl ExecutionRunner {
             mcp_service,
             skill_service,
             paths,
-            handles: Arc::new(RwLock::new(HashMap::new())),
+            handles,
             conversation_repo,
-            delegation_registry: Arc::new(DelegationRegistry::new()),
+            delegation_registry,
             delegation_tx,
             log_service,
             state_service,
@@ -444,16 +446,15 @@ impl ExecutionRunner {
             memory_repo,
             distiller,
             memory_recall,
-            delegation_semaphore: Arc::new(Semaphore::new(max_parallel_agents as usize)),
+            delegation_semaphore,
             embedding_client,
-            model_registry: Arc::new(arc_swap::ArcSwapOption::from(None)),
-            rate_limiters: std::sync::Arc::new(std::sync::RwLock::new(
-                std::collections::HashMap::new(),
-            )),
+            model_registry,
+            rate_limiters,
             graph_storage: None,
             kg_episode_repo: None,
             ingestion_adapter: None,
             goal_adapter: None,
+            bootstrap,
         };
 
         // Spawn delegation handler task — extracted into DelegationDispatcher.
@@ -489,6 +490,7 @@ impl ExecutionRunner {
 
     /// Set the knowledge graph storage for the graph_query tool.
     pub fn set_graph_storage(&mut self, storage: Arc<knowledge_graph::GraphStorage>) {
+        self.bootstrap.graph_storage = Some(storage.clone());
         self.graph_storage = Some(storage);
     }
 
@@ -499,44 +501,14 @@ impl ExecutionRunner {
 
     /// Set the ingestion adapter so the `ingest` agent tool is registered.
     pub fn set_ingestion_adapter(&mut self, adapter: Arc<dyn agent_tools::IngestionAccess>) {
+        self.bootstrap.ingestion_adapter = Some(adapter.clone());
         self.ingestion_adapter = Some(adapter);
     }
 
     /// Set the goal adapter so the `goal` agent tool is registered.
     pub fn set_goal_adapter(&mut self, adapter: Arc<dyn agent_tools::GoalAccess>) {
+        self.bootstrap.goal_adapter = Some(adapter.clone());
         self.goal_adapter = Some(adapter);
-    }
-
-    /// Get or create a shared rate limiter for a provider.
-    ///
-    /// Rate limiters are created once per provider and shared across all executors
-    /// (root and subagents) so they share the same concurrent-request and RPM buckets.
-    fn get_rate_limiter(
-        &self,
-        provider: &gateway_services::providers::Provider,
-    ) -> std::sync::Arc<agent_runtime::ProviderRateLimiter> {
-        let provider_id = provider.id.clone().unwrap_or_else(|| provider.name.clone());
-        let rate_limits = provider.effective_rate_limits();
-
-        // Check if exists (fast path — read lock)
-        if let Ok(guard) = self.rate_limiters.read() {
-            if let Some(limiter) = guard.get(&provider_id) {
-                return limiter.clone();
-            }
-        }
-
-        // Create new limiter and insert (write lock)
-        let limiter = std::sync::Arc::new(agent_runtime::ProviderRateLimiter::new(
-            rate_limits.concurrent_requests,
-            rate_limits.requests_per_minute,
-        ));
-
-        if let Ok(mut guard) = self.rate_limiters.write() {
-            // Use entry API to avoid overwriting if another thread raced us
-            guard.entry(provider_id).or_insert_with(|| limiter.clone());
-        }
-
-        limiter
     }
 
     /// Build a [`RunnerContinuationInvoker`] from this runner's fields.
@@ -637,249 +609,51 @@ impl ExecutionRunner {
         message: String,
         on_session_ready: Option<OnSessionReady>,
     ) -> Result<(ExecutionHandle, String), String> {
-        let handle = ExecutionHandle::new(config.max_iterations);
-        let handle_clone = handle.clone();
+        // Run per-session setup (session creation, history loading, executor build).
+        let setup = self.bootstrap.setup(&mut config, &message).await?;
 
-        // Get or create session and execution
-        let setup = get_or_create_session(
-            &self.state_service,
-            &config.agent_id,
-            config.session_id.as_deref(),
-            config.source,
-        );
-        let session_id = setup.session_id;
-        let execution_id = setup.execution_id;
-
-        // If session has a persisted mode, use it (overrides invoke mode)
-        if let Ok(Some(session)) = self.state_service.get_session(&session_id) {
-            if let Some(ref persisted_mode) = session.mode {
-                config.mode = Some(persisted_mode.clone());
-            }
+        // Fire the optional session-ready callback BEFORE spawning the stream
+        // (preserves the original ordering — caller subscribes to events before
+        // any are emitted).
+        if let Some(cb) = on_session_ready {
+            cb(setup.session_id.clone()).await;
         }
 
-        // Persist routing fields on the session (thread_id, connector_id, respond_to)
-        if config.thread_id.is_some()
-            || config.connector_id.is_some()
-            || config.respond_to.is_some()
-        {
-            if let Err(e) = self.state_service.update_session_routing(
-                &session_id,
-                config.thread_id.as_deref(),
-                config.connector_id.as_deref(),
-                config.respond_to.as_ref(),
-            ) {
-                tracing::warn!("Failed to persist session routing: {}", e);
-            }
-        }
-
-        // Start execution and log
-        start_execution(
-            &self.state_service,
-            &self.log_service,
-            &execution_id,
-            &session_id,
-            &config.agent_id,
-            None,
-        );
-
-        // Store handle
-        {
-            let mut handles = self.handles.write().await;
-            handles.insert(config.conversation_id.clone(), handle.clone());
-        }
-
-        // Notify caller so it can subscribe before events fire
-        if let Some(callback) = on_session_ready {
-            callback(session_id.clone()).await;
-        }
-
-        // Emit start event
-        emit_agent_started(
-            &self.event_bus,
-            &config.agent_id,
-            &config.conversation_id,
-            &session_id,
-            &execution_id,
-        )
-        .await;
-
-        // Load agent configuration (or create default for "root" agent)
-        let settings_for_loader = gateway_services::SettingsService::new(self.paths.clone());
-        let agent_loader = AgentLoader::new(
-            &self.agent_service,
-            &self.provider_service,
-            self.paths.clone(),
-        )
-        .with_settings(&settings_for_loader)
-        .with_chat_mode(config.is_chat_mode());
-        let (agent, provider) = match agent_loader.load_or_create_root(&config.agent_id).await {
-            Ok(result) => result,
-            Err(e) => {
-                self.emit_error(&config.conversation_id, &config.agent_id, &e)
-                    .await;
-                return Err(e);
-            }
+        // Assemble the per-execution stream + context exactly as the old call site did.
+        let stream = super::execution_stream::ExecutionStream {
+            event_bus: self.event_bus.clone(),
+            state_service: self.state_service.clone(),
+            log_service: self.log_service.clone(),
+            conversation_repo: self.conversation_repo.clone(),
+            delegation_tx: self.delegation_tx.clone(),
+            delegation_registry: self.delegation_registry.clone(),
+            handles: self.handles.clone(),
+            distiller: self.distiller.clone(),
+            kg_episode_repo: self.kg_episode_repo.clone(),
+            graph_storage: self.graph_storage.clone(),
+            paths: self.paths.clone(),
+            memory_repo: self.memory_repo.clone(),
+            connector_registry: self.connector_registry.clone(),
+            bridge_registry: self.bridge_registry.clone(),
+            bridge_outbox: self.bridge_outbox.clone(),
         };
-
-        // Load full session conversation (all messages including tool calls/results)
-        let mut history: Vec<ChatMessage> = self
-            .conversation_repo
-            .get_session_conversation(&session_id, 200)
-            .map(|messages| {
-                self.conversation_repo
-                    .session_messages_to_chat_format(&messages)
-            })
-            .unwrap_or_default();
-
-        // Graph-powered recall for first message — inject remembered facts, episodes, and
-        // entity context before the agent sees the user's message.
-        // Runs in BOTH chat and research modes (Phase 7): only the pipeline depth is
-        // gated on mode; memory must reach every session. Chat mode uses a smaller budget
-        // to keep latency low.
-        if let Some(recall) = &self.memory_recall {
-            let _ = session_id; // retained for future recall-log wiring
-            let top_k = if config.is_chat_mode() { 5 } else { 10 };
-            match recall
-                .recall_unified(
-                    &config.agent_id,
-                    &message,
-                    setup.ward_id.as_deref(),
-                    &[],
-                    top_k,
-                )
-                .await
-            {
-                Ok(items) if !items.is_empty() => {
-                    let formatted = crate::recall::format_scored_items(&items);
-                    if !formatted.is_empty() {
-                        history.insert(0, ChatMessage::system(formatted));
-                    }
-                    tracing::info!(
-                        agent_id = %config.agent_id,
-                        count = items.len(),
-                        "Recalled unified context for first message"
-                    );
-                }
-                Ok(_) => {
-                    tracing::debug!(
-                        "First-message unified recall returned empty — no relevant items"
-                    );
-                }
-                Err(e) => {
-                    // Surface the failure so the agent can drill manually instead
-                    // of assuming memory was silently empty. Empty results (Ok case
-                    // above) stay quiet — only genuine errors are reported.
-                    tracing::warn!("First-message unified recall failed: {}", e);
-                    history.insert(
-                        0,
-                        ChatMessage::system(crate::recall::format_recall_failure_message(&e)),
-                    );
-                }
-            }
-        }
-
-        // Create executor (restore ward_id from existing session if available)
-        let (executor, recommended_skills) = match self
-            .create_executor(CreateExecutorArgs {
-                agent: &agent,
-                provider: &provider,
-                config: &config,
-                session_id: &session_id,
-                ward_id: setup.ward_id.as_deref(),
-                is_root: true,
-                user_message: Some(&message),
-                execution_id: &execution_id,
-            })
-            .await
-        {
-            Ok(result) => result,
-            Err(e) => {
-                self.emit_error(&config.conversation_id, &config.agent_id, &e)
-                    .await;
-                return Err(e);
-            }
+        let ctx = super::execution_stream::ExecutionContext {
+            execution_id: setup.execution_id,
+            session_id: setup.session_id.clone(),
+            agent_id: config.agent_id.clone(),
+            conversation_id: config.conversation_id.clone(),
+            handle: setup.handle.clone(),
+            respond_to: config.respond_to.clone(),
+            thread_id: config.thread_id.clone(),
+            message,
+            history: setup.history,
+            recommended_skills: setup.recommended_skills,
         };
+        tokio::spawn(async move {
+            let _ = stream.run(ctx, setup.executor).await;
+        });
 
-        // Inject mandatory first action for graph tasks with placeholder specs
-        if let Some(ref ward_id) = setup.ward_id {
-            let specs_dir = self
-                .paths
-                .vault_dir()
-                .join("wards")
-                .join(ward_id)
-                .join("specs");
-            if specs_dir.exists() {
-                let has_placeholders = std::fs::read_dir(&specs_dir)
-                    .ok()
-                    .map(|entries| {
-                        entries
-                            .filter_map(|e| e.ok())
-                            .filter(|e| e.path().is_dir())
-                            .any(|topic_dir| {
-                                std::fs::read_dir(topic_dir.path())
-                                    .ok()
-                                    .map(|files| {
-                                        files.filter_map(|f| f.ok()).any(|f| {
-                                            std::fs::read_to_string(f.path())
-                                                .ok()
-                                                .map(|c| c.contains("Status: placeholder"))
-                                                .unwrap_or(false)
-                                        })
-                                    })
-                                    .unwrap_or(false)
-                            })
-                    })
-                    .unwrap_or(false);
-
-                if has_placeholders {
-                    history.push(ChatMessage::system(
-                        "[MANDATORY FIRST ACTION] Placeholder specs found in the ward's specs/ folder. \
-                         You MUST delegate to a planning subagent as your first action. \
-                         Follow the pipeline in your planning shard: delegate to data-analyst with max_iterations=40 \
-                         to fill the specs and analyze core/. Do NOT load skills, create plans, or write code yourself.".to_string()
-                    ));
-                    tracing::info!(ward = %ward_id, "Injected mandatory planning action for graph task");
-                }
-            }
-        }
-
-        // Spawn execution task
-        {
-            let stream = super::execution_stream::ExecutionStream {
-                event_bus: self.event_bus.clone(),
-                state_service: self.state_service.clone(),
-                log_service: self.log_service.clone(),
-                conversation_repo: self.conversation_repo.clone(),
-                delegation_tx: self.delegation_tx.clone(),
-                delegation_registry: self.delegation_registry.clone(),
-                handles: self.handles.clone(),
-                distiller: self.distiller.clone(),
-                kg_episode_repo: self.kg_episode_repo.clone(),
-                graph_storage: self.graph_storage.clone(),
-                paths: self.paths.clone(),
-                memory_repo: self.memory_repo.clone(),
-                connector_registry: self.connector_registry.clone(),
-                bridge_registry: self.bridge_registry.clone(),
-                bridge_outbox: self.bridge_outbox.clone(),
-            };
-            let ctx = super::execution_stream::ExecutionContext {
-                execution_id,
-                session_id: session_id.clone(),
-                agent_id: config.agent_id.clone(),
-                conversation_id: config.conversation_id.clone(),
-                handle: handle_clone,
-                respond_to: config.respond_to.clone(),
-                thread_id: config.thread_id.clone(),
-                message,
-                history,
-                recommended_skills,
-            };
-            tokio::spawn(async move {
-                let _ = stream.run(ctx, executor).await;
-            });
-        }
-
-        Ok((handle, session_id))
+        Ok((setup.handle, setup.session_id))
     }
 
     /// Stop an execution by conversation ID.
@@ -1196,414 +970,6 @@ impl ExecutionRunner {
                 Err(e)
             }
         }
-    }
-
-    /// Create an executor for the agent using the ExecutorBuilder.
-    ///
-    /// Returns the executor and any recommended skill IDs from intent analysis
-    /// (empty when analysis is skipped or fails).
-    async fn create_executor(
-        &self,
-        args: CreateExecutorArgs<'_>,
-    ) -> Result<(AgentExecutor, Vec<String>), String> {
-        let CreateExecutorArgs {
-            agent,
-            provider,
-            config,
-            session_id,
-            ward_id,
-            is_root,
-            user_message,
-            execution_id,
-        } = args;
-        // Collect available agents and skills for executor state
-        let available_agents = collect_agents_summary(&self.agent_service).await;
-        let available_skills = collect_skills_summary(&self.skill_service).await;
-
-        // Get tool settings
-        let settings_service = gateway_services::SettingsService::new(self.paths.clone());
-        let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
-
-        // Build hook context if present
-        let hook_context = config
-            .hook_context
-            .as_ref()
-            .and_then(|ctx| serde_json::to_value(ctx).ok());
-
-        // Build fact store from memory repo + embedding client (if available)
-        let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> =
-            self.memory_repo.as_ref().map(|repo| {
-                Arc::new(gateway_database::GatewayMemoryFactStore::new(
-                    repo.clone(),
-                    self.embedding_client.clone(),
-                )) as Arc<dyn zero_core::MemoryFactStore>
-            });
-        // Clone for resource indexing (before fact_store is moved into builder)
-        let fact_store_for_indexing = fact_store.clone();
-
-        // Build connector resource provider (HTTP + bridge composite)
-        let http_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
-            self.connector_registry.as_ref().map(|registry| {
-                Arc::new(crate::resource_provider::GatewayResourceProvider::new(
-                    registry.clone(),
-                )) as Arc<dyn zero_core::ConnectorResourceProvider>
-            });
-        let bridge_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> = self
-            .bridge_registry
-            .as_ref()
-            .zip(self.bridge_outbox.as_ref())
-            .map(|(reg, outbox)| {
-                Arc::new(gateway_bridge::BridgeResourceProvider::new(
-                    reg.clone(),
-                    outbox.clone(),
-                )) as Arc<dyn zero_core::ConnectorResourceProvider>
-            });
-        let connector_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
-            if http_provider.is_some() || bridge_provider.is_some() {
-                Some(
-                    Arc::new(crate::composite_provider::CompositeResourceProvider::new(
-                        http_provider,
-                        bridge_provider,
-                    )) as Arc<dyn zero_core::ConnectorResourceProvider>,
-                )
-            } else {
-                None
-            };
-
-        // Get or create shared rate limiter for this provider
-        let rate_limiter = self.get_rate_limiter(provider);
-        tracing::debug!(provider = %provider.name, "Using shared rate limiter for provider");
-
-        // Use ExecutorBuilder to create the executor
-        let mut builder = ExecutorBuilder::new(self.paths.vault_dir().clone(), tool_settings)
-            .with_workspace_cache(self.workspace_cache.clone())
-            .with_rate_limiter(rate_limiter)
-            .with_chat_mode(config.is_chat_mode());
-        if let Some(registry) = self.model_registry.load_full() {
-            builder = builder.with_model_registry(registry);
-        }
-        if let Some(fs) = fact_store {
-            builder = builder.with_fact_store(fs);
-        }
-        if let Some(cp) = connector_provider {
-            builder = builder.with_connector_provider(cp);
-        }
-        if let Some(ref gs) = self.graph_storage {
-            builder = builder.with_graph_storage(gs.clone());
-        }
-        if let Some(ref a) = self.ingestion_adapter {
-            builder = builder.with_ingestion_adapter(a.clone());
-        }
-        if let Some(ref a) = self.goal_adapter {
-            builder = builder.with_goal_adapter(a.clone());
-        }
-
-        // Intent analysis for root agent first turns only.
-        // Note: execution_logs stores execution_id in the session_id column,
-        // so we query by execution_id to find prior intent logs.
-        let mut agent_for_build = agent.clone();
-        let mut recommended_skills: Vec<String> = Vec::new();
-        let outcome = self
-            .run_intent_analysis(IntentAnalysisCtx {
-                agent,
-                provider,
-                config,
-                session_id,
-                execution_id,
-                is_root,
-                user_message,
-                fact_store: fact_store_for_indexing.as_ref(),
-            })
-            .await;
-        if let Some(out) = outcome {
-            recommended_skills = out.recommended_skills;
-            agent_for_build
-                .instructions
-                .push_str(&out.instructions_injection);
-        }
-
-        // Flag if placeholder specs exist — delegate tool uses this to block ad-hoc delegations
-        if is_root {
-            if let Some(wid) = ward_id {
-                let specs_dir = self.paths.vault_dir().join("wards").join(wid).join("specs");
-                if specs_dir.exists() {
-                    let has_placeholders = std::fs::read_dir(&specs_dir)
-                        .ok()
-                        .map(|entries| entries.filter_map(|e| e.ok()).any(|e| e.path().is_dir()))
-                        .unwrap_or(false);
-                    if has_placeholders {
-                        builder = builder.with_initial_state(
-                            "app:has_placeholder_specs",
-                            serde_json::Value::Bool(true),
-                        );
-                    }
-                }
-            }
-        }
-
-        let mut executor = builder
-            .build(
-                &agent_for_build,
-                provider,
-                &config.conversation_id,
-                session_id,
-                &available_agents,
-                &available_skills,
-                hook_context.as_ref(),
-                &self.mcp_service,
-                ward_id,
-            )
-            .await?;
-
-        attach_mid_session_recall_hook(
-            &mut executor,
-            self.memory_recall.as_ref(),
-            &agent.id,
-            ward_id,
-        );
-
-        Ok((executor, recommended_skills))
-    }
-
-    /// Run the intent-analysis sub-pipeline that was previously inlined into
-    /// `create_executor` (~220 LOC, 5 levels deep). Sequence:
-    ///
-    ///   1. Skip entirely for non-root, chat-mode, or re-entry executions.
-    ///      For re-entry, emit `IntentAnalysisSkipped` so the UI still gets
-    ///      a block.
-    ///   2. Run fast DB resource-indexing (skills/agents/wards) against
-    ///      the provided fact store.
-    ///   3. Emit `IntentAnalysisStarted`, build a temporary LLM client,
-    ///      call `analyze_intent`.
-    ///   4. On success: emit `IntentAnalysisComplete`, snapshot to session
-    ///      ctx, log for replay, return the injected agent-instructions
-    ///      suffix + recommended_skills to the caller.
-    ///   5. On LLM-client or analysis failure: emit the "scratch ward"
-    ///      fallback `IntentAnalysisComplete` shape and return `None`.
-    ///
-    /// Returning `Option<IntentOutcome>` instead of mutating out-params
-    /// keeps the caller simple: `if let Some(out) = …` applies the
-    /// instructions suffix; otherwise the agent continues unchanged.
-    async fn run_intent_analysis(&self, ctx: IntentAnalysisCtx<'_>) -> Option<IntentOutcome> {
-        let IntentAnalysisCtx {
-            agent,
-            provider,
-            config,
-            session_id,
-            execution_id,
-            is_root,
-            user_message,
-            fact_store,
-        } = ctx;
-
-        // Guard: non-root or chat-mode — never run intent analysis.
-        if !is_root || config.is_chat_mode() {
-            return None;
-        }
-
-        // Already analyzed (e.g. continuation turn): emit Skipped so the
-        // UI renders a block, then return.
-        if self.log_service.has_intent_log(execution_id) {
-            self.event_bus
-                .publish(gateway_events::GatewayEvent::IntentAnalysisSkipped {
-                    session_id: session_id.to_string(),
-                    execution_id: execution_id.to_string(),
-                })
-                .await;
-            tracing::debug!("Intent analysis skipped (already analyzed for this execution)");
-            return None;
-        }
-
-        let fs = fact_store?;
-        let msg = user_message?;
-
-        // Index resources (fast DB upsert — no LLM call). Runs before
-        // analyze_intent so the analyzer has the latest capability index.
-        index_resources(
-            fs.as_ref(),
-            &self.skill_service,
-            &self.agent_service,
-            &self.paths,
-        )
-        .await;
-        tracing::info!("Resource indexing complete (skills, agents, wards)");
-
-        // Emit started event so UI can show "Analyzing..."
-        self.event_bus
-            .publish(gateway_events::GatewayEvent::IntentAnalysisStarted {
-                session_id: session_id.to_string(),
-                execution_id: execution_id.to_string(),
-            })
-            .await;
-
-        // Build temporary LLM client for analysis.
-        let llm_config = agent_runtime::LlmConfig::new(
-            provider.base_url.clone(),
-            provider.api_key.clone(),
-            agent.model.clone(),
-            provider.id.clone().unwrap_or_else(|| provider.name.clone()),
-        )
-        .with_max_tokens(2048); // Intent analysis JSON is 1-2KB — keep max_tokens low for speed
-
-        let raw_client = match agent_runtime::OpenAiClient::new(llm_config) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!("Failed to create LLM client for intent analysis: {}", e);
-                self.emit_intent_fallback_complete(
-                    session_id,
-                    execution_id,
-                    "LLM client creation failed — using scratch ward",
-                    "Intent analysis unavailable (no LLM client)",
-                )
-                .await;
-                return None;
-            }
-        };
-
-        let retrying = agent_runtime::RetryingLlmClient::new(
-            std::sync::Arc::new(raw_client),
-            agent_runtime::RetryPolicy::default(),
-        );
-        let system_prompt =
-            crate::middleware::intent_analysis::load_intent_analysis_prompt(&self.paths);
-
-        let analysis = match analyze_intent(
-            &retrying,
-            msg,
-            fs.as_ref(),
-            self.memory_recall.as_ref().map(|r| r.as_ref()),
-            &system_prompt,
-        )
-        .await
-        {
-            Ok(a) => a,
-            Err(e) => {
-                tracing::warn!("Intent analysis failed (non-fatal): {}", e);
-                self.emit_intent_fallback_complete(
-                    session_id,
-                    execution_id,
-                    "Intent analysis failed — using scratch ward",
-                    "Intent analysis unavailable",
-                )
-                .await;
-                return None;
-            }
-        };
-
-        tracing::info!(
-            primary_intent = %analysis.primary_intent,
-            approach = %analysis.execution_strategy.approach,
-            "Intent analysis succeeded"
-        );
-
-        // Emit IntentAnalysisComplete event with the real analysis.
-        self.event_bus
-            .publish(GatewayEvent::IntentAnalysisComplete {
-                session_id: session_id.to_string(),
-                execution_id: execution_id.to_string(),
-                primary_intent: analysis.primary_intent.clone(),
-                hidden_intents: analysis.hidden_intents.clone(),
-                recommended_skills: analysis.recommended_skills.clone(),
-                recommended_agents: analysis.recommended_agents.clone(),
-                ward_recommendation: serde_json::to_value(&analysis.ward_recommendation)
-                    .unwrap_or_default(),
-                execution_strategy: serde_json::to_value(&analysis.execution_strategy)
-                    .unwrap_or_default(),
-            })
-            .await;
-
-        // Phase 2b: populate session ctx with the intent-analyzer's
-        // decision + verbatim user prompt. Subagents spawned later can
-        // fetch these via memory(get_fact, key="ctx.<sid>.intent") without
-        // re-reading the original message.
-        let ward = analysis.ward_recommendation.ward_name.as_str();
-        let intent_json = serde_json::to_value(&analysis).unwrap_or(serde_json::Value::Null);
-        crate::session_ctx::writer::intent_snapshot(fs, session_id, ward, &intent_json, msg).await;
-
-        // Log for session replay.
-        if let Ok(meta) = serde_json::to_value(&analysis) {
-            let log_entry = api_logs::ExecutionLog::new(
-                execution_id,
-                session_id,
-                &config.agent_id,
-                api_logs::LogLevel::Info,
-                api_logs::LogCategory::Intent,
-                format!("Intent: {}", analysis.primary_intent),
-            )
-            .with_metadata(meta);
-            let _ = self.log_service.log(log_entry);
-        }
-
-        // Collect spec guidance from recommended skills' ward_setup.
-        let spec_guidance = {
-            let mut guidances = Vec::new();
-            for skill_name in &analysis.recommended_skills {
-                if let Ok(Some(ws)) = self.skill_service.get_ward_setup(skill_name).await {
-                    if let Some(ref g) = ws.spec_guidance {
-                        guidances.push(g.clone());
-                    }
-                }
-            }
-            if guidances.is_empty() {
-                None
-            } else {
-                Some(guidances.join("\n\n"))
-            }
-        };
-
-        Some(IntentOutcome {
-            recommended_skills: analysis.recommended_skills.clone(),
-            instructions_injection: format_intent_injection(
-                &analysis,
-                spec_guidance.as_deref(),
-                Some(msg),
-            ),
-        })
-    }
-
-    /// Emit the fallback `IntentAnalysisComplete` event used when the LLM
-    /// client can't be built or the analysis call fails — keeps the UI
-    /// unblocked and steers the agent toward the `scratch` ward.
-    async fn emit_intent_fallback_complete(
-        &self,
-        session_id: &str,
-        execution_id: &str,
-        ward_reason: &str,
-        strategy_explanation: &str,
-    ) {
-        self.event_bus
-            .publish(GatewayEvent::IntentAnalysisComplete {
-                session_id: session_id.to_string(),
-                execution_id: execution_id.to_string(),
-                primary_intent: "general".to_string(),
-                hidden_intents: vec![],
-                recommended_skills: vec![],
-                recommended_agents: vec![],
-                ward_recommendation: serde_json::json!({
-                    "action": "create_new",
-                    "ward_name": "scratch",
-                    "subdirectory": null,
-                    "reason": ward_reason,
-                }),
-                execution_strategy: serde_json::json!({
-                    "approach": "simple",
-                    "explanation": strategy_explanation,
-                }),
-            })
-            .await;
-    }
-
-    /// Emit an error event.
-    async fn emit_error(&self, conversation_id: &str, agent_id: &str, message: &str) {
-        self.event_bus
-            .publish(GatewayEvent::Error {
-                agent_id: Some(agent_id.to_string()),
-                session_id: None,
-                execution_id: None,
-                message: message.to_string(),
-                conversation_id: Some(conversation_id.to_string()),
-            })
-            .await;
     }
 }
 
