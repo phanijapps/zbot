@@ -44,32 +44,32 @@ use crate::middleware::intent_analysis::{
 /// `invoke_with_callback`. Built once in `ExecutionRunner::with_config` and
 /// stored as a field so the runner delegates the bootstrap work here.
 pub(super) struct InvokeBootstrap {
-    pub agent_service: Arc<AgentService>,
-    pub provider_service: Arc<ProviderService>,
-    pub mcp_service: Arc<McpService>,
-    pub skill_service: Arc<SkillService>,
-    pub state_service: Arc<StateService<DatabaseManager>>,
-    pub log_service: Arc<LogService<DatabaseManager>>,
-    pub conversation_repo: Arc<ConversationRepository>,
-    pub paths: SharedVaultPaths,
-    pub memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
-    pub memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
-    pub embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
-    pub model_registry: Arc<ArcSwapOption<ModelRegistry>>,
-    pub rate_limiters: Arc<
+    pub(super) agent_service: Arc<AgentService>,
+    pub(super) provider_service: Arc<ProviderService>,
+    pub(super) mcp_service: Arc<McpService>,
+    pub(super) skill_service: Arc<SkillService>,
+    pub(super) state_service: Arc<StateService<DatabaseManager>>,
+    pub(super) log_service: Arc<LogService<DatabaseManager>>,
+    pub(super) conversation_repo: Arc<ConversationRepository>,
+    pub(super) paths: SharedVaultPaths,
+    pub(super) memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    pub(super) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
+    pub(super) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+    pub(super) model_registry: Arc<ArcSwapOption<ModelRegistry>>,
+    pub(super) rate_limiters: Arc<
         std::sync::RwLock<
             std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
         >,
     >,
-    pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
-    pub bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
-    pub bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
-    pub graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
-    pub ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
-    pub goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
-    pub event_bus: Arc<EventBus>,
-    pub handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
-    pub workspace_cache: WorkspaceCache,
+    pub(super) connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
+    pub(super) bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
+    pub(super) bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
+    pub(super) graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
+    pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+    pub(super) event_bus: Arc<EventBus>,
+    pub(super) handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
+    pub(super) workspace_cache: WorkspaceCache,
 }
 
 /// Output of [`InvokeBootstrap::begin_setup`]. Carries the state that phase 2
@@ -80,23 +80,23 @@ pub(super) struct InvokeBootstrap {
 /// [`InvokeBootstrap::finish_setup`], so the subscriber is registered before
 /// `AgentStarted`, `IntentAnalysisStarted`, and `IntentAnalysisComplete` fire.
 pub(super) struct PartialSetup {
-    pub session_id: String,
-    pub execution_id: String,
-    pub handle: ExecutionHandle,
+    pub(super) session_id: String,
+    pub(super) execution_id: String,
+    pub(super) handle: ExecutionHandle,
     /// Ward ID resolved during phase 1; forwarded to phase 2 for executor
     /// construction and placeholder-spec injection.
-    pub ward_id: Option<String>,
+    pub(super) ward_id: Option<String>,
 }
 
 /// Output of [`InvokeBootstrap::finish_setup`]. Contains everything that lives
 /// across the seam between bootstrap and stream execution.
 pub(super) struct SetupResult {
-    pub session_id: String,
-    pub execution_id: String,
-    pub executor: AgentExecutor,
-    pub handle: ExecutionHandle,
-    pub history: Vec<ChatMessage>,
-    pub recommended_skills: Vec<String>,
+    pub(super) session_id: String,
+    pub(super) execution_id: String,
+    pub(super) executor: AgentExecutor,
+    pub(super) handle: ExecutionHandle,
+    pub(super) history: Vec<ChatMessage>,
+    pub(super) recommended_skills: Vec<String>,
 }
 
 // ============================================================================

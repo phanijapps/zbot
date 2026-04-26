@@ -488,7 +488,8 @@ impl ExecutionRunner {
         self.model_registry.store(Some(registry));
     }
 
-    /// Set the knowledge graph storage for the graph_query tool.
+    /// Late-wired setter. Mirrored to `self.bootstrap.graph_storage` because
+    /// `InvokeBootstrap::finish_setup` reads its own clone at session-setup time.
     pub fn set_graph_storage(&mut self, storage: Arc<knowledge_graph::GraphStorage>) {
         self.bootstrap.graph_storage = Some(storage.clone());
         self.graph_storage = Some(storage);
@@ -499,13 +500,15 @@ impl ExecutionRunner {
         self.kg_episode_repo = Some(repo);
     }
 
-    /// Set the ingestion adapter so the `ingest` agent tool is registered.
+    /// Late-wired setter. Mirrored to `self.bootstrap.ingestion_adapter` because
+    /// `InvokeBootstrap::finish_setup` reads its own clone at session-setup time.
     pub fn set_ingestion_adapter(&mut self, adapter: Arc<dyn agent_tools::IngestionAccess>) {
         self.bootstrap.ingestion_adapter = Some(adapter.clone());
         self.ingestion_adapter = Some(adapter);
     }
 
-    /// Set the goal adapter so the `goal` agent tool is registered.
+    /// Late-wired setter. Mirrored to `self.bootstrap.goal_adapter` because
+    /// `InvokeBootstrap::finish_setup` reads its own clone at session-setup time.
     pub fn set_goal_adapter(&mut self, adapter: Arc<dyn agent_tools::GoalAccess>) {
         self.bootstrap.goal_adapter = Some(adapter.clone());
         self.goal_adapter = Some(adapter);
