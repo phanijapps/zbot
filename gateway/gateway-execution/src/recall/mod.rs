@@ -495,14 +495,6 @@ fn temporal_decay(last_seen: chrono::DateTime<chrono::Utc>, half_life_days: f64)
     1.0 / (1.0 + (age_days / half_life_days))
 }
 
-/// Convert embedding blob (little-endian bytes) to f32 vector.
-#[allow(dead_code)]
-fn blob_to_f32_vec(blob: &[u8]) -> Vec<f32> {
-    blob.chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
-}
-
 // ============================================================================
 // TESTS
 // ============================================================================

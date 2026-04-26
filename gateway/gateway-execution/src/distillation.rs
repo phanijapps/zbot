@@ -1777,16 +1777,6 @@ fn summarize_tool_result(content: &str) -> String {
     }
 }
 
-/// Truncate a JSON string to a max length for display.
-#[allow(dead_code)]
-fn truncate_json(json_str: &str, max_len: usize) -> String {
-    if json_str.len() <= max_len {
-        json_str.to_string()
-    } else {
-        format!("{}...", zero_core::truncate_str(json_str, max_len))
-    }
-}
-
 /// Parse the full distillation response (facts + entities + relationships).
 ///
 /// The LLM might return:
