@@ -215,6 +215,15 @@ impl<D: StateDbProvider> StateService<D> {
             }
         }
 
+        // Cancelled delegations were never decremented through the normal
+        // `complete_delegation` path. Wipe the bookkeeping so a follow-up
+        // continuation doesn't see a phantom `pending_delegations > 0`
+        // and incorrectly skip the terminal-status writer at the end of
+        // the next turn (see `runner.rs` `has_active_delegations` branch).
+        if let Err(e) = self.repo.reset_delegation_tracking(session_id) {
+            tracing::warn!("Failed to reset delegation tracking on cancel: {}", e);
+        }
+
         self.repo
             .update_session_status(session_id, SessionStatus::Crashed)
     }
@@ -273,6 +282,15 @@ impl<D: StateDbProvider> StateService<D> {
             );
             self.repo
                 .update_session_status(session_id, SessionStatus::Running)?;
+        }
+
+        // Defense in depth: even if `cancel_session` already cleared these,
+        // a session that's been sitting around may have stale delegation
+        // bookkeeping from a prior turn. Clearing on reactivation makes
+        // the count truthful for the new turn regardless of how the
+        // session entered its previous terminal state.
+        if let Err(e) = self.repo.reset_delegation_tracking(session_id) {
+            tracing::warn!("Failed to reset delegation tracking on reactivate: {}", e);
         }
 
         Ok(())
@@ -954,6 +972,119 @@ mod tests {
         // Complete delegation - should trigger continuation
         let trigger = service.complete_delegation(&session.id).unwrap();
         assert!(trigger);
+    }
+
+    // ========================================================================
+    // Stop + continue regression — runner.rs depends on
+    // session.has_pending_delegations() being truthful after a stop.
+    // ========================================================================
+
+    /// REGRESSION: a user-initiated stop while delegations are in flight
+    /// must reset `pending_delegations` and `continuation_needed`.
+    /// Otherwise the next continuation turn will see a phantom pending
+    /// count, take the "skip completion" branch in
+    /// `runner.rs::Ok(()) => has_active_delegations`, and the root
+    /// execution will stay at `status='running'` forever (see
+    /// `defect_session_status_after_stop_continue.md`).
+    #[test]
+    fn cancel_session_resets_pending_delegations_and_continuation() {
+        let service = setup_service();
+        let (session, _) = service.create_session("test-agent").unwrap();
+
+        // Simulate a turn that left the session with pending delegations
+        // and a request for continuation — exactly the state the user
+        // hits when they press Stop while subagents are mid-flight.
+        service.register_delegation(&session.id).unwrap();
+        service.register_delegation(&session.id).unwrap();
+        service.request_continuation(&session.id).unwrap();
+
+        let mid = service.get_session(&session.id).unwrap().unwrap();
+        assert_eq!(mid.pending_delegations, 2);
+        assert!(mid.continuation_needed);
+
+        service.cancel_session(&session.id).unwrap();
+
+        let after = service.get_session(&session.id).unwrap().unwrap();
+        assert_eq!(
+            after.pending_delegations, 0,
+            "cancelled in-flight delegations must zero the count"
+        );
+        assert!(
+            !after.continuation_needed,
+            "stale continuation request must not survive a stop"
+        );
+        assert_eq!(after.status, SessionStatus::Crashed);
+    }
+
+    /// Defense in depth: even if `cancel_session` is bypassed somehow
+    /// (alternative termination path), reactivating a session must
+    /// produce truthful delegation bookkeeping for the new turn.
+    #[test]
+    fn reactivate_session_resets_pending_delegations() {
+        let service = setup_service();
+        let (session, _) = service.create_session("test-agent").unwrap();
+
+        // Manually leave a pending count behind (simulates a path that
+        // didn't reset on its way to a terminal state).
+        service.register_delegation(&session.id).unwrap();
+        service.request_continuation(&session.id).unwrap();
+        // Force a terminal state directly so reactivation has work to do.
+        service.crash_session(&session.id).unwrap();
+
+        // Pending stays elevated until reactivation cleans up.
+        let crashed = service.get_session(&session.id).unwrap().unwrap();
+        assert_eq!(crashed.pending_delegations, 1);
+        assert!(crashed.continuation_needed);
+
+        service.reactivate_session(&session.id).unwrap();
+
+        let live = service.get_session(&session.id).unwrap().unwrap();
+        assert_eq!(live.status, SessionStatus::Running);
+        assert_eq!(
+            live.pending_delegations, 0,
+            "reactivation must zero the stale pending count"
+        );
+        assert!(
+            !live.continuation_needed,
+            "reactivation must clear the stale continuation flag"
+        );
+    }
+
+    /// End-to-end repro of the original defect: after Stop + continue,
+    /// the next call to `complete_execution` must succeed (not skip).
+    /// We simulate the runner's check at `runner.rs:1515` directly.
+    #[test]
+    fn stop_then_continue_leaves_session_truthful_for_completion() {
+        let service = setup_service();
+        let (session, root_exec) = service.create_session("test-agent").unwrap();
+
+        // Turn 1: spawn delegations, then user presses Stop.
+        service.register_delegation(&session.id).unwrap();
+        service.register_delegation(&session.id).unwrap();
+        service.cancel_session(&session.id).unwrap();
+
+        // Turn 2: user continues — reactivate the terminal session.
+        service.reactivate_session(&session.id).unwrap();
+        service.reactivate_execution(&root_exec.id).unwrap();
+
+        // The runner's `has_active_delegations` check would fire here
+        // — it must return `false` so completion runs.
+        let live = service.get_session(&session.id).unwrap().unwrap();
+        assert!(
+            !live.has_pending_delegations(),
+            "post stop+continue, has_pending_delegations() must be false \
+             so the runner takes the 'normal completion' branch"
+        );
+
+        // The runner now calls complete_execution → this must succeed
+        // and flip the root exec to Completed.
+        service.complete_execution(&root_exec.id).unwrap();
+        let exec = service.get_execution(&root_exec.id).unwrap().unwrap();
+        assert_eq!(
+            exec.status,
+            ExecutionStatus::Completed,
+            "root execution must reach Completed (the bug let it stick at Running)"
+        );
     }
 
     #[test]

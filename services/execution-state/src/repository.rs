@@ -365,6 +365,22 @@ impl<D: StateDbProvider> StateRepository<D> {
         })
     }
 
+    /// Reset both delegation bookkeeping fields to zero/false.
+    ///
+    /// Called when in-flight delegations are abandoned (user-initiated
+    /// stop, session reactivation): the pending counts and the
+    /// `continuation_needed` flag from the prior turn are stale because
+    /// the executions they referred to have been cancelled.
+    pub fn reset_delegation_tracking(&self, session_id: &str) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE sessions SET pending_delegations = 0, continuation_needed = 0 WHERE id = ?1",
+                params![session_id],
+            )?;
+            Ok(())
+        })
+    }
+
     /// Set continuation_needed flag.
     pub fn set_continuation_needed(&self, session_id: &str, needed: bool) -> Result<(), String> {
         self.db.with_connection(|conn| {
