@@ -31,17 +31,17 @@ use crate::middleware::intent_analysis::{
 };
 
 // Import types from sibling modules
-pub use super::config::ExecutionConfig;
-use super::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
-pub use super::handle::ExecutionHandle;
-use super::invoke::micro_recall::MicroRecallContext;
-use super::invoke::working_memory_middleware;
-use super::invoke::{
+pub use crate::config::ExecutionConfig;
+use crate::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
+pub use crate::handle::ExecutionHandle;
+use crate::invoke::micro_recall::MicroRecallContext;
+use crate::invoke::working_memory_middleware;
+use crate::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
     spawn_batch_writer_with_repo, AgentLoader, BatchWriterHandle, ExecutorBuilder,
     ResponseAccumulator, StreamContext, ToolCallAccumulator, WorkingMemory, WorkspaceCache,
 };
-use super::lifecycle::{
+use crate::lifecycle::{
     complete_execution, crash_execution, emit_agent_started, get_or_create_session,
     start_execution, stop_execution, CompleteExecution, CrashExecution, StopExecution,
 };
@@ -93,9 +93,9 @@ pub struct ExecutionRunner {
     /// Memory repository for structured fact storage
     memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
     /// Session distiller for automatic fact extraction after sessions
-    distiller: Option<Arc<super::distillation::SessionDistiller>>,
+    distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     /// Memory recall for automatic fact retrieval at session start
-    memory_recall: Option<Arc<super::recall::MemoryRecall>>,
+    memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     /// Semaphore to limit concurrent delegation spawns (prevents resource exhaustion)
     delegation_semaphore: Arc<Semaphore>,
     /// Embedding client for generating vector embeddings (semantic search in memory)
@@ -155,8 +155,8 @@ pub struct ExecutionRunnerConfig {
     pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     pub workspace_cache: WorkspaceCache,
     pub memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
-    pub distiller: Option<Arc<super::distillation::SessionDistiller>>,
-    pub memory_recall: Option<Arc<super::recall::MemoryRecall>>,
+    pub distiller: Option<Arc<crate::distillation::SessionDistiller>>,
+    pub memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
     pub bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
     pub embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
@@ -190,8 +190,8 @@ struct ContinuationArgs<'a> {
     workspace_cache: WorkspaceCache,
     memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
     embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
-    distiller: Option<Arc<super::distillation::SessionDistiller>>,
-    memory_recall: Option<Arc<super::recall::MemoryRecall>>,
+    distiller: Option<Arc<crate::distillation::SessionDistiller>>,
+    memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
     graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
     kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
@@ -247,7 +247,7 @@ struct CreateExecutorArgs<'a> {
 /// no items.
 async fn prepend_continuation_recall(
     history: &mut Vec<ChatMessage>,
-    memory_recall: Option<&Arc<super::recall::MemoryRecall>>,
+    memory_recall: Option<&Arc<crate::recall::MemoryRecall>>,
     agent_id: &str,
     ward_id: Option<&str>,
 ) {
@@ -335,7 +335,7 @@ async fn build_continuation_message(
 /// must explicitly opt out rather than silently diverge.
 fn attach_mid_session_recall_hook(
     executor: &mut AgentExecutor,
-    memory_recall: Option<&Arc<super::recall::MemoryRecall>>,
+    memory_recall: Option<&Arc<crate::recall::MemoryRecall>>,
     agent_id: &str,
     ward_id: Option<&str>,
 ) {
@@ -406,7 +406,7 @@ struct EventAccumulator {
     turn_tool_calls: Vec<serde_json::Value>,
     turn_text: String,
     working_memory: WorkingMemory,
-    pending_recall_triggers: Vec<(super::invoke::micro_recall::MicroRecallTrigger, u32)>,
+    pending_recall_triggers: Vec<(crate::invoke::micro_recall::MicroRecallTrigger, u32)>,
     current_tool_name: String,
 }
 
@@ -572,7 +572,7 @@ struct SpawnNotificationDeps<'a> {
     delegation_semaphore: &'a Arc<Semaphore>,
     memory_repo: &'a Option<Arc<gateway_database::MemoryRepository>>,
     embedding_client: &'a Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
-    memory_recall: &'a Option<Arc<super::recall::MemoryRecall>>,
+    memory_recall: &'a Option<Arc<crate::recall::MemoryRecall>>,
     rate_limiters: &'a Arc<
         std::sync::RwLock<
             std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
@@ -1886,7 +1886,7 @@ impl ExecutionRunner {
         );
 
         // Register the delegation (legacy function, using conversation_id as session for backward compat)
-        let delegation_context = super::delegation::DelegationContext::new(
+        let delegation_context = crate::delegation::DelegationContext::new(
             parent_conversation_id, // session_id (using conv_id for legacy)
             parent_conversation_id, // parent_execution_id (using conv_id for legacy)
             parent_agent_id,
@@ -1987,7 +1987,7 @@ impl ExecutionRunner {
         // Build connector resource provider (HTTP + bridge composite)
         let http_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
             self.connector_registry.as_ref().map(|registry| {
-                Arc::new(super::resource_provider::GatewayResourceProvider::new(
+                Arc::new(crate::resource_provider::GatewayResourceProvider::new(
                     registry.clone(),
                 )) as Arc<dyn zero_core::ConnectorResourceProvider>
             });
@@ -2004,7 +2004,7 @@ impl ExecutionRunner {
         let connector_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
             if http_provider.is_some() || bridge_provider.is_some() {
                 Some(
-                    Arc::new(super::composite_provider::CompositeResourceProvider::new(
+                    Arc::new(crate::composite_provider::CompositeResourceProvider::new(
                         http_provider,
                         bridge_provider,
                     )) as Arc<dyn zero_core::ConnectorResourceProvider>,

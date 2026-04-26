@@ -70,6 +70,12 @@ indexmap = { workspace = true }
 # ExecutionRunner::new() but read by pre-spawned background tasks).
 arc-swap = "1"
 
+[features]
+## Expose test stubs (StubSessionInvoker) for integration tests and
+## downstream crates that need to exercise the SessionInvoker seam
+## without booting the full executor pipeline.
+test-stubs = []
+
 [dev-dependencies]
 tempfile = "3"
 tokio-test = "0.4"

@@ -1,0 +1,13 @@
+//! # Runner
+//!
+//! Session orchestration. Decomposed from a 3,067-LOC god module into
+//! five focused units. **Read `AGENTS.md` in this directory before
+//! adding code here.** (AGENTS.md is added in Task 6.)
+
+mod core;
+mod session_invoker;
+
+pub use core::*;
+pub use session_invoker::SessionInvoker;
+#[cfg(any(test, feature = "test-stubs"))]
+pub use session_invoker::StubSessionInvoker;
