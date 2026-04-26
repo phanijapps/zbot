@@ -1,0 +1,6 @@
+{"t_offset_ms": 0, "type": "invoke_accepted", "payload": {"session_id": "sess-stop-continue-0000", "conversation_id": "conv-stop-continue"}}
+{"t_offset_ms": 50, "type": "agent_started", "payload": {"session_id": "sess-stop-continue-0000", "execution_id": "exec-stop-continue-root-0000", "agent_id": "root"}}
+{"t_offset_ms": 400, "type": "tool_call", "payload": {"session_id": "sess-stop-continue-0000", "execution_id": "exec-stop-continue-root-0000", "tool_name": "respond", "tool_id": "call_stop_t1", "args": {"message": "First response before stop."}}}
+{"t_offset_ms": 450, "type": "tool_result", "payload": {"session_id": "sess-stop-continue-0000", "execution_id": "exec-stop-continue-root-0000", "tool_id": "call_stop_t1", "result": "{\"ok\": true}"}}
+{"t_offset_ms": 500, "type": "turn_complete", "payload": {"session_id": "sess-stop-continue-0000", "execution_id": "exec-stop-continue-root-0000", "final_message": "First response before stop."}}
+{"t_offset_ms": 510, "type": "agent_completed", "payload": {"session_id": "sess-stop-continue-0000", "execution_id": "exec-stop-continue-root-0000", "agent_id": "root"}}

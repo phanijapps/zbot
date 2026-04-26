@@ -1,0 +1,14 @@
+{
+  "session_id": "sess-stop-continue-0000",
+  "title": "Stop and continue regression",
+  "executions": [
+    {
+      "execution_id": "exec-stop-continue-root-0000",
+      "agent_id": "root",
+      "parent_execution_id": null,
+      "started_at_offset_ms": 0,
+      "ended_at_offset_ms": 5000
+    }
+  ],
+  "artifacts": []
+}
