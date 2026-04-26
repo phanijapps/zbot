@@ -7,19 +7,32 @@
 // `Uncaught TypeError: crypto.randomUUID is not a function`, which crashes
 // the React tree the moment a chat message, plan block, or chip is created.
 //
-// `crypto.getRandomValues()` is available in non-secure contexts too, so we
-// use it to build a v4-shaped string. If the runtime has no `crypto` at all
-// (extremely old environments, or some test setups), we fall back to
-// `Math.random()` — these IDs are UI keys, not security tokens, so the
-// non-cryptographic path is acceptable as a last resort.
+// `crypto.getRandomValues()` is available in non-secure contexts on every
+// browser since IE11/Safari 5, so we use it as the universal fallback. We
+// also probe `window.msCrypto` for legacy IE 11 where the prefix wasn't
+// removed. If neither exists we throw rather than silently weakening to
+// `Math.random()` — failing loud is preferable to seeding UI ids from a
+// non-cryptographic PRNG without warning.
 //
 // Output shape matches `crypto.randomUUID()`:
 //     "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"  (36 chars)
+
+interface LegacyCryptoWindow {
+  crypto?: Crypto;
+  msCrypto?: Crypto;
+}
 
 const HEX = "0123456789abcdef";
 
 function hex(n: number): string {
   return HEX[n & 0x0f];
+}
+
+/** Resolve the platform Crypto interface, honoring legacy IE's `msCrypto`. */
+function getCrypto(): Crypto | undefined {
+  if (typeof globalThis === "undefined") return undefined;
+  const w = globalThis as unknown as LegacyCryptoWindow;
+  return w.crypto ?? w.msCrypto;
 }
 
 function v4FromBytes(bytes: Uint8Array): string {
@@ -37,29 +50,33 @@ function v4FromBytes(bytes: Uint8Array): string {
 }
 
 /**
- * Generate a v4 UUID string. Prefers `crypto.randomUUID()` when available
- * (secure context), falls back to `crypto.getRandomValues()` (works in any
- * context including http://lan-ip), final fallback is `Math.random()`.
+ * Generate a v4 UUID string. Prefers `crypto.randomUUID()` (fast path on
+ * secure contexts), falls back to `crypto.getRandomValues()` for all other
+ * contexts including plain-HTTP LAN IPs.
+ *
+ * @throws Error when neither `crypto.randomUUID` nor `crypto.getRandomValues`
+ *   is available — this should never happen in any browser that can run the
+ *   dashboard, so it's a hard failure rather than a silent degradation.
  */
 export function randomId(): string {
-  if (typeof crypto !== "undefined") {
-    if (typeof crypto.randomUUID === "function") {
-      try {
-        return crypto.randomUUID();
-      } catch {
-        // Fall through — some browsers throw outside secure contexts even
-        // when the function is defined.
-      }
-    }
-    if (typeof crypto.getRandomValues === "function") {
-      const bytes = new Uint8Array(16);
-      crypto.getRandomValues(bytes);
-      return v4FromBytes(bytes);
+  const cryptoApi = getCrypto();
+  if (!cryptoApi) {
+    throw new Error("randomId: no crypto API available on this platform");
+  }
+
+  if (typeof cryptoApi.randomUUID === "function") {
+    try {
+      return cryptoApi.randomUUID();
+    } catch {
+      // Some browsers define `randomUUID` but throw outside secure contexts.
+      // Fall through to `getRandomValues`, which is always callable.
     }
   }
 
-  // Last-resort, non-crypto fallback. UI keys only — not for security.
+  if (typeof cryptoApi.getRandomValues !== "function") {
+    throw new Error("randomId: crypto.getRandomValues is unavailable");
+  }
   const bytes = new Uint8Array(16);
-  for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+  cryptoApi.getRandomValues(bytes);
   return v4FromBytes(bytes);
 }
