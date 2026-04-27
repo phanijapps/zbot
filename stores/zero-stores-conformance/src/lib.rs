@@ -8,6 +8,15 @@
 use knowledge_graph::types::{Entity, EntityType};
 use zero_stores::KnowledgeGraphStore;
 
+// TODO(P3a-T2): conformance scenario blocked on Entity field accessibility.
+// `Entity` has no `confidence` field — `upsert_entity` always writes the DB
+// default (0.8), which is above the `< 0.5` threshold required by
+// `list_archivable_orphans`. Until `Entity` exposes `confidence` (or the trait
+// gains a lower-level insertion path that sets it), this scenario cannot be
+// exercised end-to-end through the `KnowledgeGraphStore` trait alone.
+// The Task 3 sleep-job migration's existing `OrphanArchiver` tests in
+// `gateway-execution` are the primary safety net for the SQL correctness.
+
 pub async fn entity_round_trip<S: KnowledgeGraphStore>(store: &S) {
     let e = Entity::new(
         "conformance-agent".to_string(),

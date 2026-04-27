@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use knowledge_graph::storage::GraphStorage;
+use knowledge_graph::storage::{ArchivableEntityRow, GraphStorage};
 use knowledge_graph::types::{Entity, EntityType, Relationship};
 use zero_stores::error::StoreError;
 use zero_stores::extracted::ExtractedKnowledge;
 use zero_stores::types::{
-    Direction, EntityId, KgStats, Neighbor, ReindexReport, RelationshipId, ResolveOutcome,
-    StoreOutcome, TraversalHit,
+    ArchivableEntity, Direction, EntityId, KgStats, Neighbor, ReindexReport, RelationshipId,
+    ResolveOutcome, StoreOutcome, TraversalHit,
 };
 use zero_stores::KnowledgeGraphStore;
 use zero_stores::StoreResult;
@@ -218,6 +218,30 @@ impl KnowledgeGraphStore for SqliteKgStore {
                 relationship_count,
                 alias_count,
             })
+        })
+        .await
+    }
+
+    async fn list_archivable_orphans(
+        &self,
+        min_age_hours: u32,
+        limit: usize,
+    ) -> StoreResult<Vec<ArchivableEntity>> {
+        let storage = self.storage.clone();
+        block(move || {
+            storage
+                .find_archivable_orphans(min_age_hours, limit)
+                .map(|rows| {
+                    rows.into_iter()
+                        .map(|r: ArchivableEntityRow| ArchivableEntity {
+                            entity_id: EntityId::from(r.id),
+                            agent_id: r.agent_id,
+                            entity_type: r.entity_type,
+                            name: r.name,
+                        })
+                        .collect()
+                })
+                .map_err(map_graph_err)
         })
         .await
     }
