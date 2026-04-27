@@ -1759,6 +1759,16 @@ pub struct OrphanCandidate {
     pub last_seen_at: String,
 }
 
+/// Row shape returned by `GraphStorage::find_archivable_orphans`.
+/// Maps to `zero_stores::types::ArchivableEntity` in the trait impl.
+#[derive(Debug, Clone)]
+pub struct ArchivableEntityRow {
+    pub id: String,
+    pub agent_id: String,
+    pub entity_type: String,
+    pub name: String,
+}
+
 impl GraphStorage {
     /// List entities that are candidates for pruning: non-archival, not yet
     /// compressed, with no incoming or outgoing relationships, and whose
@@ -1890,6 +1900,63 @@ impl GraphStorage {
                         }
                         crate::resolver::ResolveOutcome::Create => Ok(None),
                     }
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Find entities matching the orphan-archival heuristic (mention_count = 1,
+    /// confidence < 0.5, first_seen_at older than `min_age_hours`, no
+    /// relationships in either direction, not already archived).
+    ///
+    /// Used by the sleep-time orphan archiver via the `KnowledgeGraphStore`
+    /// trait. Hard-cap result at `limit` rows for runaway protection.
+    pub fn find_archivable_orphans(
+        &self,
+        min_age_hours: u32,
+        limit: usize,
+    ) -> GraphResult<Vec<ArchivableEntityRow>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let cutoff =
+            (chrono::Utc::now() - chrono::Duration::hours(min_age_hours as i64)).to_rfc3339();
+        let lim = limit as i64;
+        self.db
+            .with_connection(move |conn| {
+                (|| -> GraphResult<Vec<ArchivableEntityRow>> {
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT id, agent_id, entity_type, name FROM kg_entities e
+                             WHERE mention_count = 1
+                               AND confidence < 0.5
+                               AND first_seen_at < ?1
+                               AND compressed_into IS NULL
+                               AND epistemic_class != 'archival'
+                               AND NOT EXISTS (
+                                   SELECT 1 FROM kg_relationships r
+                                   WHERE r.source_entity_id = e.id
+                               )
+                               AND NOT EXISTS (
+                                   SELECT 1 FROM kg_relationships r
+                                   WHERE r.target_entity_id = e.id
+                               )
+                             LIMIT ?2",
+                        )
+                        .map_err(GraphError::Database)?;
+                    let rows = stmt
+                        .query_map(rusqlite::params![cutoff, lim], |row| {
+                            Ok(ArchivableEntityRow {
+                                id: row.get(0)?,
+                                agent_id: row.get(1)?,
+                                entity_type: row.get(2)?,
+                                name: row.get(3)?,
+                            })
+                        })
+                        .map_err(GraphError::Database)?;
+                    rows.collect::<Result<Vec<_>, _>>()
+                        .map_err(GraphError::Database)
                 })()
                 .map_err(graph_to_rusqlite)
             })
