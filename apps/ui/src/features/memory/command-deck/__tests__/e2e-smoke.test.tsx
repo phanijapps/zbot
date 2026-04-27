@@ -41,7 +41,7 @@ vi.mock("@/services/transport", () => ({
 
 describe("Memory Tab e2e smoke", () => {
   it("write flow: add instruction via right rail", async () => {
-    render(<MemoryTab agentId="agent:root" />);
+    render(<MemoryTab agentId="root" />);
     // Ward appears in rail
     await waitFor(() =>
       expect(screen.getAllByText(/wardA/).length).toBeGreaterThan(0),

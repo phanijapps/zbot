@@ -10,7 +10,7 @@ import type { MemoryFact } from "@/services/transport/types";
 function makeFact(overrides: Partial<MemoryFact> = {}): MemoryFact {
   return {
     id: "fact-1",
-    agent_id: "agent:root",
+    agent_id: "root",
     scope: "shared",
     category: "preference",
     key: "prefers-jwt",
