@@ -65,7 +65,8 @@ Scope tags:
   - `pattern_extractor.rs` (~9 stmts; cross-DB read)
 - **Why debt:** Roughly 60 statements touching knowledge-side tables directly via raw `rusqlite::Connection`. None of these would survive a SurrealDB swap unless they all route through `KnowledgeGraphStore` and `MemoryFactStore`.
 - **Fix:** After TD-010 lands, route each file's reads/writes through the appropriate store trait. Reindex is the trickiest — `vec0`-specific schema rebuild becomes a SurrealDB-specific schema rebuild — so hide it behind `KnowledgeGraphStore::reindex_embeddings(new_dim)` (or equivalent) so each impl owns its physical layout.
-- **Status:** pending (depends on TD-010)
+- **Progress (Phase 3a):** `orphan_archiver.rs` read path migrated to `KnowledgeGraphStore::list_archivable_orphans` (new trait method). Write path (soft-delete via `epistemic_class = 'archival'` + `kg_name_index` cleanup) deferred to Phase 3b — needs a new `mark_entity_archival` trait method. Other sleep files (`embedding_reindex.rs`, `kg_backfill.rs`, `synthesizer.rs`, `pattern_extractor.rs`) remain pending — each needs its own design call (see `docs/superpowers/plans/2026-04-27-phase3a-orphan-archiver.md` inventory section for per-file complexity ranking).
+- **Status:** in progress — orphan_archiver read path done (Phase 3a)
 
 #### TD-013 ✅ [K] `VectorIndex` folded into store traits
 - **Location:** `gateway/gateway-database/src/vector_index.rs:15-32`
