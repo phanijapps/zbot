@@ -4,30 +4,46 @@ use serde::{Deserialize, Serialize};
 pub struct EntityId(pub String);
 
 impl From<String> for EntityId {
-    fn from(s: String) -> Self { EntityId(s) }
+    fn from(s: String) -> Self {
+        EntityId(s)
+    }
 }
 impl From<&str> for EntityId {
-    fn from(s: &str) -> Self { EntityId(s.to_string()) }
+    fn from(s: &str) -> Self {
+        EntityId(s.to_string())
+    }
 }
 impl AsRef<str> for EntityId {
-    fn as_ref(&self) -> &str { &self.0 }
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
 }
 impl std::fmt::Display for EntityId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.0) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RelationshipId(pub String);
 
 impl From<String> for RelationshipId {
-    fn from(s: String) -> Self { RelationshipId(s) }
+    fn from(s: String) -> Self {
+        RelationshipId(s)
+    }
 }
 impl AsRef<str> for RelationshipId {
-    fn as_ref(&self) -> &str { &self.0 }
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Direction { Outgoing, Incoming, Both }
+pub enum Direction {
+    Outgoing,
+    Incoming,
+    Both,
+}
 
 #[derive(Debug, Clone)]
 pub enum ResolveOutcome {
