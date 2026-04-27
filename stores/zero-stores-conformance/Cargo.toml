@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 zero-stores = { path = "../zero-stores" }
-knowledge-graph = { path = "../services/knowledge-graph" }
+knowledge-graph = { path = "../../services/knowledge-graph" }
 async-trait = { workspace = true }
 
 [lints]
