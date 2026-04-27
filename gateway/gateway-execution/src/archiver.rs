@@ -183,29 +183,30 @@ impl SessionArchiver {
             .map(|m| m.len())
             .unwrap_or(0);
 
-        // 6. Delete from SQLite (file is confirmed written)
+        // 6. Delete messages + logs and mark archived — atomically.
+        //
+        // Without a transaction these three statements would auto-commit
+        // independently, leaving the DB in a partial state if the process
+        // dies between them (messages gone but session not flagged archived,
+        // or vice versa). On the next archive sweep that partial state can
+        // compound. Use `unchecked_transaction()` because `with_connection`
+        // hands out `&Connection` (not `&mut`). Closes TD-001 in
+        // `memory-bank/tech-debt.md`.
         self.db.with_connection(|conn| {
-            conn.execute(
+            let tx = conn.unchecked_transaction()?;
+            tx.execute(
                 "DELETE FROM messages WHERE session_id = ?1",
                 params![session_id],
             )?;
-            Ok(())
-        })?;
-
-        self.db.with_connection(|conn| {
-            conn.execute(
+            tx.execute(
                 "DELETE FROM execution_logs WHERE session_id = ?1",
                 params![session_id],
             )?;
-            Ok(())
-        })?;
-
-        // 7. Mark session as archived
-        self.db.with_connection(|conn| {
-            conn.execute(
+            tx.execute(
                 "UPDATE sessions SET archived = 1 WHERE id = ?1",
                 params![session_id],
             )?;
+            tx.commit()?;
             Ok(())
         })?;
 
@@ -581,6 +582,99 @@ mod tests {
             archived,
             vec!["s-pass".to_string()],
             "exactly one session matches all four conditions: {archived:?}"
+        );
+    }
+
+    /// Insert an `agent_executions` row so messages can FK-reference it.
+    fn seed_execution(db: &Arc<DatabaseManager>, session_id: &str, exec_id: &str) {
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO agent_executions \
+                   (id, session_id, agent_id, status, delegation_type, started_at) \
+                 VALUES (?1, ?2, 'root', 'completed', 'root', datetime('now'))",
+                params![exec_id, session_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    /// Insert a message row tied to a session + execution.
+    fn seed_message(db: &Arc<DatabaseManager>, session_id: &str, exec_id: &str, idx: usize) {
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO messages (id, execution_id, session_id, role, content, created_at) \
+                 VALUES (?1, ?2, ?3, 'user', 'hello', datetime('now'))",
+                params![format!("msg-{session_id}-{idx}"), exec_id, session_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    /// Insert an execution_logs row tied to a session.
+    fn seed_log(db: &Arc<DatabaseManager>, session_id: &str, idx: usize) {
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO execution_logs \
+                   (id, session_id, agent_id, timestamp, level, category, message) \
+                 VALUES (?1, ?2, 'root', datetime('now'), 'info', 'test', 'log line')",
+                params![format!("log-{session_id}-{idx}"), session_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn count_rows(db: &Arc<DatabaseManager>, sql: &str, session_id: &str) -> i64 {
+        db.with_connection(|conn| conn.query_row(sql, params![session_id], |row| row.get(0)))
+            .unwrap()
+    }
+
+    /// Regression for TD-001: archive_session must atomically delete
+    /// messages, delete execution_logs, and mark the session archived.
+    /// Before the transaction wrapper, these were three independent
+    /// auto-committed statements; a crash between them left the DB
+    /// inconsistent. After the fix, the happy path still works end-to-end
+    /// — that's what this test verifies.
+    #[test]
+    fn archive_session_atomically_deletes_and_marks() {
+        let (archiver, db, _tmp) = fresh();
+        seed_session(&db, "s1", "completed", 0, 30);
+        seed_execution(&db, "s1", "exec-s1");
+        seed_message(&db, "s1", "exec-s1", 0);
+        seed_message(&db, "s1", "exec-s1", 1);
+        seed_log(&db, "s1", 0);
+        seed_log(&db, "s1", 1);
+        seed_log(&db, "s1", 2);
+
+        let result = archiver.archive_session("s1").expect("archive ok");
+        assert_eq!(result.messages_archived, 2);
+        assert_eq!(result.logs_archived, 3);
+        assert!(result.file_size > 0, "archive file should have bytes");
+
+        assert_eq!(
+            count_rows(
+                &db,
+                "SELECT COUNT(*) FROM messages WHERE session_id = ?1",
+                "s1"
+            ),
+            0,
+            "messages must be gone"
+        );
+        assert_eq!(
+            count_rows(
+                &db,
+                "SELECT COUNT(*) FROM execution_logs WHERE session_id = ?1",
+                "s1"
+            ),
+            0,
+            "logs must be gone"
+        );
+        assert_eq!(
+            count_rows(&db, "SELECT archived FROM sessions WHERE id = ?1", "s1"),
+            1,
+            "session must be marked archived"
         );
     }
 }
