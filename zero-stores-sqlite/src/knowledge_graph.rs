@@ -62,18 +62,40 @@ impl KnowledgeGraphStore for SqliteKgStore {
         block(move || storage.bump_entity_mention(&id).map_err(map_graph_err)).await
     }
 
-    async fn add_alias(&self, _entity_id: &EntityId, _surface: &str) -> StoreResult<()> {
-        Err(StoreError::Backend("not implemented".into()))
+    async fn add_alias(&self, entity_id: &EntityId, surface: &str) -> StoreResult<()> {
+        let storage = self.storage.clone();
+        let entity_id = entity_id.0.clone();
+        let surface = surface.to_string();
+        block(move || {
+            storage
+                .add_alias(&entity_id, &surface)
+                .map_err(map_graph_err)
+        })
+        .await
     }
 
     async fn resolve_entity(
         &self,
-        _agent_id: &str,
-        _entity_type: &EntityType,
-        _name: &str,
-        _embedding: Option<&[f32]>,
+        agent_id: &str,
+        entity_type: &EntityType,
+        name: &str,
+        embedding: Option<&[f32]>,
     ) -> StoreResult<ResolveOutcome> {
-        Err(StoreError::Backend("not implemented".into()))
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        let entity_type = entity_type.clone();
+        let name = name.to_string();
+        let embedding = embedding.map(|e| e.to_vec());
+        block(move || {
+            let result = storage
+                .resolve_entity(&agent_id, &entity_type, &name, embedding.as_deref())
+                .map_err(map_graph_err)?;
+            Ok(match result {
+                Some(matched_id) => ResolveOutcome::Match(EntityId::from(matched_id)),
+                None => ResolveOutcome::NoMatch,
+            })
+        })
+        .await
     }
 
     async fn upsert_relationship(

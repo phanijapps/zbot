@@ -1633,6 +1633,78 @@ impl GraphStorage {
             })
             .map_err(GraphError::Other)
     }
+
+    /// Insert `surface` as an additional alias for an existing entity.
+    ///
+    /// Uses `INSERT OR IGNORE` so a duplicate surface form is silently skipped.
+    /// Single-table write — no transaction required.
+    pub fn add_alias(&self, entity_id: &str, surface: &str) -> GraphResult<()> {
+        let entity_id = entity_id.to_string();
+        let surface = surface.to_string();
+        self.db
+            .with_connection(move |conn| {
+                (|| -> GraphResult<()> {
+                    let alias_id = format!("alias-{}", uuid::Uuid::new_v4());
+                    let normalized = crate::resolver::normalize_name(&surface);
+                    conn.execute(
+                        "INSERT OR IGNORE INTO kg_aliases \
+                         (id, entity_id, surface_form, normalized_form, source, confidence, first_seen_at) \
+                         VALUES (?1, ?2, ?3, ?4, 'manual', 1.0, ?5)",
+                        rusqlite::params![
+                            alias_id,
+                            entity_id,
+                            surface,
+                            normalized,
+                            chrono::Utc::now().to_rfc3339(),
+                        ],
+                    )
+                    .map_err(GraphError::Database)?;
+                    Ok(())
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Resolve a candidate (agent_id + entity_type + name + optional embedding)
+    /// against existing entities.
+    ///
+    /// Returns `Some(entity_id)` when a match is found, `None` otherwise.
+    /// Delegates to the `EntityResolver` cascade (exact-normalized → embedding).
+    pub fn resolve_entity(
+        &self,
+        agent_id: &str,
+        entity_type: &EntityType,
+        name: &str,
+        embedding: Option<&[f32]>,
+    ) -> GraphResult<Option<String>> {
+        let agent_id = agent_id.to_string();
+        let entity_type = entity_type.clone();
+        let name = name.to_string();
+        let embedding = embedding.map(|e| e.to_vec());
+        self.db
+            .with_connection(move |conn| {
+                (|| -> GraphResult<Option<String>> {
+                    let candidate =
+                        Entity::new(agent_id.clone(), entity_type.clone(), name.clone());
+                    match crate::resolver::resolve(
+                        conn,
+                        &agent_id,
+                        &candidate,
+                        embedding.as_deref(),
+                    )
+                    .map_err(GraphError::Other)?
+                    {
+                        crate::resolver::ResolveOutcome::Merge { existing_id, .. } => {
+                            Ok(Some(existing_id))
+                        }
+                        crate::resolver::ResolveOutcome::Create => Ok(None),
+                    }
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
 }
 
 /// Outcome of a `merge_entity_into` call.
