@@ -442,30 +442,34 @@ pub async fn get_entity_subgraph(
 
 /// GET /api/graph/:agent_id/search
 /// Search entities by name.
+///
+/// Migrated from `graph_service` to `kg_store` (KnowledgeGraphStore trait).
+/// Response shape is identical; only the backing call changed.
 pub async fn search_entities(
     Path(agent_id): Path<String>,
     Query(query): Query<SearchQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<EntityListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let graph_service = match &state.graph_service {
-        Some(service) => service,
+    let kg_store = match &state.kg_store {
+        Some(store) => store,
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(ErrorResponse {
-                    error: "Knowledge graph service not available".to_string(),
+                    error: "Knowledge graph store unavailable".to_string(),
                 }),
             ));
         }
     };
 
-    match graph_service
-        .search_entities(
+    match kg_store
+        .search_entities_by_name(
             normalize_agent_id(&agent_id),
             &query.q,
             query.limit.unwrap_or(20),
         )
         .await
+        .map_err(store_err_to_http)
     {
         Ok(entities) => {
             let total = entities.len();
@@ -474,12 +478,45 @@ pub async fn search_entities(
                 total,
             }))
         }
-        Err(e) => Err((
+        Err(e) => Err(e),
+    }
+}
+
+/// Map a [`zero_stores::StoreError`] to the HTTP error pair used by graph
+/// handlers: `(StatusCode, Json<ErrorResponse>)`.
+fn store_err_to_http(err: zero_stores::StoreError) -> (StatusCode, Json<ErrorResponse>) {
+    use zero_stores::StoreError;
+    match err {
+        StoreError::NotFound => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Entity not found".to_string(),
+            }),
+        ),
+        StoreError::Conflict(msg) => (
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                error: format!("Conflict: {}", msg),
+            }),
+        ),
+        StoreError::Invalid(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!("Invalid request: {}", msg),
+            }),
+        ),
+        StoreError::Unavailable { .. } => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "Knowledge graph store temporarily unavailable".to_string(),
+            }),
+        ),
+        StoreError::Schema(msg) | StoreError::Backend(msg) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: format!("Failed to search entities: {}", e),
+                error: format!("Knowledge graph error: {}", msg),
             }),
-        )),
+        ),
     }
 }
 
