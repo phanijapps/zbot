@@ -122,10 +122,28 @@ impl KnowledgeGraphStore for SqliteKgStore {
 
     async fn store_knowledge(
         &self,
-        _agent_id: &str,
-        _knowledge: ExtractedKnowledge,
+        agent_id: &str,
+        knowledge: ExtractedKnowledge,
     ) -> StoreResult<StoreOutcome> {
-        Err(StoreError::Backend("not implemented".into()))
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        // Capture counts before consuming the value via `.into()`.
+        // GraphStorage::store_knowledge returns `()` with no outcome breakdown,
+        // so we derive counts from the input. merged vs inserted is unknown at
+        // this layer for Phase 1, so all entities count as inserted.
+        let entity_count = knowledge.entities.len() as u64;
+        let rel_count = knowledge.relationships.len() as u64;
+        block(move || {
+            storage
+                .store_knowledge(&agent_id, knowledge.into())
+                .map_err(map_graph_err)?;
+            Ok(StoreOutcome {
+                entities_inserted: entity_count,
+                entities_merged: 0,
+                relationships_inserted: rel_count,
+            })
+        })
+        .await
     }
 
     async fn get_neighbors(
