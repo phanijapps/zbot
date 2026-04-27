@@ -10,6 +10,7 @@
 
 use crate::vector_index::VectorIndex;
 use crate::KnowledgeDatabase;
+use chrono::Utc;
 use rusqlite::params;
 use std::sync::Arc;
 
@@ -244,7 +245,7 @@ impl ProcedureRepository {
             conn.execute(
                 "UPDATE procedures SET \
                  success_count = success_count + 1, \
-                 last_used = datetime('now'), \
+                 last_used = ?4, \
                  avg_duration_ms = CASE \
                      WHEN avg_duration_ms IS NULL THEN ?2 \
                      WHEN ?2 IS NULL THEN avg_duration_ms \
@@ -255,9 +256,9 @@ impl ProcedureRepository {
                      WHEN ?3 IS NULL THEN avg_token_cost \
                      ELSE (avg_token_cost * (success_count - 1) + ?3) / success_count \
                  END, \
-                 updated_at = datetime('now') \
+                 updated_at = ?4 \
                  WHERE id = ?1",
-                params![id, duration_ms, token_cost],
+                params![id, duration_ms, token_cost, Utc::now().to_rfc3339()],
             )?;
             Ok(())
         })
@@ -269,9 +270,9 @@ impl ProcedureRepository {
             conn.execute(
                 "UPDATE procedures SET \
                  failure_count = failure_count + 1, \
-                 updated_at = datetime('now') \
+                 updated_at = ?2 \
                  WHERE id = ?1",
-                params![id],
+                params![id, Utc::now().to_rfc3339()],
             )?;
             Ok(())
         })
