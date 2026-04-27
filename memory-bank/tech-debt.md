@@ -63,8 +63,13 @@ Scope tags:
   - `pattern_extractor.rs` (~9 stmts; cross-DB read)
 - **Why debt:** Roughly 60 statements touching knowledge-side tables directly via raw `rusqlite::Connection`. None of these would survive a SurrealDB swap unless they all route through `KnowledgeGraphStore` and `MemoryFactStore`.
 - **Fix:** After TD-010 lands, route each file's reads/writes through the appropriate store trait. Reindex is the trickiest — `vec0`-specific schema rebuild becomes a SurrealDB-specific schema rebuild — so hide it behind `KnowledgeGraphStore::reindex_embeddings(new_dim)` (or equivalent) so each impl owns its physical layout.
-- **Progress (Phase 3a):** `orphan_archiver.rs` read path migrated to `KnowledgeGraphStore::list_archivable_orphans` (new trait method). Write path (soft-delete via `epistemic_class = 'archival'` + `kg_name_index` cleanup) deferred to Phase 3b — needs a new `mark_entity_archival` trait method. Other sleep files (`embedding_reindex.rs`, `kg_backfill.rs`, `synthesizer.rs`, `pattern_extractor.rs`) remain pending — each needs its own design call (see `docs/superpowers/plans/2026-04-27-phase3a-orphan-archiver.md` inventory section for per-file complexity ranking).
-- **Status:** in progress — orphan_archiver read path done (Phase 3a)
+- **Per-file decisions:**
+  - `orphan_archiver.rs` ✅ — read path migrated (Phase 3a, PR #76); write path migrated (Phase 3b, PR #77). Together: file uses no raw rusqlite in production logic.
+  - `kg_backfill.rs` ⏸ **intentionally NOT migrated** — one-shot bootstrap that runs once at daemon startup to retrofit pre-existing rows with new schema fields. Forcing it through the trait would mean adding ~6 new methods (list-with-missing-property, batch-update-properties, compaction marker check/set) just for this single bootstrap concern. When SurrealDB launches, it'll start with the new schema and won't need the same backfill — each impl handles its own schema-evolution story. Marking as decision-explicit rather than pending. (Phase 3c)
+  - `embedding_reindex.rs` ⏳ — pending Phase 3d. Fills in the existing `reindex_embeddings` stub on `KnowledgeGraphStore`. The vec0 reindex itself is SQLite-specific; the trait method's contract ("rebuild embedding indexes for new dimension") is portable. Implementation will require threading an `EmbeddingClient` into `SqliteKgStore` — design call landed in 3d.
+  - `synthesizer.rs` 🛑 deferred — needs `MemoryFactStore` relocated from `framework/zero-core` to `stores/zero-stores` (separate workstream) plus new methods (multi-session aggregation, cosine dedup over vec0). Belongs in Phase 5+.
+  - `pattern_extractor.rs` 🛑 deferred — cross-DB read (knowledge.db + conversations.db) plus LLM orchestration. Needs `ProcedureStore` + `EpisodeStore` traits, not part of Phase 3 scope. Phase 5+.
+- **Status:** in progress — orphan_archiver complete (Phase 3a/3b); embedding_reindex pending (3d); kg_backfill explicitly opted out (3c); synthesizer + pattern_extractor deferred to Phase 5+
 
 #### TD-013 ✅ [K] `VectorIndex` folded into store traits
 - **Location:** `gateway/gateway-database/src/vector_index.rs:15-32`
