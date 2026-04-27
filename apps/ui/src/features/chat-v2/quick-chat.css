@@ -77,6 +77,7 @@
 .quick-chat__msg--assistant .copy-btn { align-self: flex-start; }
 .quick-chat__user-bubble {
   max-width: 80%;
+  min-width: 0;
   padding: 10px 14px;
   border-radius: 14px 14px 2px 14px;
   background: linear-gradient(135deg, var(--fx-accent), color-mix(in srgb, var(--fx-accent) 60%, #c08bff));
@@ -84,11 +85,13 @@
   font-size: 14px;
   font-weight: 500;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   box-shadow: 0 0 calc(24px * var(--fx-glow)) color-mix(in srgb, var(--fx-accent) 35%, transparent);
 }
 /* Assistant bubble — holo card with accent-tinted border + glow. */
 .quick-chat__assistant {
   max-width: 80%;
+  min-width: 0;
   padding: 10px 14px;
   border-radius: 14px 14px 14px 2px;
   background: linear-gradient(180deg, rgba(13, 16, 24, 0.85), rgba(10, 12, 20, 0.85));
@@ -100,6 +103,15 @@
   color: var(--foreground);
   font-size: 14px;
   line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+/* Tables and pre/code inside markdown can blow out the bubble width.
+ * Force them to scroll horizontally inside the bubble instead. */
+.quick-chat__assistant table,
+.quick-chat__assistant pre {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
 }
 .quick-chat__assistant > p:first-child { margin-top: 0; }
 .quick-chat__assistant > p:last-child { margin-bottom: 0; }

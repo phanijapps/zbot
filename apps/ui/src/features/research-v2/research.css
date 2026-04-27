@@ -116,6 +116,7 @@
 .research-page__user-bubble {
   align-self: flex-end;
   max-width: 80%;
+  min-width: 0;
   padding: 10px 14px;
   background: linear-gradient(135deg, var(--fx-accent), color-mix(in srgb, var(--fx-accent) 60%, #c08bff));
   border-radius: 14px 14px 2px 14px;
@@ -123,6 +124,7 @@
   font-weight: 500;
   color: #02030a;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   box-shadow: 0 0 calc(24px * var(--fx-glow)) color-mix(in srgb, var(--fx-accent) 35%, transparent);
 }
 
@@ -135,6 +137,7 @@
 .research-msg__card {
   align-self: stretch;
   max-width: 80%;
+  min-width: 0;
   padding: 14px 16px;
   border-radius: 14px 14px 14px 2px;
   background: linear-gradient(180deg, rgba(13, 16, 24, 0.85), rgba(10, 12, 20, 0.85));
@@ -146,6 +149,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  overflow-wrap: anywhere;
 }
 
 /* Inner body no longer carries bubble styling — it's just the prose
@@ -155,9 +159,19 @@
   line-height: 1.6;
   color: var(--foreground);
   align-self: stretch;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .research-page__assistant > :first-child { margin-top: 0; }
 .research-page__assistant > :last-child { margin-bottom: 0; }
+/* Tables and pre/code inside markdown can blow out the bubble width.
+ * Force them to scroll horizontally inside the bubble instead. */
+.research-page__assistant table,
+.research-page__assistant pre {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
 
 /* --- Message shells + adornments ----------------------------------------- */
 
