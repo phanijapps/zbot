@@ -231,6 +231,8 @@ mod tests {
     use knowledge_graph::GraphStorage;
     use std::sync::Mutex;
     use tempfile::tempdir;
+    use zero_stores::KnowledgeGraphStore;
+    use zero_stores_sqlite::SqliteKgStore;
 
     struct Harness {
         _tmp: tempfile::TempDir,
@@ -345,8 +347,11 @@ mod tests {
             h.compaction_repo.clone(),
             Arc::new(RecordingPatternLlm),
         ));
+        let archiver_kg_store: Arc<dyn KnowledgeGraphStore> =
+            Arc::new(SqliteKgStore::new(h.graph.clone()));
         let archiver = Arc::new(crate::sleep::OrphanArchiver::new(
             h.db.clone(),
+            archiver_kg_store,
             h.compaction_repo.clone(),
         ));
         let ops = SleepOps {

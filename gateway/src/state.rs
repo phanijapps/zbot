@@ -582,8 +582,14 @@ impl AppState {
                 compaction_repo.clone(),
                 pattern_llm,
             ));
+            // kg_store is Some whenever runner_graph_storage (and therefore this
+            // closure) is Some — safe to unwrap here.
+            let orphan_kg_store = kg_store
+                .clone()
+                .expect("kg_store is Some when graph_storage is Some");
             let orphan_archiver = Arc::new(gateway_execution::sleep::OrphanArchiver::new(
                 knowledge_db.clone(),
+                orphan_kg_store,
                 compaction_repo.clone(),
             ));
             let ops = gateway_execution::sleep::SleepOps {

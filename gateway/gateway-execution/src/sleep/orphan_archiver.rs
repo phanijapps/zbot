@@ -26,6 +26,11 @@ use std::sync::Arc;
 
 use gateway_database::{CompactionRepository, KnowledgeDatabase};
 use rusqlite::params;
+use zero_stores::KnowledgeGraphStore;
+
+/// Minimum age (in hours) an entity must have before it becomes a candidate
+/// for orphan archival. Matches the `-24 hours` threshold in the original SQL.
+const MIN_AGE_HOURS: u32 = 24;
 
 /// Cap on archivals per cycle. Prevents a bad criterion from accidentally
 /// wiping the graph on first pass.
@@ -48,14 +53,22 @@ pub struct OrphanArchiverStats {
 
 /// Archives isolated, low-confidence, singleton entities.
 pub struct OrphanArchiver {
+    /// Kept for the write path (soft-delete + name-index cleanup) until Phase 3b.
     db: Arc<KnowledgeDatabase>,
+    /// Used by the read path (`load_candidates`). Replaces the direct SQL query.
+    kg_store: Arc<dyn KnowledgeGraphStore>,
     compaction_repo: Arc<CompactionRepository>,
 }
 
 impl OrphanArchiver {
-    pub fn new(db: Arc<KnowledgeDatabase>, compaction_repo: Arc<CompactionRepository>) -> Self {
+    pub fn new(
+        db: Arc<KnowledgeDatabase>,
+        kg_store: Arc<dyn KnowledgeGraphStore>,
+        compaction_repo: Arc<CompactionRepository>,
+    ) -> Self {
         Self {
             db,
+            kg_store,
             compaction_repo,
         }
     }
@@ -63,7 +76,7 @@ impl OrphanArchiver {
     /// Run one archival pass. Returns aggregate stats. A per-entity failure
     /// is logged and skipped — the cycle never fails hard.
     pub async fn run_cycle(&self, run_id: &str) -> Result<OrphanArchiverStats, String> {
-        let candidates = self.load_candidates()?;
+        let candidates = self.load_candidates().await?;
         let mut stats = OrphanArchiverStats {
             scanned: candidates.len(),
             ..Default::default()
@@ -97,31 +110,14 @@ impl OrphanArchiver {
     }
 
     /// Select up to [`ARCHIVE_LIMIT`] entity ids matching the orphan criteria.
-    fn load_candidates(&self) -> Result<Vec<String>, String> {
-        let limit = ARCHIVE_LIMIT as i64;
-        self.db.with_connection(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id FROM kg_entities e
-                 WHERE mention_count = 1
-                   AND confidence < 0.5
-                   AND first_seen_at < datetime('now', '-24 hours')
-                   AND compressed_into IS NULL
-                   AND epistemic_class != 'archival'
-                   AND NOT EXISTS (
-                       SELECT 1 FROM kg_relationships r
-                       WHERE r.source_entity_id = e.id
-                   )
-                   AND NOT EXISTS (
-                       SELECT 1 FROM kg_relationships r
-                       WHERE r.target_entity_id = e.id
-                   )
-                 LIMIT ?1",
-            )?;
-            let rows = stmt
-                .query_map(params![limit], |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(rows)
-        })
+    /// Routed through `KnowledgeGraphStore::list_archivable_orphans` (TD-012 P3a).
+    async fn load_candidates(&self) -> Result<Vec<String>, String> {
+        let archivables = self
+            .kg_store
+            .list_archivable_orphans(MIN_AGE_HOURS, ARCHIVE_LIMIT)
+            .await
+            .map_err(|e| format!("list_archivable_orphans: {e}"))?;
+        Ok(archivables.into_iter().map(|a| a.entity_id.0).collect())
     }
 
     /// Soft-delete a single entity: flip `epistemic_class` + `compressed_into`
@@ -157,12 +153,15 @@ mod tests {
     use super::*;
     use gateway_database::{CompactionRepository, KnowledgeDatabase};
     use gateway_services::VaultPaths;
+    use knowledge_graph::storage::GraphStorage;
     use tempfile::TempDir;
+    use zero_stores_sqlite::SqliteKgStore;
 
     struct Harness {
         _tmp: TempDir,
         db: Arc<KnowledgeDatabase>,
         repo: Arc<CompactionRepository>,
+        kg_store: Arc<dyn KnowledgeGraphStore>,
     }
 
     fn setup() -> Harness {
@@ -171,10 +170,13 @@ mod tests {
         std::fs::create_dir_all(paths.conversations_db().parent().expect("parent")).expect("mkdir");
         let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
         let repo = Arc::new(CompactionRepository::new(db.clone()));
+        let storage = Arc::new(GraphStorage::new(db.clone()).expect("graph storage"));
+        let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(storage));
         Harness {
             _tmp: tmp,
             db,
             repo,
+            kg_store,
         }
     }
 
@@ -263,7 +265,7 @@ mod tests {
         // e0 has outgoing r-0; e1 has both; e2 has incoming r-1.
         // Only entities with zero in+out qualify. No entity qualifies → 0.
 
-        let archiver = OrphanArchiver::new(h.db.clone(), h.repo.clone());
+        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
         let stats = archiver.run_cycle("run-none").await.expect("run");
         assert_eq!(stats.scanned, 0, "no orphans expected: {stats:?}");
         assert_eq!(stats.archived, 0);
@@ -286,7 +288,7 @@ mod tests {
             None,
         );
 
-        let archiver = OrphanArchiver::new(h.db.clone(), h.repo.clone());
+        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
         let stats = archiver.run_cycle("run-solo").await.expect("run");
         assert_eq!(stats.scanned, 1);
         assert_eq!(stats.archived, 1);
@@ -320,7 +322,7 @@ mod tests {
             "current",
             None,
         );
-        let archiver = OrphanArchiver::new(h.db.clone(), h.repo.clone());
+        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
         let stats = archiver.run_cycle("run-conf").await.expect("run");
         assert_eq!(stats.archived, 0, "high-confidence must survive: {stats:?}");
     }
@@ -339,7 +341,7 @@ mod tests {
             "current",
             None,
         );
-        let archiver = OrphanArchiver::new(h.db.clone(), h.repo.clone());
+        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
         let stats = archiver.run_cycle("run-age").await.expect("run");
         assert_eq!(stats.archived, 0, "fresh entity must survive: {stats:?}");
     }
@@ -373,7 +375,7 @@ mod tests {
         // Incoming edge into "linked" — disqualifies it.
         insert_relationship(&h.db, "r-in", agent, "other", "linked");
 
-        let archiver = OrphanArchiver::new(h.db.clone(), h.repo.clone());
+        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
         let stats = archiver.run_cycle("run-rel").await.expect("run");
         assert_eq!(
             stats.archived, 0,
@@ -398,7 +400,7 @@ mod tests {
                 None,
             );
         }
-        let archiver = OrphanArchiver::new(h.db.clone(), h.repo.clone());
+        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
         let stats = archiver.run_cycle("run-flood").await.expect("run");
         assert_eq!(stats.scanned, 100, "cap must hold: {stats:?}");
         assert_eq!(stats.archived, 100);
@@ -418,7 +420,7 @@ mod tests {
             "current",
             None,
         );
-        let archiver = OrphanArchiver::new(h.db.clone(), h.repo.clone());
+        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
         let run_id = "run-audit";
         let stats = archiver.run_cycle(run_id).await.expect("run");
         assert_eq!(stats.archived, 1);
@@ -443,7 +445,7 @@ mod tests {
             "archival", // already archived
             Some("orphan-archive"),
         );
-        let archiver = OrphanArchiver::new(h.db.clone(), h.repo.clone());
+        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
         let stats = archiver.run_cycle("run-skip").await.expect("run");
         assert_eq!(stats.archived, 0);
     }
