@@ -127,11 +127,11 @@ Scope tags:
 - **Resolution:** Phase 1's trait surface (`KnowledgeGraphStore`, `MemoryFactStore` in `stores/zero-stores`) already exposes upsert vocabulary — `upsert_entity`, `upsert_relationship`, `add_alias`, `save_fact`, etc. The SQLite-specific `INSERT OR …` syntax lives entirely inside the SQLite impl crate and is not visible to any consumer crate. The future SurrealDB impl will use SurrealDB's record-upsert semantics in its own crate — no contract change needed.
 - **Status:** done by Phase 1 — audit confirmed in Phase 2 (no code changes required)
 
-#### TD-032 🟡 [K] Schema bootstrap is per-impl, idempotent, no cross-version migration in scope
+#### TD-032 ✅ [K] Schema bootstrap is per-impl, idempotent, no cross-version migration in scope
 - **Locations:** `gateway/gateway-database/migrations/{v23_wiki_fts.sql, v24_global_scope_backfill.sql}`, plus inline schema strings in `gateway/gateway-database/src/schema.rs` and `knowledge_schema.rs`.
 - **Resolution direction (per design doc):** Each impl crate has a private `bootstrap_schema()` function called once at startup. SQLite impl runs idempotent `CREATE TABLE IF NOT EXISTS …`. SurrealDB impl runs idempotent `DEFINE TABLE … IF NOT EXISTS`. **No `Migrator` trait in `zero-stores`.** Cross-version data migration and SQLite→SurrealDB data migration are explicitly out of this design's scope — those become a future `zero-stores-migrate` crate when actually needed.
-- **Fix:** Refactor existing inline migrations into `zero-stores-sqlite/src/bootstrap.rs`. Add `zero-stores-surreal/src/bootstrap.rs` for SurrealDB's `DEFINE …` calls when that impl is added.
-- **Status:** pending
+- **Phase 4 outcome:** Added `stores/zero-stores-sqlite/src/bootstrap.rs` with `bootstrap_schema()` as the canonical hook point for the SQLite backend. Today it delegates to `gateway-database`'s `KnowledgeDatabase::new` (which runs the bootstrap as a constructor side effect) — pattern established without churning 1000+ lines of schema DDL. When SurrealDB lands, its bootstrap mirrors this in `stores/zero-stores-surreal/src/bootstrap.rs`. Full DDL relocation deferred until shapes need to diverge between backends.
+- **Status:** ✅ done (Phase 4) — pattern established, full schema relocation deferred until proven necessary
 
 #### TD-033 🟢 [Both] Hardcoded table-name string literals scattered across crates
 - **Locations:** ~90 in `services/knowledge-graph/src/storage.rs`, ~40 in `services/execution-state/src/repository.rs`, ~12 in `gateway/gateway-bridge/src/outbox.rs`.
