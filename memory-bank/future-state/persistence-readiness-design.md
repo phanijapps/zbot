@@ -592,6 +592,18 @@ This crate's repository touches both conversations.db and knowledge.db. Knowledg
 
 ---
 
+## Fallback strategy
+
+The worst-case operational story is: **switch back to SQLite.** The design supports this as a first-class fallback, not a hack.
+
+**Code-level fallback is one config flag.** `knowledge_backend: sqlite` (instead of `surrealdb`) makes `PersistenceFactory` construct `SqliteKgStore` + `SqliteMemoryStore` instead of the SurrealDB impls. The trait surface is identical, so agent tools, HTTP handlers, and sleep jobs work unchanged. Same daemon binary; no rebuild required.
+
+**Data does not auto-transfer between backends.** SQLite and SurrealDB store on disk in their own formats. Falling back from SurrealDB → SQLite starts with an empty `knowledge.db`; the SurrealDB data remains intact at `$VAULT/data/knowledge.surreal/` (recoverable by switching back later) but is not migrated into SQLite. The "rebuild from sources" pipeline closes the gap when you commit to one backend: memory facts re-derive from session distillation, KG entities re-derive from source artifacts (wiki, skills, ward indexer inputs).
+
+**The SQLite impl stays maintained long-term, not deprecated.** The cross-impl conformance suite runs both backends in CI on every PR; bug fixes apply to both; new trait methods are implemented in both. This is an explicit ongoing commitment, captured here so it doesn't drift away. If at some future point the project chooses to drop SQLite support, that's a separate decision (with its own design doc) — it is not the trajectory of this work.
+
+---
+
 ## What we are explicitly NOT doing
 
 - **No migration tooling.** Schema bootstrap is per-impl, idempotent, runs every startup. Migration between schema versions, or between SQLite and SurrealDB data, is a future workstream and a future crate (`zero-stores-migrate`).
