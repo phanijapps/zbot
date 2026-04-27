@@ -493,11 +493,15 @@ pub async fn emit_agent_started(
 
 /// Emit delegation started event.
 ///
-/// Includes child_conversation_id for frontend tracking (used as key for subagent activities).
+/// Includes both `parent_conversation_id` (so the parent's WebSocket subscription
+/// receives this event in real time) and `child_conversation_id` (used as the
+/// frontend key for subagent activities).
+#[allow(clippy::too_many_arguments)]
 pub async fn emit_delegation_started(
     event_bus: &EventBus,
     parent_agent_id: &str,
     session_id: &str,
+    parent_conversation_id: &str,
     child_agent_id: &str,
     child_execution_id: &str,
     child_conversation_id: &str,
@@ -511,7 +515,7 @@ pub async fn emit_delegation_started(
             parent_agent_id: parent_agent_id.to_string(),
             child_agent_id: child_agent_id.to_string(),
             task: task.to_string(),
-            parent_conversation_id: None,
+            parent_conversation_id: Some(parent_conversation_id.to_string()),
             child_conversation_id: Some(child_conversation_id.to_string()),
         })
         .await;
@@ -569,5 +573,54 @@ mod tests {
         assert_eq!(setup.session_id, "session-123");
         assert_eq!(setup.execution_id, "exec-456");
         assert_eq!(setup.ward_id, Some("my-project".to_string()));
+    }
+
+    /// Regression: `emit_delegation_started` must populate `parent_conversation_id`
+    /// on the published event so the parent's WebSocket subscription (scoped by
+    /// conversation_id) receives the event in real time.
+    ///
+    /// See `defect_research_realtime_events_race.md` — when this was hardcoded
+    /// to `None`, /research pages missed delegation events until manual refresh.
+    #[tokio::test]
+    async fn emit_delegation_started_populates_parent_conversation_id() {
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe_all();
+
+        emit_delegation_started(
+            &event_bus,
+            "root",
+            "session-abc",
+            "conv-parent-xyz",
+            "child-agent",
+            "exec-child-1",
+            "conv-child-1",
+            "do work",
+        )
+        .await;
+
+        let event = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv())
+            .await
+            .expect("event must be received before timeout")
+            .expect("event must not be lagged/closed");
+
+        match event {
+            GatewayEvent::DelegationStarted {
+                parent_conversation_id,
+                child_conversation_id,
+                ..
+            } => {
+                assert_eq!(
+                    parent_conversation_id,
+                    Some("conv-parent-xyz".to_string()),
+                    "parent_conversation_id must be threaded through (was hardcoded to None)"
+                );
+                assert_eq!(
+                    child_conversation_id,
+                    Some("conv-child-1".to_string()),
+                    "child_conversation_id should still be set"
+                );
+            }
+            other => panic!("expected DelegationStarted, got: {:?}", other),
+        }
     }
 }

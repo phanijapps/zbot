@@ -818,6 +818,11 @@ impl ExecutionRunner {
             parent_agent_id: root_agent_id,
             session_id: session_id.to_string(),
             parent_execution_id: parent_execution_id.clone(),
+            // Resume-from-crash: parent's conversation_id is not separately tracked
+            // here. The root agent's conversation_id equals session_id by convention,
+            // so use session_id as a best-effort fallback. This is consistent with
+            // the legacy emit at runner/core.rs spawn_delegation.
+            parent_conversation_id: session_id.to_string(),
             child_agent_id: crashed_exec.agent_id.clone(),
             child_execution_id: new_exec.id.clone(),
             task: task.clone(),
