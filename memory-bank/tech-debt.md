@@ -37,12 +37,10 @@ Scope tags:
 
 ### Real bugs
 
-#### TD-001 🔴 [B] `archiver.rs` archives without a transaction
-- **Location:** `gateway/gateway-execution/src/archiver.rs:187-210`
-- **What:** `SessionArchiver::archive_session` runs three independent statements in three separate `with_connection` calls — `DELETE FROM messages`, `DELETE FROM execution_logs`, `UPDATE sessions SET archived = 1` — with no outer transaction. Compressed JSONL file is written to disk *before* the deletes.
-- **Risk:** A crash between calls leaves the session in a partial state — messages gone but session not flagged archived; or flagged archived but logs still present. The next archive sweep can compound the corruption (re-archive an already-half-archived session).
-- **Fix:** Wrap all three statements in one `with_connection` block bounded by `BEGIN`/`COMMIT`. Ideally push the whole operation behind a `ConversationStore::archive_session(id)` trait method so the impl owns the transaction (this is a natural fit for Phase 6).
-- **Status:** pending
+#### TD-001 ✅ [B] `archiver.rs` archives now wrapped in a transaction
+- **Location:** `gateway/gateway-execution/src/archiver.rs:186-210`
+- **Resolution:** Wrapped the three writes (`DELETE FROM messages`, `DELETE FROM execution_logs`, `UPDATE sessions SET archived = 1`) in a single `with_connection` block bounded by `conn.unchecked_transaction()` and `tx.commit()`. Added regression test `archive_session_atomically_deletes_and_marks` that seeds a session with messages + logs and verifies all three writes succeed end-to-end.
+- **Status:** done — PR #73 (commit `dbcebea`)
 
 ### Abstraction-shape debt — knowledge side (critical path for SurrealDB)
 
@@ -108,33 +106,20 @@ Scope tags:
 
 ### Dialect-portability debt
 
-#### TD-030 🟡 [K] `datetime('now')` and `datetime('now', '-N days')` time math in SQL strings
-- **Total occurrences:** 41 across the workspace (grep `datetime('now'` over `gateway/`, `services/`, `runtime/`, `framework/`).
-- **Knowledge-side callsites (must be cleaned before SurrealDB):**
-  - `gateway/gateway-database/src/memory_repository.rs:49,79,110,136`
-  - `gateway/gateway-database/src/knowledge_schema.rs:32`
-  - `gateway/gateway-database/src/procedure_repository.rs:51,55`
-  - `services/knowledge-graph/src/storage.rs` (multiple)
-  - `services/execution-state/src/repository.rs` (knowledge-side ops only)
-- **Conversations-side callsites (can stay):**
-  - `gateway/gateway-database/src/repository.rs:22`
-  - `gateway/gateway-bridge/src/outbox.rs` (4×)
-- **Fix:** For knowledge-side callsites, generate timestamps in Rust via `chrono::Utc::now().to_rfc3339()` and `chrono::Utc::now() - chrono::Duration::days(14)`, then pass as bound parameters. The SQLite impl behaves identically; the contract no longer assumes SQLite-flavoured time math.
-- **Status:** pending
+#### TD-030 ✅ [K] `datetime('now')` knowledge-side callsites replaced with Rust timestamps
+- **Locations cleared (Phase 2):**
+  - `gateway/gateway-database/src/memory_repository.rs:473, 628, 667, 1103, 1156, 1172, 1202` — 7 callsites (commit `e0d89fe`)
+  - `gateway/gateway-database/src/procedure_repository.rs:247, 258, 272` — 3 callsites (commit `67a6dd2`)
+  - `gateway/gateway-database/src/episode_repository.rs:235` — 1 relative-time callsite using `chrono::Duration::days(14)` (commit `29a1b02`)
+- **Resolution:** All knowledge-side runtime SQL callsites now bind a `chrono::Utc::now().to_rfc3339()` parameter instead of using SQLite's `datetime('now')`. Relative-time math (e.g., `'-14 days'`) is computed via `chrono::Duration::days(14)` and bound as a parameter. The SQLite impl behaves identically; the contract no longer assumes the DB has a clock — needed for the future SurrealDB swap.
+- **Out of scope (deliberately retained):** `knowledge_schema.rs:31, 736` (schema bootstrap upsert + test fixture — impl-internal schema territory; addressed in TD-032 if/when revisited). Conversations-side callsites (`schema.rs`, `repository.rs`, `outbox.rs`, `archiver.rs`) — conversations stays SQLite forever per the design, so portability concerns don't apply.
+- **Follow-up tracked separately:** TD-042 captures the `julianday('now')` callsite at `memory_repository.rs:629` (semantic change required, not a mechanical substitution).
+- **Status:** done — Phase 2
 
-#### TD-031 🟡 [K] `INSERT OR REPLACE` / `INSERT OR IGNORE` syntax in SQL not in trait
-- **Locations** (grep `INSERT OR (REPLACE|IGNORE)` over Rust sources):
-  - `gateway/gateway-database/src/schema.rs` — `schema_version` upsert
-  - `gateway/gateway-database/src/memory_repository.rs` — multiple upserts
-  - `gateway/gateway-database/src/recall_log_repository.rs`
-  - `gateway/gateway-database/src/kg_episode_repository.rs`
-  - `gateway/gateway-database/src/knowledge_schema.rs`
-  - `services/knowledge-graph/src/storage.rs` (2×)
-  - `services/execution-state/src/repository.rs` (1×)
-  - `gateway/gateway-execution/src/archiver.rs` (1×)
-  - `gateway/gateway-execution/tests/session_state_tests.rs` (test fixture)
-- **Fix:** Express upsert intent at the trait level — `upsert_entity`, `insert_if_absent_episode`, etc. Move SQLite-specific syntax into the impl. SurrealDB's record upsert semantics differ; the contract should be backend-agnostic.
-- **Status:** pending
+#### TD-031 ✅ [K] `INSERT OR REPLACE` / `INSERT OR IGNORE` semantics already at trait level (closed by Phase 1)
+- **Locations audited (Phase 2):** All `INSERT OR REPLACE` / `INSERT OR IGNORE` callsites in the workspace are inside impl crates (`gateway-database`, `services/knowledge-graph`, `services/execution-state`). Specifically: `recall_log_repository.rs`, `schema.rs`, `knowledge_schema.rs`, `memory_repository.rs:1102` (embedding_cache), `causal.rs`, `kg_episode_repository.rs` (×3), `storage.rs` (×3 alias inserts), `execution-state/repository.rs:534` (temp-table trick).
+- **Resolution:** Phase 1's trait surface (`KnowledgeGraphStore`, `MemoryFactStore` in `stores/zero-stores`) already exposes upsert vocabulary — `upsert_entity`, `upsert_relationship`, `add_alias`, `save_fact`, etc. The SQLite-specific `INSERT OR …` syntax lives entirely inside the SQLite impl crate and is not visible to any consumer crate. The future SurrealDB impl will use SurrealDB's record-upsert semantics in its own crate — no contract change needed.
+- **Status:** done by Phase 1 — audit confirmed in Phase 2 (no code changes required)
 
 #### TD-032 🟡 [K] Schema bootstrap is per-impl, idempotent, no cross-version migration in scope
 - **Locations:** `gateway/gateway-database/migrations/{v23_wiki_fts.sql, v24_global_scope_backfill.sql}`, plus inline schema strings in `gateway/gateway-database/src/schema.rs` and `knowledge_schema.rs`.
@@ -161,6 +146,12 @@ Scope tags:
 - **Fix:** No urgency. Standardize on numbered (`?1`) opportunistically as files are touched for other work.
 - **Status:** opportunistic
 
+#### TD-042 🟢 [K] `julianday('now')` date-arithmetic at memory_repository.rs:629
+- **Location:** `gateway/gateway-database/src/memory_repository.rs:629` — `julianday('now') - julianday(updated_at) > ?2` (in `decay_stale_facts`).
+- **Why debt:** `julianday()` is a SQLite-specific time function. Like `datetime('now')`, it bakes a clock assumption into the SQL — but unlike `datetime('now')`, it can't be replaced by a single bound parameter. The fix requires a semantic change: pre-compute a threshold timestamp in Rust (`Utc::now() - Duration::days(N)`) and rewrite the WHERE clause to compare `updated_at < ?threshold`.
+- **Why deferred:** Phase 2 was scoped to mechanical `datetime('now')` substitution; this is a semantic change. Best addressed alongside Phase 4 (schema bootstrap) when the full SQL surface is reviewed for SurrealDB portability anyway.
+- **Status:** pending — Phase 4
+
 ---
 
 ## Phased fix plan
@@ -180,11 +171,11 @@ Each phase produces value standalone — none of them require finishing the next
 - Resolve TD-013: pick (a) keep `VectorIndex` separate or (b) fold into the store traits. Recommend (b); document the choice in `memory-bank/decisions.md`.
 - **This is the longest pole.** Without it, TD-012 and TD-014 are blocked.
 
-### Phase 2 — Knowledge-side dialect cleanup (small, parallel-safe)
-**Closes:** TD-030, TD-031 (knowledge-side callsites only)
-- Replace `datetime('now')` with Rust-side `chrono::Utc::now()` strings.
-- Hide `INSERT OR REPLACE` / `INSERT OR IGNORE` behind trait methods.
-- Can run in parallel with Phase 1 once trait shapes are decided.
+### Phase 2 — Knowledge-side dialect cleanup ✅ done
+**Closed:** TD-030, TD-031 (knowledge-side callsites only)
+- Replaced `datetime('now')` with Rust-side `chrono::Utc::now()` parameter binding across `memory_repository.rs` (7), `procedure_repository.rs` (3), and `episode_repository.rs` (1) — 11 callsites total.
+- TD-031 was already addressed by Phase 1's trait surface; Phase 2 audit confirmed all remaining `INSERT OR …` callsites are impl-internal.
+- Follow-up TD-042 (deferred `julianday('now')` callsite) tracked separately for Phase 4.
 
 ### Phase 3 — Route shadow SQL through traits
 **Closes:** TD-012, TD-014

@@ -9,6 +9,7 @@
 // to the injected `VectorIndex`.
 // ============================================================================
 
+use chrono::Utc;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -470,8 +471,8 @@ impl MemoryRepository {
     pub fn supersede_fact(&self, old_id: &str, new_id: &str) -> Result<(), String> {
         self.db.with_connection(|conn| {
             conn.execute(
-                "UPDATE memory_facts SET valid_until = datetime('now'), superseded_by = ?1 WHERE id = ?2",
-                params![new_id, old_id],
+                "UPDATE memory_facts SET valid_until = ?3, superseded_by = ?1 WHERE id = ?2",
+                params![new_id, old_id, Utc::now().to_rfc3339()],
             )?;
             Ok(())
         })
@@ -625,10 +626,10 @@ impl MemoryRepository {
     ) -> Result<usize, String> {
         self.db.with_connection(|conn| {
             let count = conn.execute(
-                "UPDATE memory_facts SET confidence = confidence * ?1, updated_at = datetime('now')
+                "UPDATE memory_facts SET confidence = confidence * ?1, updated_at = ?3
                  WHERE julianday('now') - julianday(updated_at) > ?2
                  AND confidence > 0.1",
-                params![decay_factor, older_than_days],
+                params![decay_factor, older_than_days, Utc::now().to_rfc3339()],
             )?;
             Ok(count)
         })
@@ -664,9 +665,9 @@ impl MemoryRepository {
                      (id, session_id, agent_id, scope, category, key, content, confidence,
                       ward_id, epistemic_class, archived_at)
                  SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                        ward_id, COALESCE(epistemic_class, 'current'), datetime('now')
+                        ward_id, COALESCE(epistemic_class, 'current'), ?2
                  FROM memory_facts WHERE id = ?1",
-                params![fact_id],
+                params![fact_id, Utc::now().to_rfc3339()],
             )?;
             conn.execute("DELETE FROM memory_facts WHERE id = ?1", params![fact_id])?;
             Ok(())
@@ -1100,8 +1101,8 @@ impl MemoryRepository {
         self.db.with_connection(|conn| {
             conn.execute(
                 "INSERT OR REPLACE INTO embedding_cache (content_hash, model, embedding, created_at)
-                 VALUES (?1, ?2, ?3, datetime('now'))",
-                params![content_hash, model, blob],
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![content_hash, model, blob, Utc::now().to_rfc3339()],
             )?;
             Ok(())
         })
@@ -1144,6 +1145,7 @@ impl MemoryRepository {
         min_confidence: f64,
         limit: usize,
     ) -> Result<Vec<MemoryFact>, String> {
+        let now = Utc::now().to_rfc3339();
         self.db.with_connection(|conn| {
             let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
                 if let Some(a) = agent_id {
@@ -1153,7 +1155,7 @@ impl MemoryRepository {
                              FROM memory_facts mf
                              WHERE ((mf.agent_id = ?1 AND mf.scope = 'agent') OR mf.scope = 'global')
                                AND confidence >= ?2
-                               AND (expires_at IS NULL OR expires_at > datetime('now'))
+                               AND (expires_at IS NULL OR expires_at > ?4)
                              ORDER BY confidence DESC, mention_count DESC
                              LIMIT ?3"
                         ),
@@ -1161,6 +1163,7 @@ impl MemoryRepository {
                             Box::new(a.to_string()),
                             Box::new(min_confidence),
                             Box::new(limit as i64),
+                            Box::new(now.clone()),
                         ],
                     )
                 } else {
@@ -1169,11 +1172,15 @@ impl MemoryRepository {
                             "SELECT {FACT_COLUMNS}
                              FROM memory_facts
                              WHERE confidence >= ?1
-                               AND (expires_at IS NULL OR expires_at > datetime('now'))
+                               AND (expires_at IS NULL OR expires_at > ?3)
                              ORDER BY confidence DESC, mention_count DESC
                              LIMIT ?2"
                         ),
-                        vec![Box::new(min_confidence), Box::new(limit as i64)],
+                        vec![
+                            Box::new(min_confidence),
+                            Box::new(limit as i64),
+                            Box::new(now.clone()),
+                        ],
                     )
                 };
             let mut stmt = conn.prepare(&sql)?;
@@ -1199,13 +1206,13 @@ impl MemoryRepository {
                 "SELECT {FACT_COLUMNS}
                  FROM memory_facts
                  WHERE agent_id = ?1 AND category = ?2
-                   AND (expires_at IS NULL OR expires_at > datetime('now'))
+                   AND (expires_at IS NULL OR expires_at > ?4)
                  ORDER BY confidence DESC, updated_at DESC
                  LIMIT ?3"
             );
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(
-                params![agent_id, category, limit as i64],
+                params![agent_id, category, limit as i64, Utc::now().to_rfc3339()],
                 row_to_memory_fact,
             )?;
             rows.collect::<Result<Vec<_>, _>>()
