@@ -26,6 +26,9 @@ pub struct DelegationRequest {
     pub session_id: String,
     /// Execution ID of the parent (for linking child to parent)
     pub parent_execution_id: String,
+    /// Conversation ID of the parent agent (used for routing realtime events
+    /// to the parent's WebSocket subscription scope).
+    pub parent_conversation_id: String,
     /// ID of the child agent to spawn
     pub child_agent_id: String,
     /// Pre-created execution ID for the child agent.

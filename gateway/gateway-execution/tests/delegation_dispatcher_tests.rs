@@ -19,6 +19,7 @@ fn make_request(session_id: &str, child_agent_id: &str, task: &str) -> Delegatio
         parent_agent_id: "root".into(),
         session_id: session_id.into(),
         parent_execution_id: "exec-root".into(),
+        parent_conversation_id: format!("{}-conv", session_id),
         child_agent_id: child_agent_id.into(),
         child_execution_id: format!("exec-{}-{}", child_agent_id, session_id),
         task: task.into(),

@@ -315,6 +315,7 @@ pub fn handle_delegation(
         parent_agent_id: ctx.agent_id.clone(),
         session_id: ctx.session_id.clone(),
         parent_execution_id: ctx.execution_id.clone(),
+        parent_conversation_id: ctx.conversation_id.clone(),
         child_agent_id: child_agent.to_string(),
         child_execution_id,
         task: task.to_string(),
