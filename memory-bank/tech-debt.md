@@ -66,10 +66,10 @@ Scope tags:
 - **Per-file decisions:**
   - `orphan_archiver.rs` ✅ — read path migrated (Phase 3a, PR #76); write path migrated (Phase 3b, PR #77). Together: file uses no raw rusqlite in production logic.
   - `kg_backfill.rs` ⏸ **intentionally NOT migrated** — one-shot bootstrap that runs once at daemon startup to retrofit pre-existing rows with new schema fields. Forcing it through the trait would mean adding ~6 new methods (list-with-missing-property, batch-update-properties, compaction marker check/set) just for this single bootstrap concern. When SurrealDB launches, it'll start with the new schema and won't need the same backfill — each impl handles its own schema-evolution story. Marking as decision-explicit rather than pending. (Phase 3c)
-  - `embedding_reindex.rs` ⏳ — pending Phase 3d. Fills in the existing `reindex_embeddings` stub on `KnowledgeGraphStore`. The vec0 reindex itself is SQLite-specific; the trait method's contract ("rebuild embedding indexes for new dimension") is portable. Implementation will require threading an `EmbeddingClient` into `SqliteKgStore` — design call landed in 3d.
+  - `embedding_reindex.rs` ✅ — Phase 3d. Orchestration moved to `stores/zero-stores-sqlite/src/reindex.rs`; `SqliteKgStore::reindex_embeddings` now drives it via a new `with_embedding_client` constructor. The gateway-side `sleep/embedding_reindex.rs` stays as a thin re-export wrapper so the two existing progress-aware callers (`state::reconcile_embeddings_at_boot` and the `/api/embeddings/configure` SSE handler) keep emitting per-table `Health::Reindexing` events to the UI's `EmbeddingProgressModal` — the trait surface itself is intentionally fire-and-report (no progress callback) so it stays portable across SQLite / SurrealDB.
   - `synthesizer.rs` 🛑 deferred — needs `MemoryFactStore` relocated from `framework/zero-core` to `stores/zero-stores` (separate workstream) plus new methods (multi-session aggregation, cosine dedup over vec0). Belongs in Phase 5+.
   - `pattern_extractor.rs` 🛑 deferred — cross-DB read (knowledge.db + conversations.db) plus LLM orchestration. Needs `ProcedureStore` + `EpisodeStore` traits, not part of Phase 3 scope. Phase 5+.
-- **Status:** in progress — orphan_archiver complete (Phase 3a/3b); embedding_reindex pending (3d); kg_backfill explicitly opted out (3c); synthesizer + pattern_extractor deferred to Phase 5+
+- **Status:** in progress — orphan_archiver complete (Phase 3a/3b); embedding_reindex done (Phase 3d); kg_backfill explicitly opted out (3c); synthesizer + pattern_extractor deferred to Phase 5+
 
 #### TD-013 ✅ [K] `VectorIndex` folded into store traits
 - **Location:** `gateway/gateway-database/src/vector_index.rs:15-32`
@@ -142,10 +142,10 @@ Scope tags:
 ### Code smell (low priority)
 
 #### TD-040 🟢 [K] Dynamic SQL via `format!()` in `embedding_reindex.rs`
-- **Location:** `gateway/gateway-execution/src/sleep/embedding_reindex.rs:127-218` — five `format!()` SQL builders interpolating fields of `ReindexTarget`.
-- **What:** **Not** a SQL injection — `REINDEX_TARGETS` is a `&'static [ReindexTarget]` const at line 64; all interpolated fields are `&'static str` baked into the binary. Stylistic only.
-- **Fix:** Resolves naturally when reindex moves behind `KnowledgeGraphStore::reindex_embeddings` (TD-012). No standalone fix needed.
-- **Status:** absorbed into TD-012
+- **Location (historical):** `gateway/gateway-execution/src/sleep/embedding_reindex.rs:127-218` — five `format!()` SQL builders interpolating fields of `ReindexTarget`.
+- **Current location:** `stores/zero-stores-sqlite/src/reindex.rs` — same code, same const-driven safety, just lives in the right crate now.
+- **What:** **Not** a SQL injection — `REINDEX_TARGETS` is a `&'static [ReindexTarget]` const; all interpolated fields are `&'static str` baked into the binary. Stylistic only.
+- **Status:** ✅ moved with TD-012 Phase 3d. Orchestration relocated to `zero-stores-sqlite` where it belongs (SQLite-impl-internal).
 
 #### TD-041 🟢 [Both] Mixed parameter binding styles
 - **What:** `?`, `?1`/`?2`/…, and named `:foo` params are all in use across the codebase.

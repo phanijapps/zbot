@@ -399,10 +399,21 @@ impl AppState {
 
         // Build the trait-object KG store from runner_graph_storage.
         // Coexists with graph_service/graph_storage until Phase 5 retirement.
+        //
+        // We use `with_embedding_client` (not `new`) so the trait method
+        // `reindex_embeddings` is functional. The wired client is the
+        // `LiveEmbeddingClient` constructed above, so it follows ArcSwap
+        // backend changes — same client the gateway-side wrapper at
+        // `gateway-execution::sleep::embedding_reindex` already uses.
         let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
             runner_graph_storage.as_ref().map(|gs| {
-                Arc::new(zero_stores_sqlite::SqliteKgStore::new(gs.clone()))
-                    as Arc<dyn zero_stores::KnowledgeGraphStore>
+                let embedder = embedding_client
+                    .clone()
+                    .expect("embedding_client wired above for distillation/recall");
+                Arc::new(zero_stores_sqlite::SqliteKgStore::with_embedding_client(
+                    gs.clone(),
+                    embedder,
+                )) as Arc<dyn zero_stores::KnowledgeGraphStore>
             });
 
         let episode_repo_ref = episode_repo.clone();

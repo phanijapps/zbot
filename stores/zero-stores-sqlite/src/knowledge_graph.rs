@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use agent_runtime::llm::EmbeddingClient;
 use async_trait::async_trait;
 use knowledge_graph::storage::{ArchivableEntityRow, GraphStorage};
 use knowledge_graph::types::{Entity, EntityType, Relationship};
@@ -13,6 +14,7 @@ use zero_stores::KnowledgeGraphStore;
 use zero_stores::StoreResult;
 
 use crate::blocking::{block, map_graph_err};
+use crate::reindex;
 
 /// SQLite implementation of `KnowledgeGraphStore`. Wraps the existing
 /// `knowledge_graph::storage::GraphStorage` and bridges its synchronous
@@ -20,11 +22,38 @@ use crate::blocking::{block, map_graph_err};
 #[derive(Clone)]
 pub struct SqliteKgStore {
     storage: Arc<GraphStorage>,
+    /// Active embedding client used by `reindex_embeddings`. Optional so
+    /// integration tests that don't exercise the reindex path can construct
+    /// the store without wiring an embedding backend. Production wiring
+    /// goes through [`SqliteKgStore::with_embedding_client`].
+    embedding_client: Option<Arc<dyn EmbeddingClient>>,
 }
 
 impl SqliteKgStore {
+    /// Construct a store without an embedding client. Calls to
+    /// `reindex_embeddings` on a store built this way return
+    /// `StoreError::Backend("no embedding client configured ...")`.
     pub fn new(storage: Arc<GraphStorage>) -> Self {
-        Self { storage }
+        Self {
+            storage,
+            embedding_client: None,
+        }
+    }
+
+    /// Construct a store that supports `reindex_embeddings`.
+    ///
+    /// The supplied client must produce vectors of the dimension passed to
+    /// [`KnowledgeGraphStore::reindex_embeddings`]; per-row mismatches are
+    /// logged and skipped (the index for that row stays empty until the next
+    /// reindex).
+    pub fn with_embedding_client(
+        storage: Arc<GraphStorage>,
+        embedding_client: Arc<dyn EmbeddingClient>,
+    ) -> Self {
+        Self {
+            storage,
+            embedding_client: Some(embedding_client),
+        }
     }
 }
 
@@ -197,15 +226,38 @@ impl KnowledgeGraphStore for SqliteKgStore {
         .await
     }
 
-    async fn reindex_embeddings(&self, _new_dim: usize) -> StoreResult<ReindexReport> {
-        // TODO(TD-012): Route the existing reindex pipeline (currently in
-        // gateway/gateway-execution/src/sleep/embedding_reindex.rs) through
-        // this trait method in Phase 3. For Phase 1, return Unsupported so
-        // the trait surface is complete but consumers can't accidentally
-        // rely on it.
-        Err(StoreError::Backend(
-            "reindex_embeddings: not yet routed through KnowledgeGraphStore — see TD-012".into(),
-        ))
+    async fn reindex_embeddings(&self, new_dim: usize) -> StoreResult<ReindexReport> {
+        // The trait contract is "rebuild embedding indexes for new dim and
+        // return a final report" — there is intentionally no progress
+        // callback in the trait surface (a SurrealDB impl rebuilds in one
+        // shot; UX progress is impl-specific). Callers that want per-table
+        // progress events drive `crate::reindex::reindex_all` directly via
+        // the gateway-side wrapper at
+        // `gateway-execution/src/sleep/embedding_reindex.rs`.
+        let client = self.embedding_client.clone().ok_or_else(|| {
+            StoreError::Backend(
+                "no embedding client configured — use SqliteKgStore::with_embedding_client".into(),
+            )
+        })?;
+
+        let db = self.storage.knowledge_db().clone();
+        let summaries = reindex::reindex_all(&db, client, new_dim, &|_, _, _| {})
+            .await
+            .map_err(StoreError::Backend)?;
+
+        let tables_rebuilt: Vec<String> = summaries
+            .iter()
+            .map(|(target, _)| target.table.to_string())
+            .collect();
+        let rows_indexed: u64 = summaries
+            .iter()
+            .map(|(_, summary)| summary.indexed as u64)
+            .sum();
+
+        Ok(ReindexReport {
+            tables_rebuilt,
+            rows_indexed,
+        })
     }
 
     async fn stats(&self) -> StoreResult<KgStats> {

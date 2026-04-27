@@ -4,5 +4,6 @@
 
 mod blocking;
 mod knowledge_graph;
+pub mod reindex;
 
 pub use knowledge_graph::SqliteKgStore;

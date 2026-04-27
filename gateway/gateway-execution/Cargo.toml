@@ -26,6 +26,7 @@ gateway-templates = { path = "../gateway-templates" }
 gateway-bridge = { path = "../gateway-bridge" }
 knowledge-graph = { path = "../../services/knowledge-graph" }
 zero-stores = { path = "../../stores/zero-stores" }
+zero-stores-sqlite = { path = "../../stores/zero-stores-sqlite" }
 
 # Async
 tokio = { workspace = true }
@@ -81,7 +82,6 @@ test-stubs = []
 tempfile = "3"
 tokio-test = "0.4"
 filetime = "0.2"
-zero-stores-sqlite = { path = "../../stores/zero-stores-sqlite" }
 
 [lints]
 workspace = true

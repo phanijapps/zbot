@@ -135,6 +135,14 @@ impl GraphStorage {
         Ok(Self { db })
     }
 
+    /// Borrow the underlying knowledge database pool. Used by
+    /// `zero-stores-sqlite` to drive impl-specific maintenance routines
+    /// (e.g. `reindex_embeddings`) that need raw SQL access without
+    /// fighting the existing `pub(crate)` field visibility.
+    pub fn knowledge_db(&self) -> &Arc<KnowledgeDatabase> {
+        &self.db
+    }
+
     /// Store extracted knowledge (entities and relationships)
     pub fn store_knowledge(
         &self,
