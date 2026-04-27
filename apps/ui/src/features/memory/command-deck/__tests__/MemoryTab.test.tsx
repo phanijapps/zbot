@@ -44,7 +44,7 @@ vi.mock("@/services/transport", () => ({
 
 describe("MemoryTab (command-deck)", () => {
   it("renders wards, selects the first, shows its facts", async () => {
-    render(<MemoryTab agentId="agent:root" />);
+    render(<MemoryTab agentId="root" />);
     const wardButton = await screen.findByRole("button", {
       name: /literature-library/,
     });

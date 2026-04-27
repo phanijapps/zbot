@@ -92,7 +92,7 @@ describe("MemoryTab — delete fact wiring", () => {
   });
 
   it("renders a delete button on each fact row in the Facts tab", async () => {
-    render(<MemoryTab agentId="agent:root" />);
+    render(<MemoryTab agentId="root" />);
     await waitFor(() => {
       expect(
         screen.getByRole("button", { name: /delete preference memory/i })
@@ -101,16 +101,16 @@ describe("MemoryTab — delete fact wiring", () => {
   });
 
   it("calls transport.deleteMemory(agentId, factId) when delete is clicked + confirmed", async () => {
-    render(<MemoryTab agentId="agent:root" />);
+    render(<MemoryTab agentId="root" />);
     const btn = await screen.findByRole("button", { name: /delete preference memory/i });
     fireEvent.click(btn);
     await waitFor(() => {
-      expect(mockDeleteMemory).toHaveBeenCalledWith("agent:root", "fact-1");
+      expect(mockDeleteMemory).toHaveBeenCalledWith("root", "fact-1");
     });
   });
 
   it("refreshes ward content after a successful delete", async () => {
-    render(<MemoryTab agentId="agent:root" />);
+    render(<MemoryTab agentId="root" />);
     const btn = await screen.findByRole("button", { name: /delete preference memory/i });
     // First call happens on initial load.
     await waitFor(() => expect(mockGetWardContent).toHaveBeenCalledTimes(1));
@@ -120,7 +120,7 @@ describe("MemoryTab — delete fact wiring", () => {
 
   it("skips transport.deleteMemory when the user cancels the confirm", async () => {
     confirmSpy.mockReturnValue(false);
-    render(<MemoryTab agentId="agent:root" />);
+    render(<MemoryTab agentId="root" />);
     const btn = await screen.findByRole("button", { name: /delete preference memory/i });
     fireEvent.click(btn);
     expect(mockDeleteMemory).not.toHaveBeenCalled();
