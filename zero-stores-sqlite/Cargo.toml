@@ -1,0 +1,19 @@
+[package]
+name = "zero-stores-sqlite"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zero-stores = { path = "../zero-stores" }
+knowledge-graph = { path = "../services/knowledge-graph" }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+gateway-database = { path = "../gateway/gateway-database" }
+gateway-services = { path = "../gateway/gateway-services" }
+
+[lints]
+workspace = true

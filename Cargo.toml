@@ -18,6 +18,7 @@ members = [
 
     # Stores - Backend-agnostic persistence interfaces
     "zero-stores",
+    "zero-stores-sqlite",
 
     # Runtime - Execution engine
     "runtime/agent-runtime",
