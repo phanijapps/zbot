@@ -24,6 +24,8 @@ agent-runtime = { path = "../runtime/agent-runtime" }
 agent-tools = { path = "../runtime/agent-tools" }
 zero-core = { path = "../framework/zero-core" }
 zero-app = { path = "../framework/zero-app" }
+zero-stores = { path = "../zero-stores" }
+zero-stores-sqlite = { path = "../zero-stores-sqlite" }
 gateway-events = { path = "gateway-events" }
 gateway-database = { path = "gateway-database" }
 gateway-templates = { path = "gateway-templates" }

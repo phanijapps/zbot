@@ -4,9 +4,9 @@
 //! Causal edges represent cause-effect relationships between entities.
 
 use crate::error::{GraphError, GraphResult};
+use gateway_database::KnowledgeDatabase;
 use rusqlite::params;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 /// A causal relationship between two knowledge graph entities.
 #[derive(Debug, Clone)]
@@ -23,133 +23,135 @@ pub struct CausalEdge {
 
 /// CRUD operations for causal edges in the knowledge graph.
 pub struct CausalEdgeStore {
-    conn: Arc<Mutex<rusqlite::Connection>>,
+    db: Arc<KnowledgeDatabase>,
 }
 
 impl CausalEdgeStore {
-    /// Create a new causal edge store with a shared database connection.
-    pub fn new(conn: Arc<Mutex<rusqlite::Connection>>) -> Self {
-        Self { conn }
+    /// Create a new causal edge store backed by the shared `KnowledgeDatabase` pool.
+    pub fn new(db: Arc<KnowledgeDatabase>) -> Self {
+        Self { db }
     }
 
     /// Store a causal edge. Skips if duplicate (same primary key).
     pub async fn store_edge(&self, edge: &CausalEdge) -> GraphResult<()> {
-        let conn = self.conn.lock().await;
-        conn.execute(
-            "INSERT OR IGNORE INTO kg_causal_edges \
-             (id, agent_id, cause_entity_id, effect_entity_id, relationship, confidence, session_id, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                edge.id,
-                edge.agent_id,
-                edge.cause_entity_id,
-                edge.effect_entity_id,
-                edge.relationship,
-                edge.confidence,
-                edge.session_id,
-                edge.created_at,
-            ],
-        )
-        .map_err(GraphError::Database)?;
-        Ok(())
+        let id = edge.id.clone();
+        let agent_id = edge.agent_id.clone();
+        let cause_entity_id = edge.cause_entity_id.clone();
+        let effect_entity_id = edge.effect_entity_id.clone();
+        let relationship = edge.relationship.clone();
+        let confidence = edge.confidence;
+        let session_id = edge.session_id.clone();
+        let created_at = edge.created_at.clone();
+
+        self.db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT OR IGNORE INTO kg_causal_edges \
+                     (id, agent_id, cause_entity_id, effect_entity_id, relationship, confidence, session_id, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        id,
+                        agent_id,
+                        cause_entity_id,
+                        effect_entity_id,
+                        relationship,
+                        confidence,
+                        session_id,
+                        created_at,
+                    ],
+                )?;
+                Ok(())
+            })
+            .map_err(GraphError::Other)
     }
 
     /// Get causal edges where the given entity is the cause.
     pub async fn get_effects(&self, entity_id: &str) -> GraphResult<Vec<CausalEdge>> {
-        let conn = self.conn.lock().await;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, agent_id, cause_entity_id, effect_entity_id, relationship, confidence, session_id, created_at \
-                 FROM kg_causal_edges WHERE cause_entity_id = ?1",
-            )
-            .map_err(GraphError::Database)?;
+        let entity_id = entity_id.to_owned();
+        self.db
+            .with_connection(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, agent_id, cause_entity_id, effect_entity_id, relationship, confidence, session_id, created_at \
+                     FROM kg_causal_edges WHERE cause_entity_id = ?1",
+                )?;
 
-        let edges = stmt
-            .query_map(params![entity_id], |row| {
-                Ok(CausalEdge {
-                    id: row.get(0)?,
-                    agent_id: row.get(1)?,
-                    cause_entity_id: row.get(2)?,
-                    effect_entity_id: row.get(3)?,
-                    relationship: row.get(4)?,
-                    confidence: row.get(5)?,
-                    session_id: row.get(6)?,
-                    created_at: row.get(7)?,
-                })
+                let edges = stmt
+                    .query_map(params![entity_id], |row| {
+                        Ok(CausalEdge {
+                            id: row.get(0)?,
+                            agent_id: row.get(1)?,
+                            cause_entity_id: row.get(2)?,
+                            effect_entity_id: row.get(3)?,
+                            relationship: row.get(4)?,
+                            confidence: row.get(5)?,
+                            session_id: row.get(6)?,
+                            created_at: row.get(7)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                Ok(edges)
             })
-            .map_err(GraphError::Database)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(GraphError::Database)?;
-
-        Ok(edges)
+            .map_err(GraphError::Other)
     }
 
     /// Get causal edges where the given entity is the effect.
     pub async fn get_causes(&self, entity_id: &str) -> GraphResult<Vec<CausalEdge>> {
-        let conn = self.conn.lock().await;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, agent_id, cause_entity_id, effect_entity_id, relationship, confidence, session_id, created_at \
-                 FROM kg_causal_edges WHERE effect_entity_id = ?1",
-            )
-            .map_err(GraphError::Database)?;
+        let entity_id = entity_id.to_owned();
+        self.db
+            .with_connection(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, agent_id, cause_entity_id, effect_entity_id, relationship, confidence, session_id, created_at \
+                     FROM kg_causal_edges WHERE effect_entity_id = ?1",
+                )?;
 
-        let edges = stmt
-            .query_map(params![entity_id], |row| {
-                Ok(CausalEdge {
-                    id: row.get(0)?,
-                    agent_id: row.get(1)?,
-                    cause_entity_id: row.get(2)?,
-                    effect_entity_id: row.get(3)?,
-                    relationship: row.get(4)?,
-                    confidence: row.get(5)?,
-                    session_id: row.get(6)?,
-                    created_at: row.get(7)?,
-                })
+                let edges = stmt
+                    .query_map(params![entity_id], |row| {
+                        Ok(CausalEdge {
+                            id: row.get(0)?,
+                            agent_id: row.get(1)?,
+                            cause_entity_id: row.get(2)?,
+                            effect_entity_id: row.get(3)?,
+                            relationship: row.get(4)?,
+                            confidence: row.get(5)?,
+                            session_id: row.get(6)?,
+                            created_at: row.get(7)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                Ok(edges)
             })
-            .map_err(GraphError::Database)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(GraphError::Database)?;
-
-        Ok(edges)
+            .map_err(GraphError::Other)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::Connection;
+    use gateway_services::VaultPaths;
+    use std::sync::Arc;
+    use tempfile::TempDir;
 
-    async fn setup_test_db() -> Arc<Mutex<Connection>> {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE kg_entities (
-                id TEXT PRIMARY KEY,
-                agent_id TEXT NOT NULL,
-                entity_type TEXT NOT NULL,
-                name TEXT NOT NULL,
-                properties TEXT,
-                first_seen_at TEXT NOT NULL,
-                last_seen_at TEXT NOT NULL,
-                mention_count INTEGER DEFAULT 1
-            );
-            CREATE TABLE kg_causal_edges (
-                id TEXT PRIMARY KEY,
-                agent_id TEXT NOT NULL,
-                cause_entity_id TEXT NOT NULL,
-                effect_entity_id TEXT NOT NULL,
-                relationship TEXT NOT NULL,
-                confidence REAL DEFAULT 0.7,
-                session_id TEXT,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (cause_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE,
-                FOREIGN KEY (effect_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE
-            );
-            INSERT INTO kg_entities VALUES ('e1', 'root', 'pattern', 'rate_limiting', NULL, '2026-01-01', '2026-01-01', 1);
-            INSERT INTO kg_entities VALUES ('e2', 'root', 'outcome', 'api_ban', NULL, '2026-01-01', '2026-01-01', 1);",
-        )
+    fn setup_test_db() -> (Arc<KnowledgeDatabase>, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        paths.ensure_dirs_exist().unwrap();
+        let db = Arc::new(KnowledgeDatabase::new(paths).unwrap());
+
+        // Seed the two entities required by the FK constraints on kg_causal_edges.
+        // Use named columns since the full schema has 19 fields (most with defaults).
+        db.with_connection(|conn| {
+            conn.execute_batch(
+                "INSERT INTO kg_entities (id, agent_id, entity_type, name, normalized_name, normalized_hash, first_seen_at, last_seen_at, mention_count)
+                   VALUES ('e1', 'root', 'pattern', 'rate_limiting', 'rate_limiting', 'h1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1);
+                 INSERT INTO kg_entities (id, agent_id, entity_type, name, normalized_name, normalized_hash, first_seen_at, last_seen_at, mention_count)
+                   VALUES ('e2', 'root', 'outcome', 'api_ban', 'api_ban', 'h2', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1);",
+            )
+        })
         .unwrap();
-        Arc::new(Mutex::new(conn))
+
+        (db, tmp)
     }
 
     fn make_edge(id: &str, session_id: Option<&str>) -> CausalEdge {
@@ -161,14 +163,14 @@ mod tests {
             relationship: "prevents".to_string(),
             confidence: 0.9,
             session_id: session_id.map(String::from),
-            created_at: "2026-04-11".to_string(),
+            created_at: "2026-04-11T00:00:00Z".to_string(),
         }
     }
 
     #[tokio::test]
     async fn test_store_and_get_effects() {
-        let conn = setup_test_db().await;
-        let store = CausalEdgeStore::new(conn);
+        let (db, _tmp) = setup_test_db();
+        let store = CausalEdgeStore::new(db);
 
         let edge = make_edge("ce1", Some("sess-1"));
         store.store_edge(&edge).await.unwrap();
@@ -181,8 +183,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_causes() {
-        let conn = setup_test_db().await;
-        let store = CausalEdgeStore::new(conn);
+        let (db, _tmp) = setup_test_db();
+        let store = CausalEdgeStore::new(db);
 
         let edge = make_edge("ce1", None);
         store.store_edge(&edge).await.unwrap();
@@ -194,8 +196,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_duplicate_edge_ignored() {
-        let conn = setup_test_db().await;
-        let store = CausalEdgeStore::new(conn);
+        let (db, _tmp) = setup_test_db();
+        let store = CausalEdgeStore::new(db);
 
         let edge = make_edge("ce1", None);
         store.store_edge(&edge).await.unwrap();
@@ -208,8 +210,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_edges_returns_empty() {
-        let conn = setup_test_db().await;
-        let store = CausalEdgeStore::new(conn);
+        let (db, _tmp) = setup_test_db();
+        let store = CausalEdgeStore::new(db);
 
         let effects = store.get_effects("nonexistent").await.unwrap();
         assert!(effects.is_empty());

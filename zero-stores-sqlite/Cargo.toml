@@ -1,0 +1,20 @@
+[package]
+name = "zero-stores-sqlite"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zero-stores = { path = "../zero-stores" }
+knowledge-graph = { path = "../services/knowledge-graph" }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+# Pre-staged for Task 4+ integration test fixtures (tests/fixtures/mod.rs)
+[dev-dependencies]
+tempfile = "3"
+gateway-database = { path = "../gateway/gateway-database" }
+gateway-services = { path = "../gateway/gateway-services" }
+zero-stores-conformance = { path = "../zero-stores-conformance" }
+
+[lints]
+workspace = true

@@ -143,27 +143,38 @@ impl GraphStorage {
     ) -> GraphResult<()> {
         self.db
             .with_connection(|conn| {
-                // Store entities and build ID mapping (new_id → actual_id)
-                let mut entity_id_map: std::collections::HashMap<String, String> =
-                    std::collections::HashMap::new();
-                for entity in knowledge.entities {
-                    let original_id = entity.id.clone();
-                    let actual_id =
-                        store_entity(conn, agent_id, entity).map_err(graph_to_rusqlite)?;
-                    entity_id_map.insert(original_id, actual_id);
-                }
+                // `with_connection` provides `&Connection` (not `&mut`), so we
+                // use `unchecked_transaction` which is available on shared refs.
+                // All entity + relationship inserts are wrapped in a single
+                // transaction so a partial failure cannot leave the graph in an
+                // inconsistent state (trait contract: atomic all-or-nothing).
+                (|| -> GraphResult<()> {
+                    let tx = conn.unchecked_transaction().map_err(GraphError::Database)?;
 
-                for mut relationship in knowledge.relationships {
-                    if let Some(mapped) = entity_id_map.get(&relationship.source_entity_id) {
-                        relationship.source_entity_id = mapped.clone();
+                    // Store entities and build ID mapping (new_id → actual_id).
+                    // `Transaction` auto-derefs to `&Connection`, so helpers accept `&tx`.
+                    let mut entity_id_map: std::collections::HashMap<String, String> =
+                        std::collections::HashMap::new();
+                    for entity in knowledge.entities {
+                        let original_id = entity.id.clone();
+                        let actual_id = store_entity(&tx, agent_id, entity)?;
+                        entity_id_map.insert(original_id, actual_id);
                     }
-                    if let Some(mapped) = entity_id_map.get(&relationship.target_entity_id) {
-                        relationship.target_entity_id = mapped.clone();
-                    }
-                    store_relationship(conn, agent_id, relationship).map_err(graph_to_rusqlite)?;
-                }
 
-                Ok(())
+                    for mut relationship in knowledge.relationships {
+                        if let Some(mapped) = entity_id_map.get(&relationship.source_entity_id) {
+                            relationship.source_entity_id = mapped.clone();
+                        }
+                        if let Some(mapped) = entity_id_map.get(&relationship.target_entity_id) {
+                            relationship.target_entity_id = mapped.clone();
+                        }
+                        store_relationship(&tx, agent_id, relationship)?;
+                    }
+
+                    tx.commit().map_err(GraphError::Database)?;
+                    Ok(())
+                })()
+                .map_err(graph_to_rusqlite)
             })
             .map_err(GraphError::Other)
     }
@@ -540,6 +551,143 @@ impl GraphStorage {
     pub fn bump_entity_mention(&self, entity_id: &str) -> GraphResult<()> {
         self.db
             .with_connection(|conn| bump_entity_mention(conn, entity_id).map_err(graph_to_rusqlite))
+            .map_err(GraphError::Other)
+    }
+
+    /// Store (upsert) a single entity for an agent, returning its canonical ID.
+    ///
+    /// Delegates to the private `store_entity` function which handles
+    /// name-normalisation, deduplication, and alias seeding.
+    pub fn upsert_entity(&self, agent_id: &str, entity: Entity) -> GraphResult<String> {
+        let agent_id = agent_id.to_string();
+        self.db
+            .with_connection(|conn| {
+                store_entity(conn, &agent_id, entity).map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Store a relationship, merging properties if one with the same
+    /// (source, target, type) already exists. Returns the relationship ID.
+    pub fn upsert_relationship(
+        &self,
+        agent_id: &str,
+        relationship: Relationship,
+    ) -> GraphResult<String> {
+        let src = relationship.source_entity_id.clone();
+        let tgt = relationship.target_entity_id.clone();
+        let rel_type_str = relationship.relationship_type.as_str().to_string();
+        let agent_id = agent_id.to_string();
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<String> {
+                    store_relationship(conn, &agent_id, relationship)?;
+                    // After INSERT ... ON CONFLICT DO UPDATE the id column is
+                    // never overwritten; query by the UNIQUE key to get the id.
+                    conn.query_row(
+                        "SELECT id FROM kg_relationships \
+                         WHERE source_entity_id = ?1 \
+                           AND target_entity_id = ?2 \
+                           AND relationship_type = ?3 \
+                         LIMIT 1",
+                        rusqlite::params![src, tgt, rel_type_str],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(GraphError::Database)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Delete a single relationship by its ID.
+    pub fn delete_relationship(&self, id: &str) -> GraphResult<()> {
+        self.db
+            .with_connection(|conn| {
+                conn.execute(
+                    "DELETE FROM kg_relationships WHERE id = ?1",
+                    rusqlite::params![id],
+                )
+                .map(|_| ())
+                .map_err(|e| graph_to_rusqlite(GraphError::Database(e)))
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Fetch a single entity by its ID. Returns `None` if not found.
+    pub fn get_entity_by_id(&self, entity_id: &str) -> GraphResult<Option<Entity>> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Option<Entity>> {
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT id, agent_id, entity_type, name, properties, \
+                             first_seen_at, last_seen_at, mention_count \
+                             FROM kg_entities WHERE id = ?1 LIMIT 1",
+                        )
+                        .map_err(GraphError::Database)?;
+
+                    let mut rows = stmt
+                        .query_map(params![entity_id], |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, String>(3)?,
+                                row.get::<_, Option<String>>(4)?,
+                                row.get::<_, String>(5)?,
+                                row.get::<_, String>(6)?,
+                                row.get::<_, i64>(7)?,
+                            ))
+                        })
+                        .map_err(GraphError::Database)?;
+
+                    match rows.next() {
+                        Some(row) => Ok(Some(build_entity_from_row(row?))),
+                        None => Ok(None),
+                    }
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Delete a single entity by its ID. Also removes any associated
+    /// relationships and alias entries to keep the graph consistent.
+    ///
+    /// All four DELETEs (aliases, name_index, relationships, entity) are
+    /// executed inside a single transaction so a crash between statements
+    /// cannot leave the graph in a partially-deleted state.
+    pub fn delete_entity_by_id(&self, entity_id: &str) -> GraphResult<()> {
+        self.db
+            .with_connection(|conn| {
+                // `with_connection` provides `&Connection` (not `&mut`), so we
+                // use `unchecked_transaction` which is available on shared refs.
+                (|| -> GraphResult<()> {
+                    let tx = conn.unchecked_transaction().map_err(GraphError::Database)?;
+                    tx.execute(
+                        "DELETE FROM kg_aliases WHERE entity_id = ?1",
+                        params![entity_id],
+                    )
+                    .map_err(GraphError::Database)?;
+                    tx.execute(
+                        "DELETE FROM kg_name_index WHERE entity_id = ?1",
+                        params![entity_id],
+                    )
+                    .map_err(GraphError::Database)?;
+                    tx.execute(
+                        "DELETE FROM kg_relationships \
+                         WHERE source_entity_id = ?1 OR target_entity_id = ?1",
+                        params![entity_id],
+                    )
+                    .map_err(GraphError::Database)?;
+                    tx.execute("DELETE FROM kg_entities WHERE id = ?1", params![entity_id])
+                        .map_err(GraphError::Database)?;
+                    tx.commit().map_err(GraphError::Database)?;
+                    Ok(())
+                })()
+                .map_err(graph_to_rusqlite)
+            })
             .map_err(GraphError::Other)
     }
 
@@ -1006,6 +1154,112 @@ impl GraphStorage {
             .map_err(GraphError::Other)
     }
 
+    /// BFS traversal from a seed entity up to `max_hops` with a result cap.
+    ///
+    /// Runs the same recursive CTE used by [`SqliteGraphTraversal`], callable
+    /// from a synchronous `spawn_blocking` closure in `zero-stores-sqlite`.
+    pub fn traverse_sync(
+        &self,
+        entity_id: &str,
+        max_hops: u8,
+        limit: usize,
+    ) -> GraphResult<Vec<crate::traversal::TraversalNode>> {
+        let hop_decay = 0.7_f64;
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<crate::traversal::TraversalNode>> {
+                    let sql = r#"
+                        WITH RECURSIVE graph_walk(entity_id, hop, path, visited) AS (
+                            SELECT ?1, 0, '', ?1
+                            UNION ALL
+                            SELECT
+                                CASE WHEN r.source_entity_id = gw.entity_id
+                                     THEN r.target_entity_id
+                                     ELSE r.source_entity_id
+                                END,
+                                gw.hop + 1,
+                                CASE WHEN gw.path = '' THEN r.relationship_type
+                                     ELSE gw.path || ',' || r.relationship_type
+                                END,
+                                gw.visited || ',' ||
+                                    CASE WHEN r.source_entity_id = gw.entity_id
+                                         THEN r.target_entity_id
+                                         ELSE r.source_entity_id
+                                    END
+                            FROM graph_walk gw
+                            JOIN kg_relationships r
+                                ON (r.source_entity_id = gw.entity_id
+                                    OR r.target_entity_id = gw.entity_id)
+                            WHERE gw.hop < ?2
+                              AND gw.visited NOT LIKE
+                                  '%' ||
+                                  CASE WHEN r.source_entity_id = gw.entity_id
+                                       THEN r.target_entity_id
+                                       ELSE r.source_entity_id
+                                  END || '%'
+                        )
+                        SELECT DISTINCT
+                            gw.entity_id,
+                            e.name,
+                            e.entity_type,
+                            MIN(gw.hop) AS min_hop,
+                            gw.path,
+                            e.mention_count
+                        FROM graph_walk gw
+                        JOIN kg_entities e ON e.id = gw.entity_id
+                        WHERE gw.entity_id != ?1
+                        GROUP BY gw.entity_id
+                        ORDER BY min_hop ASC, e.mention_count DESC
+                        LIMIT ?3
+                    "#;
+                    let mut stmt = conn.prepare(sql).map_err(GraphError::Database)?;
+                    let rows = stmt
+                        .query_map(
+                            rusqlite::params![entity_id, max_hops as i64, limit as i64],
+                            |row| {
+                                Ok((
+                                    row.get::<_, String>(0)?,
+                                    row.get::<_, String>(1)?,
+                                    row.get::<_, String>(2)?,
+                                    row.get::<_, i64>(3)?,
+                                    row.get::<_, String>(4)?,
+                                    row.get::<_, i64>(5)?,
+                                ))
+                            },
+                        )
+                        .map_err(GraphError::Database)?;
+                    let mut nodes = Vec::new();
+                    for row in rows {
+                        let (id, _name, _etype, hop, path, mentions) =
+                            row.map_err(GraphError::Database)?;
+                        let hop_u8 = hop as u8;
+                        nodes.push(crate::traversal::TraversalNode {
+                            entity_id: id,
+                            entity_name: _name,
+                            entity_type: _etype,
+                            hop_distance: hop_u8,
+                            path,
+                            relevance: hop_decay.powi(hop_u8 as i32),
+                            mention_count: mentions,
+                        });
+                    }
+                    Ok(nodes)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Search entities by name with a result limit (LIKE match, case-insensitive).
+    pub fn search_by_name(
+        &self,
+        agent_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> GraphResult<Vec<Entity>> {
+        self.search_entities_order_by(agent_id, query, "mention_count DESC", limit)
+    }
+
     /// Count entities for an agent
     pub fn count_entities(&self, agent_id: &str) -> GraphResult<usize> {
         self.db
@@ -1070,6 +1324,32 @@ impl GraphStorage {
                         })
                         .map_err(GraphError::Database)?;
                     Ok(count as usize)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Return aggregate counts for entities, relationships, and aliases across
+    /// all agents. Used by `KnowledgeGraphStore::stats`.
+    pub fn stats(&self) -> GraphResult<(u64, u64, u64)> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<(u64, u64, u64)> {
+                    let entity_count: i64 = conn
+                        .query_row("SELECT COUNT(*) FROM kg_entities", [], |r| r.get(0))
+                        .map_err(GraphError::Database)?;
+                    let relationship_count: i64 = conn
+                        .query_row("SELECT COUNT(*) FROM kg_relationships", [], |r| r.get(0))
+                        .map_err(GraphError::Database)?;
+                    let alias_count: i64 = conn
+                        .query_row("SELECT COUNT(*) FROM kg_aliases", [], |r| r.get(0))
+                        .map_err(GraphError::Database)?;
+                    Ok((
+                        entity_count as u64,
+                        relationship_count as u64,
+                        alias_count as u64,
+                    ))
                 })()
                 .map_err(graph_to_rusqlite)
             })
@@ -1538,6 +1818,78 @@ impl GraphStorage {
                         out.push(row.map_err(GraphError::Database)?);
                     }
                     Ok(out)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Insert `surface` as an additional alias for an existing entity.
+    ///
+    /// Uses `INSERT OR IGNORE` so a duplicate surface form is silently skipped.
+    /// Single-table write — no transaction required.
+    pub fn add_alias(&self, entity_id: &str, surface: &str) -> GraphResult<()> {
+        let entity_id = entity_id.to_string();
+        let surface = surface.to_string();
+        self.db
+            .with_connection(move |conn| {
+                (|| -> GraphResult<()> {
+                    let alias_id = format!("alias-{}", uuid::Uuid::new_v4());
+                    let normalized = crate::resolver::normalize_name(&surface);
+                    conn.execute(
+                        "INSERT OR IGNORE INTO kg_aliases \
+                         (id, entity_id, surface_form, normalized_form, source, confidence, first_seen_at) \
+                         VALUES (?1, ?2, ?3, ?4, 'manual', 1.0, ?5)",
+                        rusqlite::params![
+                            alias_id,
+                            entity_id,
+                            surface,
+                            normalized,
+                            chrono::Utc::now().to_rfc3339(),
+                        ],
+                    )
+                    .map_err(GraphError::Database)?;
+                    Ok(())
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Resolve a candidate (agent_id + entity_type + name + optional embedding)
+    /// against existing entities.
+    ///
+    /// Returns `Some(entity_id)` when a match is found, `None` otherwise.
+    /// Delegates to the `EntityResolver` cascade (exact-normalized → embedding).
+    pub fn resolve_entity(
+        &self,
+        agent_id: &str,
+        entity_type: &EntityType,
+        name: &str,
+        embedding: Option<&[f32]>,
+    ) -> GraphResult<Option<String>> {
+        let agent_id = agent_id.to_string();
+        let entity_type = entity_type.clone();
+        let name = name.to_string();
+        let embedding = embedding.map(|e| e.to_vec());
+        self.db
+            .with_connection(move |conn| {
+                (|| -> GraphResult<Option<String>> {
+                    let candidate =
+                        Entity::new(agent_id.clone(), entity_type.clone(), name.clone());
+                    match crate::resolver::resolve(
+                        conn,
+                        &agent_id,
+                        &candidate,
+                        embedding.as_deref(),
+                    )
+                    .map_err(GraphError::Other)?
+                    {
+                        crate::resolver::ResolveOutcome::Merge { existing_id, .. } => {
+                            Ok(Some(existing_id))
+                        }
+                        crate::resolver::ResolveOutcome::Create => Ok(None),
+                    }
                 })()
                 .map_err(graph_to_rusqlite)
             })

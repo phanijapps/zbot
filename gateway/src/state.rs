@@ -107,6 +107,12 @@ pub struct AppState {
     /// Graph service for knowledge graph operations.
     pub graph_service: Option<Arc<GraphService>>,
 
+    /// Trait-based knowledge-graph store (Phase 1 extraction).
+    /// Coexists with `graph_service` — consumers are migrated incrementally.
+    /// `None` when `GraphStorage` fails to initialise (same condition as
+    /// `graph_service`).
+    pub kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
+
     /// Streaming ingestion queue (Phase 2) — None when graph is unavailable.
     pub ingestion_queue: Option<Arc<gateway_execution::ingest::IngestionQueue>>,
 
@@ -391,6 +397,14 @@ impl AppState {
         // also needs it for the graph_query tool.
         let runner_graph_storage = graph_storage.clone();
 
+        // Build the trait-object KG store from runner_graph_storage.
+        // Coexists with graph_service/graph_storage until Phase 5 retirement.
+        let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
+            runner_graph_storage.as_ref().map(|gs| {
+                Arc::new(zero_stores_sqlite::SqliteKgStore::new(gs.clone()))
+                    as Arc<dyn zero_stores::KnowledgeGraphStore>
+            });
+
         let episode_repo_ref = episode_repo.clone();
 
         // Create settings service (before distiller & runtime, so we can read execution settings)
@@ -636,6 +650,7 @@ impl AppState {
             episode_repo: Some(episode_repo_ref),
             kg_episode_repo: Some(kg_episode_repo),
             graph_service,
+            kg_store,
             ingestion_queue,
             ingestion_backpressure,
         }
@@ -719,6 +734,7 @@ impl AppState {
             episode_repo: None,
             kg_episode_repo: None,
             graph_service: None,
+            kg_store: None,
             ingestion_queue: None,
             ingestion_backpressure: None,
         }
@@ -805,6 +821,7 @@ impl AppState {
             episode_repo: None,
             kg_episode_repo: None,
             graph_service: None,
+            kg_store: None,
             ingestion_queue: None,
             ingestion_backpressure: None,
         }

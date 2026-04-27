@@ -16,6 +16,11 @@ members = [
     "framework/zero-middleware",
     "framework/zero-app",
 
+    # Stores - Backend-agnostic persistence interfaces
+    "zero-stores",
+    "zero-stores-conformance",
+    "zero-stores-sqlite",
+
     # Runtime - Execution engine
     "runtime/agent-runtime",
     "runtime/agent-tools",
