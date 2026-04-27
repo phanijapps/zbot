@@ -596,28 +596,36 @@ impl GraphStorage {
 
     /// Delete a single entity by its ID. Also removes any associated
     /// relationships and alias entries to keep the graph consistent.
+    ///
+    /// All four DELETEs (aliases, name_index, relationships, entity) are
+    /// executed inside a single transaction so a crash between statements
+    /// cannot leave the graph in a partially-deleted state.
     pub fn delete_entity_by_id(&self, entity_id: &str) -> GraphResult<()> {
         self.db
             .with_connection(|conn| {
+                // `with_connection` provides `&Connection` (not `&mut`), so we
+                // use `unchecked_transaction` which is available on shared refs.
                 (|| -> GraphResult<()> {
-                    conn.execute(
+                    let tx = conn.unchecked_transaction().map_err(GraphError::Database)?;
+                    tx.execute(
                         "DELETE FROM kg_aliases WHERE entity_id = ?1",
                         params![entity_id],
                     )
                     .map_err(GraphError::Database)?;
-                    conn.execute(
+                    tx.execute(
                         "DELETE FROM kg_name_index WHERE entity_id = ?1",
                         params![entity_id],
                     )
                     .map_err(GraphError::Database)?;
-                    conn.execute(
+                    tx.execute(
                         "DELETE FROM kg_relationships \
                          WHERE source_entity_id = ?1 OR target_entity_id = ?1",
                         params![entity_id],
                     )
                     .map_err(GraphError::Database)?;
-                    conn.execute("DELETE FROM kg_entities WHERE id = ?1", params![entity_id])
+                    tx.execute("DELETE FROM kg_entities WHERE id = ?1", params![entity_id])
                         .map_err(GraphError::Database)?;
+                    tx.commit().map_err(GraphError::Database)?;
                     Ok(())
                 })()
                 .map_err(graph_to_rusqlite)
