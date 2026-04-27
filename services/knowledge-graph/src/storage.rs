@@ -1330,6 +1330,32 @@ impl GraphStorage {
             .map_err(GraphError::Other)
     }
 
+    /// Return aggregate counts for entities, relationships, and aliases across
+    /// all agents. Used by `KnowledgeGraphStore::stats`.
+    pub fn stats(&self) -> GraphResult<(u64, u64, u64)> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<(u64, u64, u64)> {
+                    let entity_count: i64 = conn
+                        .query_row("SELECT COUNT(*) FROM kg_entities", [], |r| r.get(0))
+                        .map_err(GraphError::Database)?;
+                    let relationship_count: i64 = conn
+                        .query_row("SELECT COUNT(*) FROM kg_relationships", [], |r| r.get(0))
+                        .map_err(GraphError::Database)?;
+                    let alias_count: i64 = conn
+                        .query_row("SELECT COUNT(*) FROM kg_aliases", [], |r| r.get(0))
+                        .map_err(GraphError::Database)?;
+                    Ok((
+                        entity_count as u64,
+                        relationship_count as u64,
+                        alias_count as u64,
+                    ))
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
     /// List all relationships across all agents with pagination.
     ///
     /// Used by the Observatory "All Agents" mode to render edges.

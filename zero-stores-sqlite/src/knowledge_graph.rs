@@ -198,10 +198,27 @@ impl KnowledgeGraphStore for SqliteKgStore {
     }
 
     async fn reindex_embeddings(&self, _new_dim: usize) -> StoreResult<ReindexReport> {
-        Err(StoreError::Backend("not implemented".into()))
+        // TODO(TD-012): Route the existing reindex pipeline (currently in
+        // gateway/gateway-execution/src/sleep/embedding_reindex.rs) through
+        // this trait method in Phase 3. For Phase 1, return Unsupported so
+        // the trait surface is complete but consumers can't accidentally
+        // rely on it.
+        Err(StoreError::Backend(
+            "reindex_embeddings: not yet routed through KnowledgeGraphStore — see TD-012".into(),
+        ))
     }
 
     async fn stats(&self) -> StoreResult<KgStats> {
-        Err(StoreError::Backend("not implemented".into()))
+        let storage = self.storage.clone();
+        block(move || {
+            let (entity_count, relationship_count, alias_count) =
+                storage.stats().map_err(map_graph_err)?;
+            Ok(KgStats {
+                entity_count,
+                relationship_count,
+                alias_count,
+            })
+        })
+        .await
     }
 }
