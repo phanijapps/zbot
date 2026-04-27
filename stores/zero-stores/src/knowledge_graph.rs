@@ -63,4 +63,16 @@ pub trait KnowledgeGraphStore: Send + Sync {
     // ---- Maintenance -----------------------------------------------------
     async fn reindex_embeddings(&self, new_dim: usize) -> StoreResult<ReindexReport>;
     async fn stats(&self) -> StoreResult<KgStats>;
+
+    /// Find entities that satisfy the orphan-archival heuristic:
+    /// `mention_count = 1`, `confidence < 0.5`, `first_seen_at` older
+    /// than `min_age_hours`, zero incoming AND zero outgoing
+    /// relationships, and not already archived (`epistemic_class !=
+    /// 'archival'`). Used by the sleep-time orphan archiver. Hard-cap
+    /// the result at `limit` rows for runaway protection.
+    async fn list_archivable_orphans(
+        &self,
+        min_age_hours: u32,
+        limit: usize,
+    ) -> StoreResult<Vec<ArchivableEntity>>;
 }

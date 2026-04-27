@@ -132,3 +132,16 @@ impl From<knowledge_graph::traversal::TraversalNode> for TraversalHit {
         }
     }
 }
+
+/// An entity that meets the orphan-archival heuristic: low confidence,
+/// only seen once, old enough to be past the reinforcement grace period,
+/// and with zero relationships in either direction. Returned by
+/// `KnowledgeGraphStore::list_archivable_orphans` for the sleep-time
+/// orphan archiver.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchivableEntity {
+    pub entity_id: EntityId,
+    pub agent_id: String,
+    pub entity_type: String,
+    pub name: String,
+}
