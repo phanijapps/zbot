@@ -5,11 +5,11 @@ use knowledge_graph::storage::GraphStorage;
 use knowledge_graph::types::{Entity, EntityType, Relationship};
 use zero_stores::error::StoreError;
 use zero_stores::extracted::ExtractedKnowledge;
-use zero_stores::knowledge_graph::KnowledgeGraphStore;
 use zero_stores::types::{
     Direction, EntityId, KgStats, Neighbor, ReindexReport, RelationshipId, ResolveOutcome,
     StoreOutcome, TraversalHit,
 };
+use zero_stores::KnowledgeGraphStore;
 use zero_stores::StoreResult;
 
 /// SQLite implementation of `KnowledgeGraphStore`. Wraps the existing
