@@ -75,4 +75,11 @@ pub trait KnowledgeGraphStore: Send + Sync {
         min_age_hours: u32,
         limit: usize,
     ) -> StoreResult<Vec<ArchivableEntity>>;
+
+    /// Soft-delete an entity by marking it archival. Sets the entity's
+    /// `epistemic_class` to `'archival'`, records `reason` in
+    /// `compressed_into`, and removes the entity's name-index row (so
+    /// future searches don't surface it). Used by the sleep-time orphan
+    /// archiver. Atomically applies all writes via a single transaction.
+    async fn mark_entity_archival(&self, id: &EntityId, reason: &str) -> StoreResult<()>;
 }
