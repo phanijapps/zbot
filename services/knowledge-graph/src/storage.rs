@@ -1746,6 +1746,41 @@ impl GraphStorage {
             })
             .map_err(GraphError::Other)
     }
+
+    /// Soft-delete an entity by marking it archival. Sets
+    /// `epistemic_class = 'archival'`, records `reason` in
+    /// `compressed_into`, and drops the corresponding `kg_name_index`
+    /// row so ANN/resolver queries stop surfacing it. All three writes
+    /// are wrapped in a single transaction so readers never see a
+    /// half-archived state. See
+    /// `KnowledgeGraphStore::mark_entity_archival` in zero-stores for
+    /// the full semantic contract.
+    pub fn mark_entity_archival(&self, entity_id: &str, reason: &str) -> GraphResult<()> {
+        let id = entity_id.to_string();
+        let reason = reason.to_string();
+        self.db
+            .with_connection(move |conn| {
+                (|| -> GraphResult<()> {
+                    let tx = conn.unchecked_transaction().map_err(GraphError::Database)?;
+                    tx.execute(
+                        "UPDATE kg_entities \
+                         SET epistemic_class = 'archival', compressed_into = ?2 \
+                         WHERE id = ?1",
+                        params![id, reason],
+                    )
+                    .map_err(GraphError::Database)?;
+                    tx.execute(
+                        "DELETE FROM kg_name_index WHERE entity_id = ?1",
+                        params![id],
+                    )
+                    .map_err(GraphError::Database)?;
+                    tx.commit().map_err(GraphError::Database)?;
+                    Ok(())
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
 }
 
 /// Minimal projection of `kg_entities` used by the sleep-time Pruner to

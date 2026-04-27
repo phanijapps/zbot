@@ -245,4 +245,16 @@ impl KnowledgeGraphStore for SqliteKgStore {
         })
         .await
     }
+
+    async fn mark_entity_archival(&self, id: &EntityId, reason: &str) -> StoreResult<()> {
+        let storage = self.storage.clone();
+        let id = id.0.clone();
+        let reason = reason.to_string();
+        block(move || {
+            storage
+                .mark_entity_archival(&id, &reason)
+                .map_err(map_graph_err)
+        })
+        .await
+    }
 }
