@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 async-trait = { workspace = true }
+knowledge-graph = { path = "../services/knowledge-graph" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 

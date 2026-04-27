@@ -5,8 +5,10 @@
 //! (`zero-stores-sqlite`, future `zero-stores-surreal`).
 
 pub mod error;
+pub mod extracted;
 pub mod knowledge_graph;
 pub mod types;
 
 pub use error::{StoreError, StoreResult};
+pub use extracted::ExtractedKnowledge;
 pub use types::*;
