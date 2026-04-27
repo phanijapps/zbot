@@ -1,0 +1,12 @@
+[package]
+name = "zero-stores-conformance"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zero-stores = { path = "../zero-stores" }
+knowledge-graph = { path = "../services/knowledge-graph" }
+async-trait = { workspace = true }
+
+[lints]
+workspace = true
