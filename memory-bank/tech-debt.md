@@ -46,17 +46,15 @@ Scope tags:
 
 ### Abstraction-shape debt — knowledge side (critical path for SurrealDB)
 
-#### TD-010 🔴 [K] `KnowledgeGraphStore` trait does not exist
-- **Location:** `services/knowledge-graph/src/storage.rs` (entire file). `GraphStorage` is concrete; the only existing trait is `GraphStorageAccess` for tool integration (`runtime/agent-tools/src/graph_query.rs`), which is not a real persistence boundary.
-- **Why debt:** Every consumer (HTTP handlers, sleep jobs, distillation, ward indexer) holds a concrete `GraphStorage`. No way to swap KG storage without editing every callsite.
-- **Fix:** Define `KnowledgeGraphStore` trait in a new `zero-knowledge-store` interface crate (or co-located in `services/knowledge-graph/`, decision in this item). Methods at minimum: `upsert_entity`, `upsert_relationship`, `find_entity_by_alias`, `resolve_entity(name, embedding)`, `traverse(seed, max_hops, limit)`, `get_neighbors(entity_id, direction, limit)`, `delete_entity`. Move existing `GraphStorage` into a `zero-knowledge-store-sqlite` impl crate. The choice between "new interface crate" vs "trait in existing services/knowledge-graph" is a sub-decision worth a brief design note.
-- **Status:** pending
+#### TD-010 ✅ [K] `KnowledgeGraphStore` trait extracted (Phase 1 done)
+- **Location:** `services/knowledge-graph/src/storage.rs` (concrete `GraphStorage` retained as the SQLite impl backing).
+- **Resolution:** `KnowledgeGraphStore` trait now lives in new `zero-stores` interface crate with all 14 methods (entity CRUD, aliases & resolution, relationships, bulk ingest, read paths, maintenance). New `zero-stores-sqlite` adapter crate implements the trait by wrapping `Arc<GraphStorage>` and bridging sync rusqlite → async via `spawn_blocking`. New `zero-stores-conformance` crate holds cross-impl scenarios (one scaffold scenario; more added incrementally). `AppState` exposes `kg_store: Option<Arc<dyn KnowledgeGraphStore>>` alongside the existing `graph_service`. One HTTP handler (`search_entities`) migrated as proof of pattern. Three atomicity bugs found and fixed in `GraphStorage` along the way: `delete_entity_by_id` (commit 324b573), `store_knowledge` (commit cc59cde) — both wrapped in `unchecked_transaction()` to honor the trait contract.
+- **Status:** done — Phase 1 implementation plan executed across 14 tasks on `feature/phase1-kg-store-extraction`
 
-#### TD-011 🔴 [K] `CausalEdgeStore::new` leaks `rusqlite` into public API
-- **Location:** `services/knowledge-graph/src/causal.rs:25-32` — `pub fn new(conn: Arc<Mutex<rusqlite::Connection>>) -> Self`.
-- **Why debt:** Public constructor takes a raw rusqlite handle. The struct itself stores `Arc<Mutex<rusqlite::Connection>>` as a field. Both leak a SQLite-only type into a public API that's supposed to be reusable.
-- **Fix:** After TD-010, change ctor to accept `Arc<dyn KnowledgeGraphStore>` (and reroute its queries through the trait), or define a focused `CausalEdgeStorage` trait if causal edges deserve their own boundary.
-- **Status:** pending (depends on TD-010)
+#### TD-011 ✅ [K] `CausalEdgeStore` rusqlite leak removed
+- **Location:** `services/knowledge-graph/src/causal.rs` — `pub fn new(db: Arc<KnowledgeDatabase>)` (was: `Arc<Mutex<rusqlite::Connection>>`).
+- **Resolution:** Constructor now takes `Arc<KnowledgeDatabase>`. Struct field changed from `Arc<Mutex<rusqlite::Connection>>` to `Arc<KnowledgeDatabase>`. Method bodies use `self.db.with_connection(|conn| ...)` instead of `self.conn.lock()`. All 4 existing causal-edge tests pass; no behavioural change. No public callers exist outside the test module — `CausalEdgeStore` is constructed only in tests today, so updating callers reduces to fixing the test fixture.
+- **Status:** done — commit `93a75bd`
 
 #### TD-012 🟠 [K] `gateway-execution/sleep/*` bypasses persistence abstractions
 - **Locations:** All in `gateway/gateway-execution/src/sleep/`
