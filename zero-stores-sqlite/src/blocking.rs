@@ -2,8 +2,6 @@ use zero_stores::error::StoreError;
 
 /// Run a synchronous closure on the blocking thread pool, mapping any
 /// panic or join error into `StoreError::Backend`.
-// Used by Task 4+
-#[allow(dead_code)]
 pub(crate) async fn block<T, F>(f: F) -> Result<T, StoreError>
 where
     F: FnOnce() -> Result<T, StoreError> + Send + 'static,
@@ -16,8 +14,6 @@ where
 
 /// Map the existing `knowledge_graph::error::GraphError` into a `StoreError`.
 /// Mapping is centralised here so Tasks 4–9 import a single conversion point.
-// Used by Task 4+
-#[allow(dead_code)]
 pub(crate) fn map_graph_err(e: knowledge_graph::error::GraphError) -> StoreError {
     use knowledge_graph::error::GraphError as G;
     match e {

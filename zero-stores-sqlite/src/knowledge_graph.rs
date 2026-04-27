@@ -12,13 +12,13 @@ use zero_stores::types::{
 use zero_stores::KnowledgeGraphStore;
 use zero_stores::StoreResult;
 
+use crate::blocking::{block, map_graph_err};
+
 /// SQLite implementation of `KnowledgeGraphStore`. Wraps the existing
 /// `knowledge_graph::storage::GraphStorage` and bridges its synchronous
 /// rusqlite API into the async trait via `spawn_blocking`.
 #[derive(Clone)]
 pub struct SqliteKgStore {
-    // Used by Tasks 4+
-    #[allow(dead_code)]
     storage: Arc<GraphStorage>,
 }
 
@@ -32,20 +32,34 @@ impl SqliteKgStore {
 impl KnowledgeGraphStore for SqliteKgStore {
     // Methods filled in by Tasks 4-9.
 
-    async fn upsert_entity(&self, _agent_id: &str, _entity: Entity) -> StoreResult<EntityId> {
-        Err(StoreError::Backend("not implemented".into()))
+    async fn upsert_entity(&self, agent_id: &str, entity: Entity) -> StoreResult<EntityId> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        block(move || {
+            storage
+                .upsert_entity(&agent_id, entity)
+                .map(EntityId::from)
+                .map_err(map_graph_err)
+        })
+        .await
     }
 
-    async fn get_entity(&self, _id: &EntityId) -> StoreResult<Option<Entity>> {
-        Err(StoreError::Backend("not implemented".into()))
+    async fn get_entity(&self, id: &EntityId) -> StoreResult<Option<Entity>> {
+        let storage = self.storage.clone();
+        let id = id.0.clone();
+        block(move || storage.get_entity_by_id(&id).map_err(map_graph_err)).await
     }
 
-    async fn delete_entity(&self, _id: &EntityId) -> StoreResult<()> {
-        Err(StoreError::Backend("not implemented".into()))
+    async fn delete_entity(&self, id: &EntityId) -> StoreResult<()> {
+        let storage = self.storage.clone();
+        let id = id.0.clone();
+        block(move || storage.delete_entity_by_id(&id).map_err(map_graph_err)).await
     }
 
-    async fn bump_entity_mention(&self, _id: &EntityId) -> StoreResult<()> {
-        Err(StoreError::Backend("not implemented".into()))
+    async fn bump_entity_mention(&self, id: &EntityId) -> StoreResult<()> {
+        let storage = self.storage.clone();
+        let id = id.0.clone();
+        block(move || storage.bump_entity_mention(&id).map_err(map_graph_err)).await
     }
 
     async fn add_alias(&self, _entity_id: &EntityId, _surface: &str) -> StoreResult<()> {

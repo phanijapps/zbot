@@ -543,6 +543,88 @@ impl GraphStorage {
             .map_err(GraphError::Other)
     }
 
+    /// Store (upsert) a single entity for an agent, returning its canonical ID.
+    ///
+    /// Delegates to the private `store_entity` function which handles
+    /// name-normalisation, deduplication, and alias seeding.
+    pub fn upsert_entity(&self, agent_id: &str, entity: Entity) -> GraphResult<String> {
+        let agent_id = agent_id.to_string();
+        self.db
+            .with_connection(|conn| {
+                store_entity(conn, &agent_id, entity).map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Fetch a single entity by its ID. Returns `None` if not found.
+    pub fn get_entity_by_id(&self, entity_id: &str) -> GraphResult<Option<Entity>> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Option<Entity>> {
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT id, agent_id, entity_type, name, properties, \
+                             first_seen_at, last_seen_at, mention_count \
+                             FROM kg_entities WHERE id = ?1 LIMIT 1",
+                        )
+                        .map_err(GraphError::Database)?;
+
+                    let mut rows = stmt
+                        .query_map(params![entity_id], |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, String>(3)?,
+                                row.get::<_, Option<String>>(4)?,
+                                row.get::<_, String>(5)?,
+                                row.get::<_, String>(6)?,
+                                row.get::<_, i64>(7)?,
+                            ))
+                        })
+                        .map_err(GraphError::Database)?;
+
+                    match rows.next() {
+                        Some(row) => Ok(Some(build_entity_from_row(row?))),
+                        None => Ok(None),
+                    }
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Delete a single entity by its ID. Also removes any associated
+    /// relationships and alias entries to keep the graph consistent.
+    pub fn delete_entity_by_id(&self, entity_id: &str) -> GraphResult<()> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<()> {
+                    conn.execute(
+                        "DELETE FROM kg_aliases WHERE entity_id = ?1",
+                        params![entity_id],
+                    )
+                    .map_err(GraphError::Database)?;
+                    conn.execute(
+                        "DELETE FROM kg_name_index WHERE entity_id = ?1",
+                        params![entity_id],
+                    )
+                    .map_err(GraphError::Database)?;
+                    conn.execute(
+                        "DELETE FROM kg_relationships \
+                         WHERE source_entity_id = ?1 OR target_entity_id = ?1",
+                        params![entity_id],
+                    )
+                    .map_err(GraphError::Database)?;
+                    conn.execute("DELETE FROM kg_entities WHERE id = ?1", params![entity_id])
+                        .map_err(GraphError::Database)?;
+                    Ok(())
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
     /// Delete all data for an agent
     pub fn delete_agent_data(&self, agent_id: &str) -> GraphResult<usize> {
         self.db
