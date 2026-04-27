@@ -556,6 +556,53 @@ impl GraphStorage {
             .map_err(GraphError::Other)
     }
 
+    /// Store a relationship, merging properties if one with the same
+    /// (source, target, type) already exists. Returns the relationship ID.
+    pub fn upsert_relationship(
+        &self,
+        agent_id: &str,
+        relationship: Relationship,
+    ) -> GraphResult<String> {
+        let src = relationship.source_entity_id.clone();
+        let tgt = relationship.target_entity_id.clone();
+        let rel_type_str = relationship.relationship_type.as_str().to_string();
+        let agent_id = agent_id.to_string();
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<String> {
+                    store_relationship(conn, &agent_id, relationship)?;
+                    // After INSERT ... ON CONFLICT DO UPDATE the id column is
+                    // never overwritten; query by the UNIQUE key to get the id.
+                    conn.query_row(
+                        "SELECT id FROM kg_relationships \
+                         WHERE source_entity_id = ?1 \
+                           AND target_entity_id = ?2 \
+                           AND relationship_type = ?3 \
+                         LIMIT 1",
+                        rusqlite::params![src, tgt, rel_type_str],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(GraphError::Database)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Delete a single relationship by its ID.
+    pub fn delete_relationship(&self, id: &str) -> GraphResult<()> {
+        self.db
+            .with_connection(|conn| {
+                conn.execute(
+                    "DELETE FROM kg_relationships WHERE id = ?1",
+                    rusqlite::params![id],
+                )
+                .map(|_| ())
+                .map_err(|e| graph_to_rusqlite(GraphError::Database(e)))
+            })
+            .map_err(GraphError::Other)
+    }
+
     /// Fetch a single entity by its ID. Returns `None` if not found.
     pub fn get_entity_by_id(&self, entity_id: &str) -> GraphResult<Option<Entity>> {
         self.db

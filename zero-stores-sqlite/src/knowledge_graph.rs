@@ -100,14 +100,24 @@ impl KnowledgeGraphStore for SqliteKgStore {
 
     async fn upsert_relationship(
         &self,
-        _agent_id: &str,
-        _rel: Relationship,
+        agent_id: &str,
+        rel: Relationship,
     ) -> StoreResult<RelationshipId> {
-        Err(StoreError::Backend("not implemented".into()))
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        block(move || {
+            storage
+                .upsert_relationship(&agent_id, rel)
+                .map(RelationshipId::from)
+                .map_err(map_graph_err)
+        })
+        .await
     }
 
-    async fn delete_relationship(&self, _id: &RelationshipId) -> StoreResult<()> {
-        Err(StoreError::Backend("not implemented".into()))
+    async fn delete_relationship(&self, id: &RelationshipId) -> StoreResult<()> {
+        let storage = self.storage.clone();
+        let id = id.0.clone();
+        block(move || storage.delete_relationship(&id).map_err(map_graph_err)).await
     }
 
     async fn store_knowledge(
