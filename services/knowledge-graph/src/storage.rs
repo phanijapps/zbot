@@ -143,27 +143,38 @@ impl GraphStorage {
     ) -> GraphResult<()> {
         self.db
             .with_connection(|conn| {
-                // Store entities and build ID mapping (new_id → actual_id)
-                let mut entity_id_map: std::collections::HashMap<String, String> =
-                    std::collections::HashMap::new();
-                for entity in knowledge.entities {
-                    let original_id = entity.id.clone();
-                    let actual_id =
-                        store_entity(conn, agent_id, entity).map_err(graph_to_rusqlite)?;
-                    entity_id_map.insert(original_id, actual_id);
-                }
+                // `with_connection` provides `&Connection` (not `&mut`), so we
+                // use `unchecked_transaction` which is available on shared refs.
+                // All entity + relationship inserts are wrapped in a single
+                // transaction so a partial failure cannot leave the graph in an
+                // inconsistent state (trait contract: atomic all-or-nothing).
+                (|| -> GraphResult<()> {
+                    let tx = conn.unchecked_transaction().map_err(GraphError::Database)?;
 
-                for mut relationship in knowledge.relationships {
-                    if let Some(mapped) = entity_id_map.get(&relationship.source_entity_id) {
-                        relationship.source_entity_id = mapped.clone();
+                    // Store entities and build ID mapping (new_id → actual_id).
+                    // `Transaction` auto-derefs to `&Connection`, so helpers accept `&tx`.
+                    let mut entity_id_map: std::collections::HashMap<String, String> =
+                        std::collections::HashMap::new();
+                    for entity in knowledge.entities {
+                        let original_id = entity.id.clone();
+                        let actual_id = store_entity(&tx, agent_id, entity)?;
+                        entity_id_map.insert(original_id, actual_id);
                     }
-                    if let Some(mapped) = entity_id_map.get(&relationship.target_entity_id) {
-                        relationship.target_entity_id = mapped.clone();
-                    }
-                    store_relationship(conn, agent_id, relationship).map_err(graph_to_rusqlite)?;
-                }
 
-                Ok(())
+                    for mut relationship in knowledge.relationships {
+                        if let Some(mapped) = entity_id_map.get(&relationship.source_entity_id) {
+                            relationship.source_entity_id = mapped.clone();
+                        }
+                        if let Some(mapped) = entity_id_map.get(&relationship.target_entity_id) {
+                            relationship.target_entity_id = mapped.clone();
+                        }
+                        store_relationship(&tx, agent_id, relationship)?;
+                    }
+
+                    tx.commit().map_err(GraphError::Database)?;
+                    Ok(())
+                })()
+                .map_err(graph_to_rusqlite)
             })
             .map_err(GraphError::Other)
     }
