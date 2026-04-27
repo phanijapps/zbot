@@ -22,7 +22,9 @@ test.describe("aapl-peer-valuation (Mode Full)", () => {
       .toMatch(/\/research\/sess-/);
 
     // Title reflects the intent / recorded session title.
-    await expect(page.locator("header, [class*='title'], h1").first())
+    // Target the research page title specifically — `header` matches the
+    // global topbar which has no session content.
+    await expect(page.locator("[class*='research-page__title']").first())
       .toContainText(/AAPL/i, { timeout: 20_000 });
 
     // Root agent delegated; planner-agent subagent card renders.

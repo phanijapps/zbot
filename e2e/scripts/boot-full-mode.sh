@@ -57,7 +57,11 @@ PY="$VENV/bin/python"
 pick_port() { "$PY" -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1])"; }
 LLM_PORT=$(pick_port)
 GATEWAY_HTTP_PORT=$(pick_port)
-GATEWAY_WS_PORT=$(pick_port)
+# zerod serves the WebSocket upgrade on the unified HTTP port at /ws.
+# The legacy --ws-port flag is gated behind --legacy-ws-port-enabled and we
+# don't bind it here. Surface the unified URL as gateway_ws_url so the UI
+# connects to the correct endpoint.
+GATEWAY_WS_PORT="$GATEWAY_HTTP_PORT"
 UI_PORT=$(pick_port)
 
 # Patch providers.json: add a "provider-mock" entry first in the list so it
@@ -140,7 +144,6 @@ fi
       --data-dir "$DATA_DIR" \
       --host 127.0.0.1 \
       --http-port "$GATEWAY_HTTP_PORT" \
-      --ws-port "$GATEWAY_WS_PORT" \
       --log-level info \
       --no-dashboard \
     > "$RUN_DIR/zerod.log" 2>&1
@@ -185,5 +188,5 @@ if ! curl -sf "http://127.0.0.1:$UI_PORT/" >/dev/null; then
 fi
 
 cat <<EOF
-{"run_dir":"$RUN_DIR","mock_llm_url":"http://127.0.0.1:$LLM_PORT","gateway_http_url":"http://127.0.0.1:$GATEWAY_HTTP_PORT","gateway_ws_url":"ws://127.0.0.1:$GATEWAY_WS_PORT","ui_url":"http://127.0.0.1:$UI_PORT","data_dir":"$DATA_DIR","fixture":"$FIXTURE"}
+{"run_dir":"$RUN_DIR","mock_llm_url":"http://127.0.0.1:$LLM_PORT","gateway_http_url":"http://127.0.0.1:$GATEWAY_HTTP_PORT","gateway_ws_url":"ws://127.0.0.1:$GATEWAY_WS_PORT/ws","ui_url":"http://127.0.0.1:$UI_PORT","data_dir":"$DATA_DIR","fixture":"$FIXTURE"}
 EOF
