@@ -25,7 +25,7 @@
 use std::sync::Arc;
 
 use gateway_database::{CompactionRepository, KnowledgeDatabase};
-use rusqlite::params;
+use zero_stores::types::EntityId;
 use zero_stores::KnowledgeGraphStore;
 
 /// Minimum age (in hours) an entity must have before it becomes a candidate
@@ -53,9 +53,13 @@ pub struct OrphanArchiverStats {
 
 /// Archives isolated, low-confidence, singleton entities.
 pub struct OrphanArchiver {
-    /// Kept for the write path (soft-delete + name-index cleanup) until Phase 3b.
+    /// Held for symmetry with the original ctor signature; both read and
+    /// write paths now go through `kg_store`. Removable in a follow-up
+    /// cleanup once callers stop passing it.
+    #[allow(dead_code)]
     db: Arc<KnowledgeDatabase>,
-    /// Used by the read path (`load_candidates`). Replaces the direct SQL query.
+    /// Used by both the candidate-load read path and the soft-delete
+    /// write path.
     kg_store: Arc<dyn KnowledgeGraphStore>,
     compaction_repo: Arc<CompactionRepository>,
 }
@@ -82,7 +86,7 @@ impl OrphanArchiver {
             ..Default::default()
         };
         for entity_id in &candidates {
-            match self.archive_entity(entity_id) {
+            match self.archive_entity(entity_id).await {
                 Ok(()) => {
                     stats.archived += 1;
                     if let Err(e) =
@@ -121,26 +125,15 @@ impl OrphanArchiver {
     }
 
     /// Soft-delete a single entity: flip `epistemic_class` + `compressed_into`
-    /// and remove its name-index row. Wrapped in a transaction so readers
-    /// never see a half-archived state.
-    fn archive_entity(&self, entity_id: &str) -> Result<(), String> {
-        let id = entity_id.to_string();
-        self.db.with_connection(move |conn| {
-            let tx = conn.unchecked_transaction()?;
-            tx.execute(
-                "UPDATE kg_entities
-                 SET epistemic_class = 'archival',
-                     compressed_into = ?1
-                 WHERE id = ?2",
-                params![ORPHAN_SENTINEL, id],
-            )?;
-            tx.execute(
-                "DELETE FROM kg_name_index WHERE entity_id = ?1",
-                params![id],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
+    /// and remove its name-index row. Atomicity is guaranteed by the
+    /// `KnowledgeGraphStore::mark_entity_archival` contract — the impl
+    /// wraps all writes in a single transaction so readers never see a
+    /// half-archived state.
+    async fn archive_entity(&self, entity_id: &str) -> Result<(), String> {
+        self.kg_store
+            .mark_entity_archival(&EntityId::from(entity_id), ORPHAN_SENTINEL)
+            .await
+            .map_err(|e| format!("mark_entity_archival: {e}"))
     }
 }
 
@@ -154,6 +147,7 @@ mod tests {
     use gateway_database::{CompactionRepository, KnowledgeDatabase};
     use gateway_services::VaultPaths;
     use knowledge_graph::storage::GraphStorage;
+    use rusqlite::params;
     use tempfile::TempDir;
     use zero_stores_sqlite::SqliteKgStore;
 
