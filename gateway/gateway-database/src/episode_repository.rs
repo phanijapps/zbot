@@ -10,6 +10,7 @@
 
 use crate::vector_index::VectorIndex;
 use crate::KnowledgeDatabase;
+use chrono::{Duration, Utc};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -225,6 +226,7 @@ impl EpisodeRepository {
         ward_id: &str,
         limit: usize,
     ) -> Result<Vec<SessionEpisode>, String> {
+        let cutoff = (Utc::now() - Duration::days(14)).to_rfc3339();
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, session_id, agent_id, ward_id, task_summary, outcome, \
@@ -232,11 +234,11 @@ impl EpisodeRepository {
                  FROM session_episodes \
                  WHERE ward_id = ?1 \
                    AND outcome IN ('success', 'partial') \
-                   AND created_at > datetime('now', '-14 days') \
+                   AND created_at > ?2 \
                  ORDER BY created_at DESC \
-                 LIMIT ?2",
+                 LIMIT ?3",
             )?;
-            let rows = stmt.query_map(params![ward_id, limit as i64], row_to_episode)?;
+            let rows = stmt.query_map(params![ward_id, cutoff, limit as i64], row_to_episode)?;
             rows.collect::<Result<Vec<_>, _>>()
         })
     }
