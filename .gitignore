@@ -141,3 +141,4 @@ chroma.sqlite3
 mempalace.yaml
 entities.json
 mcp.json
+.playwright-mcp/
