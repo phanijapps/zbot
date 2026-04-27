@@ -152,11 +152,11 @@ Scope tags:
 - **Fix:** No urgency. Standardize on numbered (`?1`) opportunistically as files are touched for other work.
 - **Status:** opportunistic
 
-#### TD-042 🟢 [K] `julianday('now')` date-arithmetic at memory_repository.rs:629
+#### TD-042 ✅ [K] `julianday('now')` date-arithmetic at memory_repository.rs:629
 - **Location:** `gateway/gateway-database/src/memory_repository.rs:629` — `julianday('now') - julianday(updated_at) > ?2` (in `decay_stale_facts`).
 - **Why debt:** `julianday()` is a SQLite-specific time function. Like `datetime('now')`, it bakes a clock assumption into the SQL — but unlike `datetime('now')`, it can't be replaced by a single bound parameter. The fix requires a semantic change: pre-compute a threshold timestamp in Rust (`Utc::now() - Duration::days(N)`) and rewrite the WHERE clause to compare `updated_at < ?threshold`.
-- **Why deferred:** Phase 2 was scoped to mechanical `datetime('now')` substitution; this is a semantic change. Best addressed alongside Phase 4 (schema bootstrap) when the full SQL surface is reviewed for SurrealDB portability anyway.
-- **Status:** pending — Phase 4
+- **Phase 4 fix:** `decay_stale_facts` now computes `cutoff = (Utc::now() - chrono::Duration::days(older_than_days as i64)).to_rfc3339()` in Rust and binds it as `?3` in `WHERE updated_at < ?3`. Params reordered: `?1` decay_factor, `?2` now (for `updated_at` write), `?3` cutoff. Same flavor as Phase 2's `datetime('now')` cleanup — keeps the SQL portable across SQLite and SurrealDB.
+- **Status:** ✅ done (Phase 4)
 
 ---
 
