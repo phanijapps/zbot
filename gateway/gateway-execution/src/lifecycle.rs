@@ -501,6 +501,7 @@ pub async fn emit_delegation_started(
     event_bus: &EventBus,
     parent_agent_id: &str,
     session_id: &str,
+    parent_execution_id: &str,
     parent_conversation_id: &str,
     child_agent_id: &str,
     child_execution_id: &str,
@@ -510,7 +511,7 @@ pub async fn emit_delegation_started(
     event_bus
         .publish(GatewayEvent::DelegationStarted {
             session_id: session_id.to_string(),
-            parent_execution_id: session_id.to_string(), // Will be updated by caller
+            parent_execution_id: parent_execution_id.to_string(),
             child_execution_id: child_execution_id.to_string(),
             parent_agent_id: parent_agent_id.to_string(),
             child_agent_id: child_agent_id.to_string(),
@@ -590,6 +591,7 @@ mod tests {
             &event_bus,
             "root",
             "session-abc",
+            "exec-parent-7",
             "conv-parent-xyz",
             "child-agent",
             "exec-child-1",
@@ -605,10 +607,16 @@ mod tests {
 
         match event {
             GatewayEvent::DelegationStarted {
+                parent_execution_id,
                 parent_conversation_id,
                 child_conversation_id,
                 ..
             } => {
+                assert_eq!(
+                    parent_execution_id, "exec-parent-7",
+                    "parent_execution_id must be the parent agent's exec id, not the session id \
+                     (UI childrenOf() filters by parent_execution_id and drops subagents otherwise)"
+                );
                 assert_eq!(
                     parent_conversation_id,
                     Some("conv-parent-xyz".to_string()),

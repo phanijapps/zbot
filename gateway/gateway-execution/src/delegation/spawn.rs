@@ -142,6 +142,7 @@ pub async fn spawn_delegated_agent(
         &event_bus,
         &request.parent_agent_id,
         &session_id,
+        &request.parent_execution_id,
         &request.parent_conversation_id,
         &request.child_agent_id,
         &execution_id,
