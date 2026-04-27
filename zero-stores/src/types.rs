@@ -86,3 +86,49 @@ pub struct StoreOutcome {
     pub entities_merged: u64,
     pub relationships_inserted: u64,
 }
+
+// ============================================================================
+// From conversions: knowledge_graph types → zero_stores types
+// ============================================================================
+
+impl From<knowledge_graph::types::Direction> for Direction {
+    fn from(d: knowledge_graph::types::Direction) -> Self {
+        match d {
+            knowledge_graph::types::Direction::Outgoing => Direction::Outgoing,
+            knowledge_graph::types::Direction::Incoming => Direction::Incoming,
+            knowledge_graph::types::Direction::Both => Direction::Both,
+        }
+    }
+}
+
+impl From<Direction> for knowledge_graph::types::Direction {
+    fn from(d: Direction) -> Self {
+        match d {
+            Direction::Outgoing => knowledge_graph::types::Direction::Outgoing,
+            Direction::Incoming => knowledge_graph::types::Direction::Incoming,
+            Direction::Both => knowledge_graph::types::Direction::Both,
+        }
+    }
+}
+
+impl From<knowledge_graph::types::NeighborInfo> for Neighbor {
+    fn from(n: knowledge_graph::types::NeighborInfo) -> Self {
+        Neighbor {
+            entity_id: EntityId(n.entity.id),
+            relationship_id: RelationshipId(n.relationship.id),
+            relationship_type: n.relationship.relationship_type.as_str().to_string(),
+            direction: n.direction.into(),
+        }
+    }
+}
+
+impl From<knowledge_graph::traversal::TraversalNode> for TraversalHit {
+    fn from(n: knowledge_graph::traversal::TraversalNode) -> Self {
+        TraversalHit {
+            entity_id: EntityId(n.entity_id),
+            hop: n.hop_distance as usize,
+            path: n.path,
+            mention_count: n.mention_count,
+        }
+    }
+}

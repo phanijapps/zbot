@@ -148,29 +148,53 @@ impl KnowledgeGraphStore for SqliteKgStore {
 
     async fn get_neighbors(
         &self,
-        _id: &EntityId,
-        _direction: Direction,
-        _limit: usize,
+        id: &EntityId,
+        direction: Direction,
+        limit: usize,
     ) -> StoreResult<Vec<Neighbor>> {
-        Err(StoreError::Backend("not implemented".into()))
+        let storage = self.storage.clone();
+        let id = id.0.clone();
+        block(move || {
+            storage
+                .get_neighbors("", &id, direction.into(), limit)
+                .map(|rows| rows.into_iter().map(Into::into).collect())
+                .map_err(map_graph_err)
+        })
+        .await
     }
 
     async fn traverse(
         &self,
-        _seed: &EntityId,
-        _max_hops: usize,
-        _limit: usize,
+        seed: &EntityId,
+        max_hops: usize,
+        limit: usize,
     ) -> StoreResult<Vec<TraversalHit>> {
-        Err(StoreError::Backend("not implemented".into()))
+        let storage = self.storage.clone();
+        let seed = seed.0.clone();
+        block(move || {
+            storage
+                .traverse_sync(&seed, max_hops.min(255) as u8, limit)
+                .map(|rows| rows.into_iter().map(Into::into).collect())
+                .map_err(map_graph_err)
+        })
+        .await
     }
 
     async fn search_entities_by_name(
         &self,
-        _agent_id: &str,
-        _query: &str,
-        _limit: usize,
+        agent_id: &str,
+        query: &str,
+        limit: usize,
     ) -> StoreResult<Vec<Entity>> {
-        Err(StoreError::Backend("not implemented".into()))
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        let query = query.to_string();
+        block(move || {
+            storage
+                .search_by_name(&agent_id, &query, limit)
+                .map_err(map_graph_err)
+        })
+        .await
     }
 
     async fn reindex_embeddings(&self, _new_dim: usize) -> StoreResult<ReindexReport> {

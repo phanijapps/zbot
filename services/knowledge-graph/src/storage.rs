@@ -1154,6 +1154,112 @@ impl GraphStorage {
             .map_err(GraphError::Other)
     }
 
+    /// BFS traversal from a seed entity up to `max_hops` with a result cap.
+    ///
+    /// Runs the same recursive CTE used by [`SqliteGraphTraversal`], callable
+    /// from a synchronous `spawn_blocking` closure in `zero-stores-sqlite`.
+    pub fn traverse_sync(
+        &self,
+        entity_id: &str,
+        max_hops: u8,
+        limit: usize,
+    ) -> GraphResult<Vec<crate::traversal::TraversalNode>> {
+        let hop_decay = 0.7_f64;
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<crate::traversal::TraversalNode>> {
+                    let sql = r#"
+                        WITH RECURSIVE graph_walk(entity_id, hop, path, visited) AS (
+                            SELECT ?1, 0, '', ?1
+                            UNION ALL
+                            SELECT
+                                CASE WHEN r.source_entity_id = gw.entity_id
+                                     THEN r.target_entity_id
+                                     ELSE r.source_entity_id
+                                END,
+                                gw.hop + 1,
+                                CASE WHEN gw.path = '' THEN r.relationship_type
+                                     ELSE gw.path || ',' || r.relationship_type
+                                END,
+                                gw.visited || ',' ||
+                                    CASE WHEN r.source_entity_id = gw.entity_id
+                                         THEN r.target_entity_id
+                                         ELSE r.source_entity_id
+                                    END
+                            FROM graph_walk gw
+                            JOIN kg_relationships r
+                                ON (r.source_entity_id = gw.entity_id
+                                    OR r.target_entity_id = gw.entity_id)
+                            WHERE gw.hop < ?2
+                              AND gw.visited NOT LIKE
+                                  '%' ||
+                                  CASE WHEN r.source_entity_id = gw.entity_id
+                                       THEN r.target_entity_id
+                                       ELSE r.source_entity_id
+                                  END || '%'
+                        )
+                        SELECT DISTINCT
+                            gw.entity_id,
+                            e.name,
+                            e.entity_type,
+                            MIN(gw.hop) AS min_hop,
+                            gw.path,
+                            e.mention_count
+                        FROM graph_walk gw
+                        JOIN kg_entities e ON e.id = gw.entity_id
+                        WHERE gw.entity_id != ?1
+                        GROUP BY gw.entity_id
+                        ORDER BY min_hop ASC, e.mention_count DESC
+                        LIMIT ?3
+                    "#;
+                    let mut stmt = conn.prepare(sql).map_err(GraphError::Database)?;
+                    let rows = stmt
+                        .query_map(
+                            rusqlite::params![entity_id, max_hops as i64, limit as i64],
+                            |row| {
+                                Ok((
+                                    row.get::<_, String>(0)?,
+                                    row.get::<_, String>(1)?,
+                                    row.get::<_, String>(2)?,
+                                    row.get::<_, i64>(3)?,
+                                    row.get::<_, String>(4)?,
+                                    row.get::<_, i64>(5)?,
+                                ))
+                            },
+                        )
+                        .map_err(GraphError::Database)?;
+                    let mut nodes = Vec::new();
+                    for row in rows {
+                        let (id, _name, _etype, hop, path, mentions) =
+                            row.map_err(GraphError::Database)?;
+                        let hop_u8 = hop as u8;
+                        nodes.push(crate::traversal::TraversalNode {
+                            entity_id: id,
+                            entity_name: _name,
+                            entity_type: _etype,
+                            hop_distance: hop_u8,
+                            path,
+                            relevance: hop_decay.powi(hop_u8 as i32),
+                            mention_count: mentions,
+                        });
+                    }
+                    Ok(nodes)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Search entities by name with a result limit (LIKE match, case-insensitive).
+    pub fn search_by_name(
+        &self,
+        agent_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> GraphResult<Vec<Entity>> {
+        self.search_entities_order_by(agent_id, query, "mention_count DESC", limit)
+    }
+
     /// Count entities for an agent
     pub fn count_entities(&self, agent_id: &str) -> GraphResult<usize> {
         self.db
