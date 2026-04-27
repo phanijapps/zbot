@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use agent_runtime::llm::EmbeddingClient;
 use async_trait::async_trait;
 use knowledge_graph::storage::{ArchivableEntityRow, GraphStorage};
 use knowledge_graph::types::{Entity, EntityType, Relationship};
@@ -20,11 +21,42 @@ use crate::blocking::{block, map_graph_err};
 #[derive(Clone)]
 pub struct SqliteKgStore {
     storage: Arc<GraphStorage>,
+    /// Active embedding client used by `reindex_embeddings`. Optional so
+    /// integration tests that don't exercise the reindex path can construct
+    /// the store without wiring an embedding backend. Production wiring
+    /// goes through [`SqliteKgStore::with_embedding_client`].
+    ///
+    /// Read by the trait method `reindex_embeddings` (filled in by Phase 3d
+    /// in a follow-up commit on this branch).
+    #[allow(dead_code)]
+    embedding_client: Option<Arc<dyn EmbeddingClient>>,
 }
 
 impl SqliteKgStore {
+    /// Construct a store without an embedding client. Calls to
+    /// `reindex_embeddings` on a store built this way return
+    /// `StoreError::Backend("no embedding client configured ...")`.
     pub fn new(storage: Arc<GraphStorage>) -> Self {
-        Self { storage }
+        Self {
+            storage,
+            embedding_client: None,
+        }
+    }
+
+    /// Construct a store that supports `reindex_embeddings`.
+    ///
+    /// The supplied client must produce vectors of the dimension passed to
+    /// [`KnowledgeGraphStore::reindex_embeddings`]; per-row mismatches are
+    /// logged and skipped (the index for that row stays empty until the next
+    /// reindex).
+    pub fn with_embedding_client(
+        storage: Arc<GraphStorage>,
+        embedding_client: Arc<dyn EmbeddingClient>,
+    ) -> Self {
+        Self {
+            storage,
+            embedding_client: Some(embedding_client),
+        }
     }
 }
 
