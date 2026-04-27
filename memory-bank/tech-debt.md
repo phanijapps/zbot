@@ -37,12 +37,10 @@ Scope tags:
 
 ### Real bugs
 
-#### TD-001 🔴 [B] `archiver.rs` archives without a transaction
-- **Location:** `gateway/gateway-execution/src/archiver.rs:187-210`
-- **What:** `SessionArchiver::archive_session` runs three independent statements in three separate `with_connection` calls — `DELETE FROM messages`, `DELETE FROM execution_logs`, `UPDATE sessions SET archived = 1` — with no outer transaction. Compressed JSONL file is written to disk *before* the deletes.
-- **Risk:** A crash between calls leaves the session in a partial state — messages gone but session not flagged archived; or flagged archived but logs still present. The next archive sweep can compound the corruption (re-archive an already-half-archived session).
-- **Fix:** Wrap all three statements in one `with_connection` block bounded by `BEGIN`/`COMMIT`. Ideally push the whole operation behind a `ConversationStore::archive_session(id)` trait method so the impl owns the transaction (this is a natural fit for Phase 6).
-- **Status:** pending
+#### TD-001 ✅ [B] `archiver.rs` archives now wrapped in a transaction
+- **Location:** `gateway/gateway-execution/src/archiver.rs:186-210`
+- **Resolution:** Wrapped the three writes (`DELETE FROM messages`, `DELETE FROM execution_logs`, `UPDATE sessions SET archived = 1`) in a single `with_connection` block bounded by `conn.unchecked_transaction()` and `tx.commit()`. Added regression test `archive_session_atomically_deletes_and_marks` that seeds a session with messages + logs and verifies all three writes succeed end-to-end.
+- **Status:** done — PR #73 (commit `dbcebea`)
 
 ### Abstraction-shape debt — knowledge side (critical path for SurrealDB)
 
