@@ -16,10 +16,10 @@
 use std::sync::Arc;
 
 use agent_runtime::llm::EmbeddingClient;
-use gateway_database::KnowledgeDatabase;
+use gateway_database::{KnowledgeDatabase, MemoryRepository};
 use knowledge_graph::storage::GraphStorage;
-use zero_stores::KnowledgeGraphStore;
-use zero_stores_sqlite::SqliteKgStore;
+use zero_stores::{KnowledgeGraphStore, MemoryFactStore};
+use zero_stores_sqlite::{SqliteKgStore, SqliteMemoryStore};
 
 /// Build the `Arc<dyn KnowledgeGraphStore>` used by `AppState`.
 ///
@@ -63,4 +63,25 @@ pub fn build_kg_store_from_storage(
         storage,
         embedding_client,
     ))
+}
+
+/// Build the `Arc<dyn MemoryFactStore>` used by `AppState`.
+///
+/// Today this always returns a `SqliteMemoryStore` (a re-export of
+/// `gateway_database::GatewayMemoryFactStore`). When SurrealDB support
+/// lands, this is the branch point — `match config.knowledge_backend
+/// { Sqlite => SqliteMemoryStore::new(…), Surreal => SurrealMemoryStore::new(…) }`.
+///
+/// AppState shares one `Arc<MemoryRepository>` between this factory and
+/// the legacy `memory_repo` field that many existing consumers still
+/// hold by concrete type. Until those consumers migrate to the trait
+/// object (a separate workstream — TD-023's deferred half), the factory
+/// accepts the pre-built repository rather than recreating it. The
+/// `embedding_client` is the live `LiveEmbeddingClient` so embedding
+/// generation follows ArcSwap backend changes.
+pub fn build_memory_store(
+    memory_repo: Arc<MemoryRepository>,
+    embedding_client: Option<Arc<dyn EmbeddingClient>>,
+) -> Arc<dyn MemoryFactStore> {
+    Arc::new(SqliteMemoryStore::new(memory_repo, embedding_client))
 }

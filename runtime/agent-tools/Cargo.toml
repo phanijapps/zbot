@@ -7,6 +7,7 @@ license = "MIT"
 
 [dependencies]
 zero-core = { path = "../../framework/zero-core" }
+zero-stores-traits = { path = "../../stores/zero-stores-traits" }
 
 async-trait = "0.1"
 serde = { version = "1.0", features = ["derive"] }

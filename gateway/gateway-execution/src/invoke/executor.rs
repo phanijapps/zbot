@@ -38,7 +38,8 @@ use gateway_services::{McpService, SettingsService, SkillService};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use zero_core::{ConnectorResourceProvider, FileSystemContext, MemoryFactStore};
+use zero_core::{ConnectorResourceProvider, FileSystemContext};
+use zero_stores::MemoryFactStore;
 
 use super::graph_adapter::GraphStorageAdapter;
 use crate::config::GatewayFileSystem;

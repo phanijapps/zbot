@@ -5,6 +5,8 @@
 mod blocking;
 pub mod bootstrap;
 mod knowledge_graph;
+pub mod memory_facts;
 pub mod reindex;
 
 pub use knowledge_graph::SqliteKgStore;
+pub use memory_facts::SqliteMemoryStore;

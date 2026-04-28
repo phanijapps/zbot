@@ -254,7 +254,7 @@ async fn build_continuation_message(
     paths: &SharedVaultPaths,
     session_id: &str,
     ward_id: Option<&str>,
-    fact_store: Option<&Arc<dyn zero_core::MemoryFactStore>>,
+    fact_store: Option<&Arc<dyn zero_stores::MemoryFactStore>>,
 ) -> String {
     let plan_hint = ward_id.and_then(|wid| {
         let specs_dir = paths.vault_dir().join("wards").join(wid).join("specs");
@@ -1139,12 +1139,12 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
     }
 
     // Build fact store for continuation (so save_fact uses DB, not file fallback)
-    let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> =
+    let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
         memory_repo.as_ref().map(|repo| {
             Arc::new(gateway_database::GatewayMemoryFactStore::new(
                 repo.clone(),
                 embedding_client.clone(),
-            )) as Arc<dyn zero_core::MemoryFactStore>
+            )) as Arc<dyn zero_stores::MemoryFactStore>
         });
     // Clone for session-ctx plan_snapshot below — the builder moves the
     // primary Arc, so we keep a separate handle to write plan text to

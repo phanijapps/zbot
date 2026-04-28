@@ -45,11 +45,11 @@ pub fn sanitize_fts_query(raw: &str) -> String {
 // TYPES
 // ============================================================================
 
-// `SkillIndexRow` is defined in `zero-core::memory` so the
+// `SkillIndexRow` is defined in `zero-stores-traits` so the
 // `MemoryFactStore` trait can use it in its method signatures without a
 // reverse dependency on this crate. Re-exported via this module so existing
 // callers that imported it from `gateway-database` keep working.
-pub use zero_core::memory::SkillIndexRow;
+pub use zero_stores_traits::SkillIndexRow;
 
 /// A structured memory fact extracted from session distillation or manual save.
 #[derive(Debug, Clone, Serialize, Deserialize)]
