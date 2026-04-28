@@ -308,6 +308,13 @@ impl ConversationRepository {
         })
     }
 
+    // =========================================================================
+    // `ConversationStore` trait impl helpers
+    // =========================================================================
+    // Trait impl itself is below the `impl ConversationRepository` block;
+    // see TD-021 in `memory-bank/tech-debt.md`. Forwarding only — the
+    // existing inherent methods stay the canonical surface.
+
     /// Parse stored tool calls JSON into ToolCall format.
     ///
     /// Our stored format: [{"tool_id": "...", "tool_name": "...", "args": {...}, "result": "...", "error": null}]
@@ -334,6 +341,26 @@ impl ConversationRepository {
         } else {
             Some(tool_calls)
         }
+    }
+}
+
+// =====================================================================
+// `ConversationStore` trait impl (TD-021 hygiene)
+// =====================================================================
+//
+// Forwards to the existing inherent methods. Surface intentionally
+// narrow — see `stores/zero-stores-traits/src/conversation.rs` for
+// rationale. No consumer is expected to migrate to
+// `Arc<dyn ConversationStore>` as part of this scaffold; see
+// `memory-bank/tech-debt.md` TD-021.
+
+impl zero_stores_traits::ConversationStore for ConversationRepository {
+    fn get_session_ward_id(&self, session_id: &str) -> Result<Option<String>, String> {
+        ConversationRepository::get_session_ward_id(self, session_id)
+    }
+
+    fn get_session_agent_id(&self, session_id: &str) -> Result<Option<String>, String> {
+        ConversationRepository::get_session_agent_id(self, session_id)
     }
 }
 

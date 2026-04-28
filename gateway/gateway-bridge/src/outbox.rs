@@ -273,6 +273,46 @@ impl OutboxRepository {
     }
 }
 
+// =====================================================================
+// `OutboxStore` trait impl (TD-022 hygiene)
+// =====================================================================
+//
+// Forwards to the existing inherent methods. Errors are mapped to
+// `String` because `zero-stores-traits` can't depend on `BridgeError`
+// without a circular crate dependency. Consumers that need typed
+// errors continue to call `OutboxRepository` directly. No consumer is
+// expected to migrate to `Arc<dyn OutboxStore>` as part of this
+// scaffold; see `memory-bank/tech-debt.md` TD-022.
+
+impl zero_stores_traits::OutboxStore for OutboxRepository {
+    fn insert_item(
+        &self,
+        adapter_id: &str,
+        capability: &str,
+        payload: &serde_json::Value,
+        session_id: Option<&str>,
+        thread_id: Option<&str>,
+        agent_id: Option<&str>,
+    ) -> Result<String, String> {
+        self.insert(
+            adapter_id, capability, payload, session_id, thread_id, agent_id,
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    fn mark_inflight(&self, id: &str) -> Result<(), String> {
+        OutboxRepository::mark_inflight(self, id).map_err(|e| e.to_string())
+    }
+
+    fn mark_sent(&self, id: &str) -> Result<(), String> {
+        OutboxRepository::mark_sent(self, id).map_err(|e| e.to_string())
+    }
+
+    fn reset_inflight(&self, adapter_id: &str) -> Result<usize, String> {
+        OutboxRepository::reset_inflight(self, adapter_id).map_err(|e| e.to_string())
+    }
+}
+
 /// Map a row to an OutboxItem.
 fn row_to_item(row: &rusqlite::Row<'_>) -> OutboxItem {
     OutboxItem {

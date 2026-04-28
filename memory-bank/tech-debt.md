@@ -81,6 +81,7 @@ Scope tags:
 - **Why debt:** A single repo straddles the two databases that are about to diverge. Once knowledge.db moves to SurrealDB, every method in this file has to know which backend to talk to — turning the repo into a manual coordinator.
 - **Fix:** Split into a leaner `ExecutionStateStore` (sessions/executions/messages — stays SQLite) and remove all direct knowledge-side table access from this file, replacing with calls into `KnowledgeGraphStore` + `MemoryFactStore`.
 - **Status:** unblocked (MemoryFactStore relocated to `stores/zero-stores-traits` / re-exported from `stores/zero-stores`); migration of `repository.rs` knowledge-side ops still pending as a separate multi-PR workstream
+- **Phase 6 deferral note:** Multi-PR workstream — 31 SQL callsites in `services/execution-state/src/repository.rs` (2780 lines). Each migrating function needs careful per-method scrutiny. NOT in scope for the Phase 6 hygiene PR; tracked as the next standalone workstream.
 
 ### Abstraction-shape debt — conversations side (NOT critical for migration)
 
@@ -91,18 +92,20 @@ Scope tags:
 - **What:** Both define `fn with_connection<F, R>(&self, f: F) -> Result<R, String> where F: FnOnce(&Connection) -> Result<R, rusqlite::Error>`. The closure parameter is a raw rusqlite `&Connection`; the inner error type is `rusqlite::Error`. The trait *is* SQLite.
 - **Why debt:** Even though conversations stays SQLite, this shape blocks any cross-cutting work (observability decorators, swapping pool implementations, in-memory test doubles, etc).
 - **Fix:** Reshape to method-per-operation traits — `LogStore::append`, `LogStore::query_by_session`, `ExecutionStateStore::insert_message`, etc. Internal pool can stay rusqlite; the contract stops leaking.
-- **Status:** pending (does not block SurrealDB switch; do in Phase 6)
+- **Status:** pending (does not block SurrealDB switch)
+- **Phase 6 deferral note:** Wide-reach trait reshape — `DbProvider` / `StateDbProvider` are referenced from many service crates. Reshape requires per-method-per-trait migration. Low priority since conversations stays SQLite forever; trait shape staying SQLite-flavored is acceptable. Not bundled into the TD-021 / TD-022 hygiene PR because the work touches a different blast radius.
 
-#### TD-021 🟢 [C] `ConversationRepository` is concrete — no trait
-- **Location:** `gateway/gateway-database/src/repository.rs:37`. Used as `Arc<ConversationRepository>` at `gateway/src/state.rs:63`, `gateway-execution/src/runner/core.rs`, delegation callbacks, HTTP handlers.
-- **Why debt:** Same hygiene argument as TD-020. Conversations stays SQLite, so not blocking.
-- **Fix:** Extract `ConversationStore` trait. Defer until trait shapes for the knowledge side are settled, so the shape is consistent.
-- **Status:** pending (defer to Phase 6)
+#### TD-021 ✅ [C] `ConversationStore` trait extracted (Phase 6 hygiene)
+- **Location:** `gateway/gateway-database/src/repository.rs` — `ConversationRepository` now implements `zero_stores_traits::ConversationStore`.
+- **Resolution:** Hygiene scaffold landed alongside TD-022. New `stores/zero-stores-traits/src/conversation.rs` defines `ConversationStore` with two trait-friendly methods (`get_session_ward_id`, `get_session_agent_id`) that mirror `ConversationRepository` verbatim. The richer methods returning `Message` / `Vec<Message>` / `agent_runtime::ChatMessage` stay on the concrete type — hoisting `Message` out of `gateway-database` into `zero-stores-traits` is deferred until a consumer actually wants trait-erased reads. The point of this scaffold is symmetry with `KnowledgeGraphStore` and `OutboxStore`, not full method coverage.
+- **Consumer migration:** explicitly NOT part of this scaffold. All sites continue to hold `Arc<ConversationRepository>` directly; promoting to `Arc<dyn ConversationStore>` is a separate workstream tracked under TD-023's retirement halves.
+- **Status:** done — Phase 6 hygiene
 
-#### TD-022 🟢 [C] `OutboxRepository` is concrete — no trait
-- **Location:** `gateway/gateway-bridge/src/outbox.rs` (~12 stmts of raw rusqlite).
-- **Fix:** Extract `OutboxStore` trait. Independent of SurrealDB plan.
-- **Status:** pending (defer to Phase 6)
+#### TD-022 ✅ [C] `OutboxStore` trait extracted (Phase 6 hygiene)
+- **Location:** `gateway/gateway-bridge/src/outbox.rs` — `OutboxRepository` now implements `zero_stores_traits::OutboxStore`.
+- **Resolution:** New `stores/zero-stores-traits/src/outbox.rs` defines `OutboxStore` with the lifecycle core (`insert_item`, `mark_inflight`, `mark_sent`, `reset_inflight`). The impl on `OutboxRepository` forwards to the existing inherent methods, mapping `BridgeError` → `String` at the trait boundary (the trait can't pull in `BridgeError` without a circular crate dep). Deliberately omitted from the trait surface: `mark_failed` (carries `chrono::DateTime<Utc>`), `get_unacked` / `get_since` / `get_retryable` (return `Vec<OutboxItem>` whose row type lives in `gateway-bridge`), `reset_all_inflight`, `cleanup_sent` — these stay on the concrete type until a cross-cutting consumer needs them in the trait.
+- **Consumer migration:** explicitly NOT part of this scaffold. All sites continue to hold `Arc<OutboxRepository>` directly; promoting to `Arc<dyn OutboxStore>` is out of scope.
+- **Status:** done — Phase 6 hygiene
 
 #### TD-023 ⏳ [Both] `AppState` factory pattern established; `graph_service` retirement deferred
 - **Location:** `gateway/src/state/mod.rs` — concrete persistence types alongside trait objects.
@@ -203,9 +206,10 @@ Each phase produces value standalone — none of them require finishing the next
 - After this lands, adding SurrealDB is a new crate plus a config switch.
 
 ### Phase 6 (optional, deferred) — Conversations-side hygiene
-**Closes:** TD-020, TD-021, TD-022
-- Reshape `DbProvider` / `StateDbProvider` to method-per-op traits.
-- Extract `ConversationStore`, `OutboxStore`.
+**Closed:** TD-021, TD-022
+**Still deferred:** TD-020
+- ✅ Extracted `ConversationStore` and `OutboxStore` traits as hygiene scaffold (narrow surface; consumer migration to `Arc<dyn ...>` deferred to a future workstream alongside TD-023's retirement halves).
+- ⏸ `DbProvider` / `StateDbProvider` reshape (TD-020) deferred — wide blast radius across service crates and not on the SurrealDB critical path.
 - Strictly hygiene, not on the SurrealDB critical path. Can land after the swap.
 
 ---
