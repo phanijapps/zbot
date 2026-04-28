@@ -3,8 +3,8 @@
 use std::sync::Arc;
 use tempfile::tempdir;
 
-use gateway_database::vector_index::{SqliteVecIndex, VectorIndex};
-use gateway_database::KnowledgeDatabase;
+use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+use zero_stores_sqlite::KnowledgeDatabase;
 use gateway_services::VaultPaths;
 
 fn setup() -> (tempfile::TempDir, Arc<KnowledgeDatabase>) {

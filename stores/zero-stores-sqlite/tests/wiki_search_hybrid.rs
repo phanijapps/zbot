@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use tempfile::tempdir;
 
-use gateway_database::vector_index::{SqliteVecIndex, VectorIndex};
-use gateway_database::{KnowledgeDatabase, WardWikiRepository};
+use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+use zero_stores_sqlite::{KnowledgeDatabase, WardWikiRepository};
 use gateway_services::VaultPaths;
 
 fn setup() -> (

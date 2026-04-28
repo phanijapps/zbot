@@ -1,14 +1,76 @@
-//! SQLite implementation of the `zero-stores` traits. Wraps the
-//! `kg::storage::GraphStorage` (relocated here from
-//! `services/knowledge-graph` in Slice D6b) and bridges its synchronous
-//! rusqlite API into async via `tokio::task::spawn_blocking`.
+//! # zero-stores-sqlite
+//!
+//! SQLite-backed persistence for AgentZero. Implements the `zero-stores`
+//! traits (`KnowledgeGraphStore`, `MemoryFactStore`, etc.) plus the SQLite
+//! connection pool, schema management, and per-table repositories that the
+//! gateway uses.
+//!
+//! Slice D8 (2026-04) merged the historic `gateway-database` crate into
+//! this one — there is now a single SQLite crate. See
+//! `memory-bank/architecture.md` for the broader persistence story.
 
+// -- KnowledgeGraphStore impl + supporting glue (originally D6/D6b) -----------
 mod blocking;
 pub mod bootstrap;
 pub mod kg;
 mod knowledge_graph;
-pub mod memory_facts;
 pub mod reindex;
 
+// -- Per-table stores (originally gateway-database) ---------------------------
+pub mod age_bucket;
+pub mod auxiliary_stores;
+pub mod compaction_repository;
+mod connection;
+pub mod distillation_repository;
+pub mod episode_repository;
+pub mod episode_store;
+pub mod goal_repository;
+pub mod kg_episode_repository;
+pub mod knowledge_db;
+pub mod knowledge_schema;
+pub mod memory_fact_store;
+pub mod memory_repository;
+pub mod procedure_repository;
+pub mod procedure_store;
+pub mod recall_log_repository;
+pub mod repository;
+mod schema;
+pub mod sqlite_vec_loader;
+pub mod vector_index;
+pub mod wiki_repository;
+pub mod wiki_store;
+
+// -- Public surface (D6b symbols) --------------------------------------------
 pub use knowledge_graph::SqliteKgStore;
-pub use memory_facts::SqliteMemoryStore;
+
+// -- Public surface (originally gateway-database lib.rs) ----------------------
+pub use age_bucket::age_bucket;
+pub use auxiliary_stores::{GatewayDistillationStore, GatewayGoalStore, GatewayRecallLogStore};
+pub use compaction_repository::{Compaction, CompactionRepository, RunSummary};
+pub use connection::DatabaseManager;
+pub use distillation_repository::{
+    DistillationRepository, DistillationRun, DistillationStats, UndistilledSession,
+};
+pub use episode_repository::{EpisodeRepository, SessionEpisode};
+pub use episode_store::GatewayEpisodeStore;
+pub use goal_repository::{Goal, GoalRepository};
+pub use kg_episode_repository::{EpisodeSource, KgEpisode, KgEpisodeRepository};
+pub use knowledge_db::KnowledgeDatabase;
+pub use knowledge_schema::{
+    drop_and_recreate_vec_tables_at_dim, list_vec_table_presence, REQUIRED_VEC_TABLES,
+};
+pub use memory_fact_store::GatewayMemoryFactStore;
+pub use memory_repository::{MemoryFact, MemoryRepository, ScoredFact, SkillIndexRow};
+pub use procedure_repository::{Procedure, ProcedureRepository};
+pub use procedure_store::GatewayProcedureStore;
+pub use recall_log_repository::RecallLogRepository;
+pub use repository::{ConversationRepository, Message};
+pub use vector_index::{SqliteVecIndex, VectorIndex};
+pub use wiki_repository::{WardWikiRepository, WikiArticle, WikiHit};
+pub use wiki_store::GatewayWikiStore;
+
+/// Canonical alias for the SQLite `MemoryFactStore` impl. Mirrors the
+/// `Sqlite*` naming used by `SqliteKgStore` — the persistence factory in
+/// `gateway/src/state/persistence_factory.rs` constructs the store via this
+/// alias.
+pub use memory_fact_store::GatewayMemoryFactStore as SqliteMemoryStore;

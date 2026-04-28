@@ -16,7 +16,7 @@
 //! until proven necessary (e.g. when the schema needs to differ between
 //! impls in shape, not just storage layer).
 
-pub use gateway_database::knowledge_db::KnowledgeDatabase;
+pub use crate::knowledge_db::KnowledgeDatabase;
 
 /// Idempotent schema bootstrap. Called by `SqliteKgStore` constructors
 /// when running against a fresh data directory. Today this is a no-op

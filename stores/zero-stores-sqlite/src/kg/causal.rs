@@ -4,7 +4,7 @@
 //! Causal edges represent cause-effect relationships between entities.
 
 use knowledge_graph::error::{GraphError, GraphResult};
-use gateway_database::KnowledgeDatabase;
+use crate::KnowledgeDatabase;
 use rusqlite::params;
 use std::sync::Arc;
 
