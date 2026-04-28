@@ -85,3 +85,59 @@ pub fn build_memory_store(
 ) -> Arc<dyn MemoryFactStore> {
     Arc::new(SqliteMemoryStore::new(memory_repo, embedding_client))
 }
+
+// ============================================================================
+// SurrealDB backend dispatch (Cargo feature `surreal-backend`).
+//
+// These functions construct an `Arc<dyn KnowledgeGraphStore>` /
+// `Arc<dyn MemoryFactStore>` backed by a shared `Surreal<Any>` handle.
+// Wiring into `AppState::new` is a follow-up — for now, callers can
+// invoke these helpers directly when constructing a SurrealDB-backed
+// daemon. The feature gate keeps the SurrealDB SDK out of default
+// builds.
+// ============================================================================
+
+/// Configuration parameters for the SurrealDB backend.
+///
+/// Mirrors the `[persistence.surreal]` section of `settings.json`.
+/// `vault_root` is used to expand the `$VAULT` placeholder in the URL.
+#[cfg(feature = "surreal-backend")]
+#[derive(Clone, Debug)]
+pub struct SurrealBackendConfig {
+    pub url: String,
+    pub namespace: String,
+    pub database: String,
+    pub credentials: Option<(String, String)>,
+    pub vault_root: std::path::PathBuf,
+}
+
+/// Build both SurrealDB-backed stores sharing one connection handle.
+/// Schema is applied idempotently as part of construction. Returns the
+/// (KG, Memory) pair. Errors fail fast — the daemon is expected to
+/// refuse to start on persistence init failure.
+#[cfg(feature = "surreal-backend")]
+pub async fn build_surreal_pair(
+    cfg: &SurrealBackendConfig,
+) -> Result<(Arc<dyn KnowledgeGraphStore>, Arc<dyn MemoryFactStore>), String> {
+    let surreal_cfg = zero_stores_surreal::SurrealConfig {
+        url: cfg.url.clone(),
+        namespace: cfg.namespace.clone(),
+        database: cfg.database.clone(),
+        credentials: cfg.credentials.as_ref().map(|(u, p)| {
+            zero_stores_surreal::SurrealCredentials {
+                username: u.clone(),
+                password: p.clone(),
+            }
+        }),
+    };
+    let db = zero_stores_surreal::connect(&surreal_cfg, Some(&cfg.vault_root))
+        .await
+        .map_err(|e| format!("surreal connect: {e}"))?;
+    zero_stores_surreal::schema::apply_schema(&db)
+        .await
+        .map_err(|e| format!("surreal schema: {e}"))?;
+    let kg: Arc<dyn KnowledgeGraphStore> =
+        Arc::new(zero_stores_surreal::SurrealKgStore::new(db.clone()));
+    let mem: Arc<dyn MemoryFactStore> = Arc::new(zero_stores_surreal::SurrealMemoryStore::new(db));
+    Ok((kg, mem))
+}

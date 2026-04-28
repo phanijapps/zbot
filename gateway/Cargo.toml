@@ -26,6 +26,7 @@ zero-core = { path = "../framework/zero-core" }
 zero-app = { path = "../framework/zero-app" }
 zero-stores = { path = "../stores/zero-stores" }
 zero-stores-sqlite = { path = "../stores/zero-stores-sqlite" }
+zero-stores-surreal = { path = "../stores/zero-stores-surreal", optional = true }
 gateway-events = { path = "gateway-events" }
 gateway-database = { path = "gateway-database" }
 gateway-templates = { path = "gateway-templates" }
@@ -92,6 +93,11 @@ axum-test = "16"
 
 [features]
 default = []
+# Opt-in SurrealDB 3.0 backend for KG + memory stores. When enabled, the
+# persistence_factory exposes build_surreal_kg_store / build_surreal_memory_store
+# and the AppState wiring can branch on a config flag. Default builds stay
+# slim and unaffected.
+surreal-backend = ["dep:zero-stores-surreal"]
 
 [lib]
 name = "gateway"
