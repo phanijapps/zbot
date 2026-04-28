@@ -620,35 +620,41 @@ impl AppState {
         // Create settings service (before distiller & runtime, so we can read execution settings)
         let settings = Arc::new(SettingsService::new(paths.clone()));
 
-        // SessionDistiller is SQLite-knowledge-tied (it depends on
-        // memory_repo / graph_storage / distillation_repo / episode_repo).
-        // When SurrealDB is on, all those are None — skip distiller build
-        // entirely. The runtime accepts Option<Arc<SessionDistiller>>.
-        let distiller: Option<Arc<SessionDistiller>> = match memory_repo.as_ref() {
-            Some(mr) => {
-                let mut distiller_inner = SessionDistiller::new(
-                    provider_service.clone(),
-                    embedding_client.clone(),
-                    conversation_repo.clone(),
-                    mr.clone(),
-                    graph_storage.clone(),
-                    distillation_repo.clone(),
-                    episode_repo.clone(),
-                    paths.clone(),
-                    Some(settings.clone()),
-                );
-                if let Some(wr) = wiki_repo.as_ref() {
-                    distiller_inner.set_wiki_repo(wr.clone());
-                }
-                if let Some(pr) = procedure_repo.as_ref() {
-                    distiller_inner.set_procedure_repo(pr.clone());
-                }
-                if let Some(mem) = memory_store.as_ref() {
-                    distiller_inner.set_memory_store(mem.clone());
-                }
-                Some(Arc::new(distiller_inner))
+        // SessionDistiller (Phase E3): builds in BOTH backends.
+        //
+        // Required: at least one of memory_store (trait) or memory_repo
+        // (concrete) must be wired so fact upsert has a destination.
+        // SQLite-only deps (graph_storage, distillation_repo, episode_repo,
+        // wiki_repo, procedure_repo) flow through as Optional — None in
+        // Surreal mode means the corresponding side-effects (KG ingestion,
+        // run-tracking, episode storage, wiki compilation, procedure
+        // upsert) skip gracefully. Fact distillation itself runs.
+        let distiller: Option<Arc<SessionDistiller>> = if memory_store.is_some()
+            || memory_repo.is_some()
+        {
+            let mut distiller_inner = SessionDistiller::new(
+                provider_service.clone(),
+                embedding_client.clone(),
+                conversation_repo.clone(),
+                memory_repo.clone(),
+                graph_storage.clone(),
+                distillation_repo.clone(),
+                episode_repo.clone(),
+                paths.clone(),
+                Some(settings.clone()),
+            );
+            if let Some(wr) = wiki_repo.as_ref() {
+                distiller_inner.set_wiki_repo(wr.clone());
             }
-            None => None,
+            if let Some(pr) = procedure_repo.as_ref() {
+                distiller_inner.set_procedure_repo(pr.clone());
+            }
+            if let Some(mem) = memory_store.as_ref() {
+                distiller_inner.set_memory_store(mem.clone());
+            }
+            Some(Arc::new(distiller_inner))
+        } else {
+            None
         };
 
         // Keep a handle for on-demand distillation (backfill, trigger).
