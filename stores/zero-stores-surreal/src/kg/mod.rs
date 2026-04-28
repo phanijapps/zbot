@@ -17,6 +17,7 @@ use zero_stores::types::{
 mod alias;
 mod entity;
 mod relationship;
+mod traverse;
 
 #[derive(Clone)]
 pub struct SurrealKgStore {
@@ -95,39 +96,39 @@ impl KnowledgeGraphStore for SurrealKgStore {
     // === traverse (Task 8) ===
     async fn get_neighbors(
         &self,
-        _id: &EntityId,
-        _direction: Direction,
-        _limit: usize,
+        id: &EntityId,
+        direction: Direction,
+        limit: usize,
     ) -> StoreResult<Vec<Neighbor>> {
-        Err(unimplemented_err("get_neighbors (Task 8)"))
+        traverse::get_neighbors(self.db(), id, direction, limit).await
     }
 
     async fn traverse(
         &self,
-        _seed: &EntityId,
-        _max_hops: usize,
-        _limit: usize,
+        seed: &EntityId,
+        max_hops: usize,
+        limit: usize,
     ) -> StoreResult<Vec<TraversalHit>> {
-        Err(unimplemented_err("traverse (Task 8)"))
+        traverse::traverse(self.db(), seed, max_hops, limit).await
     }
 
     async fn get_neighbors_full(
         &self,
-        _agent_id: &str,
-        _entity_id: &str,
-        _direction: Direction,
-        _limit: usize,
+        agent_id: &str,
+        entity_id: &str,
+        direction: Direction,
+        limit: usize,
     ) -> StoreResult<Vec<NeighborInfo>> {
-        Err(unimplemented_err("get_neighbors_full (Task 8)"))
+        traverse::get_neighbors_full(self.db(), agent_id, entity_id, direction, limit).await
     }
 
     async fn get_subgraph(
         &self,
-        _agent_id: &str,
-        _center_entity_id: &str,
-        _max_hops: usize,
+        agent_id: &str,
+        center_entity_id: &str,
+        max_hops: usize,
     ) -> StoreResult<Subgraph> {
-        Err(unimplemented_err("get_subgraph (Task 8)"))
+        traverse::get_subgraph(self.db(), agent_id, center_entity_id, max_hops).await
     }
 
     // === search (Task 9) ===
