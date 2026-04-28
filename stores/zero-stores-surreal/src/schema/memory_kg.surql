@@ -59,16 +59,12 @@ DEFINE INDEX IF NOT EXISTS rel_agent_type
 -- enforcement, gained: full feature parity with SQLite without column-by-column
 -- migration churn.
 DEFINE TABLE IF NOT EXISTS memory_fact SCHEMALESS;
-DEFINE FIELD IF NOT EXISTS agent_id     ON memory_fact TYPE string;
-DEFINE FIELD IF NOT EXISTS content      ON memory_fact TYPE string;
-DEFINE FIELD IF NOT EXISTS fact_type    ON memory_fact TYPE string;
-DEFINE FIELD IF NOT EXISTS confidence   ON memory_fact TYPE float DEFAULT 0.8;
-DEFINE FIELD IF NOT EXISTS created_at   ON memory_fact TYPE datetime DEFAULT time::now();
-DEFINE FIELD IF NOT EXISTS last_used_at ON memory_fact TYPE datetime DEFAULT time::now();
-DEFINE FIELD IF NOT EXISTS use_count    ON memory_fact TYPE int DEFAULT 0;
-DEFINE FIELD IF NOT EXISTS archived     ON memory_fact TYPE bool DEFAULT false;
-DEFINE FIELD IF NOT EXISTS embedding    ON memory_fact TYPE option<array<float>>;
-DEFINE FIELD IF NOT EXISTS metadata     ON memory_fact TYPE option<object>;
+-- No per-field DEFINE FIELD entries on memory_fact: the typed MemoryFact
+-- carries `created_at`/`updated_at` as ISO-8601 STRINGS, while save_fact
+-- and SurrealDB defaults would otherwise produce datetime values.
+-- Type-checked DEFINE FIELDs would force one or the other and break the
+-- round-trip on the cross-write path. SCHEMALESS lets both shapes
+-- coexist; backend reads tolerate the union.
 
 DEFINE INDEX IF NOT EXISTS fact_agent_type ON memory_fact FIELDS agent_id, fact_type;
 DEFINE INDEX IF NOT EXISTS fact_archived   ON memory_fact FIELDS archived;

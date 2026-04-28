@@ -32,14 +32,23 @@ pub async fn save_fact(
     confidence: f64,
     _session_id: Option<&str>,
 ) -> Result<Value, String> {
+    // Write created_at/last_used_at as ISO-8601 strings to keep the column
+    // shape consistent with `upsert_typed_fact` (which writes the typed
+    // MemoryFact JSON whose timestamps are strings). The SurrealDB schema's
+    // `DEFAULT time::now()` would otherwise coerce these into datetimes,
+    // breaking deserialization on read since the table now contains a mix
+    // of types.
+    let now = chrono::Utc::now().to_rfc3339();
     db.query(
         "CREATE memory_fact SET \
-         agent_id = $a, content = $c, fact_type = $ft, confidence = $conf, archived = false",
+         agent_id = $a, content = $c, fact_type = $ft, confidence = $conf, \
+         archived = false, created_at = $now, last_used_at = $now",
     )
     .bind(("a", agent_id.to_string()))
     .bind(("c", content.to_string()))
     .bind(("ft", category.to_string()))
     .bind(("conf", confidence))
+    .bind(("now", now))
     .await
     .map_err(|e| format!("save_fact: {e}"))?;
     Ok(serde_json::json!({ "saved": true }))
@@ -139,17 +148,18 @@ pub async fn list_memory_facts(
                 "confidence": r.confidence.unwrap_or(0.8),
                 "mention_count": 0,
                 "source_summary": null,
-                "created_at": r.created_at
-                    .map(|d| d.to_rfc3339())
-                    .unwrap_or_default(),
-                "updated_at": r.last_used_at
-                    .map(|d| d.to_rfc3339())
-                    .unwrap_or_default(),
+                "created_at": r.created_at.unwrap_or_default(),
+                "updated_at": r.last_used_at.unwrap_or_default(),
             })
         })
         .collect())
 }
 
+// Accept both string and datetime for created_at/last_used_at since the
+// SurrealDB-side memory_fact table is SCHEMALESS — rows written by
+// upsert_typed_fact carry MemoryFact.{created_at,updated_at} as ISO strings,
+// while older Surreal-native writes (e.g. via save_fact) used datetime
+// defaults. Storing as Option<String> tolerates both.
 #[derive(SurrealValue)]
 #[surreal(crate = "surrealdb::types")]
 struct FactListRow {
@@ -158,8 +168,8 @@ struct FactListRow {
     content: String,
     fact_type: String,
     confidence: Option<f64>,
-    created_at: Option<chrono::DateTime<chrono::Utc>>,
-    last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+    created_at: Option<String>,
+    last_used_at: Option<String>,
 }
 
 pub async fn get_memory_fact_by_id(
@@ -196,8 +206,8 @@ pub async fn get_memory_fact_by_id(
             "confidence": r.confidence.unwrap_or(0.8),
             "mention_count": 0,
             "source_summary": null,
-            "created_at": r.created_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
-            "updated_at": r.last_used_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+            "created_at": r.created_at.unwrap_or_default(),
+            "updated_at": r.last_used_at.unwrap_or_default(),
         })
     }))
 }
@@ -349,8 +359,8 @@ pub async fn search_memory_facts_hybrid(
                 "mention_count": 0,
                 "source_summary": null,
                 "ward_id": r.ward_id.unwrap_or_default(),
-                "created_at": r.created_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
-                "updated_at": r.last_used_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+                "created_at": r.created_at.unwrap_or_default(),
+                "updated_at": r.last_used_at.unwrap_or_default(),
                 "match_source": src,
             })
         })
@@ -365,8 +375,8 @@ struct FactSearchRow {
     content: String,
     fact_type: String,
     confidence: Option<f64>,
-    created_at: Option<chrono::DateTime<chrono::Utc>>,
-    last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+    created_at: Option<String>,
+    last_used_at: Option<String>,
     ward_id: Option<String>,
 }
 
