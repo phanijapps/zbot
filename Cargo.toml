@@ -17,6 +17,7 @@ members = [
     "framework/zero-app",
 
     # Stores - Backend-agnostic persistence interfaces
+    "stores/gateway-database",
     "stores/zero-stores",
     "stores/zero-stores-conformance",
     "stores/zero-stores-domain",
@@ -37,7 +38,6 @@ members = [
 
     # Gateway - Network layer
     "gateway/gateway-events",
-    "gateway/gateway-database",
     "gateway/gateway-templates",
     "gateway/gateway-connectors",
     "gateway/gateway-services",

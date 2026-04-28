@@ -19,7 +19,7 @@ api-logs = { path = "../../services/api-logs" }
 execution-state = { path = "../../services/execution-state" }
 zero-core = { path = "../../framework/zero-core" }
 gateway-events = { path = "../gateway-events" }
-gateway-database = { path = "../gateway-database" }
+gateway-database = { path = "../../stores/gateway-database" }
 gateway-services = { path = "../gateway-services" }
 gateway-connectors = { path = "../gateway-connectors" }
 gateway-templates = { path = "../gateway-templates" }

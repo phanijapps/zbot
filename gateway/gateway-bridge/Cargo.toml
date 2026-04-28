@@ -13,7 +13,7 @@ description = "WebSocket bridge for AgentZero worker connections"
 
 [dependencies]
 # Internal crates
-gateway-database = { path = "../gateway-database" }
+gateway-database = { path = "../../stores/gateway-database" }
 gateway-bus = { path = "../gateway-bus" }
 zero-core = { path = "../../framework/zero-core" }
 zero-stores-traits = { path = "../../stores/zero-stores-traits" }

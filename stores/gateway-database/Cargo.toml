@@ -16,10 +16,10 @@ description = "SQLite connection pool and schema for the AgentZero gateway"
 api-logs = { path = "../../services/api-logs" }
 execution-state = { path = "../../services/execution-state" }
 agent-runtime = { path = "../../runtime/agent-runtime" }
-gateway-services = { path = "../gateway-services" }
+gateway-services = { path = "../../gateway/gateway-services" }
 zero-core = { path = "../../framework/zero-core" }
-zero-stores-traits = { path = "../../stores/zero-stores-traits" }
-zero-stores-domain = { path = "../../stores/zero-stores-domain" }
+zero-stores-traits = { path = "../zero-stores-traits" }
+zero-stores-domain = { path = "../zero-stores-domain" }
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled", "load_extension"] }

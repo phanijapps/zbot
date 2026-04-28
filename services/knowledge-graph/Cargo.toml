@@ -36,7 +36,7 @@ tracing = "0.1"
 zero-app = { path = "../../framework/zero-app" }
 
 # Shared knowledge.db pool (v22 schema)
-gateway-database = { path = "../../gateway/gateway-database" }
+gateway-database = { path = "../../stores/gateway-database" }
 
 [dev-dependencies]
 tempfile = "3"

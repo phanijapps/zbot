@@ -29,7 +29,7 @@ zero-stores-traits = { path = "../stores/zero-stores-traits" }
 zero-stores-sqlite = { path = "../stores/zero-stores-sqlite" }
 zero-stores-surreal = { path = "../stores/zero-stores-surreal", optional = true }
 gateway-events = { path = "gateway-events" }
-gateway-database = { path = "gateway-database" }
+gateway-database = { path = "../stores/gateway-database" }
 gateway-templates = { path = "gateway-templates" }
 gateway-connectors = { path = "gateway-connectors" }
 gateway-services = { path = "gateway-services" }

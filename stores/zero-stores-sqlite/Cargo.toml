@@ -13,7 +13,7 @@ agent-runtime = { path = "../../runtime/agent-runtime" }
 # `gateway-database` exposes `KnowledgeDatabase` (the shared knowledge.db
 # pool) which the reindex orchestration drives. Dep direction stays acyclic:
 # gateway-database does not depend on zero-stores or zero-stores-sqlite.
-gateway-database = { path = "../../gateway/gateway-database" }
+gateway-database = { path = "../gateway-database" }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
 tracing = { workspace = true }
