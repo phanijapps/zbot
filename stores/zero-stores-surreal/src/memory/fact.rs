@@ -238,14 +238,37 @@ pub async fn upsert_typed_fact(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "MemoryFact missing id".to_string())?
         .to_string();
-    if let Some(emb) = embedding {
-        if let Some(obj) = fact.as_object_mut() {
+
+    // Normalize the row to the Surreal-canonical shape so the existing
+    // indexes (`fact_agent_type`, `fact_archived`) and the
+    // `list_memory_facts` / `recall_facts` queries match. Callers
+    // pass the SQLite `MemoryFact` JSON which uses `category` —
+    // mirror it into `fact_type` and default `archived = false`
+    // when not set so the row participates in the standard filter.
+    if let Some(obj) = fact.as_object_mut() {
+        if !obj.contains_key("fact_type") {
+            if let Some(cat) = obj.get("category").cloned() {
+                obj.insert("fact_type".to_string(), cat);
+            }
+        }
+        if !obj.contains_key("archived") {
+            obj.insert("archived".to_string(), Value::Bool(false));
+        }
+        // `last_used_at` mirrors `updated_at` for compatibility with
+        // recall_facts' ORDER BY (when present).
+        if !obj.contains_key("last_used_at") {
+            if let Some(updated) = obj.get("updated_at").cloned() {
+                obj.insert("last_used_at".to_string(), updated);
+            }
+        }
+        if let Some(emb) = embedding {
             obj.insert(
                 "embedding".to_string(),
                 Value::Array(emb.into_iter().map(|f| serde_json::json!(f)).collect()),
             );
         }
     }
+
     let thing = surrealdb::types::RecordId::new(
         "memory_fact",
         surrealdb::types::RecordIdKey::String(fact_id),

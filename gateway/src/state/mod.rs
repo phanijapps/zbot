@@ -1352,34 +1352,65 @@ impl AppState {
         // modes (SQLite-wrapper or SurrealMemoryStore via the bundle).
         let memory_store = match &self.memory_store {
             Some(s) => s,
-            None => return,
+            None => {
+                tracing::warn!(
+                    "seed_default_policies: memory_store is None — refusing to seed. \
+                     This means neither SQLite memory_repo nor a SurrealDB bundle was \
+                     wired into AppState; check persistence_factory output."
+                );
+                return;
+            }
         };
 
         // Check if any correction facts already exist for the root agent.
-        let existing = memory_store
+        let existing = match memory_store
             .list_memory_facts(Some("root"), Some("correction"), None, 1, 0)
             .await
-            .unwrap_or_default();
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(
+                    "seed_default_policies: existence check failed ({e}); \
+                     proceeding as if empty (may produce duplicates if policies \
+                     are already present)."
+                );
+                Vec::new()
+            }
+        };
         if !existing.is_empty() {
-            tracing::debug!("Policies already exist, skipping seed");
+            tracing::debug!(
+                existing_count = existing.len(),
+                "seed_default_policies: policies already present for root/correction — skipping"
+            );
             return;
         }
 
         let template = match gateway_templates::Templates::get("default_policies.json") {
             Some(f) => f.data.to_vec(),
-            None => return,
+            None => {
+                tracing::warn!(
+                    "seed_default_policies: bundled `default_policies.json` template \
+                     missing from gateway-templates — nothing to seed."
+                );
+                return;
+            }
         };
 
         let policies: Vec<serde_json::Value> = match serde_json::from_slice(&template) {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!("Failed to parse default_policies.json: {}", e);
+                tracing::warn!(
+                    "seed_default_policies: failed to parse default_policies.json: {e}"
+                );
                 return;
             }
         };
 
+        let total = policies.len();
         let now = chrono::Utc::now().to_rfc3339();
-        let mut count = 0;
+        let mut count = 0usize;
+        let mut skipped_empty = 0usize;
+        let mut errors: Vec<(String, String)> = Vec::new();
 
         for policy in &policies {
             let category = policy["category"].as_str().unwrap_or("correction");
@@ -1389,6 +1420,7 @@ impl AppState {
             let pinned = policy["pinned"].as_bool().unwrap_or(true);
 
             if key.is_empty() || content.is_empty() {
+                skipped_empty += 1;
                 continue;
             }
 
@@ -1417,14 +1449,25 @@ impl AppState {
                 "source_ref": null,
             });
 
-            if memory_store.upsert_typed_fact(fact_value, None).await.is_ok() {
-                count += 1;
+            match memory_store.upsert_typed_fact(fact_value, None).await {
+                Ok(()) => count += 1,
+                Err(e) => errors.push((key.to_string(), e)),
             }
         }
 
-        if count > 0 {
-            tracing::info!("Seeded {} default policies/instructions", count);
+        if !errors.is_empty() {
+            for (key, e) in &errors {
+                tracing::warn!(policy_key = %key, error = %e, "seed_default_policies: upsert failed");
+            }
         }
+
+        tracing::info!(
+            total = total,
+            seeded = count,
+            skipped_empty = skipped_empty,
+            failed = errors.len(),
+            "seed_default_policies: completed"
+        );
     }
 
     /// Ensure Python venv and Node.js environment exist, then seed workspace memory.
