@@ -244,4 +244,19 @@ pub trait MemoryFactStore: Send + Sync {
     async fn count_all_facts(&self, _agent_id: Option<&str>) -> Result<i64, String> {
         Ok(0)
     }
+
+    /// Paginated list of memory facts with optional `agent_id`, `category`,
+    /// and `scope` filters. Returns each row as a `serde_json::Value` so
+    /// that the trait surface stays free of the gateway-database
+    /// `MemoryFact` struct (dep-cycle avoidance). Default returns empty.
+    async fn list_memory_facts(
+        &self,
+        _agent_id: Option<&str>,
+        _category: Option<&str>,
+        _scope: Option<&str>,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<Vec<Value>, String> {
+        Ok(Vec::new())
+    }
 }

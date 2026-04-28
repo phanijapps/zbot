@@ -546,8 +546,11 @@ pub async fn list_all_memory_facts(
     Query(query): Query<AllMemoryListQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<MemoryListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let memory_repo = match &state.memory_repo {
-        Some(repo) => repo,
+    // Route through the trait surface so the SurrealDB backend is honored
+    // when the user has opted in via Settings → Persistence. The legacy
+    // concrete `state.memory_repo` is no longer the source of truth here.
+    let memory_store = match &state.memory_store {
+        Some(s) => s,
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -558,16 +561,17 @@ pub async fn list_all_memory_facts(
         }
     };
 
-    let facts = memory_repo
-        .list_all_memory_facts(
+    let raw_facts = memory_store
+        .list_memory_facts(
             query.agent_id.as_deref(),
             query.category.as_deref(),
             query.scope.as_deref(),
             query.limit,
             query.offset,
         )
+        .await
         .map_err(|e| {
-            tracing::error!("Failed to list all memory facts: {}", e);
+            tracing::error!("Failed to list memory facts: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
@@ -576,14 +580,31 @@ pub async fn list_all_memory_facts(
             )
         })?;
 
-    let total = memory_repo
-        .count_all_memory_facts(query.agent_id.as_deref())
+    let total = memory_store
+        .count_all_facts(query.agent_id.as_deref())
+        .await
+        .map(|n| n as usize)
         .unwrap_or(0);
 
-    Ok(Json(MemoryListResponse {
-        facts: facts.into_iter().map(MemoryFactResponse::from).collect(),
-        total,
-    }))
+    // Each row is a serde_json::Value; deserialize into MemoryFactResponse.
+    // Rows that fail to deserialize are skipped with a warning rather than
+    // failing the whole request — backend impls may emit slightly different
+    // shapes (e.g. Surreal's RecordId-derived `id` vs SQLite's UUID string).
+    // Each row is a serde_json::Value matching the MemoryFactResponse shape
+    // (both backends emit it). Rows that fail to deserialize are skipped
+    // with a warning rather than failing the whole request.
+    let facts: Vec<MemoryFactResponse> = raw_facts
+        .into_iter()
+        .filter_map(|v| match serde_json::from_value::<MemoryFactResponse>(v) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                tracing::warn!("memory fact row decode failed: {e}");
+                None
+            }
+        })
+        .collect();
+
+    Ok(Json(MemoryListResponse { facts, total }))
 }
 
 // ============================================================================

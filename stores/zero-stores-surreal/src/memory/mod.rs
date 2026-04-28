@@ -50,4 +50,15 @@ impl MemoryFactStore for SurrealMemoryStore {
     async fn count_all_facts(&self, agent_id: Option<&str>) -> Result<i64, String> {
         fact::count_all_facts(&self.db, agent_id).await
     }
+
+    async fn list_memory_facts(
+        &self,
+        agent_id: Option<&str>,
+        category: Option<&str>,
+        scope: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Value>, String> {
+        fact::list_memory_facts(&self.db, agent_id, category, scope, limit, offset).await
+    }
 }

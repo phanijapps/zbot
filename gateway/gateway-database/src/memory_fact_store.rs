@@ -635,6 +635,23 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             .count_all_memory_facts(agent_id)
             .map(|n| n as i64)
     }
+
+    async fn list_memory_facts(
+        &self,
+        agent_id: Option<&str>,
+        category: Option<&str>,
+        scope: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Value>, String> {
+        let facts = self
+            .memory_repo
+            .list_all_memory_facts(agent_id, category, scope, limit, offset)?;
+        facts
+            .into_iter()
+            .map(|f| serde_json::to_value(f).map_err(|e| e.to_string()))
+            .collect()
+    }
 }
 
 #[cfg(test)]
