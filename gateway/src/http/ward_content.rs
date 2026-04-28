@@ -285,13 +285,30 @@ pub async fn get_ward_content(
     State(state): State<AppState>,
     Path(ward_id): Path<String>,
 ) -> Result<Json<WardContentResponse>, HandlerError> {
-    // Memory facts still flow through the concrete `MemoryRepository`
-    // because `MemoryFactStore` does not yet expose a `list_by_ward`
-    // shape. In SurrealDB-backend mode `memory_repo` is `None` —
-    // 503 with a clear hand-off message rather than panic.
-    let memory_repo = state.memory_repo.as_ref().ok_or_else(|| {
-        surreal_unavailable("ward facts (per-ward MemoryFact)")
-    })?;
+    // Memory facts: SQLite path uses `MemoryRepository::list_by_ward` (a
+    // single WHERE-on-index query). SurrealDB path streams via the trait
+    // surface and filters in handler — the trait surface doesn't yet
+    // accept a ward_id argument.
+    let facts: Vec<MemoryFact> = if let Some(memory_repo) = state.memory_repo.as_ref() {
+        memory_repo
+            .list_by_ward(&ward_id, FACT_LIMIT)
+            .map_err(|e| internal("list facts by ward", e))?
+    } else if let Some(memory_store) = state.memory_store.as_ref() {
+        const FACT_AGG_LIMIT: usize = 5000;
+        let raw = memory_store
+            .list_memory_facts(None, None, None, FACT_AGG_LIMIT, 0)
+            .await
+            .map_err(|e| internal("list facts by ward (trait)", e))?;
+        raw.into_iter()
+            .filter(|v| {
+                v.get("ward_id").and_then(|w| w.as_str()) == Some(ward_id.as_str())
+            })
+            .filter_map(|v| serde_json::from_value::<MemoryFact>(v).ok())
+            .take(FACT_LIMIT)
+            .collect()
+    } else {
+        return Err(surreal_unavailable("ward facts"));
+    };
 
     // Episode / wiki / procedure listings prefer the trait store when
     // it's wired (SurrealDB or SQLite). The SQLite-backed repo build
@@ -312,10 +329,6 @@ pub async fn get_ward_content(
             None => return Err(surreal_unavailable("episodes")),
         },
     };
-
-    let facts = memory_repo
-        .list_by_ward(&ward_id, FACT_LIMIT)
-        .map_err(|e| internal("list facts by ward", e))?;
 
     let wiki_articles: Vec<WikiArticle> = match state.wiki_store.as_ref() {
         Some(store) => {
@@ -404,24 +417,50 @@ pub struct WardListItem {
 }
 
 /// GET /api/wards — list distinct wards with fact counts.
+///
+/// SQLite path uses `MemoryRepository::list_wards` (a single GROUP BY).
+/// SurrealDB path streams up to `WARD_AGG_LIMIT` facts via the trait
+/// surface and aggregates `ward_id` distinct counts in the handler —
+/// the trait does not expose a distinct-projection method yet.
 pub async fn list_wards(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<WardListItem>>, HandlerError> {
-    // `MemoryFactStore` does not expose a "distinct wards" projection
-    // yet — this listing still requires the concrete SQLite repo.
-    // SurrealDB-backend mode 503s here.
-    let memory_repo = state
-        .memory_repo
+    if let Some(memory_repo) = state.memory_repo.as_ref() {
+        let rows = memory_repo
+            .list_wards()
+            .map_err(|e| internal("list wards", e))?;
+        return Ok(Json(
+            rows.into_iter()
+                .map(|(id, count)| WardListItem { id, count })
+                .collect(),
+        ));
+    }
+
+    let memory_store = state
+        .memory_store
         .as_ref()
-        .ok_or_else(|| surreal_unavailable("ward listing (distinct wards)"))?;
+        .ok_or_else(|| surreal_unavailable("ward listing"))?;
 
-    let rows = memory_repo
-        .list_wards()
-        .map_err(|e| internal("list wards", e))?;
+    const WARD_AGG_LIMIT: usize = 5000;
+    let rows = memory_store
+        .list_memory_facts(None, None, None, WARD_AGG_LIMIT, 0)
+        .await
+        .map_err(|e| internal("list wards (trait)", e))?;
 
-    Ok(Json(
-        rows.into_iter()
-            .map(|(id, count)| WardListItem { id, count })
-            .collect(),
-    ))
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for row in rows {
+        let ward = row
+            .get("ward_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("__global__");
+        *counts.entry(ward.to_string()).or_insert(0) += 1;
+    }
+
+    let mut items: Vec<WardListItem> = counts
+        .into_iter()
+        .map(|(id, count)| WardListItem { id, count })
+        .collect();
+    items.sort_by(|a, b| b.count.cmp(&a.count).then(a.id.cmp(&b.id)));
+
+    Ok(Json(items))
 }

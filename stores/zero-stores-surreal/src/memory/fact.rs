@@ -102,18 +102,24 @@ pub async fn list_memory_facts(
 ) -> Result<Vec<Value>, String> {
     // `scope` is accepted for API parity with the SQLite store but is not
     // yet a column on the Surreal `memory_fact` table; ignored for now.
+    //
+    // SELECT * — the table is SCHEMALESS, so rows may carry any subset of
+    // the canonical MemoryFact fields (ward_id, key, pinned, etc.).
+    // Returning the whole row lets handlers that filter on ward_id /
+    // category / pinned see those fields. Filtering on `archived = false`
+    // matches both rows that explicitly set it (the typical case post
+    // `upsert_typed_fact` normalization) and absent rows because the
+    // typed shape always sets it.
     let mut where_clauses: Vec<&'static str> = vec!["archived = false"];
     if agent_id.is_some() {
         where_clauses.push("agent_id = $a");
     }
     if category.is_some() {
-        where_clauses.push("fact_type = $c");
+        where_clauses.push("(fact_type = $c OR category = $c)");
     }
     let where_sql = where_clauses.join(" AND ");
     let q = format!(
-        "SELECT id, agent_id, content, fact_type, confidence, \
-         created_at, last_used_at \
-         FROM memory_fact WHERE {where_sql} \
+        "SELECT * FROM memory_fact WHERE {where_sql} \
          ORDER BY created_at DESC LIMIT {limit} START {offset}"
     );
     let mut q = db.query(q);
@@ -124,35 +130,51 @@ pub async fn list_memory_facts(
         q = q.bind(("c", c.to_string()));
     }
     let mut resp = q.await.map_err(|e| format!("list_memory_facts: {e}"))?;
-    let rows: Vec<FactListRow> = resp
+    let rows: Vec<Value> = resp
         .take(0)
         .map_err(|e| format!("list_memory_facts take: {e}"))?;
-    Ok(rows
+
+    // Normalize each row to the MemoryFactResponse-compatible shape so
+    // the HTTP handler can deserialize directly into MemoryFact. Rows
+    // written by upsert_typed_fact already carry the canonical shape
+    // (with `category`); rows from the legacy `save_fact` path carry
+    // `fact_type` instead — copy it across when `category` is missing.
+    let normalized: Vec<Value> = rows
         .into_iter()
-        .map(|r| {
-            let id_str = match &r.id.key {
-                surrealdb::types::RecordIdKey::String(s) => s.clone(),
-                other => format!("{other:?}"),
-            };
-            // Emit the MemoryFactResponse-compatible shape so the HTTP
-            // handler can deserialize directly. Fields not represented on
-            // the Surreal table (scope, key, mention_count, source_summary)
-            // get sensible defaults.
-            serde_json::json!({
-                "id": id_str,
-                "agent_id": r.agent_id,
-                "scope": "session",
-                "category": r.fact_type,
-                "key": "",
-                "content": r.content,
-                "confidence": r.confidence.unwrap_or(0.8),
-                "mention_count": 0,
-                "source_summary": null,
-                "created_at": r.created_at.unwrap_or_default(),
-                "updated_at": r.last_used_at.unwrap_or_default(),
-            })
+        .map(|mut row| {
+            // Surreal returns `id` as a Thing (object); flatten to string.
+            row = crate::row_value::flatten_record_id(row);
+            if let Some(obj) = row.as_object_mut() {
+                if !obj.contains_key("category") {
+                    if let Some(ft) = obj.get("fact_type").cloned() {
+                        obj.insert("category".to_string(), ft);
+                    }
+                }
+                // Defaults for fields that may be absent on legacy rows
+                // so MemoryFact deserialization succeeds.
+                obj.entry("scope".to_string())
+                    .or_insert_with(|| Value::String("session".to_string()));
+                obj.entry("key".to_string())
+                    .or_insert_with(|| Value::String(String::new()));
+                obj.entry("mention_count".to_string())
+                    .or_insert_with(|| Value::from(0));
+                obj.entry("source_summary".to_string())
+                    .or_insert(Value::Null);
+                obj.entry("ward_id".to_string())
+                    .or_insert_with(|| Value::String("__global__".to_string()));
+                obj.entry("pinned".to_string())
+                    .or_insert(Value::Bool(false));
+                if !obj.contains_key("updated_at") {
+                    if let Some(lu) = obj.get("last_used_at").cloned() {
+                        obj.insert("updated_at".to_string(), lu);
+                    }
+                }
+            }
+            row
         })
-        .collect())
+        .collect();
+
+    Ok(normalized)
 }
 
 // Accept both string and datetime for created_at/last_used_at since the
