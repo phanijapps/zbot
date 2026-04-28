@@ -91,6 +91,13 @@ pub struct AppState {
     /// Memory repository for accessing agent memory facts.
     pub memory_repo: Option<Arc<MemoryRepository>>,
 
+    /// Trait-based memory-fact store (relocation of `MemoryFactStore` from
+    /// `zero-core` to `zero-stores`). Coexists with `memory_repo` —
+    /// consumers are migrated incrementally in a follow-up workstream
+    /// (mirrors the `kg_store` / `graph_service` pattern). `None` when
+    /// `memory_repo` itself is `None`.
+    pub memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+
     /// Goal repository — active goals used for intent boost in unified recall.
     pub goal_repo: Option<Arc<gateway_database::GoalRepository>>,
 
@@ -422,6 +429,15 @@ impl AppState {
                 persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
             });
 
+        // Build the trait-object MemoryFactStore from the same `MemoryRepository`
+        // and `LiveEmbeddingClient` that the gateway-side fact-store callsites
+        // use. Construction is centralized in `persistence_factory` (TD-023):
+        // when SurrealDB support lands, the config-driven branch goes there
+        // and this callsite stays the same.
+        let memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = Some(
+            persistence_factory::build_memory_store(memory_repo.clone(), embedding_client.clone()),
+        );
+
         let episode_repo_ref = episode_repo.clone();
 
         // Create settings service (before distiller & runtime, so we can read execution settings)
@@ -667,6 +683,7 @@ impl AppState {
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            memory_store,
             goal_repo: Some(goal_repo),
             distillation_repo: Some(distillation_repo),
             distiller: Some(distiller_ref),
@@ -751,6 +768,7 @@ impl AppState {
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            memory_store: None,
             goal_repo: None,
             distillation_repo: None,
             distiller: None,
@@ -838,6 +856,7 @@ impl AppState {
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            memory_store: None,
             goal_repo: None,
             distillation_repo: None,
             distiller: None,

@@ -67,9 +67,9 @@ Scope tags:
   - `orphan_archiver.rs` ✅ — read path migrated (Phase 3a, PR #76); write path migrated (Phase 3b, PR #77). Together: file uses no raw rusqlite in production logic.
   - `kg_backfill.rs` ⏸ **intentionally NOT migrated** — one-shot bootstrap that runs once at daemon startup to retrofit pre-existing rows with new schema fields. Forcing it through the trait would mean adding ~6 new methods (list-with-missing-property, batch-update-properties, compaction marker check/set) just for this single bootstrap concern. When SurrealDB launches, it'll start with the new schema and won't need the same backfill — each impl handles its own schema-evolution story. Marking as decision-explicit rather than pending. (Phase 3c)
   - `embedding_reindex.rs` ✅ — Phase 3d. Orchestration moved to `stores/zero-stores-sqlite/src/reindex.rs`; `SqliteKgStore::reindex_embeddings` now drives it via a new `with_embedding_client` constructor. The gateway-side `sleep/embedding_reindex.rs` stays as a thin re-export wrapper so the two existing progress-aware callers (`state::reconcile_embeddings_at_boot` and the `/api/embeddings/configure` SSE handler) keep emitting per-table `Health::Reindexing` events to the UI's `EmbeddingProgressModal` — the trait surface itself is intentionally fire-and-report (no progress callback) so it stays portable across SQLite / SurrealDB.
-  - `synthesizer.rs` 🛑 deferred — needs `MemoryFactStore` relocated from `framework/zero-core` to `stores/zero-stores` (separate workstream) plus new methods (multi-session aggregation, cosine dedup over vec0). Belongs in Phase 5+.
-  - `pattern_extractor.rs` 🛑 deferred — cross-DB read (knowledge.db + conversations.db) plus LLM orchestration. Needs `ProcedureStore` + `EpisodeStore` traits, not part of Phase 3 scope. Phase 5+.
-- **Status:** in progress — orphan_archiver complete (Phase 3a/3b); embedding_reindex done (Phase 3d); kg_backfill explicitly opted out (3c); synthesizer + pattern_extractor deferred to Phase 5+
+  - `synthesizer.rs` 🛑 still deferred — `MemoryFactStore` relocation is now DONE (trait lives in `stores/zero-stores-traits`, re-exported from `stores/zero-stores`). The remaining blocker is new trait methods (multi-session aggregation, cosine dedup over vec0). Belongs in Phase 5+.
+  - `pattern_extractor.rs` 🛑 still deferred — `MemoryFactStore` relocation unblocks the memory-side ops, but cross-DB read (knowledge.db + conversations.db) plus LLM orchestration still needs `ProcedureStore` + `EpisodeStore` traits, not part of Phase 3 scope. Phase 5+.
+- **Status:** in progress — orphan_archiver complete (Phase 3a/3b); embedding_reindex done (Phase 3d); kg_backfill explicitly opted out (3c); synthesizer + pattern_extractor still deferred (MemoryFactStore relocation now done; remaining blockers are new trait methods + ProcedureStore/EpisodeStore traits)
 
 #### TD-013 ✅ [K] `VectorIndex` folded into store traits
 - **Location:** `gateway/gateway-database/src/vector_index.rs:15-32`
@@ -80,7 +80,7 @@ Scope tags:
 - **Location:** `services/execution-state/src/repository.rs` (entire file — ~99 fns, ~81 stmts). Touches `sessions`, `agent_executions`, `messages` (conversations.db) **and** `memory_facts`, `kg_relationships`, `kg_entities`, `recall_log` (knowledge.db). Note also the developer-acknowledged pain at line 426: `"the with_connection trait hands us &Connection, not &mut"`.
 - **Why debt:** A single repo straddles the two databases that are about to diverge. Once knowledge.db moves to SurrealDB, every method in this file has to know which backend to talk to — turning the repo into a manual coordinator.
 - **Fix:** Split into a leaner `ExecutionStateStore` (sessions/executions/messages — stays SQLite) and remove all direct knowledge-side table access from this file, replacing with calls into `KnowledgeGraphStore` + `MemoryFactStore`.
-- **Status:** pending (depends on TD-010)
+- **Status:** unblocked (MemoryFactStore relocated to `stores/zero-stores-traits` / re-exported from `stores/zero-stores`); migration of `repository.rs` knowledge-side ops still pending as a separate multi-PR workstream
 
 ### Abstraction-shape debt — conversations side (NOT critical for migration)
 
@@ -105,10 +105,11 @@ Scope tags:
 - **Status:** pending (defer to Phase 6)
 
 #### TD-023 ⏳ [Both] `AppState` factory pattern established; `graph_service` retirement deferred
-- **Location:** `gateway/src/state/mod.rs:63-75` — concrete persistence types alongside trait objects.
+- **Location:** `gateway/src/state/mod.rs` — concrete persistence types alongside trait objects.
 - **Progress (Phase 5):** Factory pattern landed at `gateway/src/state/persistence_factory.rs`. `kg_store` construction goes through `build_kg_store_from_storage()`; the canonical `build_kg_store(knowledge_db, embedding_client)` entrypoint is gated until `graph_service` retires (it's where the SurrealDB config-driven branch will live). When SurrealDB support lands, this is where the branch goes — consumers don't need to change because they hold `Arc<dyn KnowledgeGraphStore>`.
-- **Deferred:** Retirement of `graph_service: Option<Arc<GraphService>>` (the parallel concrete field on `AppState`). Migrating its dozens of consumers — HTTP handlers in `gateway/src/http/graph.rs`, sleep jobs, distillation, etc. — is a multi-PR workstream.
-- **Status:** factory pattern done; `graph_service` retirement deferred to a future workstream
+- **Progress (MemoryFactStore relocation):** Trait moved out of `framework/zero-core` into a new dependency-light `stores/zero-stores-traits` crate (re-exported from `stores/zero-stores` for the design-canonical `zero_stores::MemoryFactStore` import path). `SqliteMemoryStore` now lives at `stores/zero-stores-sqlite/src/memory_facts.rs` (a re-export of `gateway_database::GatewayMemoryFactStore`). New `persistence_factory::build_memory_store(memory_repo, embedding_client)` factory; new `AppState::memory_store: Option<Arc<dyn MemoryFactStore>>` field coexists with the legacy concrete `memory_repo` field (same pattern as `kg_store` / `graph_service`).
+- **Deferred:** Retirement of `graph_service: Option<Arc<GraphService>>` and `memory_repo: Option<Arc<MemoryRepository>>` (the parallel concrete fields on `AppState`). Migrating their dozens of consumers — HTTP handlers in `gateway/src/http/graph.rs`, sleep jobs, distillation, default-policy seeding, etc. — is a multi-PR workstream.
+- **Status:** factory pattern done; `memory_store` field added; `graph_service` + `memory_repo` retirement deferred to a future workstream
 
 ### Dialect-portability debt
 
