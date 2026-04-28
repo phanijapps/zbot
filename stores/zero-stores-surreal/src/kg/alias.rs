@@ -42,7 +42,7 @@ pub async fn resolve_entity(
     agent_id: &str,
     entity_type: &EntityType,
     name: &str,
-    _embedding: Option<&[f32]>,
+    embedding: Option<&[f32]>,
 ) -> StoreResult<ResolveOutcome> {
     // Stage 1: exact match on (agent_id, name, entity_type)
     let mut resp = db
@@ -71,7 +71,22 @@ pub async fn resolve_entity(
         return Ok(ResolveOutcome::Match(row.entity_id.to_entity_id()));
     }
 
-    // Stage 3 (embedding-similarity match) is wired in Task 9 once HNSW exists.
+    // Stage 3: embedding-similarity match (only when HNSW index is present
+    // for the same dimension). Distance threshold is conservative — tighter
+    // values risk false-positives across distinct concepts with similar names.
+    if let Some(emb) = embedding {
+        let dim = crate::schema::hnsw::read_dim(db).await?;
+        if dim == Some(emb.len()) {
+            const THRESHOLD: f32 = 0.15;
+            let hits = crate::kg::search::search_by_embedding(db, agent_id, emb, 1).await?;
+            if let Some((id, dist)) = hits.into_iter().next() {
+                if dist < THRESHOLD {
+                    return Ok(ResolveOutcome::Match(id));
+                }
+            }
+        }
+    }
+
     Ok(ResolveOutcome::NoMatch)
 }
 

@@ -17,6 +17,7 @@ use zero_stores::types::{
 mod alias;
 mod entity;
 mod relationship;
+mod search;
 mod traverse;
 
 #[derive(Clone)]
@@ -134,11 +135,11 @@ impl KnowledgeGraphStore for SurrealKgStore {
     // === search (Task 9) ===
     async fn search_entities_by_name(
         &self,
-        _agent_id: &str,
-        _query: &str,
-        _limit: usize,
+        agent_id: &str,
+        query: &str,
+        limit: usize,
     ) -> StoreResult<Vec<Entity>> {
-        Err(unimplemented_err("search_entities_by_name (Task 9)"))
+        search::search_entities_by_name(self.db(), agent_id, query, limit).await
     }
 
     // === reindex (Task 10) ===
