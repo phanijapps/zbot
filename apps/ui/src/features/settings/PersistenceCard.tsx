@@ -9,61 +9,57 @@ import { Database } from "lucide-react";
 
 export function PersistenceCard() {
   return (
-    <div className="settings-card">
-      <div className="settings-card__header">
-        <Database className="settings-card__icon" aria-hidden="true" />
+    <div className="card card__padding--lg">
+      <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
+        <div className="card__icon card__icon--primary">
+          <Database style={{ width: 18, height: 18 }} />
+        </div>
         <div>
-          <h3 className="settings-card__title">Persistence</h3>
-          <p className="settings-card__subtitle">
-            Knowledge graph + memory storage backend
-          </p>
+          <h2 className="settings-section-header">Persistence</h2>
+          <p className="page-subtitle">Knowledge graph + memory storage backend</p>
         </div>
       </div>
 
-      <div className="settings-card__body">
-        <div className="settings-row">
-          <div className="settings-row__label">
-            <strong>Knowledge Backend</strong>
-            <p className="settings-row__hint">
-              SQLite is the default and the only backend wired into the
-              running daemon today. SurrealDB 3.0 is available as an
-              opt-in build (Mode A: embedded RocksDB) for testing.
-            </p>
-          </div>
-          <div className="settings-row__control">
-            <select
-              id="knowledge-backend-readonly"
-              value="sqlite"
-              disabled
-              aria-label="Knowledge backend (read-only — feature-gated)"
-            >
-              <option value="sqlite">SQLite (default)</option>
-              <option value="surreal" disabled>
-                SurrealDB (build with --features surreal-backend)
-              </option>
-            </select>
-          </div>
+      <div style={{ marginBottom: "var(--spacing-3)" }}>
+        <label className="settings-field-label" htmlFor="persistence-backend">
+          Knowledge Backend
+        </label>
+        <select
+          id="persistence-backend"
+          className="form-input"
+          value="sqlite"
+          disabled
+          aria-label="Knowledge backend (read-only — feature-gated)"
+          style={{ marginTop: 4 }}
+        >
+          <option value="sqlite">SQLite (default)</option>
+          <option value="surreal" disabled>
+            SurrealDB (build with --features surreal-backend)
+          </option>
+        </select>
+        <div className="page-subtitle" style={{ marginTop: 4 }}>
+          SQLite is the only backend wired into the running daemon today.
+          SurrealDB 3.0 is available as an opt-in build (Mode A: embedded
+          RocksDB) for testing.
         </div>
+      </div>
 
-        <div className="settings-banner settings-banner--info">
-          <strong>SurrealDB backend is experimental.</strong> Build the
-          daemon with <code>cargo run -p daemon --features surreal-backend</code>{" "}
-          to opt in. The factory plumbing in{" "}
-          <code>gateway/src/state/persistence_factory.rs::build_surreal_pair</code>{" "}
-          is ready; settings.json driven dispatch lands in a follow-up PR.
-        </div>
+      <div
+        className="settings-alert settings-alert--warning"
+        style={{ marginBottom: "var(--spacing-3)" }}
+      >
+        <strong>SurrealDB backend is experimental.</strong> Build the daemon
+        with <code>cargo run -p daemon --features surreal-backend</code> to
+        opt in. The factory plumbing in{" "}
+        <code>persistence_factory::build_surreal_pair</code> is ready;
+        settings.json driven dispatch lands in a follow-up PR.
+      </div>
 
-        <div className="settings-row">
-          <div className="settings-row__label">
-            <strong>Recovery</strong>
-            <p className="settings-row__hint">
-              On corruption, the daemon refuses to start. Recovery is a
-              manual CLI step backed by{" "}
-              <code>zero-stores-surreal-recovery</code>: read-only export
-              to a JSON sidecar, then rename the corrupt directory aside.
-            </p>
-          </div>
-        </div>
+      <div className="page-subtitle">
+        <strong>Recovery:</strong> on corruption, the daemon refuses to
+        start. Recovery is a manual CLI step backed by{" "}
+        <code>zero-stores-surreal-recovery</code>: read-only export to a
+        JSON sidecar, then rename the corrupt directory aside.
       </div>
     </div>
   );
