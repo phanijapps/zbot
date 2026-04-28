@@ -32,7 +32,7 @@ use gateway_database::{
     ScoredFact, WardWikiRepository,
 };
 use gateway_services::RecallConfig;
-use knowledge_graph::GraphService;
+use zero_stores_sqlite::kg::service::GraphService;
 
 /// Retrieves relevant memory facts for injection at session start.
 ///

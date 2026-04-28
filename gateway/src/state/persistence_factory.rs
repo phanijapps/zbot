@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use agent_runtime::llm::EmbeddingClient;
 use gateway_database::{KnowledgeDatabase, MemoryRepository};
-use knowledge_graph::storage::GraphStorage;
 use zero_stores::{KnowledgeGraphStore, MemoryFactStore};
+use zero_stores_sqlite::kg::storage::GraphStorage;
 use zero_stores_sqlite::{SqliteKgStore, SqliteMemoryStore};
 
 /// Build the `Arc<dyn KnowledgeGraphStore>` used by `AppState`.

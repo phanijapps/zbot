@@ -11,7 +11,8 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use gateway_database::CompactionRepository;
-use knowledge_graph::{Entity, EntityType, GraphStorage};
+use knowledge_graph::{Entity, EntityType};
+use zero_stores_sqlite::kg::storage::GraphStorage;
 
 /// Default cosine threshold for considering two entities near-duplicates.
 const DEFAULT_COSINE_THRESHOLD: f32 = 0.92;
@@ -204,7 +205,8 @@ mod tests {
     use super::*;
     use gateway_database::KnowledgeDatabase;
     use gateway_services::VaultPaths;
-    use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, GraphStorage};
+    use knowledge_graph::{Entity, EntityType, ExtractedKnowledge};
+    use zero_stores_sqlite::kg::storage::GraphStorage;
     use std::sync::Arc;
 
     fn setup() -> (

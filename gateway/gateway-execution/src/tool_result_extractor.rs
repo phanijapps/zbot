@@ -9,7 +9,8 @@
 //! the exact tool invocation that produced it.
 
 use gateway_database::{EpisodeSource, KgEpisode, KgEpisodeRepository};
-use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, GraphStorage};
+use knowledge_graph::{Entity, EntityType, ExtractedKnowledge};
+use zero_stores_sqlite::kg::storage::GraphStorage;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;

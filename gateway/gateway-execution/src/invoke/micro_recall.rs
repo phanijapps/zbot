@@ -6,7 +6,7 @@
 
 use super::working_memory::WorkingMemory;
 use gateway_database::{MemoryFact, MemoryRepository};
-use knowledge_graph::storage::GraphStorage;
+use zero_stores_sqlite::kg::storage::GraphStorage;
 use regex::Regex;
 use std::sync::Arc;
 use std::sync::LazyLock;

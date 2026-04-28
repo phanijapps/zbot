@@ -67,7 +67,7 @@ pub async fn spawn_delegated_agent(
             std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
         >,
     >,
-    graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 ) -> Result<String, String> {

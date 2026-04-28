@@ -9,7 +9,8 @@ use std::time::Instant;
 
 use gateway_database::KnowledgeDatabase;
 use gateway_services::VaultPaths;
-use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, GraphStorage};
+use knowledge_graph::{Entity, EntityType, ExtractedKnowledge};
+use zero_stores_sqlite::kg::storage::GraphStorage;
 
 fn normalized(v: Vec<f32>) -> Vec<f32> {
     let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();

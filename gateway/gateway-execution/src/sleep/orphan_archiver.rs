@@ -146,7 +146,7 @@ mod tests {
     use super::*;
     use gateway_database::{CompactionRepository, KnowledgeDatabase};
     use gateway_services::VaultPaths;
-    use knowledge_graph::storage::GraphStorage;
+    use zero_stores_sqlite::kg::storage::GraphStorage;
     use rusqlite::params;
     use tempfile::TempDir;
     use zero_stores_sqlite::SqliteKgStore;

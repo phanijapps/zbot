@@ -8,7 +8,7 @@
 //! `visited` accumulator, and `max_hops` bounds recursion depth — safe
 //! for resource-constrained targets like Raspberry Pi 4.
 
-use crate::storage::GraphStorage;
+use super::storage::GraphStorage;
 use rusqlite::params;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -30,6 +30,21 @@ pub struct TraversalNode {
     pub relevance: f64,
     /// Number of times the entity has been mentioned
     pub mention_count: i64,
+}
+
+// Conversion to the trait-level `TraversalHit` type. Hosted here (the
+// owner of `TraversalNode`) instead of in `zero-stores` to avoid that
+// crate having to depend on `zero-stores-sqlite`. Relocated from
+// `zero-stores/src/types.rs` during Slice D6b.
+impl From<TraversalNode> for zero_stores::types::TraversalHit {
+    fn from(n: TraversalNode) -> Self {
+        zero_stores::types::TraversalHit {
+            entity_id: zero_stores::types::EntityId(n.entity_id),
+            hop: n.hop_distance as usize,
+            path: n.path,
+            mention_count: n.mention_count,
+        }
+    }
 }
 
 /// Trait for multi-hop graph traversal.
@@ -249,7 +264,7 @@ impl GraphTraversal for SqliteGraphTraversal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType};
+    use knowledge_graph::types::{Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType};
     use tempfile::tempdir;
 
     /// Spin up an in-memory-ish test storage and return it wrapped in Arc.

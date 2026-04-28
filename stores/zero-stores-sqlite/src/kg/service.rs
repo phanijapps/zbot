@@ -2,9 +2,9 @@
 //!
 //! Business logic layer providing higher-level operations on the knowledge graph.
 
-use crate::error::GraphResult;
-use crate::storage::GraphStorage;
-use crate::types::{Direction, Entity, EntityWithConnections, GraphStats, Relationship, Subgraph};
+use knowledge_graph::error::GraphResult;
+use super::storage::GraphStorage;
+use knowledge_graph::types::{Direction, Entity, EntityWithConnections, GraphStats, Relationship, Subgraph};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -130,8 +130,8 @@ impl GraphService {
             .get_neighbors(agent_id, &entity.id, Direction::Both, 1000)?;
 
         // Separate into incoming and outgoing
-        let mut outgoing: Vec<(crate::types::Relationship, Entity)> = Vec::new();
-        let mut incoming: Vec<(crate::types::Relationship, Entity)> = Vec::new();
+        let mut outgoing: Vec<(knowledge_graph::types::Relationship, Entity)> = Vec::new();
+        let mut incoming: Vec<(knowledge_graph::types::Relationship, Entity)> = Vec::new();
 
         for neighbor in neighbors {
             match neighbor.direction {
@@ -239,7 +239,7 @@ impl GraphService {
         let mut visited_entities: HashSet<String> = HashSet::new();
         let mut visited_relationships: HashSet<String> = HashSet::new();
         let mut entities: Vec<Entity> = Vec::new();
-        let mut relationships: Vec<crate::types::Relationship> = Vec::new();
+        let mut relationships: Vec<knowledge_graph::types::Relationship> = Vec::new();
 
         // BFS traversal
         let mut current_hop: Vec<String> = vec![center_entity_id.to_string()];
@@ -316,7 +316,7 @@ impl GraphService {
         relationship_type: Option<&str>,
         limit: usize,
         offset: usize,
-    ) -> GraphResult<Vec<crate::types::Relationship>> {
+    ) -> GraphResult<Vec<knowledge_graph::types::Relationship>> {
         self.storage
             .list_relationships(agent_id, relationship_type, limit, offset)
     }
@@ -328,7 +328,7 @@ impl GraphService {
         entity_id: &str,
         direction: Direction,
         limit: usize,
-    ) -> GraphResult<Vec<crate::types::NeighborInfo>> {
+    ) -> GraphResult<Vec<knowledge_graph::types::NeighborInfo>> {
         self.storage
             .get_neighbors(agent_id, entity_id, direction, limit)
     }
@@ -383,7 +383,7 @@ fn merge_by_reciprocal_rank(ranked_lists: &[Vec<Entity>]) -> Vec<Entity> {
 
 /// Process a list of neighbors into the BFS accumulators.
 fn collect_neighbors(
-    neighbors: Vec<crate::types::NeighborInfo>,
+    neighbors: Vec<knowledge_graph::types::NeighborInfo>,
     visited_entities: &mut HashSet<String>,
     visited_relationships: &mut HashSet<String>,
     entities: &mut Vec<Entity>,
@@ -411,7 +411,7 @@ fn collect_neighbors(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType};
+    use knowledge_graph::types::{Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType};
     use tempfile::tempdir;
 
     async fn create_test_service() -> GraphService {

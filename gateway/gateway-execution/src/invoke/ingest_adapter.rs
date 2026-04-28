@@ -1,7 +1,7 @@
 //! # Ingestion Adapter
 //!
 //! Bridges [`gateway_database::KgEpisodeRepository`] + [`IngestionQueue`] +
-//! [`knowledge_graph::GraphStorage`] to [`agent_tools::IngestionAccess`].
+//! [`zero_stores_sqlite::kg::storage::GraphStorage`] to [`agent_tools::IngestionAccess`].
 //! Wired into the agent tool registry so the `ingest` tool can both
 //! (a) enqueue text chunks for background LLM extraction, and
 //! (b) bulk-upsert structured entities and relationships synchronously.
@@ -15,8 +15,9 @@ use agent_tools::{IngestionAccess, StructuredCounts, StructuredEntity, Structure
 use chrono::Utc;
 use gateway_database::KgEpisodeRepository;
 use knowledge_graph::{
-    Entity, EntityType, ExtractedKnowledge, GraphStorage, Relationship, RelationshipType,
+    Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType,
 };
+use zero_stores_sqlite::kg::storage::GraphStorage;
 
 use crate::ingest::{
     chunker::{chunk_text, ChunkOptions},
