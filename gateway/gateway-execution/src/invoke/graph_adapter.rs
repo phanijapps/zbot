@@ -1,6 +1,6 @@
 //! # Graph Storage Adapter
 //!
-//! Bridges `knowledge_graph::GraphStorage` to `agent_tools::GraphStorageAccess`
+//! Bridges `zero_stores_sqlite::kg::storage::GraphStorage` to `agent_tools::GraphStorageAccess`
 //! so the `GraphQueryTool` can query the knowledge graph without depending on
 //! the concrete storage crate.
 
@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use agent_tools::{EntityInfo, GraphStorageAccess, NeighborInfo};
 use async_trait::async_trait;
-use knowledge_graph::{Direction, Entity, GraphService, GraphStorage, GraphView, Relationship};
+use knowledge_graph::{Direction, Entity, Relationship};
+use zero_stores_sqlite::kg::service::{GraphService, GraphView};
+use zero_stores_sqlite::kg::storage::GraphStorage;
 
 /// Map `knowledge_graph::Entity` to the tool-facing [`EntityInfo`] WITHOUT
 /// dropping fields. `properties` is round-tripped as JSON so everything the

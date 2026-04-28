@@ -227,7 +227,7 @@ pub(crate) struct RunnerDelegationInvoker {
             std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
         >,
     >,
-    pub(crate) graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    pub(crate) graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
     pub(crate) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(crate) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 }

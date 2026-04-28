@@ -8,7 +8,7 @@ use tempfile::tempdir;
 use gateway_database::{KgEpisodeRepository, KnowledgeDatabase};
 use gateway_execution::ingest::{IngestionQueue, NoopExtractor};
 use gateway_services::VaultPaths;
-use knowledge_graph::GraphStorage;
+use zero_stores_sqlite::kg::storage::GraphStorage;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn queue_drains_pending_episodes() {

@@ -228,7 +228,7 @@ mod tests {
         ProcedureRepository,
     };
     use gateway_services::VaultPaths;
-    use knowledge_graph::GraphStorage;
+    use zero_stores_sqlite::kg::storage::GraphStorage;
     use std::sync::Mutex;
     use tempfile::tempdir;
     use zero_stores::KnowledgeGraphStore;

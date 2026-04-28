@@ -3,10 +3,11 @@ use std::sync::Arc;
 
 use agent_runtime::llm::EmbeddingClient;
 use async_trait::async_trait;
-use knowledge_graph::storage::{ArchivableEntityRow, GraphStorage};
 use knowledge_graph::types::{
     Direction as KgDirection, Entity, EntityType, GraphStats, NeighborInfo, Relationship, Subgraph,
 };
+
+use crate::kg::storage::{ArchivableEntityRow, GraphStorage};
 use zero_stores::error::StoreError;
 use zero_stores::extracted::ExtractedKnowledge;
 use zero_stores::types::{
@@ -20,7 +21,7 @@ use crate::blocking::{block, map_graph_err};
 use crate::reindex;
 
 /// SQLite implementation of `KnowledgeGraphStore`. Wraps the existing
-/// `knowledge_graph::storage::GraphStorage` and bridges its synchronous
+/// `crate::kg::storage::GraphStorage` and bridges its synchronous
 /// rusqlite API into the async trait via `spawn_blocking`.
 #[derive(Clone)]
 pub struct SqliteKgStore {

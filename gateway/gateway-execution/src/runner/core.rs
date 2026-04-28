@@ -112,7 +112,7 @@ pub struct ExecutionRunner {
         >,
     >,
     /// Knowledge graph storage for the graph_query tool.
-    graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
     /// KG episode repository for ward artifact indexing after distillation.
     kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
     /// Adapter for the `ingest` agent tool. Wired via [`Self::set_ingestion_adapter`].
@@ -191,7 +191,7 @@ pub(super) struct ContinuationArgs<'a> {
     pub(super) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub(super) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub(super) model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
-    pub(super) graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    pub(super) graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
     pub(super) kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
@@ -490,7 +490,7 @@ impl ExecutionRunner {
 
     /// Late-wired setter. Mirrored to `self.bootstrap.graph_storage` because
     /// `InvokeBootstrap::finish_setup` reads its own clone at session-setup time.
-    pub fn set_graph_storage(&mut self, storage: Arc<knowledge_graph::GraphStorage>) {
+    pub fn set_graph_storage(&mut self, storage: Arc<zero_stores_sqlite::kg::storage::GraphStorage>) {
         self.bootstrap.graph_storage = Some(storage.clone());
         self.graph_storage = Some(storage);
     }
@@ -1541,7 +1541,7 @@ pub(super) async fn run_ward_artifact_indexer(
     session_id: &str,
     agent_id: &str,
     kg_episode_repo: Option<&Arc<gateway_database::KgEpisodeRepository>>,
-    graph_storage: Option<&Arc<knowledge_graph::GraphStorage>>,
+    graph_storage: Option<&Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
     paths: &SharedVaultPaths,
 ) {
     let (Some(wid), Some(ep_repo), Some(graph)) = (ward_id, kg_episode_repo, graph_storage) else {

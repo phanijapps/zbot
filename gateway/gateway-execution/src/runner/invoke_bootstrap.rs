@@ -64,7 +64,7 @@ pub(super) struct InvokeBootstrap {
     pub(super) connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     pub(super) bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
     pub(super) bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
-    pub(super) graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    pub(super) graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     pub(super) event_bus: Arc<EventBus>,

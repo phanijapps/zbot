@@ -2,8 +2,8 @@
 //!
 //! SQLite storage for knowledge graph entities and relationships.
 
-use crate::error::{GraphError, GraphResult};
-use crate::types::{
+use knowledge_graph::error::{GraphError, GraphResult};
+use knowledge_graph::types::{
     Direction, Entity, EntityType, ExtractedKnowledge, NeighborInfo, Relationship, RelationshipType,
 };
 use gateway_database::KnowledgeDatabase;
@@ -1171,11 +1171,11 @@ impl GraphStorage {
         entity_id: &str,
         max_hops: u8,
         limit: usize,
-    ) -> GraphResult<Vec<crate::traversal::TraversalNode>> {
+    ) -> GraphResult<Vec<super::traversal::TraversalNode>> {
         let hop_decay = 0.7_f64;
         self.db
             .with_connection(|conn| {
-                (|| -> GraphResult<Vec<crate::traversal::TraversalNode>> {
+                (|| -> GraphResult<Vec<super::traversal::TraversalNode>> {
                     let sql = r#"
                         WITH RECURSIVE graph_walk(entity_id, hop, path, visited) AS (
                             SELECT ?1, 0, '', ?1
@@ -1241,7 +1241,7 @@ impl GraphStorage {
                         let (id, _name, _etype, hop, path, mentions) =
                             row.map_err(GraphError::Database)?;
                         let hop_u8 = hop as u8;
-                        nodes.push(crate::traversal::TraversalNode {
+                        nodes.push(super::traversal::TraversalNode {
                             entity_id: id,
                             entity_name: _name,
                             entity_type: _etype,
@@ -1888,7 +1888,7 @@ impl GraphStorage {
             .with_connection(move |conn| {
                 (|| -> GraphResult<()> {
                     let alias_id = format!("alias-{}", uuid::Uuid::new_v4());
-                    let normalized = crate::resolver::normalize_name(&surface);
+                    let normalized = knowledge_graph::resolver::normalize_name(&surface);
                     conn.execute(
                         "INSERT OR IGNORE INTO kg_aliases \
                          (id, entity_id, surface_form, normalized_form, source, confidence, first_seen_at) \
@@ -1930,7 +1930,7 @@ impl GraphStorage {
                 (|| -> GraphResult<Option<String>> {
                     let candidate =
                         Entity::new(agent_id.clone(), entity_type.clone(), name.clone());
-                    match crate::resolver::resolve(
+                    match knowledge_graph::resolver::resolve(
                         conn,
                         &agent_id,
                         &candidate,
@@ -1938,10 +1938,10 @@ impl GraphStorage {
                     )
                     .map_err(GraphError::Other)?
                     {
-                        crate::resolver::ResolveOutcome::Merge { existing_id, .. } => {
+                        knowledge_graph::resolver::ResolveOutcome::Merge { existing_id, .. } => {
                             Ok(Some(existing_id))
                         }
-                        crate::resolver::ResolveOutcome::Create => Ok(None),
+                        knowledge_graph::resolver::ResolveOutcome::Create => Ok(None),
                     }
                 })()
                 .map_err(graph_to_rusqlite)
@@ -2046,10 +2046,10 @@ fn resolve_via_resolver(
     agent_id: &str,
     entity: &Entity,
 ) -> GraphResult<Option<String>> {
-    match crate::resolver::resolve(conn, agent_id, entity, entity.name_embedding.as_deref())
+    match knowledge_graph::resolver::resolve(conn, agent_id, entity, entity.name_embedding.as_deref())
         .map_err(GraphError::Other)?
     {
-        crate::resolver::ResolveOutcome::Merge {
+        knowledge_graph::resolver::ResolveOutcome::Merge {
             existing_id,
             reason,
         } => {
@@ -2061,7 +2061,7 @@ fn resolve_via_resolver(
             );
             Ok(Some(existing_id))
         }
-        crate::resolver::ResolveOutcome::Create => Ok(None),
+        knowledge_graph::resolver::ResolveOutcome::Create => Ok(None),
     }
 }
 
@@ -2104,7 +2104,7 @@ fn merge_into_existing(
 ) -> GraphResult<()> {
     // Append candidate's surface form as an alias of the winning entity.
     let alias_id = format!("alias-{}", uuid::Uuid::new_v4());
-    let normalized = crate::resolver::normalize_name(&candidate.name);
+    let normalized = knowledge_graph::resolver::normalize_name(&candidate.name);
     conn.execute(
         "INSERT OR IGNORE INTO kg_aliases (
              id, entity_id, surface_form, normalized_form, source, confidence, first_seen_at
@@ -2254,7 +2254,7 @@ fn store_entity(conn: &Connection, agent_id: &str, entity: Entity) -> GraphResul
     // Seed self-alias so future mentions of this exact surface form short-circuit
     // at resolver stage 1 (alias-table lookup).
     let alias_id = format!("alias-{}", uuid::Uuid::new_v4());
-    let normalized = crate::resolver::normalize_name(&entity.name);
+    let normalized = knowledge_graph::resolver::normalize_name(&entity.name);
     conn.execute(
         "INSERT OR IGNORE INTO kg_aliases (
              id, entity_id, surface_form, normalized_form, source, confidence, first_seen_at
@@ -2420,7 +2420,7 @@ fn store_relationship(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{EntityType, RelationshipType};
+    use knowledge_graph::types::{EntityType, RelationshipType};
     use tempfile::tempdir;
 
     #[test]
@@ -2839,7 +2839,7 @@ mod tests {
 
         let mut entity = Entity::new(
             "root".to_string(),
-            crate::EntityType::Person,
+            knowledge_graph::EntityType::Person,
             "A.D. Lovelace".to_string(),
         );
         entity.id = "e1".to_string();
@@ -2873,7 +2873,7 @@ mod tests {
 
         let mut e1 = Entity::new(
             "root".to_string(),
-            crate::EntityType::Person,
+            knowledge_graph::EntityType::Person,
             "A.D. Lovelace".to_string(),
         );
         e1.id = "e1".to_string();
@@ -2889,7 +2889,7 @@ mod tests {
 
         let mut e2 = Entity::new(
             "root".to_string(),
-            crate::EntityType::Person,
+            knowledge_graph::EntityType::Person,
             "Augusta Lovelace".to_string(),
         );
         e2.id = "e2".to_string();
@@ -2937,7 +2937,7 @@ mod tests {
 
         let mut e1 = Entity::new(
             "root".to_string(),
-            crate::EntityType::Person,
+            knowledge_graph::EntityType::Person,
             "A.D. Lovelace".to_string(),
         );
         e1.id = "e1".to_string();
@@ -2960,7 +2960,7 @@ mod tests {
 
         let mut e2 = Entity::new(
             "root".to_string(),
-            crate::EntityType::Person,
+            knowledge_graph::EntityType::Person,
             "UniqueString12345".to_string(),
         );
         e2.id = "e2".to_string();

@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use knowledge_graph::{GraphStorage, OrphanCandidate};
+use zero_stores_sqlite::kg::storage::{GraphStorage, OrphanCandidate};
 
 /// Tuning knobs for the decay pass.
 #[derive(Debug, Clone)]

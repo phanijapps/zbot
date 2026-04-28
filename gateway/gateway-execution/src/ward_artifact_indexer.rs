@@ -8,7 +8,8 @@
 
 use crate::indexer::relationship_rules;
 use gateway_database::{EpisodeSource, KgEpisode, KgEpisodeRepository};
-use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, GraphStorage, Relationship};
+use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, Relationship};
+use zero_stores_sqlite::kg::storage::GraphStorage;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};

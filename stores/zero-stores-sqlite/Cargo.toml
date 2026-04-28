@@ -19,6 +19,9 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 tracing = { workspace = true }
 serde_json = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Used by relocated KG storage modules (`kg/{storage,traversal,causal,service}.rs`)
+chrono = { workspace = true }
+uuid = { workspace = true }
 
 # Pre-staged for Task 4+ integration test fixtures (tests/fixtures/mod.rs)
 [dev-dependencies]

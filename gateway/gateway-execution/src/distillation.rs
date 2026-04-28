@@ -29,7 +29,8 @@ use gateway_database::{
     MemoryRepository, ProcedureRepository, SessionEpisode, WardWikiRepository,
 };
 use gateway_services::{ProviderService, SettingsService, VaultPaths};
-use knowledge_graph::{Entity, EntityType, GraphStorage, Relationship, RelationshipType};
+use knowledge_graph::{Entity, EntityType, Relationship, RelationshipType};
+use zero_stores_sqlite::kg::storage::GraphStorage;
 use serde::{Deserialize, Serialize};
 
 /// Distills completed sessions into structured memory facts.
@@ -2204,7 +2205,8 @@ mod tests {
         use super::*;
         use gateway_database::KnowledgeDatabase;
         use gateway_services::VaultPaths;
-        use knowledge_graph::{types::ExtractedKnowledge, Entity, EntityType, GraphStorage};
+        use knowledge_graph::{types::ExtractedKnowledge, Entity, EntityType};
+        use zero_stores_sqlite::kg::storage::GraphStorage;
         use std::collections::HashMap;
         use std::sync::Arc;
         use tempfile::tempdir;

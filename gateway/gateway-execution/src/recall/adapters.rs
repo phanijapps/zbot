@@ -68,7 +68,7 @@ pub fn procedure_to_item(proc: &Procedure, score: f64) -> ScoredItem {
     }
 }
 
-use knowledge_graph::GraphStorage;
+use zero_stores_sqlite::kg::storage::GraphStorage;
 use std::sync::Arc;
 
 /// ANN-query `kg_name_index` for entities whose name embedding is closest to

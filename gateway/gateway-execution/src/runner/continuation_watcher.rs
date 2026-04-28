@@ -73,7 +73,7 @@ pub(crate) struct RunnerContinuationInvoker {
     /// the live value at fire time via `.load_full()`.
     pub(crate) model_registry:
         Arc<arc_swap::ArcSwapOption<gateway_services::models::ModelRegistry>>,
-    pub(crate) graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    pub(crate) graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
     pub(crate) kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
     pub(crate) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(crate) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,

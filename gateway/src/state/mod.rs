@@ -29,7 +29,8 @@ use gateway_database::{
     MemoryRepository, ProcedureRepository, RecallLogRepository, WardWikiRepository,
 };
 use gateway_services::EmbeddingService;
-use knowledge_graph::{GraphService, GraphStorage};
+use zero_stores_sqlite::kg::service::GraphService;
+use zero_stores_sqlite::kg::storage::GraphStorage;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -43,7 +43,7 @@ use zero_stores::MemoryFactStore;
 
 use super::graph_adapter::GraphStorageAdapter;
 use crate::config::GatewayFileSystem;
-use knowledge_graph::GraphStorage;
+use zero_stores_sqlite::kg::storage::GraphStorage;
 
 /// Workspace context cache type — same pattern as SkillService/ConnectorRegistry.
 pub type WorkspaceCache = Arc<tokio::sync::RwLock<Option<HashMap<String, serde_json::Value>>>>;

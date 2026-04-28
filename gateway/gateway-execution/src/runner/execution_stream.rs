@@ -49,7 +49,7 @@ pub struct ExecutionStream {
     pub handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
     pub distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
-    pub graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    pub graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
     pub paths: SharedVaultPaths,
     pub memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
     pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
@@ -98,7 +98,7 @@ struct EventHandlerDeps<'a> {
     agent_id: &'a str,
     handle: &'a ExecutionHandle,
     kg_episode_repo: Option<&'a Arc<gateway_database::KgEpisodeRepository>>,
-    graph_storage: Option<&'a Arc<knowledge_graph::GraphStorage>>,
+    graph_storage: Option<&'a Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
 }
 
 /// Handle a `StreamEvent::ToolCallStart` — record the call, update the

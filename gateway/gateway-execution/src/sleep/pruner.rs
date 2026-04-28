@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use gateway_database::CompactionRepository;
-use knowledge_graph::GraphStorage;
+use zero_stores_sqlite::kg::storage::GraphStorage;
 
 use crate::sleep::decay::PruneCandidate;
 
@@ -67,7 +67,8 @@ mod tests {
     use crate::sleep::decay::{DecayConfig, DecayEngine};
     use gateway_database::{CompactionRepository, KnowledgeDatabase};
     use gateway_services::VaultPaths;
-    use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, GraphStorage};
+    use knowledge_graph::{Entity, EntityType, ExtractedKnowledge};
+    use zero_stores_sqlite::kg::storage::GraphStorage;
     use std::sync::Arc;
 
     fn setup() -> (

@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, Notify};
 
 use crate::ingest::extractor::Extractor;
 use gateway_database::KgEpisodeRepository;
-use knowledge_graph::GraphStorage;
+use zero_stores_sqlite::kg::storage::GraphStorage;
 
 const WAKE_CHANNEL_CAPACITY: usize = 256;
 const CLAIM_FAILURE_BACKOFF: Duration = Duration::from_millis(500);

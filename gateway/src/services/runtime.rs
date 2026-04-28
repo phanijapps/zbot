@@ -112,7 +112,7 @@ impl RuntimeService {
         bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
         embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
         max_parallel_agents: u32,
-        graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+        graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
         kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
         ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
         goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
