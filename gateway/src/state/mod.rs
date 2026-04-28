@@ -213,6 +213,28 @@ fn sync_reconcile_vec_dim_at_boot(
     );
 }
 
+/// Pick the right `EpisodeStore` impl for AppState — Surreal when the
+/// user's opted in, SQLite-backed otherwise. Extracted so the call-site
+/// inside `AppState::new` stays readable.
+#[cfg(feature = "surreal-backend")]
+fn build_episode_store_for_state(
+    surreal_bundle: Option<&persistence_factory::SurrealStoreBundle>,
+    episode_repo: Arc<EpisodeRepository>,
+) -> Arc<dyn zero_stores_traits::EpisodeStore> {
+    match surreal_bundle {
+        Some(b) => b.episode.clone(),
+        None => Arc::new(gateway_database::GatewayEpisodeStore::new(episode_repo))
+            as Arc<dyn zero_stores_traits::EpisodeStore>,
+    }
+}
+#[cfg(not(feature = "surreal-backend"))]
+fn build_episode_store_for_state(
+    episode_repo: Arc<EpisodeRepository>,
+) -> Arc<dyn zero_stores_traits::EpisodeStore> {
+    Arc::new(gateway_database::GatewayEpisodeStore::new(episode_repo))
+        as Arc<dyn zero_stores_traits::EpisodeStore>
+}
+
 impl AppState {
     /// Create a new application state.
     ///
@@ -372,25 +394,38 @@ impl AppState {
         // SessionDistiller construction, so they can be wired with it). The
         // KG override branch lives later because it depends on
         // runner_graph_storage which isn't available yet — we re-derive
-        // surreal_override there with the cached pair below.
+        // surreal_override there with the cached bundle below.
+        //
+        // When the user has opted into Surreal, the *full* store bundle is
+        // built here so the trait-routed `episode_store`, `wiki_store` and
+        // `procedure_store` fields below can route to Surreal too — without
+        // the bundle they'd silently fall through to SQLite-backed
+        // counterparts (or, for episodes built later, the wrong DB) and
+        // the UI would show zeroes.
         #[cfg(feature = "surreal-backend")]
-        let early_surreal_override: Option<(
-            Arc<dyn zero_stores::KnowledgeGraphStore>,
-            Arc<dyn zero_stores::MemoryFactStore>,
-        )> = persistence_factory::maybe_build_surreal_pair(&paths);
+        let surreal_bundle: Option<persistence_factory::SurrealStoreBundle> =
+            persistence_factory::maybe_build_surreal_full(&paths);
         #[cfg(not(feature = "surreal-backend"))]
-        let early_surreal_override: Option<(
-            Arc<dyn zero_stores::KnowledgeGraphStore>,
-            Arc<dyn zero_stores::MemoryFactStore>,
-        )> = None;
-        let early_memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
-            early_surreal_override
-                .as_ref()
-                .map(|(_, mem)| mem.clone())
-                .or(Some(persistence_factory::build_memory_store(
+        let surreal_bundle: Option<()> = None;
+        let early_memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = {
+            #[cfg(feature = "surreal-backend")]
+            {
+                surreal_bundle
+                    .as_ref()
+                    .map(|b| b.memory.clone())
+                    .or(Some(persistence_factory::build_memory_store(
+                        memory_repo.clone(),
+                        embedding_client.clone(),
+                    )))
+            }
+            #[cfg(not(feature = "surreal-backend"))]
+            {
+                Some(persistence_factory::build_memory_store(
                     memory_repo.clone(),
                     embedding_client.clone(),
-                )));
+                ))
+            }
+        };
 
         // Create memory recall with optional graph enrichment and episodic recall
         let mut memory_recall_inner = match &graph_service {
@@ -422,9 +457,27 @@ impl AppState {
             wiki_vec.clone(),
         ));
         memory_recall_inner.set_wiki_repo(wiki_repo.clone());
-        let wiki_store_for_state: Arc<dyn zero_stores_traits::WikiStore> = Arc::new(
-            gateway_database::GatewayWikiStore::new(wiki_repo.clone()),
-        );
+        // When Surreal is opted in, route the trait-routed wiki store to
+        // SurrealWikiStore so the UI reads from Surreal. The legacy
+        // `wiki_repo` (concrete SQLite) stays wired for callers that
+        // haven't migrated to the trait yet.
+        let wiki_store_for_state: Arc<dyn zero_stores_traits::WikiStore> = {
+            #[cfg(feature = "surreal-backend")]
+            {
+                surreal_bundle
+                    .as_ref()
+                    .map(|b| b.wiki.clone())
+                    .unwrap_or_else(|| {
+                        Arc::new(gateway_database::GatewayWikiStore::new(wiki_repo.clone()))
+                            as Arc<dyn zero_stores_traits::WikiStore>
+                    })
+            }
+            #[cfg(not(feature = "surreal-backend"))]
+            {
+                Arc::new(gateway_database::GatewayWikiStore::new(wiki_repo.clone()))
+                    as Arc<dyn zero_stores_traits::WikiStore>
+            }
+        };
 
         // Wire procedure repository for procedure recall during intent analysis
         let procedure_vec: Arc<dyn VectorIndex> = Arc::new(
@@ -436,9 +489,25 @@ impl AppState {
             procedure_vec,
         ));
         memory_recall_inner.set_procedure_repo(procedure_repo.clone());
-        let procedure_store_for_state: Arc<dyn zero_stores_traits::ProcedureStore> = Arc::new(
-            gateway_database::GatewayProcedureStore::new(procedure_repo.clone()),
-        );
+        let procedure_store_for_state: Arc<dyn zero_stores_traits::ProcedureStore> = {
+            #[cfg(feature = "surreal-backend")]
+            {
+                surreal_bundle
+                    .as_ref()
+                    .map(|b| b.procedure.clone())
+                    .unwrap_or_else(|| {
+                        Arc::new(gateway_database::GatewayProcedureStore::new(
+                            procedure_repo.clone(),
+                        )) as Arc<dyn zero_stores_traits::ProcedureStore>
+                    })
+            }
+            #[cfg(not(feature = "surreal-backend"))]
+            {
+                Arc::new(gateway_database::GatewayProcedureStore::new(
+                    procedure_repo.clone(),
+                )) as Arc<dyn zero_stores_traits::ProcedureStore>
+            }
+        };
         if let Some(ref mem) = early_memory_store {
             memory_recall_inner.set_memory_store(mem.clone());
         }
@@ -470,19 +539,29 @@ impl AppState {
         // `gateway-execution::sleep::embedding_reindex` already uses.
         // Reuse the memory_store built earlier (before MemoryRecall +
         // SessionDistiller wiring). Build the kg_store now using the same
-        // surreal_override pair if present, else SQLite-backed.
-        let surreal_override = early_surreal_override;
-        let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> = surreal_override
-            .as_ref()
-            .map(|(kg, _)| kg.clone())
-            .or_else(|| {
+        // surreal bundle if present, else SQLite-backed.
+        let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> = {
+            #[cfg(feature = "surreal-backend")]
+            {
+                surreal_bundle.as_ref().map(|b| b.kg.clone()).or_else(|| {
+                    runner_graph_storage.as_ref().map(|gs| {
+                        let embedder = embedding_client
+                            .clone()
+                            .expect("embedding_client wired above for distillation/recall");
+                        persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
+                    })
+                })
+            }
+            #[cfg(not(feature = "surreal-backend"))]
+            {
                 runner_graph_storage.as_ref().map(|gs| {
                     let embedder = embedding_client
                         .clone()
                         .expect("embedding_client wired above for distillation/recall");
                     persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
                 })
-            });
+            }
+        };
         let memory_store = early_memory_store;
 
         let episode_repo_ref = episode_repo.clone();
@@ -737,9 +816,11 @@ impl AppState {
             goal_repo: Some(goal_repo),
             distillation_repo: Some(distillation_repo),
             distiller: Some(distiller_ref),
-            episode_store: Some(Arc::new(gateway_database::GatewayEpisodeStore::new(
+            episode_store: Some(build_episode_store_for_state(
+                #[cfg(feature = "surreal-backend")]
+                surreal_bundle.as_ref(),
                 episode_repo_ref.clone(),
-            )) as Arc<dyn zero_stores_traits::EpisodeStore>),
+            )),
             wiki_store: Some(wiki_store_for_state),
             procedure_store: Some(procedure_store_for_state),
             episode_repo: Some(episode_repo_ref),

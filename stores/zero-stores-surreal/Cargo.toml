@@ -9,6 +9,7 @@ description = "SurrealDB 3.0 implementation of the zero-stores traits"
 [dependencies]
 zero-stores = { path = "../zero-stores" }
 zero-stores-traits = { path = "../zero-stores-traits" }
+zero-stores-domain = { path = "../zero-stores-domain" }
 knowledge-graph = { path = "../../services/knowledge-graph" }
 
 surrealdb = { workspace = true }

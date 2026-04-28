@@ -74,13 +74,14 @@ DEFINE INDEX IF NOT EXISTS fact_agent_type ON memory_fact FIELDS agent_id, fact_
 DEFINE INDEX IF NOT EXISTS fact_archived   ON memory_fact FIELDS archived;
 
 -- --- wiki_doc (FTS-backed long-form notes) -------------------------------
-DEFINE TABLE IF NOT EXISTS wiki_doc SCHEMAFULL;
+-- SCHEMALESS so the typed `WikiArticle` shape (tags, source_fact_ids,
+-- version, embedding) round-trips without per-column DEFINE FIELDs —
+-- mirrors the memory_fact rationale.
+DEFINE TABLE IF NOT EXISTS wiki_doc SCHEMALESS;
 DEFINE FIELD IF NOT EXISTS agent_id   ON wiki_doc TYPE string;
 DEFINE FIELD IF NOT EXISTS title      ON wiki_doc TYPE string;
 DEFINE FIELD IF NOT EXISTS content    ON wiki_doc TYPE string;
 DEFINE FIELD IF NOT EXISTS ward_id    ON wiki_doc TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS created_at ON wiki_doc TYPE datetime DEFAULT time::now();
-DEFINE FIELD IF NOT EXISTS updated_at ON wiki_doc TYPE datetime DEFAULT time::now();
 
 -- --- analyzers + FTS indexes --------------------------------------------
 DEFINE ANALYZER IF NOT EXISTS ascii TOKENIZERS class FILTERS lowercase, ascii;
@@ -92,6 +93,52 @@ DEFINE INDEX IF NOT EXISTS wiki_doc_content_fts
     ON wiki_doc FIELDS content FULLTEXT ANALYZER ascii BM25;
 DEFINE INDEX IF NOT EXISTS memory_fact_fts
     ON memory_fact FIELDS content FULLTEXT ANALYZER ascii BM25;
+
+-- --- episode (session_episodes parity) ----------------------------------
+-- SCHEMALESS so the full SessionEpisode JSON shape (id, session_id, agent_id,
+-- ward_id, task_summary, outcome, strategy_used, key_learnings, token_cost,
+-- embedding, created_at) round-trips without a per-column DEFINE FIELD —
+-- mirrors the memory_fact rationale.
+DEFINE TABLE IF NOT EXISTS episode SCHEMALESS;
+DEFINE FIELD IF NOT EXISTS session_id ON episode TYPE string;
+DEFINE FIELD IF NOT EXISTS agent_id   ON episode TYPE string;
+DEFINE FIELD IF NOT EXISTS ward_id    ON episode TYPE string;
+DEFINE FIELD IF NOT EXISTS outcome    ON episode TYPE string;
+DEFINE FIELD IF NOT EXISTS created_at ON episode TYPE string;
+DEFINE INDEX IF NOT EXISTS episode_session_id ON episode FIELDS session_id UNIQUE;
+DEFINE INDEX IF NOT EXISTS episode_ward       ON episode FIELDS ward_id;
+DEFINE INDEX IF NOT EXISTS episode_agent_ward ON episode FIELDS agent_id, ward_id;
+
+-- --- procedure (procedures parity) --------------------------------------
+DEFINE TABLE IF NOT EXISTS procedure SCHEMALESS;
+DEFINE FIELD IF NOT EXISTS agent_id ON procedure TYPE string;
+DEFINE FIELD IF NOT EXISTS ward_id  ON procedure TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS name     ON procedure TYPE string;
+DEFINE INDEX IF NOT EXISTS procedure_agent ON procedure FIELDS agent_id;
+DEFINE INDEX IF NOT EXISTS procedure_ward  ON procedure FIELDS ward_id;
+
+-- --- goal (kg_goals parity) ----------------------------------------------
+DEFINE TABLE IF NOT EXISTS goal SCHEMALESS;
+DEFINE FIELD IF NOT EXISTS agent_id ON goal TYPE string;
+DEFINE FIELD IF NOT EXISTS state    ON goal TYPE string;
+DEFINE INDEX IF NOT EXISTS goal_agent_state ON goal FIELDS agent_id, state;
+
+-- --- recall_log ---------------------------------------------------------
+-- (session_id, fact_key) pairs are unique to keep log_recall idempotent.
+DEFINE TABLE IF NOT EXISTS recall_log SCHEMALESS;
+DEFINE FIELD IF NOT EXISTS session_id  ON recall_log TYPE string;
+DEFINE FIELD IF NOT EXISTS fact_key    ON recall_log TYPE string;
+DEFINE FIELD IF NOT EXISTS recalled_at ON recall_log TYPE string;
+DEFINE INDEX IF NOT EXISTS recall_log_session_key
+    ON recall_log FIELDS session_id, fact_key UNIQUE;
+DEFINE INDEX IF NOT EXISTS recall_log_session ON recall_log FIELDS session_id;
+
+-- --- distillation_run ---------------------------------------------------
+DEFINE TABLE IF NOT EXISTS distillation_run SCHEMALESS;
+DEFINE FIELD IF NOT EXISTS session_id ON distillation_run TYPE string;
+DEFINE FIELD IF NOT EXISTS status     ON distillation_run TYPE string;
+DEFINE INDEX IF NOT EXISTS distillation_session
+    ON distillation_run FIELDS session_id UNIQUE;
 
 -- --- meta tracking ------------------------------------------------------
 -- zmeta is intentionally SCHEMALESS — it carries arbitrary metadata payloads
