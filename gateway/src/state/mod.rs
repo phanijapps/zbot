@@ -280,15 +280,32 @@ impl AppState {
         );
         let conversation_repo = Arc::new(ConversationRepository::new(db_manager.clone()));
 
-        // Initialize knowledge database (memory facts, graph, vec0 indexes)
-        // Held as Option<Arc<…>> on AppState — Phase E gates the actual
-        // initialization further below behind `surreal_bundle.is_none()`,
-        // so when the user opts into SurrealDB the daemon never opens
-        // `knowledge.db`. Today this branch always runs because the
-        // surreal_bundle is built later; the gate flips in Phase E commit 2.
-        let knowledge_db = Arc::new(
-            KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
-        );
+        // Phase E2: detect SurrealDB opt-in BEFORE touching SQLite knowledge.
+        // When the user has selected Surreal (settings.json:
+        // `execution.featureFlags.surreal_backend = true`) we never open
+        // `knowledge.db` and skip the entire SQLite-knowledge cluster
+        // (KnowledgeDatabase + memory_repo + episode_repo + goal_repo +
+        // kg_episode_repo + graph_storage/service + vec indexes +
+        // wiki_repo + procedure_repo + sleep_time_worker). All those
+        // become `None`; the runtime is wired with trait-routed stores
+        // via `surreal_bundle` instead.
+        let use_surreal_for_knowledge = persistence_factory::is_surreal_backend_opt_in(&paths);
+        if use_surreal_for_knowledge {
+            tracing::info!(
+                "SurrealDB backend opted in — skipping SQLite knowledge.db / memory_repo / graph_storage / sleep_time_worker"
+            );
+        }
+
+        // Initialize knowledge database (memory facts, graph, vec0 indexes).
+        // `None` when Surreal is on — handlers route through trait stores.
+        let knowledge_db: Option<Arc<KnowledgeDatabase>> = if use_surreal_for_knowledge {
+            None
+        } else {
+            Some(Arc::new(
+                KnowledgeDatabase::new(paths.clone())
+                    .expect("Failed to initialize knowledge database"),
+            ))
+        };
 
         // Create log service for execution tracing
         let log_service = Arc::new(LogService::new(db_manager.clone()));
@@ -309,35 +326,50 @@ impl AppState {
 
         // Initialize memory evolution services — repositories that need vector
         // similarity get a SqliteVecIndex over their vec0 partner table.
-        let memory_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "memory_facts_index", "fact_id")
-                .expect("vec index init"),
-        );
-        let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
-        let goal_repo = Arc::new(zero_stores_sqlite::GoalRepository::new(
-            knowledge_db.clone(),
-        ));
-        let distillation_repo = Arc::new(DistillationRepository::new(db_manager.clone()));
-        let episode_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "session_episodes_index", "episode_id")
-                .expect("vec index init"),
-        );
-        let episode_repo = Arc::new(EpisodeRepository::new(knowledge_db.clone(), episode_vec));
-        let kg_episode_repo = Arc::new(KgEpisodeRepository::new(knowledge_db.clone()));
+        // Phase E2: when SurrealDB is on, knowledge_db is None and every
+        // SQLite-tied repo below is None too. Trait-routed stores cover
+        // the same surface via `surreal_bundle` further down.
+        let memory_repo: Option<Arc<MemoryRepository>> = knowledge_db.as_ref().map(|kdb| {
+            let memory_vec: Arc<dyn VectorIndex> = Arc::new(
+                SqliteVecIndex::new(kdb.clone(), "memory_facts_index", "fact_id")
+                    .expect("vec index init"),
+            );
+            Arc::new(MemoryRepository::new(kdb.clone(), memory_vec))
+        });
+        let goal_repo: Option<Arc<zero_stores_sqlite::GoalRepository>> = knowledge_db
+            .as_ref()
+            .map(|kdb| Arc::new(zero_stores_sqlite::GoalRepository::new(kdb.clone())));
+        let distillation_repo: Option<Arc<DistillationRepository>> = knowledge_db
+            .as_ref()
+            .map(|_| Arc::new(DistillationRepository::new(db_manager.clone())));
+        let episode_repo: Option<Arc<EpisodeRepository>> = knowledge_db.as_ref().map(|kdb| {
+            let episode_vec: Arc<dyn VectorIndex> = Arc::new(
+                SqliteVecIndex::new(kdb.clone(), "session_episodes_index", "episode_id")
+                    .expect("vec index init"),
+            );
+            Arc::new(EpisodeRepository::new(kdb.clone(), episode_vec))
+        });
+        let kg_episode_repo: Option<Arc<KgEpisodeRepository>> = knowledge_db
+            .as_ref()
+            .map(|kdb| Arc::new(KgEpisodeRepository::new(kdb.clone())));
 
-        // Initialize knowledge graph service and storage
+        // Initialize knowledge graph service and storage. Skipped entirely
+        // when SurrealDB is on (knowledge_db is None).
         let (graph_service, graph_storage): (Option<Arc<GraphService>>, Option<Arc<GraphStorage>>) =
-            match GraphStorage::new(knowledge_db.clone()) {
-                Ok(storage) => {
-                    let storage = Arc::new(storage);
-                    let service = Arc::new(GraphService::new(storage.clone()));
-                    tracing::info!("Knowledge graph service initialized");
-                    (Some(service), Some(storage))
-                }
-                Err(e) => {
-                    tracing::warn!("Knowledge graph initialization failed: {}", e);
-                    (None, None)
-                }
+            match knowledge_db.as_ref() {
+                Some(kdb) => match GraphStorage::new(kdb.clone()) {
+                    Ok(storage) => {
+                        let storage = Arc::new(storage);
+                        let service = Arc::new(GraphService::new(storage.clone()));
+                        tracing::info!("Knowledge graph service initialized");
+                        (Some(service), Some(storage))
+                    }
+                    Err(e) => {
+                        tracing::warn!("Knowledge graph initialization failed: {}", e);
+                        (None, None)
+                    }
+                },
+                None => (None, None),
             };
 
         // EmbeddingService — owns the live EmbeddingClient and supports
@@ -381,7 +413,9 @@ impl AppState {
         // `KnowledgeDatabase::new` is still usable for FTS-only recall)
         // and let the async reconciler reindex once the user reconfigures.
         if embedding_service.needs_reindex() {
-            sync_reconcile_vec_dim_at_boot(&embedding_service, &knowledge_db);
+            if let Some(ref kdb) = knowledge_db {
+                sync_reconcile_vec_dim_at_boot(&embedding_service, kdb);
+            }
         }
         // Hand downstream (distillation, recall, memory_fact_store, etc.) a
         // LiveEmbeddingClient wrapper so they follow ArcSwap backend changes
@@ -423,111 +457,135 @@ impl AppState {
             persistence_factory::maybe_build_surreal_full(&paths);
         #[cfg(not(feature = "surreal-backend"))]
         let _surreal_bundle: Option<()> = None;
+        // The trait-routed memory store: Surreal when opted in, SQLite-wrapper
+        // when memory_repo is Some, None otherwise (Surreal feature off + flag on
+        // — defensive, not reachable in normal builds).
         let early_memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = {
             #[cfg(feature = "surreal-backend")]
             {
-                surreal_bundle.as_ref().map(|b| b.memory.clone()).or(Some(
-                    persistence_factory::build_memory_store(
-                        memory_repo.clone(),
-                        embedding_client.clone(),
-                    ),
-                ))
+                surreal_bundle
+                    .as_ref()
+                    .map(|b| b.memory.clone())
+                    .or_else(|| {
+                        memory_repo.as_ref().map(|mr| {
+                            persistence_factory::build_memory_store(
+                                mr.clone(),
+                                embedding_client.clone(),
+                            )
+                        })
+                    })
             }
             #[cfg(not(feature = "surreal-backend"))]
             {
-                Some(persistence_factory::build_memory_store(
-                    memory_repo.clone(),
-                    embedding_client.clone(),
-                ))
+                memory_repo.as_ref().map(|mr| {
+                    persistence_factory::build_memory_store(mr.clone(), embedding_client.clone())
+                })
             }
         };
 
-        // Create memory recall with optional graph enrichment and episodic recall
-        let mut memory_recall_inner = match &graph_service {
-            Some(gs) => MemoryRecall::with_graph(
+        // Create memory recall with optional graph enrichment and episodic recall.
+        // None entirely when knowledge_db is None — handlers route through
+        // memory_store directly in that path.
+        let mut memory_recall_inner: Option<MemoryRecall> = match (&memory_repo, &graph_service) {
+            (Some(mr), Some(gs)) => Some(MemoryRecall::with_graph(
                 embedding_client.clone(),
-                memory_repo.clone(),
+                mr.clone(),
                 gs.clone(),
                 recall_config.clone(),
-            ),
-            None => MemoryRecall::new(
+            )),
+            (Some(mr), None) => Some(MemoryRecall::new(
                 embedding_client.clone(),
-                memory_repo.clone(),
+                mr.clone(),
                 recall_config.clone(),
-            ),
+            )),
+            (None, _) => None,
         };
-        memory_recall_inner.set_episode_repo(episode_repo.clone());
+        if let (Some(recall), Some(er)) = (memory_recall_inner.as_mut(), episode_repo.as_ref()) {
+            recall.set_episode_repo(er.clone());
+        }
 
-        // Wire recall log for tracking recalled facts per session (enables predictive recall)
+        // Wire recall log for tracking recalled facts per session (enables predictive recall).
+        // RecallLogRepository is over db_manager (conversation DB), not knowledge_db,
+        // so it's safe to build in either mode.
         let recall_log = Arc::new(RecallLogRepository::new(db_manager.clone()));
-        memory_recall_inner.set_recall_log(recall_log);
+        if let Some(recall) = memory_recall_inner.as_mut() {
+            recall.set_recall_log(recall_log);
+        }
 
-        // Wire ward wiki repository for wiki-first recall
-        let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "wiki_articles_index", "article_id")
-                .expect("vec index init"),
-        );
-        let wiki_repo = Arc::new(WardWikiRepository::new(
-            knowledge_db.clone(),
-            wiki_vec.clone(),
-        ));
-        memory_recall_inner.set_wiki_repo(wiki_repo.clone());
-        // When Surreal is opted in, route the trait-routed wiki store to
-        // SurrealWikiStore so the UI reads from Surreal. The legacy
-        // `wiki_repo` (concrete SQLite) stays wired for callers that
-        // haven't migrated to the trait yet.
-        let wiki_store_for_state: Arc<dyn zero_stores_traits::WikiStore> = {
+        // Wire ward wiki repository for wiki-first recall — SQLite-only.
+        let wiki_repo: Option<Arc<WardWikiRepository>> = knowledge_db.as_ref().map(|kdb| {
+            let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
+                SqliteVecIndex::new(kdb.clone(), "wiki_articles_index", "article_id")
+                    .expect("vec index init"),
+            );
+            Arc::new(WardWikiRepository::new(kdb.clone(), wiki_vec))
+        });
+        if let (Some(recall), Some(wr)) = (memory_recall_inner.as_mut(), wiki_repo.as_ref()) {
+            recall.set_wiki_repo(wr.clone());
+        }
+        // Trait-routed wiki store — Surreal when opted in, else SQLite wrapper
+        // (when wiki_repo exists), else None.
+        let wiki_store_for_state: Option<Arc<dyn zero_stores_traits::WikiStore>> = {
             #[cfg(feature = "surreal-backend")]
             {
                 surreal_bundle
                     .as_ref()
                     .map(|b| b.wiki.clone())
-                    .unwrap_or_else(|| {
-                        Arc::new(zero_stores_sqlite::GatewayWikiStore::new(wiki_repo.clone()))
-                            as Arc<dyn zero_stores_traits::WikiStore>
+                    .or_else(|| {
+                        wiki_repo.as_ref().map(|wr| {
+                            Arc::new(zero_stores_sqlite::GatewayWikiStore::new(wr.clone()))
+                                as Arc<dyn zero_stores_traits::WikiStore>
+                        })
                     })
             }
             #[cfg(not(feature = "surreal-backend"))]
             {
-                Arc::new(zero_stores_sqlite::GatewayWikiStore::new(wiki_repo.clone()))
-                    as Arc<dyn zero_stores_traits::WikiStore>
+                wiki_repo.as_ref().map(|wr| {
+                    Arc::new(zero_stores_sqlite::GatewayWikiStore::new(wr.clone()))
+                        as Arc<dyn zero_stores_traits::WikiStore>
+                })
             }
         };
 
-        // Wire procedure repository for procedure recall during intent analysis
-        let procedure_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
-                .expect("vec index init"),
-        );
-        let procedure_repo = Arc::new(ProcedureRepository::new(
-            knowledge_db.clone(),
-            procedure_vec,
-        ));
-        memory_recall_inner.set_procedure_repo(procedure_repo.clone());
-        let procedure_store_for_state: Arc<dyn zero_stores_traits::ProcedureStore> = {
+        // Wire procedure repository for procedure recall during intent analysis.
+        // SQLite-only — None when knowledge_db is None.
+        let procedure_repo: Option<Arc<ProcedureRepository>> = knowledge_db.as_ref().map(|kdb| {
+            let procedure_vec: Arc<dyn VectorIndex> = Arc::new(
+                SqliteVecIndex::new(kdb.clone(), "procedures_index", "procedure_id")
+                    .expect("vec index init"),
+            );
+            Arc::new(ProcedureRepository::new(kdb.clone(), procedure_vec))
+        });
+        if let (Some(recall), Some(pr)) = (memory_recall_inner.as_mut(), procedure_repo.as_ref()) {
+            recall.set_procedure_repo(pr.clone());
+        }
+        let procedure_store_for_state: Option<Arc<dyn zero_stores_traits::ProcedureStore>> = {
             #[cfg(feature = "surreal-backend")]
             {
                 surreal_bundle
                     .as_ref()
                     .map(|b| b.procedure.clone())
-                    .unwrap_or_else(|| {
-                        Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(
-                            procedure_repo.clone(),
-                        )) as Arc<dyn zero_stores_traits::ProcedureStore>
+                    .or_else(|| {
+                        procedure_repo.as_ref().map(|pr| {
+                            Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(pr.clone()))
+                                as Arc<dyn zero_stores_traits::ProcedureStore>
+                        })
                     })
             }
             #[cfg(not(feature = "surreal-backend"))]
             {
-                Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(
-                    procedure_repo.clone(),
-                )) as Arc<dyn zero_stores_traits::ProcedureStore>
+                procedure_repo.as_ref().map(|pr| {
+                    Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(pr.clone()))
+                        as Arc<dyn zero_stores_traits::ProcedureStore>
+                })
             }
         };
-        if let Some(ref mem) = early_memory_store {
-            memory_recall_inner.set_memory_store(mem.clone());
+        if let (Some(recall), Some(mem)) = (memory_recall_inner.as_mut(), early_memory_store.as_ref())
+        {
+            recall.set_memory_store(mem.clone());
         }
 
-        let memory_recall = Arc::new(memory_recall_inner);
+        let memory_recall: Option<Arc<MemoryRecall>> = memory_recall_inner.map(Arc::new);
 
         // Clone embedding client before it's moved into distiller — the runner
         // also needs it so the memory fact store can generate embeddings.
@@ -584,28 +642,40 @@ impl AppState {
         // Create settings service (before distiller & runtime, so we can read execution settings)
         let settings = Arc::new(SettingsService::new(paths.clone()));
 
-        let wiki_repo = Arc::new(WardWikiRepository::new(knowledge_db.clone(), wiki_vec));
+        // SessionDistiller is SQLite-knowledge-tied (it depends on
+        // memory_repo / graph_storage / distillation_repo / episode_repo).
+        // When SurrealDB is on, all those are None — skip distiller build
+        // entirely. The runtime accepts Option<Arc<SessionDistiller>>.
+        let distiller: Option<Arc<SessionDistiller>> = match memory_repo.as_ref() {
+            Some(mr) => {
+                let mut distiller_inner = SessionDistiller::new(
+                    provider_service.clone(),
+                    embedding_client.clone(),
+                    conversation_repo.clone(),
+                    mr.clone(),
+                    graph_storage.clone(),
+                    distillation_repo.clone(),
+                    episode_repo.clone(),
+                    paths.clone(),
+                    Some(settings.clone()),
+                );
+                if let Some(wr) = wiki_repo.as_ref() {
+                    distiller_inner.set_wiki_repo(wr.clone());
+                }
+                if let Some(pr) = procedure_repo.as_ref() {
+                    distiller_inner.set_procedure_repo(pr.clone());
+                }
+                if let Some(mem) = memory_store.as_ref() {
+                    distiller_inner.set_memory_store(mem.clone());
+                }
+                Some(Arc::new(distiller_inner))
+            }
+            None => None,
+        };
 
-        let mut distiller_inner = SessionDistiller::new(
-            provider_service.clone(),
-            embedding_client.clone(),
-            conversation_repo.clone(),
-            memory_repo.clone(),
-            graph_storage,
-            Some(distillation_repo.clone()),
-            Some(episode_repo),
-            paths.clone(), // For loading distillation_prompt.md
-            Some(settings.clone()),
-        );
-        distiller_inner.set_wiki_repo(wiki_repo);
-        distiller_inner.set_procedure_repo(procedure_repo.clone());
-        if let Some(ref mem) = memory_store {
-            distiller_inner.set_memory_store(mem.clone());
-        }
-        let distiller = Arc::new(distiller_inner);
-
-        // Keep a handle for on-demand distillation (backfill, trigger)
-        let distiller_ref = distiller.clone();
+        // Keep a handle for on-demand distillation (backfill, trigger).
+        // None when SurrealDB mode skipped distiller construction.
+        let distiller_ref: Option<Arc<SessionDistiller>> = distiller.clone();
         let max_parallel_agents = settings
             .get_execution_settings()
             .map(|s| s.max_parallel_agents)
@@ -614,51 +684,59 @@ impl AppState {
 
         // Create streaming ingestion queue + backpressure BEFORE the runtime so the
         // runner can be wired with an IngestionAdapter.
-        // Requires graph_storage — if the graph failed to initialize, we skip.
-        let (ingestion_queue, ingestion_backpressure) = match runner_graph_storage.as_ref().cloned()
-        {
-            Some(gs) => {
-                let extractor = Arc::new(gateway_execution::ingest::extractor::LlmExtractor::new(
-                    provider_service.clone(),
-                    "root".to_string(),
-                ));
-                let queue = Arc::new(gateway_execution::ingest::IngestionQueue::start(
-                    2,
-                    kg_episode_repo.clone(),
-                    gs,
-                    extractor,
-                ));
-                let bp = Arc::new(gateway_execution::ingest::Backpressure::new(
-                    gateway_execution::ingest::BackpressureConfig::default(),
-                    kg_episode_repo.clone(),
-                ));
-                (
-                    Some(queue) as Option<Arc<gateway_execution::ingest::IngestionQueue>>,
-                    Some(bp) as Option<Arc<gateway_execution::ingest::Backpressure>>,
-                )
-            }
-            None => (None, None),
-        };
+        // Requires graph_storage AND kg_episode_repo — if either is unavailable
+        // (SurrealDB mode, or graph init failed), we skip.
+        let (ingestion_queue, ingestion_backpressure) =
+            match (runner_graph_storage.as_ref().cloned(), kg_episode_repo.as_ref()) {
+                (Some(gs), Some(kg_ep)) => {
+                    let extractor =
+                        Arc::new(gateway_execution::ingest::extractor::LlmExtractor::new(
+                            provider_service.clone(),
+                            "root".to_string(),
+                        ));
+                    let queue = Arc::new(gateway_execution::ingest::IngestionQueue::start(
+                        2,
+                        kg_ep.clone(),
+                        gs,
+                        extractor,
+                    ));
+                    let bp = Arc::new(gateway_execution::ingest::Backpressure::new(
+                        gateway_execution::ingest::BackpressureConfig::default(),
+                        kg_ep.clone(),
+                    ));
+                    (
+                        Some(queue) as Option<Arc<gateway_execution::ingest::IngestionQueue>>,
+                        Some(bp) as Option<Arc<gateway_execution::ingest::Backpressure>>,
+                    )
+                }
+                _ => (None, None),
+            };
 
         // Build agent-tool adapters so runner can register `ingest` + `goal` tools.
         // The adapter needs graph_storage so the structured-ingest path can
         // call `store_knowledge` directly without going through LLM extraction.
-        let ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>> =
-            match (ingestion_queue.as_ref(), runner_graph_storage.as_ref()) {
-                (Some(q), Some(gs)) => Some(Arc::new(
-                    gateway_execution::invoke::ingest_adapter::IngestionAdapter::new(
-                        q.clone(),
-                        kg_episode_repo.clone(),
-                        gs.clone(),
-                    ),
-                )
-                    as Arc<dyn agent_tools::IngestionAccess>),
-                _ => None,
-            };
-        let goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>> = Some(Arc::new(
-            gateway_execution::invoke::goal_adapter::GoalAdapter::new(goal_repo.clone()),
-        )
-            as Arc<dyn agent_tools::GoalAccess>);
+        let ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>> = match (
+            ingestion_queue.as_ref(),
+            runner_graph_storage.as_ref(),
+            kg_episode_repo.as_ref(),
+        ) {
+            (Some(q), Some(gs), Some(kg_ep)) => Some(Arc::new(
+                gateway_execution::invoke::ingest_adapter::IngestionAdapter::new(
+                    q.clone(),
+                    kg_ep.clone(),
+                    gs.clone(),
+                ),
+            )
+                as Arc<dyn agent_tools::IngestionAccess>),
+            _ => None,
+        };
+        // Goal adapter requires goal_repo which is None in SurrealDB mode.
+        let goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>> =
+            goal_repo.as_ref().map(|gr| {
+                Arc::new(gateway_execution::invoke::goal_adapter::GoalAdapter::new(
+                    gr.clone(),
+                )) as Arc<dyn agent_tools::GoalAccess>
+            });
 
         // Create runtime with execution runner and connector registry
         let runtime = Arc::new(RuntimeService::with_runner_and_connectors(
@@ -673,31 +751,34 @@ impl AppState {
             state_service.clone(),
             Some(connector_registry.clone()),
             workspace_cache.clone(),
-            Some(memory_repo.clone()),
-            Some(distiller),
-            Some(memory_recall),
+            memory_repo.clone(),
+            distiller,
+            memory_recall,
             Some(bridge_registry.clone()),
             Some(bridge_outbox.clone()),
             runner_embedding_client,
             max_parallel_agents,
             runner_graph_storage.clone(),
-            Some(kg_episode_repo.clone()),
+            kg_episode_repo.clone(),
             ingestion_adapter,
             goal_adapter,
         ));
 
         // Phase 4: CompactionRepository + SleepTimeWorker (background maintenance).
-        let compaction_repo = Arc::new(zero_stores_sqlite::CompactionRepository::new(
-            knowledge_db.clone(),
-        ));
+        // CompactionRepository is SQLite-tied (kg_compactions table on
+        // knowledge.db). None in SurrealDB mode.
+        let compaction_repo: Option<Arc<zero_stores_sqlite::CompactionRepository>> = knowledge_db
+            .as_ref()
+            .map(|kdb| Arc::new(zero_stores_sqlite::CompactionRepository::new(kdb.clone())));
 
         // One-shot backfill: populate legacy kg_entities / kg_relationships
         // rows with the richer metadata introduced in commits b816702,
         // 1bc21f6, 5bf3013. Marker row in kg_compactions gates this so
         // subsequent daemon starts are a no-op. Non-fatal on failure —
         // a backfill bug must never prevent the daemon from booting.
-        {
-            let backfiller = gateway_execution::sleep::KgBackfiller::new(knowledge_db.clone());
+        // Skip entirely when knowledge_db is None (SurrealDB mode).
+        if let Some(ref kdb) = knowledge_db {
+            let backfiller = gateway_execution::sleep::KgBackfiller::new(kdb.clone());
             match backfiller.run_once_blocking() {
                 Ok(stats) if stats.already_done => {
                     tracing::debug!("kg_backfill: marker present, skipping");
@@ -717,72 +798,78 @@ impl AppState {
             }
         }
 
-        let sleep_time_worker = runner_graph_storage.as_ref().cloned().map(|gs| {
-            let verifier: Option<Arc<dyn gateway_execution::sleep::compactor::PairwiseVerifier>> =
-                Some(Arc::new(
-                    gateway_execution::sleep::LlmPairwiseVerifier::new(provider_service.clone()),
+        // Sleep-time worker requires the entire SQLite knowledge cluster.
+        // Build only when ALL of (graph_storage, compaction_repo,
+        // memory_repo, knowledge_db, procedure_repo, kg_store) are present.
+        let sleep_time_worker = match (
+            runner_graph_storage.as_ref().cloned(),
+            compaction_repo.as_ref(),
+            knowledge_db.as_ref(),
+            memory_repo.as_ref(),
+            procedure_repo.as_ref(),
+            kg_store.as_ref(),
+        ) {
+            (Some(gs), Some(comp), Some(kdb), Some(mr), Some(pr), Some(kgs)) => {
+                let verifier: Option<
+                    Arc<dyn gateway_execution::sleep::compactor::PairwiseVerifier>,
+                > = Some(Arc::new(gateway_execution::sleep::LlmPairwiseVerifier::new(
+                    provider_service.clone(),
+                )));
+                let compactor = Arc::new(gateway_execution::sleep::Compactor::new(
+                    gs.clone(),
+                    comp.clone(),
+                    verifier,
                 ));
-            let compactor = Arc::new(gateway_execution::sleep::Compactor::new(
-                gs.clone(),
-                compaction_repo.clone(),
-                verifier,
-            ));
-            let decay = Arc::new(gateway_execution::sleep::DecayEngine::new(
-                gs.clone(),
-                gateway_execution::sleep::DecayConfig::default(),
-            ));
-            let pruner = Arc::new(gateway_execution::sleep::Pruner::new(
-                gs,
-                compaction_repo.clone(),
-            ));
-            // Synthesizer + PatternExtractor — both depend on a default LLM
-            // provider being configured. We construct them unconditionally;
-            // the ops themselves log+skip if provider listing fails at run
-            // time, so a bootless config never aborts the cycle.
-            let synth_llm = Arc::new(gateway_execution::sleep::LlmSynthesizer::new(
-                provider_service.clone(),
-            ));
-            let synthesizer = Arc::new(gateway_execution::sleep::Synthesizer::new(
-                knowledge_db.clone(),
-                memory_repo.clone(),
-                compaction_repo.clone(),
-                synth_llm,
-                embedding_client.clone(),
-            ));
-            let pattern_llm = Arc::new(gateway_execution::sleep::LlmPatternExtractor::new(
-                provider_service.clone(),
-            ));
-            let pattern_extractor = Arc::new(gateway_execution::sleep::PatternExtractor::new(
-                knowledge_db.clone(),
-                db_manager.clone(),
-                procedure_repo.clone(),
-                compaction_repo.clone(),
-                pattern_llm,
-            ));
-            // kg_store is Some whenever runner_graph_storage (and therefore this
-            // closure) is Some — safe to unwrap here.
-            let orphan_kg_store = kg_store
-                .clone()
-                .expect("kg_store is Some when graph_storage is Some");
-            let orphan_archiver = Arc::new(gateway_execution::sleep::OrphanArchiver::new(
-                knowledge_db.clone(),
-                orphan_kg_store,
-                compaction_repo.clone(),
-            ));
-            let ops = gateway_execution::sleep::SleepOps {
-                synthesizer: Some(synthesizer),
-                pattern_extractor: Some(pattern_extractor),
-                orphan_archiver: Some(orphan_archiver),
-            };
-            Arc::new(gateway_execution::sleep::SleepTimeWorker::start_with_ops(
-                compactor,
-                decay,
-                pruner,
-                ops,
-                std::time::Duration::from_secs(60 * 60),
-                "root".to_string(),
-            ))
-        });
+                let decay = Arc::new(gateway_execution::sleep::DecayEngine::new(
+                    gs.clone(),
+                    gateway_execution::sleep::DecayConfig::default(),
+                ));
+                let pruner =
+                    Arc::new(gateway_execution::sleep::Pruner::new(gs, comp.clone()));
+                let synth_llm = Arc::new(gateway_execution::sleep::LlmSynthesizer::new(
+                    provider_service.clone(),
+                ));
+                let synthesizer = Arc::new(gateway_execution::sleep::Synthesizer::new(
+                    kdb.clone(),
+                    mr.clone(),
+                    comp.clone(),
+                    synth_llm,
+                    embedding_client.clone(),
+                ));
+                let pattern_llm = Arc::new(gateway_execution::sleep::LlmPatternExtractor::new(
+                    provider_service.clone(),
+                ));
+                let pattern_extractor =
+                    Arc::new(gateway_execution::sleep::PatternExtractor::new(
+                        kdb.clone(),
+                        db_manager.clone(),
+                        pr.clone(),
+                        comp.clone(),
+                        pattern_llm,
+                    ));
+                let orphan_archiver = Arc::new(gateway_execution::sleep::OrphanArchiver::new(
+                    kdb.clone(),
+                    kgs.clone(),
+                    comp.clone(),
+                ));
+                let ops = gateway_execution::sleep::SleepOps {
+                    synthesizer: Some(synthesizer),
+                    pattern_extractor: Some(pattern_extractor),
+                    orphan_archiver: Some(orphan_archiver),
+                };
+                Some(Arc::new(
+                    gateway_execution::sleep::SleepTimeWorker::start_with_ops(
+                        compactor,
+                        decay,
+                        pruner,
+                        ops,
+                        std::time::Duration::from_secs(60 * 60),
+                        "root".to_string(),
+                    ),
+                ))
+            }
+            _ => None,
+        };
 
         // Create hook registry
         let hook_registry = Arc::new(HookRegistry::new(event_bus.clone()));
@@ -808,7 +895,7 @@ impl AppState {
             hook_registry: Some(hook_registry),
             delegation_registry,
             conversations: conversation_repo,
-            knowledge_db: Some(knowledge_db),
+            knowledge_db,
             settings,
             log_service,
             state_service,
@@ -819,27 +906,29 @@ impl AppState {
             cron_scheduler: None, // Initialized by server.start()
             session_archiver: Some(session_archiver),
             sleep_time_worker,
-            compaction_repo: Some(compaction_repo),
+            compaction_repo,
             plugin_manager,
             model_registry,
             embedding_service,
             workspace_cache,
             paths,
             config_dir,
-            memory_repo: Some(memory_repo),
+            memory_repo,
             memory_store,
-            goal_repo: Some(goal_repo),
-            distillation_repo: Some(distillation_repo),
-            distiller: Some(distiller_ref),
-            episode_store: Some(build_episode_store_for_state(
-                #[cfg(feature = "surreal-backend")]
-                surreal_bundle.as_ref(),
-                episode_repo_ref.clone(),
-            )),
-            wiki_store: Some(wiki_store_for_state),
-            procedure_store: Some(procedure_store_for_state),
-            episode_repo: Some(episode_repo_ref),
-            kg_episode_repo: Some(kg_episode_repo),
+            goal_repo,
+            distillation_repo,
+            distiller: distiller_ref,
+            episode_store: episode_repo_ref.as_ref().map(|er| {
+                build_episode_store_for_state(
+                    #[cfg(feature = "surreal-backend")]
+                    surreal_bundle.as_ref(),
+                    er.clone(),
+                )
+            }),
+            wiki_store: wiki_store_for_state,
+            procedure_store: procedure_store_for_state,
+            episode_repo: episode_repo_ref,
+            kg_episode_repo,
             graph_service,
             kg_store,
             ingestion_queue,

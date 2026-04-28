@@ -86,6 +86,34 @@ pub fn build_memory_store(
     Arc::new(SqliteMemoryStore::new(memory_repo, embedding_client))
 }
 
+/// Read `execution.featureFlags.surreal_backend` from `settings.json`
+/// and return `true` when the user has opted in.
+///
+/// Works regardless of whether the `surreal-backend` Cargo feature is
+/// compiled in — used by `AppState::new` to gate SQLite-knowledge
+/// initialization. When the feature is OFF, callers honor the flag
+/// only as far as "skip SQLite knowledge.db init"; the trait-routed
+/// stores still need the feature to actually run.
+///
+/// Failing closed (treating parse / missing-file errors as `false`)
+/// keeps SQLite as the safe default.
+pub fn is_surreal_backend_opt_in(paths: &gateway_services::paths::VaultPaths) -> bool {
+    let raw = match std::fs::read_to_string(paths.settings()) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let value: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    value
+        .get("execution")
+        .and_then(|e| e.get("featureFlags"))
+        .and_then(|f| f.get("surreal_backend"))
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false)
+}
+
 // ============================================================================
 // SurrealDB backend dispatch (Cargo feature `surreal-backend`).
 //
