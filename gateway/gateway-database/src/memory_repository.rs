@@ -174,19 +174,27 @@ impl MemoryRepository {
         })
     }
 
-    /// Episode-pipeline health snapshot for the memory health endpoint:
-    /// pending + running + failed counts from `kg_episodes`.
+    /// Episode-pipeline health snapshot for the memory health endpoint.
+    ///
+    /// `queue_pending` matches the historical
+    /// `KgEpisodeRepository::count_pending_global` semantics — it counts
+    /// rows with `status IN ('pending', 'running')`. `queue_running`
+    /// then breaks out the running subset so the UI can show how many
+    /// are actively in flight vs. waiting. `failed_recent` counts
+    /// `status = 'failed'`. The handler-side wire shape was preserved
+    /// during the trait migration (see `gateway/src/http/memory.rs::health`).
     pub fn episode_health_metrics(
         &self,
     ) -> Result<zero_stores_traits::MemoryHealthMetrics, String> {
         self.db.with_connection(|conn| {
             let row =
                 |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0) };
-            let pending = row("SELECT COUNT(*) FROM kg_episodes WHERE status = 'pending'");
+            let pending_or_running =
+                row("SELECT COUNT(*) FROM kg_episodes WHERE status IN ('pending', 'running')");
             let running = row("SELECT COUNT(*) FROM kg_episodes WHERE status = 'running'");
             let failed = row("SELECT COUNT(*) FROM kg_episodes WHERE status = 'failed'");
             Ok(zero_stores_traits::MemoryHealthMetrics {
-                queue_pending: pending.max(0) as u64,
+                queue_pending: pending_or_running.max(0) as u64,
                 queue_running: running.max(0) as u64,
                 failed_recent: failed.max(0) as u64,
             })

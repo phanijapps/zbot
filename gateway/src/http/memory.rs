@@ -1,6 +1,31 @@
 //! # Memory Endpoints
 //!
 //! CRUD and search operations for agent memory facts.
+//!
+//! ## Migration status (TD-023)
+//!
+//! Handlers in this file split into two groups:
+//!
+//! 1. **Migrated** to trait stores: `stats`, `health`. Both pull
+//!    aggregate counts through `state.memory_store` (and
+//!    `state.kg_store` for the entity/relationship part of `stats`).
+//!    The SQL that was previously inlined in this file now lives
+//!    behind `MemoryFactStore::aggregate_stats` /
+//!    `MemoryFactStore::health_metrics`.
+//!
+//! 2. **Not migrated** (deliberate, tracked under TD-023's
+//!    HTTP-handler retirement follow-up): every handler that
+//!    returns or accepts a typed `MemoryFact` row —
+//!    `list_memory_facts`, `search_memory_facts`, `get_memory_fact`,
+//!    `delete_memory_fact`, `create_memory_fact`,
+//!    `search_all_memory_facts`, `list_all_memory_facts`. The
+//!    `MemoryFactStore` trait surface returns `serde_json::Value`
+//!    payloads (the design choice keeps the trait portable to
+//!    SurrealDB without dragging `MemoryFact` into the `zero-stores`
+//!    types crate). Migrating these handlers requires hoisting
+//!    `MemoryFact` from `gateway-database` up to `zero-stores`,
+//!    which has a large blast radius (11 import sites) and is
+//!    intentionally a separate workstream.
 
 use crate::state::AppState;
 use axum::{
@@ -604,33 +629,42 @@ pub struct MemoryStats {
     pub db_size_mb: f64,
 }
 
-fn count_row(conn: &rusqlite::Connection, sql: &str) -> i64 {
-    conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0)
-}
-
 /// `GET /api/memory/stats` — aggregate counts across memory subsystems.
+///
+/// Counts are pulled through trait-erased stores:
+/// - entity / relationship counts come from `kg_store` (per-agent
+///   "root" view, mirroring the historical handler's `get_entities`
+///   / `get_relationships` calls).
+/// - fact / episode / procedure / wiki / goal counts come from
+///   `memory_store.aggregate_stats()`.
+///
+/// `db_size_mb` is read directly from the on-disk database file —
+/// that's a filesystem operation, not a store concern.
 pub async fn stats(State(state): State<AppState>) -> Json<MemoryStats> {
     let mut stats = MemoryStats::default();
 
-    if let Some(graph_service) = state.graph_service.as_ref() {
-        let storage = graph_service.storage();
-        if let Ok(entities) = storage.get_entities("root") {
+    if let Some(kg_store) = state.kg_store.as_ref() {
+        // The historical handler used `get_entities`/`get_relationships`
+        // (which return all rows for the agent and `len()` them);
+        // `list_entities`/`list_relationships` with a high cap mirrors
+        // that without paging surprises.
+        if let Ok(entities) = kg_store.list_entities("root", None, 100_000, 0).await {
             stats.entities = entities.len() as i64;
         }
-        if let Ok(rels) = storage.get_relationships("root") {
+        if let Ok(rels) = kg_store.list_relationships("root", None, 100_000, 0).await {
             stats.relationships = rels.len() as i64;
         }
     }
 
-    let _ = state.knowledge_db.with_connection(|conn| {
-        stats.facts = count_row(conn, "SELECT COUNT(*) FROM memory_facts");
-        stats.episodes = count_row(conn, "SELECT COUNT(*) FROM kg_episodes");
-        stats.procedures = count_row(conn, "SELECT COUNT(*) FROM procedures");
-        stats.wiki_articles = count_row(conn, "SELECT COUNT(*) FROM ward_wiki_articles");
-        stats.goals_active =
-            count_row(conn, "SELECT COUNT(*) FROM kg_goals WHERE state = 'active'");
-        Ok(())
-    });
+    if let Some(memory_store) = state.memory_store.as_ref() {
+        if let Ok(agg) = memory_store.aggregate_stats().await {
+            stats.facts = agg.facts;
+            stats.episodes = agg.episodes;
+            stats.procedures = agg.procedures;
+            stats.wiki_articles = agg.wiki_articles;
+            stats.goals_active = agg.goals_active;
+        }
+    }
 
     let knowledge_path = state.paths.knowledge_db();
     if let Ok(meta) = std::fs::metadata(&knowledge_path) {
@@ -654,26 +688,22 @@ pub struct MemoryHealth {
 }
 
 /// `GET /api/memory/health` — queue depth, recent failures, last compaction.
+///
+/// Pulls episode-pipeline metrics through `state.memory_store.health_metrics`
+/// (which counts pending / running / failed rows in `kg_episodes`)
+/// instead of reaching into `state.knowledge_db` directly. Compaction
+/// metrics still come from `state.compaction_repo` — that repository
+/// has not been migrated to a `zero-stores` trait yet (tracked under
+/// TD-023's HTTP-handler retirement follow-up).
 pub async fn health(State(state): State<AppState>) -> Json<MemoryHealth> {
     let mut health = MemoryHealth::default();
 
-    if let Some(repo) = state.kg_episode_repo.as_ref() {
-        if let Ok(n) = repo.count_pending_global() {
-            health.ingestion_queue_pending = n;
+    if let Some(memory_store) = state.memory_store.as_ref() {
+        if let Ok(m) = memory_store.health_metrics().await {
+            health.ingestion_queue_pending = m.queue_pending;
+            health.ingestion_queue_running = m.queue_running;
+            health.failed_episodes_recent = m.failed_recent;
         }
-        let _ = state.knowledge_db.with_connection(|conn| {
-            let failed = count_row(
-                conn,
-                "SELECT COUNT(*) FROM kg_episodes WHERE status = 'failed'",
-            );
-            let running = count_row(
-                conn,
-                "SELECT COUNT(*) FROM kg_episodes WHERE status = 'running'",
-            );
-            health.failed_episodes_recent = failed.max(0) as u64;
-            health.ingestion_queue_running = running.max(0) as u64;
-            Ok(())
-        });
     }
 
     if let Some(compaction_repo) = state.compaction_repo.as_ref() {
