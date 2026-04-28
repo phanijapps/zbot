@@ -16,9 +16,9 @@
 use std::sync::Arc;
 
 use agent_runtime::llm::EmbeddingClient;
-use gateway_database::{KnowledgeDatabase, MemoryRepository};
 use zero_stores::{KnowledgeGraphStore, MemoryFactStore};
 use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::{KnowledgeDatabase, MemoryRepository};
 use zero_stores_sqlite::{SqliteKgStore, SqliteMemoryStore};
 
 /// Build the `Arc<dyn KnowledgeGraphStore>` used by `AppState`.
@@ -68,7 +68,7 @@ pub fn build_kg_store_from_storage(
 /// Build the `Arc<dyn MemoryFactStore>` used by `AppState`.
 ///
 /// Today this always returns a `SqliteMemoryStore` (a re-export of
-/// `gateway_database::GatewayMemoryFactStore`). When SurrealDB support
+/// `zero_stores_sqlite::GatewayMemoryFactStore`). When SurrealDB support
 /// lands, this is the branch point — `match config.knowledge_backend
 /// { Sqlite => SqliteMemoryStore::new(…), Surreal => SurrealMemoryStore::new(…) }`.
 ///
@@ -122,7 +122,9 @@ pub struct SurrealBackendConfig {
 /// Returns `None` for any other state — missing file, flag absent or
 /// false, parse error. Failing closed keeps SQLite as the safe default.
 #[cfg(feature = "surreal-backend")]
-fn read_surreal_opt_in(paths: &gateway_services::paths::VaultPaths) -> Option<SurrealBackendConfig> {
+fn read_surreal_opt_in(
+    paths: &gateway_services::paths::VaultPaths,
+) -> Option<SurrealBackendConfig> {
     let raw = std::fs::read_to_string(paths.settings()).ok()?;
     let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
     let opted_in = value
@@ -229,9 +231,7 @@ pub struct SurrealStoreBundle {
 /// connection handle. Schema is applied idempotently as part of
 /// construction. Errors fail fast.
 #[cfg(feature = "surreal-backend")]
-pub async fn build_surreal_full(
-    cfg: &SurrealBackendConfig,
-) -> Result<SurrealStoreBundle, String> {
+pub async fn build_surreal_full(cfg: &SurrealBackendConfig) -> Result<SurrealStoreBundle, String> {
     let surreal_cfg = zero_stores_surreal::SurrealConfig {
         url: cfg.url.clone(),
         namespace: cfg.namespace.clone(),

@@ -273,7 +273,7 @@ mod tests {
         let tmp_path = dir.keep();
         let paths = Arc::new(gateway_services::VaultPaths::new(tmp_path));
         std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
-        let db = Arc::new(gateway_database::KnowledgeDatabase::new(paths).unwrap());
+        let db = Arc::new(crate::KnowledgeDatabase::new(paths).unwrap());
         Arc::new(GraphStorage::new(db).unwrap())
     }
 

@@ -1,13 +1,13 @@
 //! # Goal Adapter
 //!
-//! Bridges [`gateway_database::GoalRepository`] to [`agent_tools::GoalAccess`]
+//! Bridges [`zero_stores_sqlite::GoalRepository`] to [`agent_tools::GoalAccess`]
 //! so the `goal` tool can create/update/list agent goals.
 
 use async_trait::async_trait;
 use std::sync::Arc;
 
 use agent_tools::{GoalAccess, GoalSummary};
-use gateway_database::{Goal, GoalRepository};
+use zero_stores_sqlite::{Goal, GoalRepository};
 
 /// Adapter that implements [`GoalAccess`] by delegating to a [`GoalRepository`].
 pub struct GoalAdapter {

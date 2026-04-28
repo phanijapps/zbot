@@ -5,12 +5,12 @@
 //! into working memory so the LLM has relevant context at the right moment.
 
 use super::working_memory::WorkingMemory;
-use gateway_database::{MemoryFact, MemoryRepository};
-use zero_stores_sqlite::kg::storage::GraphStorage;
 use regex::Regex;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use tracing::debug;
+use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::{MemoryFact, MemoryRepository};
 
 /// Regex for extracting entity candidates from text (same pattern as working_memory_middleware).
 /// Matches: "quoted strings", PascalCase words, ALLCAPS (3+ chars).

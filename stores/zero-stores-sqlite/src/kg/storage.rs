@@ -6,7 +6,7 @@ use knowledge_graph::error::{GraphError, GraphResult};
 use knowledge_graph::types::{
     Direction, Entity, EntityType, ExtractedKnowledge, NeighborInfo, Relationship, RelationshipType,
 };
-use gateway_database::KnowledgeDatabase;
+use crate::KnowledgeDatabase;
 use rusqlite::{params, Connection};
 use std::sync::Arc;
 
@@ -2833,7 +2833,7 @@ mod tests {
         let paths =
             std::sync::Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
         std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
-        let db = std::sync::Arc::new(gateway_database::KnowledgeDatabase::new(paths).unwrap());
+        let db = std::sync::Arc::new(crate::KnowledgeDatabase::new(paths).unwrap());
 
         let storage = GraphStorage::new(db.clone()).unwrap();
 
@@ -2868,7 +2868,7 @@ mod tests {
         let paths =
             std::sync::Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
         std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
-        let db = std::sync::Arc::new(gateway_database::KnowledgeDatabase::new(paths).unwrap());
+        let db = std::sync::Arc::new(crate::KnowledgeDatabase::new(paths).unwrap());
         let storage = GraphStorage::new(db.clone()).unwrap();
 
         let mut e1 = Entity::new(
@@ -2921,7 +2921,7 @@ mod tests {
         let paths =
             std::sync::Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
         std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
-        let db = std::sync::Arc::new(gateway_database::KnowledgeDatabase::new(paths).unwrap());
+        let db = std::sync::Arc::new(crate::KnowledgeDatabase::new(paths).unwrap());
         let storage = GraphStorage::new(db.clone()).unwrap();
 
         fn normalized(v: Vec<f32>) -> Vec<f32> {

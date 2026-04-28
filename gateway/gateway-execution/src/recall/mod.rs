@@ -25,14 +25,14 @@ pub use scored_item::{intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, S
 use std::sync::Arc;
 
 use agent_runtime::llm::embedding::EmbeddingClient;
+use gateway_services::RecallConfig;
+use zero_stores_sqlite::kg::service::GraphService;
 #[cfg(test)]
-use gateway_database::MemoryFact;
-use gateway_database::{
+use zero_stores_sqlite::MemoryFact;
+use zero_stores_sqlite::{
     EpisodeRepository, MemoryRepository, Procedure, ProcedureRepository, RecallLogRepository,
     ScoredFact, WardWikiRepository,
 };
-use gateway_services::RecallConfig;
-use zero_stores_sqlite::kg::service::GraphService;
 
 /// Retrieves relevant memory facts for injection at session start.
 ///
@@ -185,7 +185,7 @@ impl MemoryRecall {
             // scores yet — captured in the portability doc as a follow-up).
             raw.into_iter()
                 .filter_map(|v| {
-                    serde_json::from_value::<gateway_database::MemoryFact>(v)
+                    serde_json::from_value::<zero_stores_sqlite::MemoryFact>(v)
                         .ok()
                         .map(|fact| ScoredFact { fact, score: 0.0 })
                 })

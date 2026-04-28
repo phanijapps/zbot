@@ -10,9 +10,9 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use gateway_database::CompactionRepository;
 use knowledge_graph::{Entity, EntityType};
 use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::CompactionRepository;
 
 /// Default cosine threshold for considering two entities near-duplicates.
 const DEFAULT_COSINE_THRESHOLD: f32 = 0.92;
@@ -203,11 +203,11 @@ fn pick_loser_winner(entities: &[Entity], a: &str, b: &str) -> (String, String) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gateway_database::KnowledgeDatabase;
     use gateway_services::VaultPaths;
     use knowledge_graph::{Entity, EntityType, ExtractedKnowledge};
-    use zero_stores_sqlite::kg::storage::GraphStorage;
     use std::sync::Arc;
+    use zero_stores_sqlite::kg::storage::GraphStorage;
+    use zero_stores_sqlite::KnowledgeDatabase;
 
     fn setup() -> (
         tempfile::TempDir,

@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use gateway_database::KnowledgeDatabase;
+use zero_stores_sqlite::KnowledgeDatabase;
 use gateway_services::VaultPaths;
 use knowledge_graph::{Entity, EntityType, ExtractedKnowledge};
 use zero_stores_sqlite::kg::storage::GraphStorage;

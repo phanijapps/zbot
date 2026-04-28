@@ -6,10 +6,10 @@ use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
 
-use gateway_database::{KgEpisodeRepository, KnowledgeDatabase};
 use gateway_execution::ingest::{IngestionQueue, NoopExtractor};
 use gateway_services::VaultPaths;
 use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::{KgEpisodeRepository, KnowledgeDatabase};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unrelated_reads_stay_under_200ms_p95_during_ingestion() {

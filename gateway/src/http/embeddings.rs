@@ -85,7 +85,7 @@ async fn vec_health_snapshot(state: &AppState) -> zero_stores::VecIndexHealth {
     }
     zero_stores::VecIndexHealth {
         tables_present: Vec::new(),
-        tables_missing: gateway_database::REQUIRED_VEC_TABLES
+        tables_missing: zero_stores_sqlite::REQUIRED_VEC_TABLES
             .iter()
             .map(|s| s.to_string())
             .collect(),

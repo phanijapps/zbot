@@ -434,7 +434,7 @@ impl KnowledgeGraphStore for SqliteKgStore {
                 "session_episodes_index_rowids",
             ];
             let (tables_present, tables_missing) = db
-                .with_connection(|conn| Ok(gateway_database::list_vec_table_presence(conn)))
+                .with_connection(|conn| Ok(crate::list_vec_table_presence(conn)))
                 .map_err(|e| StoreError::Backend(format!("vec_index_health: {e}")))?;
             let indexed_rows = db
                 .with_connection(|conn| {

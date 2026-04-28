@@ -12,12 +12,12 @@ use std::sync::Arc;
 
 use agent_runtime::llm::{ChatMessage, LlmClient, LlmConfig};
 use async_trait::async_trait;
-use gateway_database::{
-    CompactionRepository, DatabaseManager, KnowledgeDatabase, Procedure, ProcedureRepository,
-};
 use gateway_services::ProviderService;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use zero_stores_sqlite::{
+    CompactionRepository, DatabaseManager, KnowledgeDatabase, Procedure, ProcedureRepository,
+};
 
 use crate::ingest::json_shape::parse_llm_json;
 
@@ -611,9 +611,9 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gateway_database::vector_index::{SqliteVecIndex, VectorIndex};
     use gateway_services::VaultPaths;
     use std::sync::Mutex;
+    use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
 
     struct MockLlm {
         response: Mutex<PatternResponse>,

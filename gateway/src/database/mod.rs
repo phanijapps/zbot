@@ -3,4 +3,4 @@
 // Re-exports from gateway-database crate.
 // ============================================================================
 
-pub use gateway_database::{ConversationRepository, DatabaseManager, Message};
+pub use zero_stores_sqlite::{ConversationRepository, DatabaseManager, Message};

@@ -24,14 +24,14 @@ use agent_runtime::llm::config::LlmConfig;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::openai::OpenAiClient;
 use agent_runtime::types::ChatMessage;
-use gateway_database::{
+use gateway_services::{ProviderService, SettingsService, VaultPaths};
+use knowledge_graph::{Entity, EntityType, Relationship, RelationshipType};
+use serde::{Deserialize, Serialize};
+use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::{
     ConversationRepository, DistillationRepository, DistillationRun, EpisodeRepository, MemoryFact,
     MemoryRepository, ProcedureRepository, SessionEpisode, WardWikiRepository,
 };
-use gateway_services::{ProviderService, SettingsService, VaultPaths};
-use knowledge_graph::{Entity, EntityType, Relationship, RelationshipType};
-use zero_stores_sqlite::kg::storage::GraphStorage;
-use serde::{Deserialize, Serialize};
 
 /// Distills completed sessions into structured memory facts.
 ///
@@ -399,7 +399,7 @@ impl SessionDistiller {
             .unwrap_or_default();
         let existing_contents: Vec<(String, String)> = existing_facts
             .iter()
-            .map(|f: &gateway_database::MemoryFact| (f.key.clone(), f.content.clone()))
+            .map(|f: &zero_stores_sqlite::MemoryFact| (f.key.clone(), f.content.clone()))
             .collect();
 
         // Reserved key prefixes — only created via UI, never by distillation
@@ -680,7 +680,7 @@ impl SessionDistiller {
                     .as_ref()
                     .map(|p| serde_json::to_string(p).unwrap_or_default());
 
-                let proc = gateway_database::Procedure {
+                let proc = zero_stores_sqlite::Procedure {
                     id: format!("proc-{}", uuid::Uuid::new_v4()),
                     agent_id: agent_id.to_string(),
                     ward_id: ward_id.or_else(|| Some("__global__".to_string())),
@@ -1401,7 +1401,11 @@ impl SessionDistiller {
         if let Some(ref existing) = existing_correction {
             if existing.content != correction_content && !existing.pinned {
                 let supersede_res = match &self.memory_store {
-                    Some(store) => store.supersede_fact(&existing.id, &correction_fact_id).await,
+                    Some(store) => {
+                        store
+                            .supersede_fact(&existing.id, &correction_fact_id)
+                            .await
+                    }
                     None => self
                         .memory_repo
                         .supersede_fact(&existing.id, &correction_fact_id),
@@ -1700,7 +1704,7 @@ fn compute_session_metrics(transcript: &str) -> SessionMetrics {
 }
 
 /// Build a compact transcript from session messages.
-fn build_transcript(messages: &[gateway_database::Message]) -> String {
+fn build_transcript(messages: &[zero_stores_sqlite::Message]) -> String {
     let mut parts = Vec::with_capacity(messages.len());
 
     for msg in messages {
@@ -2203,13 +2207,13 @@ mod tests {
     // ------------------------------------------------------------------------
     mod resolve_endpoint {
         use super::*;
-        use gateway_database::KnowledgeDatabase;
         use gateway_services::VaultPaths;
         use knowledge_graph::{types::ExtractedKnowledge, Entity, EntityType};
-        use zero_stores_sqlite::kg::storage::GraphStorage;
         use std::collections::HashMap;
         use std::sync::Arc;
         use tempfile::tempdir;
+        use zero_stores_sqlite::kg::storage::GraphStorage;
+        use zero_stores_sqlite::KnowledgeDatabase;
 
         fn fresh_graph() -> GraphStorage {
             let dir = tempdir().unwrap();
@@ -2328,7 +2332,7 @@ mod tests {
     #[test]
     fn test_build_transcript_truncates() {
         let long_content = "x".repeat(2000);
-        let messages = vec![gateway_database::Message {
+        let messages = vec![zero_stores_sqlite::Message {
             id: "msg-1".to_string(),
             execution_id: Some("exec-1".to_string()),
             session_id: Some("sess-1".to_string()),

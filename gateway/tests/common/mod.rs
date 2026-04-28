@@ -19,11 +19,11 @@ use axum_test::TestServer;
 use execution_state::StateService;
 use gateway::database::DatabaseManager;
 use gateway::{http::create_http_router, websocket::WebSocketHandler, AppState, GatewayConfig};
-use gateway_database::{
+use tempfile::TempDir;
+use zero_stores_sqlite::{
     vector_index::VectorIndex, EpisodeRepository, ProcedureRepository, SqliteVecIndex,
     WardWikiRepository,
 };
-use tempfile::TempDir;
 
 /// Current time as RFC3339 string — the form persisted alongside seeded rows.
 pub fn now_iso() -> String {

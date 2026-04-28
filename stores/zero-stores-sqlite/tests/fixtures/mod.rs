@@ -1,4 +1,4 @@
-use gateway_database::knowledge_db::KnowledgeDatabase;
+use zero_stores_sqlite::knowledge_db::KnowledgeDatabase;
 use gateway_services::paths::VaultPaths;
 use std::sync::Arc;
 use tempfile::TempDir;

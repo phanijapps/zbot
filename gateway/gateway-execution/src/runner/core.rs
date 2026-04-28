@@ -11,7 +11,6 @@
 use agent_runtime::{AgentExecutor, ChatMessage};
 use api_logs::LogService;
 use execution_state::StateService;
-use gateway_database::{ConversationRepository, DatabaseManager};
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths};
 use serde_json::Value;
@@ -20,6 +19,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock, Semaphore};
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 /// Callback invoked after session creation but before any events are emitted.
 /// Receives the session_id so the caller can set up subscriptions before events fire.
@@ -85,7 +85,7 @@ pub struct ExecutionRunner {
     /// Cached workspace context (avoids reading workspace.json per execution)
     workspace_cache: WorkspaceCache,
     /// Memory repository for structured fact storage
-    memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
     /// Session distiller for automatic fact extraction after sessions
     distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     /// Memory recall for automatic fact retrieval at session start
@@ -114,7 +114,7 @@ pub struct ExecutionRunner {
     /// Knowledge graph storage for the graph_query tool.
     graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
     /// KG episode repository for ward artifact indexing after distillation.
-    kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+    kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     /// Adapter for the `ingest` agent tool. Wired via [`Self::set_ingestion_adapter`].
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     /// Adapter for the `goal` agent tool. Wired via [`Self::set_goal_adapter`].
@@ -152,7 +152,7 @@ pub struct ExecutionRunnerConfig {
     // --- Optional integrations ---
     pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     pub workspace_cache: WorkspaceCache,
-    pub memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    pub memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
     pub distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
@@ -186,13 +186,13 @@ pub(super) struct ContinuationArgs<'a> {
     pub(super) log_service: Arc<LogService<DatabaseManager>>,
     pub(super) state_service: Arc<StateService<DatabaseManager>>,
     pub(super) workspace_cache: WorkspaceCache,
-    pub(super) memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    pub(super) memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
     pub(super) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     pub(super) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub(super) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub(super) model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
     pub(super) graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
-    pub(super) kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+    pub(super) kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 }
@@ -490,13 +490,16 @@ impl ExecutionRunner {
 
     /// Late-wired setter. Mirrored to `self.bootstrap.graph_storage` because
     /// `InvokeBootstrap::finish_setup` reads its own clone at session-setup time.
-    pub fn set_graph_storage(&mut self, storage: Arc<zero_stores_sqlite::kg::storage::GraphStorage>) {
+    pub fn set_graph_storage(
+        &mut self,
+        storage: Arc<zero_stores_sqlite::kg::storage::GraphStorage>,
+    ) {
         self.bootstrap.graph_storage = Some(storage.clone());
         self.graph_storage = Some(storage);
     }
 
     /// Set the KG episode repository used by post-distillation ward indexing.
-    pub fn set_kg_episode_repo(&mut self, repo: Arc<gateway_database::KgEpisodeRepository>) {
+    pub fn set_kg_episode_repo(&mut self, repo: Arc<zero_stores_sqlite::KgEpisodeRepository>) {
         self.kg_episode_repo = Some(repo);
     }
 
@@ -1141,7 +1144,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
     // Build fact store for continuation (so save_fact uses DB, not file fallback)
     let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
         memory_repo.as_ref().map(|repo| {
-            Arc::new(gateway_database::GatewayMemoryFactStore::new(
+            Arc::new(zero_stores_sqlite::GatewayMemoryFactStore::new(
                 repo.clone(),
                 embedding_client.clone(),
             )) as Arc<dyn zero_stores::MemoryFactStore>
@@ -1540,7 +1543,7 @@ pub(super) async fn run_ward_artifact_indexer(
     ward_id: &Option<String>,
     session_id: &str,
     agent_id: &str,
-    kg_episode_repo: Option<&Arc<gateway_database::KgEpisodeRepository>>,
+    kg_episode_repo: Option<&Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     graph_storage: Option<&Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
     paths: &SharedVaultPaths,
 ) {

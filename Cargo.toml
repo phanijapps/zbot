@@ -17,7 +17,6 @@ members = [
     "framework/zero-app",
 
     # Stores - Backend-agnostic persistence interfaces
-    "stores/gateway-database",
     "stores/zero-stores",
     "stores/zero-stores-conformance",
     "stores/zero-stores-domain",

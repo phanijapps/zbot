@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use tempfile::tempdir;
 
-use gateway_database::{DatabaseManager, KnowledgeDatabase};
+use zero_stores_sqlite::{DatabaseManager, KnowledgeDatabase};
 use gateway_services::VaultPaths;
 
 #[test]

@@ -21,7 +21,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use gateway_database::MemoryRepository;
+use zero_stores_sqlite::MemoryRepository;
 
 /// Byte caps per section — total preamble stays under ~5 KB.
 const AGENTS_MD_CAP: usize = 2048;
@@ -119,9 +119,9 @@ pub fn build(
 /// - `calc_wacc(equity, debt, cost_of_equity, cost_of_debt, tax_rate) -> float`
 ///   Weighted average cost of capital.
 /// ```
-fn render_primitives(facts: &[gateway_database::MemoryFact], cap: usize) -> String {
+fn render_primitives(facts: &[zero_stores_sqlite::MemoryFact], cap: usize) -> String {
     use std::collections::BTreeMap;
-    let mut by_file: BTreeMap<&str, Vec<&gateway_database::MemoryFact>> = BTreeMap::new();
+    let mut by_file: BTreeMap<&str, Vec<&zero_stores_sqlite::MemoryFact>> = BTreeMap::new();
     for f in facts {
         // Key: primitive.<path>.<symbol> → take the middle part.
         let body = f.key.strip_prefix("primitive.").unwrap_or(&f.key);
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn test_render_primitives_groups_by_file() {
-        use gateway_database::MemoryFact;
+        use zero_stores_sqlite::MemoryFact;
         fn mk(key: &str, content: &str) -> MemoryFact {
             MemoryFact {
                 id: String::new(),

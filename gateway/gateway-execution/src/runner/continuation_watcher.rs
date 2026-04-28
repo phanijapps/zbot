@@ -24,12 +24,12 @@ use super::session_invoker::ContinuationSpawner;
 use api_logs::LogService;
 use async_trait::async_trait;
 use execution_state::StateService;
-use gateway_database::{ConversationRepository, DatabaseManager};
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use crate::delegation::{DelegationRegistry, DelegationRequest};
 use crate::handle::ExecutionHandle;
@@ -65,7 +65,7 @@ pub(crate) struct RunnerContinuationInvoker {
     pub(crate) log_service: Arc<LogService<DatabaseManager>>,
     pub(crate) state_service: Arc<StateService<DatabaseManager>>,
     pub(crate) workspace_cache: WorkspaceCache,
-    pub(crate) memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    pub(crate) memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
     pub(crate) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     pub(crate) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub(crate) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
@@ -74,7 +74,7 @@ pub(crate) struct RunnerContinuationInvoker {
     pub(crate) model_registry:
         Arc<arc_swap::ArcSwapOption<gateway_services::models::ModelRegistry>>,
     pub(crate) graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
-    pub(crate) kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+    pub(crate) kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     pub(crate) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(crate) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 }

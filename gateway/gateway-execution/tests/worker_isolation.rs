@@ -12,10 +12,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tempfile::tempdir;
 
-use gateway_database::{KgEpisode, KgEpisodeRepository, KnowledgeDatabase};
 use gateway_execution::ingest::{extractor::Extractor, IngestionQueue};
 use gateway_services::VaultPaths;
 use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::{KgEpisode, KgEpisodeRepository, KnowledgeDatabase};
 
 struct PanicExtractor {
     invocations: Arc<AtomicU64>,

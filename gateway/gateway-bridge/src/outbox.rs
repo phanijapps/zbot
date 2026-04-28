@@ -32,12 +32,12 @@ pub struct OutboxItem {
 ///
 /// Uses the same `DatabaseManager` pool as the rest of the gateway.
 pub struct OutboxRepository {
-    db: Arc<gateway_database::DatabaseManager>,
+    db: Arc<zero_stores_sqlite::DatabaseManager>,
 }
 
 impl OutboxRepository {
     /// Create a new outbox repository.
-    pub fn new(db: Arc<gateway_database::DatabaseManager>) -> Self {
+    pub fn new(db: Arc<zero_stores_sqlite::DatabaseManager>) -> Self {
         Self { db }
     }
 
@@ -336,12 +336,12 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> OutboxItem {
 mod tests {
     use super::*;
 
-    fn setup_db() -> Arc<gateway_database::DatabaseManager> {
+    fn setup_db() -> Arc<zero_stores_sqlite::DatabaseManager> {
         use gateway_services::VaultPaths;
 
         let dir = tempfile::TempDir::new().unwrap();
         let paths = Arc::new(VaultPaths::new(dir.path().to_path_buf()));
-        Arc::new(gateway_database::DatabaseManager::new(paths).unwrap())
+        Arc::new(zero_stores_sqlite::DatabaseManager::new(paths).unwrap())
     }
 
     #[test]

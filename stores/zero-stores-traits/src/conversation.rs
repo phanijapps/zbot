@@ -26,7 +26,7 @@
 
 /// Backend-agnostic interface for the conversation message stream.
 ///
-/// Mirrors a subset of `gateway_database::ConversationRepository`'s public
+/// Mirrors a subset of `zero_stores_sqlite::ConversationRepository`'s public
 /// surface. Surface intentionally narrow — see module docs.
 pub trait ConversationStore: Send + Sync {
     /// Get the `ward_id` for a session.

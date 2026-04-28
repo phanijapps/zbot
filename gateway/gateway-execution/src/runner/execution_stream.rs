@@ -12,10 +12,10 @@ use std::sync::Arc;
 use agent_runtime::{AgentExecutor, ChatMessage};
 use api_logs::LogService;
 use execution_state::StateService;
-use gateway_database::{ConversationRepository, DatabaseManager};
 use gateway_events::EventBus;
 use gateway_services::SharedVaultPaths;
 use tokio::sync::{mpsc, RwLock};
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use crate::delegation::{DelegationRegistry, DelegationRequest};
 use crate::handle::ExecutionHandle;
@@ -48,10 +48,10 @@ pub struct ExecutionStream {
     pub delegation_registry: Arc<DelegationRegistry>,
     pub handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
     pub distiller: Option<Arc<crate::distillation::SessionDistiller>>,
-    pub kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+    pub kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     pub graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
     pub paths: SharedVaultPaths,
-    pub memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    pub memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
     pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     pub bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
     pub bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
@@ -97,7 +97,7 @@ struct EventHandlerDeps<'a> {
     execution_id: &'a str,
     agent_id: &'a str,
     handle: &'a ExecutionHandle,
-    kg_episode_repo: Option<&'a Arc<gateway_database::KgEpisodeRepository>>,
+    kg_episode_repo: Option<&'a Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     graph_storage: Option<&'a Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
 }
 
@@ -597,10 +597,10 @@ mod tests {
 
     use api_logs::LogService;
     use execution_state::StateService;
-    use gateway_database::{ConversationRepository, DatabaseManager};
     use gateway_events::EventBus;
     use gateway_services::VaultPaths;
     use tokio::sync::{mpsc, RwLock};
+    use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
     #[test]
     fn execution_stream_constructs_with_minimum_required_deps() {

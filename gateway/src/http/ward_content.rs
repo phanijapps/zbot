@@ -4,7 +4,7 @@
 //! content types (facts, wiki, procedures, episodes), counts per type, and a
 //! derived summary sourced from the ward's `__index__` wiki article (if any).
 //! Each item is stamped with a server-computed `age_bucket` using the helper
-//! in [`gateway_database::age_bucket`] so the UI doesn't need to reimplement
+//! in [`zero_stores_sqlite::age_bucket`] so the UI doesn't need to reimplement
 //! recency classification.
 //!
 //! Limits: facts, wiki and procedures are capped at 100 rows; episodes at 50.
@@ -32,13 +32,13 @@ use axum::{
     Json,
 };
 use chrono::{DateTime, Utc};
-use gateway_database::{
-    age_bucket, vector_index::VectorIndex, EpisodeRepository, MemoryFact, Procedure,
-    ProcedureRepository, SessionEpisode, SqliteVecIndex, WardWikiRepository, WikiArticle,
-};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use zero_stores_sqlite::{
+    age_bucket, vector_index::VectorIndex, EpisodeRepository, MemoryFact, Procedure,
+    ProcedureRepository, SessionEpisode, SqliteVecIndex, WardWikiRepository, WikiArticle,
+};
 
 const FACT_LIMIT: usize = 100;
 const WIKI_LIMIT: usize = 100;
@@ -351,7 +351,7 @@ pub async fn get_ward_content(
     // and skip rows that fail to decode.
     let episodes_json: Vec<Value> = episode_values
         .into_iter()
-        .filter_map(|v| serde_json::from_value::<gateway_database::SessionEpisode>(v).ok())
+        .filter_map(|v| serde_json::from_value::<zero_stores_sqlite::SessionEpisode>(v).ok())
         .map(|e| episode_to_value(e, now))
         .collect();
 

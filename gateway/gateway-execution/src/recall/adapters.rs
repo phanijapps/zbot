@@ -6,7 +6,7 @@
 //! consumed by `rrf_merge`.
 
 use crate::recall::scored_item::{ItemKind, Provenance, ScoredItem};
-use gateway_database::{MemoryFact, Procedure, WikiArticle};
+use zero_stores_sqlite::{MemoryFact, Procedure, WikiArticle};
 
 /// Project a [`MemoryFact`] into a [`ScoredItem`].
 ///
@@ -68,8 +68,8 @@ pub fn procedure_to_item(proc: &Procedure, score: f64) -> ScoredItem {
     }
 }
 
-use zero_stores_sqlite::kg::storage::GraphStorage;
 use std::sync::Arc;
+use zero_stores_sqlite::kg::storage::GraphStorage;
 
 /// ANN-query `kg_name_index` for entities whose name embedding is closest to
 /// `query_embedding`, and project each hit as a [`ScoredItem::GraphNode`].

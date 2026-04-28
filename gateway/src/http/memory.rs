@@ -33,8 +33,8 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use gateway_database::MemoryFact;
 use serde::{Deserialize, Serialize};
+use zero_stores_sqlite::MemoryFact;
 
 // ============================================================================
 // REQUEST/RESPONSE TYPES
@@ -385,14 +385,14 @@ pub async fn delete_memory_fact(
                 .delete_memory_fact(&fact_id)
                 .await
                 .map_err(|e| {
-                tracing::error!("Failed to delete memory fact: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Failed to delete memory fact: {}", e),
-                    }),
-                )
-            })?;
+                    tracing::error!("Failed to delete memory fact: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: format!("Failed to delete memory fact: {}", e),
+                        }),
+                    )
+                })?;
 
             if deleted {
                 Ok(StatusCode::NO_CONTENT)

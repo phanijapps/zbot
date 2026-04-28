@@ -78,10 +78,10 @@ impl DecayEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gateway_database::KnowledgeDatabase;
     use gateway_services::VaultPaths;
     use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType};
     use std::sync::Arc;
+    use zero_stores_sqlite::KnowledgeDatabase;
 
     fn setup() -> (tempfile::TempDir, Arc<GraphStorage>) {
         let tmp = tempfile::tempdir().expect("tempdir");
