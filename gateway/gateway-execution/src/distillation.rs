@@ -33,11 +33,19 @@ use knowledge_graph::{Entity, EntityType, GraphStorage, Relationship, Relationsh
 use serde::{Deserialize, Serialize};
 
 /// Distills completed sessions into structured memory facts.
+///
+/// Persistence routing: when `memory_store` is set (always, after the
+/// `set_memory_store` wiring in AppState::new), fact upsert + supersede
+/// go through the trait so SurrealDB is honored when opted-in. Sync-only
+/// methods (cached embeddings, get_fact_embedding for clustering) still
+/// flow through `memory_repo` because they're SQLite-cache concerns and
+/// the trait surface deliberately does not expose them.
 pub struct SessionDistiller {
     provider_service: Arc<ProviderService>,
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
     conversation_repo: Arc<ConversationRepository>,
     memory_repo: Arc<MemoryRepository>,
+    memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     graph_storage: Option<Arc<GraphStorage>>,
     distillation_repo: Option<Arc<DistillationRepository>>,
     episode_repo: Option<Arc<EpisodeRepository>>,
@@ -213,6 +221,7 @@ impl SessionDistiller {
             embedding_client,
             conversation_repo,
             memory_repo,
+            memory_store: None,
             graph_storage,
             distillation_repo,
             episode_repo,
@@ -221,6 +230,12 @@ impl SessionDistiller {
             wiki_repo: None,
             procedure_repo: None,
         }
+    }
+
+    /// Wire the trait-routed memory store. When set, upsert + supersede go
+    /// through this handle so SurrealDB is honored when opted-in.
+    pub fn set_memory_store(&mut self, store: Arc<dyn zero_stores::MemoryFactStore>) {
+        self.memory_store = Some(store);
     }
 
     /// Set the ward wiki repository for post-distillation wiki compilation.
@@ -499,7 +514,11 @@ impl SessionDistiller {
             // Supersede the old fact if content differs
             if let Some(ref existing) = existing_fact {
                 if existing.content != ef.content && !existing.pinned {
-                    if let Err(e) = self.memory_repo.supersede_fact(&existing.id, &fact_id) {
+                    let supersede_res = match &self.memory_store {
+                        Some(store) => store.supersede_fact(&existing.id, &fact_id).await,
+                        None => self.memory_repo.supersede_fact(&existing.id, &fact_id),
+                    };
+                    if let Err(e) = supersede_res {
                         tracing::warn!(
                             key = %ef.key,
                             old_id = %existing.id,
@@ -517,7 +536,14 @@ impl SessionDistiller {
                 }
             }
 
-            if let Err(e) = self.memory_repo.upsert_memory_fact(&fact) {
+            let upsert_res = match &self.memory_store {
+                Some(store) => match serde_json::to_value(&fact) {
+                    Ok(v) => store.upsert_typed_fact(v, fact.embedding.clone()).await,
+                    Err(e) => Err(format!("encode fact: {e}")),
+                },
+                None => self.memory_repo.upsert_memory_fact(&fact),
+            };
+            if let Err(e) = upsert_res {
                 tracing::warn!(
                     key = %ef.key,
                     error = %e,
@@ -1230,10 +1256,13 @@ impl SessionDistiller {
         // Supersede old strategy if content differs
         if let Some(ref existing) = existing_strategy {
             if existing.content != strategy_description && !existing.pinned {
-                if let Err(e) = self
-                    .memory_repo
-                    .supersede_fact(&existing.id, &strategy_fact_id)
-                {
+                let supersede_res = match &self.memory_store {
+                    Some(store) => store.supersede_fact(&existing.id, &strategy_fact_id).await,
+                    None => self
+                        .memory_repo
+                        .supersede_fact(&existing.id, &strategy_fact_id),
+                };
+                if let Err(e) = supersede_res {
                     tracing::warn!(
                         key = %fact_key,
                         error = %e,
@@ -1250,7 +1279,13 @@ impl SessionDistiller {
             }
         }
 
-        self.memory_repo.upsert_memory_fact(&fact)?;
+        match &self.memory_store {
+            Some(store) => {
+                let v = serde_json::to_value(&fact).map_err(|e| format!("encode fact: {e}"))?;
+                store.upsert_typed_fact(v, fact.embedding.clone()).await?;
+            }
+            None => self.memory_repo.upsert_memory_fact(&fact)?,
+        }
 
         Ok(())
     }
@@ -1364,10 +1399,13 @@ impl SessionDistiller {
         // Supersede old correction if content differs
         if let Some(ref existing) = existing_correction {
             if existing.content != correction_content && !existing.pinned {
-                if let Err(e) = self
-                    .memory_repo
-                    .supersede_fact(&existing.id, &correction_fact_id)
-                {
+                let supersede_res = match &self.memory_store {
+                    Some(store) => store.supersede_fact(&existing.id, &correction_fact_id).await,
+                    None => self
+                        .memory_repo
+                        .supersede_fact(&existing.id, &correction_fact_id),
+                };
+                if let Err(e) = supersede_res {
                     tracing::warn!(
                         key = %fact_key,
                         error = %e,
@@ -1384,7 +1422,13 @@ impl SessionDistiller {
             }
         }
 
-        self.memory_repo.upsert_memory_fact(&fact)?;
+        match &self.memory_store {
+            Some(store) => {
+                let v = serde_json::to_value(&fact).map_err(|e| format!("encode fact: {e}"))?;
+                store.upsert_typed_fact(v, fact.embedding.clone()).await?;
+            }
+            None => self.memory_repo.upsert_memory_fact(&fact)?,
+        }
 
         Ok(())
     }

@@ -52,7 +52,13 @@ DEFINE INDEX IF NOT EXISTS rel_agent_type
     ON relationship FIELDS agent_id, relationship_type;
 
 -- --- memory_fact ---------------------------------------------------------
-DEFINE TABLE IF NOT EXISTS memory_fact SCHEMAFULL;
+-- memory_fact is SCHEMALESS so the typed MemoryFact shape (with all the
+-- SQLite-side columns: scope, key, pinned, epistemic_class, valid_from/until,
+-- expires_at, superseded_by, contradicted_by, ward_id, etc.) round-trips
+-- without an explicit DEFINE FIELD per column. Trade-off: no schema-level
+-- enforcement, gained: full feature parity with SQLite without column-by-column
+-- migration churn.
+DEFINE TABLE IF NOT EXISTS memory_fact SCHEMALESS;
 DEFINE FIELD IF NOT EXISTS agent_id     ON memory_fact TYPE string;
 DEFINE FIELD IF NOT EXISTS content      ON memory_fact TYPE string;
 DEFINE FIELD IF NOT EXISTS fact_type    ON memory_fact TYPE string;

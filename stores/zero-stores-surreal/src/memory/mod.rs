@@ -69,4 +69,41 @@ impl MemoryFactStore for SurrealMemoryStore {
     async fn delete_memory_fact(&self, fact_id: &str) -> Result<bool, String> {
         fact::delete_memory_fact(&self.db, fact_id).await
     }
+
+    async fn upsert_typed_fact(
+        &self,
+        fact: Value,
+        embedding: Option<Vec<f32>>,
+    ) -> Result<(), String> {
+        fact::upsert_typed_fact(&self.db, fact, embedding).await
+    }
+
+    async fn supersede_fact(&self, old_id: &str, new_id: &str) -> Result<(), String> {
+        fact::supersede_fact(&self.db, old_id, new_id).await
+    }
+
+    async fn archive_fact(&self, fact_id: &str) -> Result<bool, String> {
+        fact::archive_fact(&self.db, fact_id).await
+    }
+
+    async fn search_memory_facts_hybrid(
+        &self,
+        agent_id: Option<&str>,
+        query: &str,
+        mode: &str,
+        limit: usize,
+        ward_id: Option<&str>,
+        query_embedding: Option<&[f32]>,
+    ) -> Result<Vec<Value>, String> {
+        fact::search_memory_facts_hybrid(
+            &self.db,
+            agent_id,
+            query,
+            mode,
+            limit,
+            ward_id,
+            query_embedding,
+        )
+        .await
+    }
 }

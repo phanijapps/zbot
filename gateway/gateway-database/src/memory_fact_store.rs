@@ -663,6 +663,80 @@ impl MemoryFactStore for GatewayMemoryFactStore {
     async fn delete_memory_fact(&self, fact_id: &str) -> Result<bool, String> {
         self.memory_repo.delete_memory_fact(fact_id)
     }
+
+    async fn upsert_typed_fact(
+        &self,
+        fact: Value,
+        embedding: Option<Vec<f32>>,
+    ) -> Result<(), String> {
+        let mut typed: MemoryFact =
+            serde_json::from_value(fact).map_err(|e| format!("decode MemoryFact: {e}"))?;
+        if embedding.is_some() {
+            typed.embedding = embedding;
+        }
+        self.memory_repo.upsert_memory_fact(&typed)
+    }
+
+    async fn supersede_fact(&self, old_id: &str, new_id: &str) -> Result<(), String> {
+        self.memory_repo.supersede_fact(old_id, new_id)
+    }
+
+    async fn archive_fact(&self, fact_id: &str) -> Result<bool, String> {
+        self.memory_repo
+            .archive_fact(fact_id)
+            .map(|_| true)
+            .or_else(|e| {
+                if e.contains("not found") {
+                    Ok(false)
+                } else {
+                    Err(e)
+                }
+            })
+    }
+
+    async fn search_memory_facts_hybrid(
+        &self,
+        agent_id: Option<&str>,
+        query: &str,
+        mode: &str,
+        limit: usize,
+        ward_id: Option<&str>,
+        query_embedding: Option<&[f32]>,
+    ) -> Result<Vec<Value>, String> {
+        let scored: Vec<(crate::memory_repository::ScoredFact, &'static str)> = match mode {
+            "fts" => {
+                let rows = self
+                    .memory_repo
+                    .search_memory_facts_fts(query, agent_id, limit, ward_id)?;
+                rows.into_iter().map(|sf| (sf, "fts")).collect()
+            }
+            _ => {
+                // semantic + hybrid both fuse FTS + vector via the existing
+                // RRF hybrid path. Standard 0.5/0.5 weights.
+                let (rows, _sources) = self.memory_repo.search_memory_facts_hybrid(
+                    query,
+                    query_embedding,
+                    agent_id,
+                    limit,
+                    0.5,
+                    0.5,
+                    ward_id,
+                )?;
+                let src = if mode == "semantic" { "vec" } else { "hybrid" };
+                rows.into_iter().map(|sf| (sf, src)).collect()
+            }
+        };
+        scored
+            .into_iter()
+            .map(|(sf, src)| {
+                let mut v = serde_json::to_value(sf.fact).map_err(|e| e.to_string())?;
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("match_source".to_string(), Value::String(src.to_string()));
+                }
+                Ok(v)
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

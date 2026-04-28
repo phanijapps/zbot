@@ -35,9 +35,15 @@ use gateway_services::RecallConfig;
 use knowledge_graph::GraphService;
 
 /// Retrieves relevant memory facts for injection at session start.
+///
+/// Persistence routing: hybrid memory search goes through `memory_store`
+/// (the trait) when set, so SurrealDB is honored when opted-in. Other
+/// repos (episode, wiki, procedure) still hit SQLite directly — those
+/// migrate in a separate phase that introduces their own trait surfaces.
 pub struct MemoryRecall {
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
     memory_repo: Arc<MemoryRepository>,
+    memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     graph_service: Option<Arc<GraphService>>,
     config: Arc<RecallConfig>,
     episode_repo: Option<Arc<EpisodeRepository>>,
@@ -56,6 +62,7 @@ impl MemoryRecall {
         Self {
             embedding_client,
             memory_repo,
+            memory_store: None,
             graph_service: None,
             config,
             episode_repo: None,
@@ -63,6 +70,12 @@ impl MemoryRecall {
             wiki_repo: None,
             procedure_repo: None,
         }
+    }
+
+    /// Wire the trait-routed memory store. When set, hybrid recall goes
+    /// through this handle so SurrealDB is honored when opted-in.
+    pub fn set_memory_store(&mut self, store: Arc<dyn zero_stores::MemoryFactStore>) {
+        self.memory_store = Some(store);
     }
 
     /// Access the recall configuration.
@@ -80,6 +93,7 @@ impl MemoryRecall {
         Self {
             embedding_client,
             memory_repo,
+            memory_store: None,
             graph_service: Some(graph_service),
             config,
             episode_repo: None,
@@ -152,16 +166,42 @@ impl MemoryRecall {
         // 1. Embed the user message for vector search
         let query_embedding = self.embed_query(user_message).await;
 
-        // 2. Run hybrid search (FTS5 + vector) using config weights
-        let (hybrid_results, _sources) = self.memory_repo.search_memory_facts_hybrid(
-            user_message,
-            query_embedding.as_deref(),
-            Some(agent_id),
-            limit * 2, // Fetch more than needed, we'll merge and trim
-            self.config.vector_weight,
-            self.config.bm25_weight,
-            None, // ward_id — no ward filtering in recall service (for now)
-        )?;
+        // 2. Run hybrid search (FTS5 + vector). Trait-routed when
+        //    memory_store is wired so SurrealDB is honored when opted-in.
+        let hybrid_results: Vec<ScoredFact> = if let Some(store) = &self.memory_store {
+            let raw = store
+                .search_memory_facts_hybrid(
+                    Some(agent_id),
+                    user_message,
+                    "hybrid",
+                    limit * 2,
+                    None,
+                    query_embedding.as_deref(),
+                )
+                .await?;
+            // Decode each Value back to a ScoredFact-compatible shape. The
+            // trait emits MemoryFactResponse-shaped JSON; we wrap each in a
+            // ScoredFact with score=0.0 (the trait doesn't preserve per-row
+            // scores yet — captured in the portability doc as a follow-up).
+            raw.into_iter()
+                .filter_map(|v| {
+                    serde_json::from_value::<gateway_database::MemoryFact>(v)
+                        .ok()
+                        .map(|fact| ScoredFact { fact, score: 0.0 })
+                })
+                .collect()
+        } else {
+            let (results, _sources) = self.memory_repo.search_memory_facts_hybrid(
+                user_message,
+                query_embedding.as_deref(),
+                Some(agent_id),
+                limit * 2, // Fetch more than needed, we'll merge and trim
+                self.config.vector_weight,
+                self.config.bm25_weight,
+                None, // ward_id — no ward filtering in recall service (for now)
+            )?;
+            results
+        };
 
         // 3. Also fetch high-confidence facts (always relevant)
         let high_conf_facts = self

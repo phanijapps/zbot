@@ -205,8 +205,8 @@ pub async fn search_memory_facts(
     Path(agent_id): Path<String>,
     Query(query): Query<MemorySearchQuery>,
 ) -> Result<Json<MemoryListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let memory_repo = match &state.memory_repo {
-        Some(repo) => repo,
+    let memory_store = match &state.memory_store {
+        Some(s) => s,
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -219,19 +219,14 @@ pub async fn search_memory_facts(
 
     let mode = query.mode.as_deref().unwrap_or("hybrid");
     let ward_id = query.ward_id.as_deref();
-
-    // Build (fact, source) pairs according to the requested mode.
     let scope_agent: Option<&str> = Some(agent_id.as_str());
-    let scored: Vec<(MemoryFact, &'static str)> = match mode {
-        "fts" => {
-            let rows = memory_repo
-                .search_memory_facts_fts(&query.q, scope_agent, query.limit, ward_id)
-                .map_err(|e| search_err("Failed to search memory facts (fts)", e))?;
-            rows.into_iter().map(|sf| (sf.fact, "fts")).collect()
-        }
+
+    // For semantic + hybrid we need an embedding of the query text. Fall
+    // through to FTS-only on hybrid if the embedding backend is down;
+    // bubble the error as 400 for explicit semantic requests.
+    let qe_opt: Option<Vec<f32>> = match mode {
+        "fts" => None,
         "semantic" => {
-            // Bubble embedding errors as 400 — caller asked for a mode that
-            // requires an embedding backend.
             let emb = state
                 .embedding_service
                 .client()
@@ -245,67 +240,49 @@ pub async fn search_memory_facts(
                         }),
                     )
                 })?;
-            let qe = emb.into_iter().next().unwrap_or_default();
-            let rows = memory_repo
-                .search_similar_facts(&qe, scope_agent, 0.0, query.limit, ward_id)
-                .map_err(|e| search_err("Failed to search memory facts (semantic)", e))?;
-            rows.into_iter().map(|sf| (sf.fact, "vec")).collect()
+            emb.into_iter().next()
         }
-        // Default: hybrid. If embedding fails, degrade to FTS-only (embedding=None).
-        _ => {
-            let qe_opt: Option<Vec<f32>> = match state
-                .embedding_service
-                .client()
-                .embed(&[query.q.as_str()])
-                .await
-            {
-                Ok(v) => v.into_iter().next(),
-                Err(e) => {
-                    tracing::debug!("hybrid search: embedding unavailable ({e}); FTS-only");
-                    None
-                }
-            };
-            let (rows, sources) = memory_repo
-                .search_memory_facts_hybrid(
-                    &query.q,
-                    qe_opt.as_deref(),
-                    scope_agent,
-                    query.limit,
-                    0.7,
-                    0.3,
-                    ward_id,
-                )
-                .map_err(|e| search_err("Failed to search memory facts (hybrid)", e))?;
-            let src_map: std::collections::HashMap<String, &'static str> =
-                sources.into_iter().collect();
-            rows.into_iter()
-                .map(|sf| {
-                    let src = src_map.get(&sf.fact.id).copied().unwrap_or("fts");
-                    (sf.fact, src)
-                })
-                .collect()
-        }
+        _ => match state
+            .embedding_service
+            .client()
+            .embed(&[query.q.as_str()])
+            .await
+        {
+            Ok(v) => v.into_iter().next(),
+            Err(e) => {
+                tracing::debug!("hybrid search: embedding unavailable ({e}); FTS-only");
+                None
+            }
+        },
     };
 
-    // Filter by category if specified; attach match_source.
-    let facts: Vec<MemoryFactResponse> = scored
+    let raw_rows = memory_store
+        .search_memory_facts_hybrid(
+            scope_agent,
+            &query.q,
+            mode,
+            query.limit,
+            ward_id,
+            qe_opt.as_deref(),
+        )
+        .await
+        .map_err(|e| search_err("Failed to search memory facts", e))?;
+
+    // Decode rows + apply optional category filter (the trait method doesn't
+    // filter by category — we do it client-side here so the trait stays simple).
+    let facts: Vec<MemoryFactResponse> = raw_rows
         .into_iter()
-        .filter(|(fact, _)| {
+        .filter_map(|v| serde_json::from_value::<MemoryFactResponse>(v).ok())
+        .filter(|f| {
             query
                 .category
                 .as_ref()
-                .map(|c| fact.category == *c)
+                .map(|c| f.category == *c)
                 .unwrap_or(true)
-        })
-        .map(|(fact, src)| {
-            let mut r = MemoryFactResponse::from(fact);
-            r.match_source = Some(src.to_string());
-            r
         })
         .collect();
 
     let total = facts.len();
-
     Ok(Json(MemoryListResponse { facts, total }))
 }
 
@@ -469,8 +446,8 @@ pub async fn create_memory_fact(
     Path(agent_id): Path<String>,
     Json(request): Json<CreateMemoryFactRequest>,
 ) -> Result<(StatusCode, Json<MemoryFactResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let memory_repo = match &state.memory_repo {
-        Some(repo) => repo,
+    let memory_store = match &state.memory_store {
+        Some(s) => s,
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -508,14 +485,25 @@ pub async fn create_memory_fact(
         source_ref: None,
     };
 
-    memory_repo.upsert_memory_fact(&fact).map_err(|e| {
+    let fact_value = serde_json::to_value(&fact).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: format!("Failed to create fact: {}", e),
+                error: format!("Failed to encode fact: {}", e),
             }),
         )
     })?;
+    memory_store
+        .upsert_typed_fact(fact_value, None)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to create fact: {}", e),
+                }),
+            )
+        })?;
 
     Ok((StatusCode::CREATED, Json(MemoryFactResponse::from(fact))))
 }

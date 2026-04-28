@@ -354,6 +354,30 @@ impl AppState {
             .join(&recall_config.session_offload.archive_path);
         let session_archiver = Arc::new(SessionArchiver::new(db_manager.clone(), archive_path));
 
+        // Build the trait-routed memory_store eagerly (before MemoryRecall +
+        // SessionDistiller construction, so they can be wired with it). The
+        // KG override branch lives later because it depends on
+        // runner_graph_storage which isn't available yet — we re-derive
+        // surreal_override there with the cached pair below.
+        #[cfg(feature = "surreal-backend")]
+        let early_surreal_override: Option<(
+            Arc<dyn zero_stores::KnowledgeGraphStore>,
+            Arc<dyn zero_stores::MemoryFactStore>,
+        )> = persistence_factory::maybe_build_surreal_pair(&paths);
+        #[cfg(not(feature = "surreal-backend"))]
+        let early_surreal_override: Option<(
+            Arc<dyn zero_stores::KnowledgeGraphStore>,
+            Arc<dyn zero_stores::MemoryFactStore>,
+        )> = None;
+        let early_memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
+            early_surreal_override
+                .as_ref()
+                .map(|(_, mem)| mem.clone())
+                .or(Some(persistence_factory::build_memory_store(
+                    memory_repo.clone(),
+                    embedding_client.clone(),
+                )));
+
         // Create memory recall with optional graph enrichment and episodic recall
         let mut memory_recall_inner = match &graph_service {
             Some(gs) => MemoryRecall::with_graph(
@@ -395,6 +419,9 @@ impl AppState {
             procedure_vec,
         ));
         memory_recall_inner.set_procedure_repo(procedure_repo.clone());
+        if let Some(ref mem) = early_memory_store {
+            memory_recall_inner.set_memory_store(mem.clone());
+        }
 
         let memory_recall = Arc::new(memory_recall_inner);
 
@@ -421,23 +448,10 @@ impl AppState {
         // so it follows ArcSwap backend changes — same client the
         // gateway-side wrapper at
         // `gateway-execution::sleep::embedding_reindex` already uses.
-        // Detect whether the user opted in to SurrealDB via settings.json.
-        // The branch is feature-gated: without `surreal-backend`, the dep
-        // isn't even compiled in, and `surreal_override` is always `None`.
-        // Mixed-mode: the legacy graph_service / memory_repo concrete fields
-        // still flow through SQLite for callers that haven't migrated to the
-        // trait surface yet (TD-023 deferred half).
-        #[cfg(feature = "surreal-backend")]
-        let surreal_override: Option<(
-            Arc<dyn zero_stores::KnowledgeGraphStore>,
-            Arc<dyn zero_stores::MemoryFactStore>,
-        )> = persistence_factory::maybe_build_surreal_pair(&paths);
-        #[cfg(not(feature = "surreal-backend"))]
-        let surreal_override: Option<(
-            Arc<dyn zero_stores::KnowledgeGraphStore>,
-            Arc<dyn zero_stores::MemoryFactStore>,
-        )> = None;
-
+        // Reuse the memory_store built earlier (before MemoryRecall +
+        // SessionDistiller wiring). Build the kg_store now using the same
+        // surreal_override pair if present, else SQLite-backed.
+        let surreal_override = early_surreal_override;
         let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> = surreal_override
             .as_ref()
             .map(|(kg, _)| kg.clone())
@@ -449,17 +463,7 @@ impl AppState {
                     persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
                 })
             });
-
-        // Build the trait-object MemoryFactStore from the same `MemoryRepository`
-        // and `LiveEmbeddingClient` that the gateway-side fact-store callsites
-        // use, OR override with the SurrealDB-backed store when opted-in.
-        let memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = surreal_override
-            .as_ref()
-            .map(|(_, mem)| mem.clone())
-            .or(Some(persistence_factory::build_memory_store(
-                memory_repo.clone(),
-                embedding_client.clone(),
-            )));
+        let memory_store = early_memory_store;
 
         let episode_repo_ref = episode_repo.clone();
 
@@ -481,6 +485,9 @@ impl AppState {
         );
         distiller_inner.set_wiki_repo(wiki_repo);
         distiller_inner.set_procedure_repo(procedure_repo.clone());
+        if let Some(ref mem) = memory_store {
+            distiller_inner.set_memory_store(mem.clone());
+        }
         let distiller = Arc::new(distiller_inner);
 
         // Keep a handle for on-demand distillation (backfill, trigger)

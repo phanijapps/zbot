@@ -272,4 +272,49 @@ pub trait MemoryFactStore: Send + Sync {
     async fn delete_memory_fact(&self, _fact_id: &str) -> Result<bool, String> {
         Ok(false)
     }
+
+    /// Upsert a fully-shaped memory fact. The `fact` Value must contain the
+    /// gateway-database `MemoryFact` JSON shape (id, agent_id, scope,
+    /// category, key, content, confidence, mention_count, source_summary,
+    /// ward_id, contradicted_by, created_at, updated_at, expires_at,
+    /// valid_from, valid_until, superseded_by, pinned, etc.). The optional
+    /// `embedding` is the L2-normalized name vector to persist alongside.
+    /// Default returns an error so impls that don't support typed upsert
+    /// fail loudly rather than silently dropping writes.
+    async fn upsert_typed_fact(
+        &self,
+        _fact: Value,
+        _embedding: Option<Vec<f32>>,
+    ) -> Result<(), String> {
+        Err("upsert_typed_fact not implemented for this store".to_string())
+    }
+
+    /// Mark a fact as superseded by a newer fact. Both ids should already
+    /// exist. Default returns no-op error so misuse is loud.
+    async fn supersede_fact(&self, _old_id: &str, _new_id: &str) -> Result<(), String> {
+        Err("supersede_fact not implemented for this store".to_string())
+    }
+
+    /// Mark a fact as archived (soft-delete). Used by sleep-time pruning.
+    async fn archive_fact(&self, _fact_id: &str) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    /// Hybrid FTS + vector search across memory facts. `mode` is one of
+    /// `"fts"`, `"semantic"`, or `"hybrid"`. `query_embedding` is supplied
+    /// only for semantic / hybrid modes (caller pre-embeds the query string).
+    /// `ward_id` filters to a specific ward when set.
+    /// Each row in the returned Vec carries a `match_source` field
+    /// (`"fts"`, `"vec"`, `"hybrid"`) for downstream ranking display.
+    async fn search_memory_facts_hybrid(
+        &self,
+        _agent_id: Option<&str>,
+        _query: &str,
+        _mode: &str,
+        _limit: usize,
+        _ward_id: Option<&str>,
+        _query_embedding: Option<&[f32]>,
+    ) -> Result<Vec<Value>, String> {
+        Ok(Vec::new())
+    }
 }

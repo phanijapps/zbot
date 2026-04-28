@@ -221,6 +221,160 @@ pub async fn delete_memory_fact(
     Ok(!rows.is_empty())
 }
 
+pub async fn upsert_typed_fact(
+    db: &Arc<Surreal<Any>>,
+    mut fact: Value,
+    embedding: Option<Vec<f32>>,
+) -> Result<(), String> {
+    let fact_id = fact
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "MemoryFact missing id".to_string())?
+        .to_string();
+    if let Some(emb) = embedding {
+        if let Some(obj) = fact.as_object_mut() {
+            obj.insert(
+                "embedding".to_string(),
+                Value::Array(emb.into_iter().map(|f| serde_json::json!(f)).collect()),
+            );
+        }
+    }
+    let thing = surrealdb::types::RecordId::new(
+        "memory_fact",
+        surrealdb::types::RecordIdKey::String(fact_id),
+    );
+    db.query("UPSERT $id CONTENT $fact")
+        .bind(("id", thing))
+        .bind(("fact", fact))
+        .await
+        .map_err(|e| format!("upsert_typed_fact: {e}"))?;
+    Ok(())
+}
+
+pub async fn supersede_fact(
+    db: &Arc<Surreal<Any>>,
+    old_id: &str,
+    new_id: &str,
+) -> Result<(), String> {
+    let thing = surrealdb::types::RecordId::new(
+        "memory_fact",
+        surrealdb::types::RecordIdKey::String(old_id.to_string()),
+    );
+    db.query("UPDATE $id SET superseded_by = $new_id, last_used_at = time::now()")
+        .bind(("id", thing))
+        .bind(("new_id", new_id.to_string()))
+        .await
+        .map_err(|e| format!("supersede_fact: {e}"))?;
+    Ok(())
+}
+
+pub async fn archive_fact(db: &Arc<Surreal<Any>>, fact_id: &str) -> Result<bool, String> {
+    let thing = surrealdb::types::RecordId::new(
+        "memory_fact",
+        surrealdb::types::RecordIdKey::String(fact_id.to_string()),
+    );
+    let mut resp = db
+        .query("UPDATE $id SET archived = true RETURN AFTER")
+        .bind(("id", thing))
+        .await
+        .map_err(|e| format!("archive_fact: {e}"))?;
+    let rows: Vec<Value> = resp
+        .take(0)
+        .map_err(|e| format!("archive_fact take: {e}"))?;
+    Ok(!rows.is_empty())
+}
+
+pub async fn search_memory_facts_hybrid(
+    db: &Arc<Surreal<Any>>,
+    agent_id: Option<&str>,
+    query: &str,
+    mode: &str,
+    limit: usize,
+    ward_id: Option<&str>,
+    _query_embedding: Option<&[f32]>,
+) -> Result<Vec<Value>, String> {
+    // Surreal-side hybrid is FTS-only for now: the @@ FULLTEXT operator
+    // gives us keyword retrieval. Vector + RRF fusion is a follow-up
+    // (DEFINE INDEX HNSW + KNN scoring blended with FTS rank — non-trivial
+    // SurrealQL). semantic-only mode falls back to the same FTS path so
+    // search continues to work on Surreal; "match_source" labels reflect
+    // the requested mode so callers see consistent shapes across backends.
+    let mut clauses: Vec<&'static str> = vec!["archived = false"];
+    if !query.is_empty() {
+        clauses.push("content @@ $q");
+    }
+    if agent_id.is_some() {
+        clauses.push("agent_id = $a");
+    }
+    if ward_id.is_some() {
+        clauses.push("ward_id = $w");
+    }
+    let where_sql = clauses.join(" AND ");
+    let q_sql = format!(
+        "SELECT id, agent_id, content, fact_type, confidence, \
+         created_at, last_used_at, ward_id \
+         FROM memory_fact WHERE {where_sql} LIMIT {limit}"
+    );
+    let mut q = db.query(q_sql);
+    if !query.is_empty() {
+        q = q.bind(("q", query.to_string()));
+    }
+    if let Some(a) = agent_id {
+        q = q.bind(("a", a.to_string()));
+    }
+    if let Some(w) = ward_id {
+        q = q.bind(("w", w.to_string()));
+    }
+    let mut resp = q
+        .await
+        .map_err(|e| format!("search_memory_facts_hybrid: {e}"))?;
+    let rows: Vec<FactSearchRow> = resp
+        .take(0)
+        .map_err(|e| format!("search take: {e}"))?;
+    let src = match mode {
+        "fts" => "fts",
+        "semantic" => "vec",
+        _ => "hybrid",
+    };
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let id_str = match &r.id.key {
+                surrealdb::types::RecordIdKey::String(s) => s.clone(),
+                other => format!("{other:?}"),
+            };
+            serde_json::json!({
+                "id": id_str,
+                "agent_id": r.agent_id,
+                "scope": "session",
+                "category": r.fact_type,
+                "key": "",
+                "content": r.content,
+                "confidence": r.confidence.unwrap_or(0.8),
+                "mention_count": 0,
+                "source_summary": null,
+                "ward_id": r.ward_id.unwrap_or_default(),
+                "created_at": r.created_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+                "updated_at": r.last_used_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+                "match_source": src,
+            })
+        })
+        .collect())
+}
+
+#[derive(SurrealValue)]
+#[surreal(crate = "surrealdb::types")]
+struct FactSearchRow {
+    id: surrealdb::types::RecordId,
+    agent_id: String,
+    content: String,
+    fact_type: String,
+    confidence: Option<f64>,
+    created_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+    ward_id: Option<String>,
+}
+
 pub async fn count_all_facts(
     db: &Arc<Surreal<Any>>,
     agent_id: Option<&str>,
