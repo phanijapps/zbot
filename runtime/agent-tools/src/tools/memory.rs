@@ -15,9 +15,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use zero_core::{
-    FileSystemContext, MemoryFactStore, Result, Tool, ToolContext, ToolPermissions, ZeroError,
-};
+use zero_core::{FileSystemContext, Result, Tool, ToolContext, ToolPermissions, ZeroError};
+use zero_stores_traits::MemoryFactStore;
 
 // ============================================================================
 // CONFIGURATION
@@ -1223,7 +1222,7 @@ mod tests {
     #[tokio::test]
     async fn action_recall_returns_degraded_result_on_missing_index() {
         use async_trait::async_trait;
-        use zero_core::MemoryFactStore;
+        use zero_stores_traits::MemoryFactStore;
 
         struct BrokenStore;
 

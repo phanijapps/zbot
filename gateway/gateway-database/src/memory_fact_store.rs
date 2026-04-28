@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use agent_runtime::llm::embedding::{content_hash, EmbeddingClient};
-use zero_core::{MemoryFactStore, SkillIndexRow};
+use zero_stores_traits::{MemoryFactStore, SkillIndexRow};
 
 use crate::memory_repository::{MemoryFact, MemoryRepository};
 

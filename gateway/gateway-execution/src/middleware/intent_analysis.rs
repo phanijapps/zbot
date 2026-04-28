@@ -3,7 +3,7 @@ use gateway_services::{AgentService, SharedVaultPaths, SkillService, SkillSource
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use zero_core::{MemoryFactStore, SkillIndexRow};
+use zero_stores::{MemoryFactStore, SkillIndexRow};
 
 // ---------------------------------------------------------------------------
 // Types

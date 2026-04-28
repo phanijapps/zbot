@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use serde::Deserialize;
-use zero_core::MemoryFactStore;
+use zero_stores_traits::MemoryFactStore;
 
 /// The extractor script, embedded at compile time. On first use the
 /// runtime writes it to a stable temp path so `python3` can invoke it.

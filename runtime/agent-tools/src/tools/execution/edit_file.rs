@@ -9,7 +9,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use zero_core::{FileSystemContext, MemoryFactStore, Result, Tool, ToolContext, ZeroError};
+use zero_core::{FileSystemContext, Result, Tool, ToolContext, ZeroError};
+use zero_stores_traits::MemoryFactStore;
 
 use super::ast_hook;
 use super::ward_cwd::resolve_ward_cwd;

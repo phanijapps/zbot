@@ -8,9 +8,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use zero_core::{
-    FileSystemContext, MemoryFactStore, Result, Tool, ToolContext, ToolPermissions, ZeroError,
-};
+use zero_core::{FileSystemContext, Result, Tool, ToolContext, ToolPermissions, ZeroError};
+use zero_stores_traits::MemoryFactStore;
 
 /// AGENTS.md file name - living readme for agent executions
 const WARD_AGENTS_MD: &str = "AGENTS.md";

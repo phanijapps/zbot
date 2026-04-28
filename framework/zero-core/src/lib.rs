@@ -50,7 +50,6 @@ pub mod context;
 pub mod error;
 pub mod event;
 pub mod filesystem;
-pub mod memory;
 pub mod multimodal;
 pub mod policy;
 pub mod registry;
@@ -74,7 +73,6 @@ pub use context::{
 pub use error::{Result, ZeroError};
 pub use event::{DelegateAction, Event, EventActions, RespondAction};
 pub use filesystem::{FileSystemContext, NoFileSystemContext};
-pub use memory::{MemoryFactStore, SkillIndexRow};
 pub use policy::{CapabilityCategory, ResourceLimits, ToolPermissions, ToolRiskLevel};
 pub use registry::{
     shared_unified_registry, CapabilityRegistry, CapabilityRouter, RoutingResult,

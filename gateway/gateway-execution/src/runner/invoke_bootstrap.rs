@@ -124,7 +124,7 @@ struct IntentAnalysisCtx<'a> {
     execution_id: &'a str,
     is_root: bool,
     user_message: Option<&'a str>,
-    fact_store: Option<&'a Arc<dyn zero_core::MemoryFactStore>>,
+    fact_store: Option<&'a Arc<dyn zero_stores::MemoryFactStore>>,
 }
 
 /// Return type of [`InvokeBootstrap::run_intent_analysis`].
@@ -419,12 +419,12 @@ impl InvokeBootstrap {
             .and_then(|ctx| serde_json::to_value(ctx).ok());
 
         // Build fact store from memory repo + embedding client (if available)
-        let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> =
+        let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
             self.memory_repo.as_ref().map(|repo| {
                 Arc::new(gateway_database::GatewayMemoryFactStore::new(
                     repo.clone(),
                     self.embedding_client.clone(),
-                )) as Arc<dyn zero_core::MemoryFactStore>
+                )) as Arc<dyn zero_stores::MemoryFactStore>
             });
         // Clone for resource indexing (before fact_store is moved into builder)
         let fact_store_for_indexing = fact_store.clone();

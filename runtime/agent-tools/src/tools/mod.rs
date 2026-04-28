@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use zero_core::FileSystemContext;
-use zero_core::MemoryFactStore;
 use zero_core::Tool;
+use zero_stores_traits::MemoryFactStore;
 
 pub use agent::{CreateAgentTool, ListAgentsTool};
 pub use connectors::QueryResourceTool;

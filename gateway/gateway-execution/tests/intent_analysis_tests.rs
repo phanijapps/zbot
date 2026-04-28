@@ -9,7 +9,7 @@ use gateway_execution::middleware::intent_analysis::{
     analyze_intent, format_intent_injection, DEFAULT_INTENT_ANALYSIS_PROMPT,
 };
 use serde_json::Value;
-use zero_core::MemoryFactStore;
+use zero_stores::MemoryFactStore;
 
 // ===========================================================================
 // Mock LLM clients

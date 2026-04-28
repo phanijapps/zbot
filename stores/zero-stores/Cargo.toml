@@ -8,6 +8,7 @@ async-trait = { workspace = true }
 knowledge-graph = { path = "../../services/knowledge-graph" }
 serde = { workspace = true }
 thiserror = { workspace = true }
+zero-stores-traits = { path = "../zero-stores-traits" }
 
 [lints]
 workspace = true

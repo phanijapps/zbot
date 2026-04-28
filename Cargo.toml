@@ -20,6 +20,7 @@ members = [
     "stores/zero-stores",
     "stores/zero-stores-conformance",
     "stores/zero-stores-sqlite",
+    "stores/zero-stores-traits",
 
     # Runtime - Execution engine
     "runtime/agent-runtime",

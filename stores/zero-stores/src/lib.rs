@@ -7,9 +7,11 @@
 pub mod error;
 pub mod extracted;
 pub mod knowledge_graph;
+pub mod memory_facts;
 pub mod types;
 
 pub use error::{StoreError, StoreResult};
 pub use extracted::ExtractedKnowledge;
 pub use knowledge_graph::KnowledgeGraphStore;
+pub use memory_facts::{MemoryFactStore, SkillIndexRow};
 pub use types::*;

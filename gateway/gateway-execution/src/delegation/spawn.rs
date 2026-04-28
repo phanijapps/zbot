@@ -288,12 +288,12 @@ pub async fn spawn_delegated_agent(
     }
 
     // Build fact store for subagent (so save_fact uses DB, not file fallback)
-    let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> =
+    let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
         memory_repo.as_ref().map(|repo| {
             Arc::new(gateway_database::GatewayMemoryFactStore::new(
                 repo.clone(),
                 embedding_client.clone(),
-            )) as Arc<dyn zero_core::MemoryFactStore>
+            )) as Arc<dyn zero_stores::MemoryFactStore>
         });
     if let Some(fs) = fact_store {
         builder = builder.with_fact_store(fs);
@@ -389,12 +389,12 @@ pub async fn spawn_delegated_agent(
     // Build a fact_store handle for the post-execution state_handoff hook.
     // Kept separate from the executor's fact_store (already moved into the
     // builder) — this one only drives session_ctx writes, not the executor.
-    let fact_store_for_ctx: Option<Arc<dyn zero_core::MemoryFactStore>> =
+    let fact_store_for_ctx: Option<Arc<dyn zero_stores::MemoryFactStore>> =
         memory_repo.as_ref().map(|repo| {
             Arc::new(gateway_database::GatewayMemoryFactStore::new(
                 repo.clone(),
                 embedding_client.clone(),
-            )) as Arc<dyn zero_core::MemoryFactStore>
+            )) as Arc<dyn zero_stores::MemoryFactStore>
         });
 
     // Phase 7: pass a MemoryRepository handle through so spawn_execution_task
@@ -505,7 +505,7 @@ struct SpawnContext {
     paths: SharedVaultPaths,
 
     // --- Optional memory wiring (Phase 4b + 7 ward_snapshot preamble) ---
-    fact_store_for_ctx: Option<Arc<dyn zero_core::MemoryFactStore>>,
+    fact_store_for_ctx: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     memory_repo_for_snapshot: Option<Arc<gateway_database::MemoryRepository>>,
 }
 
@@ -799,7 +799,7 @@ struct HandleExecutionSuccess<'a> {
     response: &'a str,
     parent_agent: &'a str,
     parent_execution_id: &'a str,
-    fact_store_for_ctx: Option<&'a Arc<dyn zero_core::MemoryFactStore>>,
+    fact_store_for_ctx: Option<&'a Arc<dyn zero_stores::MemoryFactStore>>,
 }
 
 /// Handle successful execution completion.
