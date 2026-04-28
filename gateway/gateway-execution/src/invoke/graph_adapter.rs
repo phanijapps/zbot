@@ -170,9 +170,9 @@ impl GraphStorageAccess for GraphStorageAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zero_stores_sqlite::KnowledgeDatabase;
     use gateway_services::VaultPaths;
     use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType};
+    use zero_stores_sqlite::KnowledgeDatabase;
 
     fn storage() -> (tempfile::TempDir, Arc<GraphStorage>) {
         let tmp = tempfile::tempdir().expect("tempdir");

@@ -9,8 +9,8 @@
 mod common;
 
 use common::{make_episode_repo, make_procedure_repo, make_wiki_repo, now_iso, setup};
-use zero_stores_sqlite::{MemoryFact, Procedure, SessionEpisode, WikiArticle};
 use serde_json::Value;
+use zero_stores_sqlite::{MemoryFact, Procedure, SessionEpisode, WikiArticle};
 
 const TEST_WARD: &str = "literature-library";
 

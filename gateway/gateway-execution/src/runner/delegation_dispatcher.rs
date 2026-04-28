@@ -31,11 +31,11 @@ use std::sync::Arc;
 use api_logs::LogService;
 use async_trait::async_trait;
 use execution_state::StateService;
-use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 use gateway_events::EventBus;
 use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths};
 use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio::task::JoinHandle;
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use crate::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
 use crate::handle::ExecutionHandle;

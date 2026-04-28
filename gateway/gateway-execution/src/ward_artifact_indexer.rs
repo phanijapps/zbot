@@ -7,13 +7,13 @@
 //! (timeline.json, people.json, etc.) now reaches the knowledge graph.
 
 use crate::indexer::relationship_rules;
-use zero_stores_sqlite::{EpisodeSource, KgEpisode, KgEpisodeRepository};
 use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, Relationship};
-use zero_stores_sqlite::kg::storage::GraphStorage;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::{EpisodeSource, KgEpisode, KgEpisodeRepository};
 
 /// Options for ward indexing.
 #[derive(Debug, Clone, Copy, Default)]

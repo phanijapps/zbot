@@ -8,13 +8,13 @@ use super::registry::DelegationRegistry;
 use agent_runtime::AgentExecutor;
 use api_logs::LogService;
 use execution_state::StateService;
-use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths, SkillService};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock};
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use agent_runtime::ChatMessage;
 

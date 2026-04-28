@@ -24,9 +24,9 @@
 
 use std::sync::Arc;
 
-use zero_stores_sqlite::{CompactionRepository, KnowledgeDatabase};
 use zero_stores::types::EntityId;
 use zero_stores::KnowledgeGraphStore;
+use zero_stores_sqlite::{CompactionRepository, KnowledgeDatabase};
 
 /// Minimum age (in hours) an entity must have before it becomes a candidate
 /// for orphan archival. Matches the `-24 hours` threshold in the original SQL.
@@ -144,12 +144,12 @@ impl OrphanArchiver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zero_stores_sqlite::{CompactionRepository, KnowledgeDatabase};
     use gateway_services::VaultPaths;
-    use zero_stores_sqlite::kg::storage::GraphStorage;
     use rusqlite::params;
     use tempfile::TempDir;
+    use zero_stores_sqlite::kg::storage::GraphStorage;
     use zero_stores_sqlite::SqliteKgStore;
+    use zero_stores_sqlite::{CompactionRepository, KnowledgeDatabase};
 
     struct Harness {
         _tmp: TempDir,

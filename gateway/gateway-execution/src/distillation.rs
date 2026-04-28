@@ -24,14 +24,14 @@ use agent_runtime::llm::config::LlmConfig;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::openai::OpenAiClient;
 use agent_runtime::types::ChatMessage;
+use gateway_services::{ProviderService, SettingsService, VaultPaths};
+use knowledge_graph::{Entity, EntityType, Relationship, RelationshipType};
+use serde::{Deserialize, Serialize};
+use zero_stores_sqlite::kg::storage::GraphStorage;
 use zero_stores_sqlite::{
     ConversationRepository, DistillationRepository, DistillationRun, EpisodeRepository, MemoryFact,
     MemoryRepository, ProcedureRepository, SessionEpisode, WardWikiRepository,
 };
-use gateway_services::{ProviderService, SettingsService, VaultPaths};
-use knowledge_graph::{Entity, EntityType, Relationship, RelationshipType};
-use zero_stores_sqlite::kg::storage::GraphStorage;
-use serde::{Deserialize, Serialize};
 
 /// Distills completed sessions into structured memory facts.
 ///
@@ -1401,7 +1401,11 @@ impl SessionDistiller {
         if let Some(ref existing) = existing_correction {
             if existing.content != correction_content && !existing.pinned {
                 let supersede_res = match &self.memory_store {
-                    Some(store) => store.supersede_fact(&existing.id, &correction_fact_id).await,
+                    Some(store) => {
+                        store
+                            .supersede_fact(&existing.id, &correction_fact_id)
+                            .await
+                    }
                     None => self
                         .memory_repo
                         .supersede_fact(&existing.id, &correction_fact_id),
@@ -2203,13 +2207,13 @@ mod tests {
     // ------------------------------------------------------------------------
     mod resolve_endpoint {
         use super::*;
-        use zero_stores_sqlite::KnowledgeDatabase;
         use gateway_services::VaultPaths;
         use knowledge_graph::{types::ExtractedKnowledge, Entity, EntityType};
-        use zero_stores_sqlite::kg::storage::GraphStorage;
         use std::collections::HashMap;
         use std::sync::Arc;
         use tempfile::tempdir;
+        use zero_stores_sqlite::kg::storage::GraphStorage;
+        use zero_stores_sqlite::KnowledgeDatabase;
 
         fn fresh_graph() -> GraphStorage {
             let dir = tempdir().unwrap();

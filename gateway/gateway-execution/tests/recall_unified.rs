@@ -9,12 +9,12 @@
 use std::sync::Arc;
 use tempfile::tempdir;
 
+use gateway_execution::recall::{ItemKind, MemoryRecall};
+use gateway_services::{RecallConfig, VaultPaths};
 use zero_stores_sqlite::{
     EpisodeRepository, KnowledgeDatabase, MemoryFact, MemoryRepository, SessionEpisode,
     SqliteVecIndex, VectorIndex,
 };
-use gateway_execution::recall::{ItemKind, MemoryRecall};
-use gateway_services::{RecallConfig, VaultPaths};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recall_unified_returns_scored_items_from_facts() {

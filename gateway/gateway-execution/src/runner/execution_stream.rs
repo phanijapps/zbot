@@ -12,10 +12,10 @@ use std::sync::Arc;
 use agent_runtime::{AgentExecutor, ChatMessage};
 use api_logs::LogService;
 use execution_state::StateService;
-use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 use gateway_events::EventBus;
 use gateway_services::SharedVaultPaths;
 use tokio::sync::{mpsc, RwLock};
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use crate::delegation::{DelegationRegistry, DelegationRequest};
 use crate::handle::ExecutionHandle;
@@ -597,10 +597,10 @@ mod tests {
 
     use api_logs::LogService;
     use execution_state::StateService;
-    use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
     use gateway_events::EventBus;
     use gateway_services::VaultPaths;
     use tokio::sync::{mpsc, RwLock};
+    use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
     #[test]
     fn execution_stream_constructs_with_minimum_required_deps() {

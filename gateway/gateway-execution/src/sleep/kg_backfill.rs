@@ -27,9 +27,9 @@
 
 use std::sync::Arc;
 
-use zero_stores_sqlite::KnowledgeDatabase;
 use rusqlite::params;
 use serde_json::{Map, Value};
+use zero_stores_sqlite::KnowledgeDatabase;
 
 /// Marker reason recorded in `kg_compactions.reason` on completion.
 const BACKFILL_REASON: &str = "kg-metadata-backfill-v1";
@@ -352,9 +352,9 @@ fn truncate_chars(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zero_stores_sqlite::KnowledgeDatabase;
     use gateway_services::VaultPaths;
     use tempfile::TempDir;
+    use zero_stores_sqlite::KnowledgeDatabase;
 
     struct Harness {
         _tmp: TempDir,

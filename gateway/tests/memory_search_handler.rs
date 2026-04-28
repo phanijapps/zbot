@@ -11,10 +11,10 @@ mod common;
 use axum_test::TestServer;
 use common::{make_state, now_iso};
 use gateway::{http::create_http_router, websocket::WebSocketHandler, GatewayConfig};
-use zero_stores_sqlite::MemoryFact;
 use serde_json::Value;
 use std::sync::Arc;
 use tempfile::TempDir;
+use zero_stores_sqlite::MemoryFact;
 
 /// Build a minimal `TestServer` + seed one memory fact whose content contains
 /// the keyword `tickers`.

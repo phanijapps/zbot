@@ -19,12 +19,12 @@ use agent_runtime::{AgentExecutor, ChatMessage};
 use api_logs::LogService;
 use arc_swap::ArcSwapOption;
 use execution_state::StateService;
-use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::{
     AgentService, McpService, ModelRegistry, ProviderService, SharedVaultPaths, SkillService,
 };
 use tokio::sync::RwLock;
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use crate::config::ExecutionConfig;
 use crate::handle::ExecutionHandle;
@@ -819,10 +819,10 @@ mod tests {
     use api_logs::LogService;
     use arc_swap::ArcSwapOption;
     use execution_state::StateService;
-    use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
     use gateway_events::EventBus;
     use gateway_services::VaultPaths;
     use tokio::sync::RwLock;
+    use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
     #[test]
     fn invoke_bootstrap_constructs_with_minimum_required_deps() {

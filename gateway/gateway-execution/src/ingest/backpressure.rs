@@ -65,8 +65,8 @@ impl Backpressure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zero_stores_sqlite::KnowledgeDatabase;
     use gateway_services::VaultPaths;
+    use zero_stores_sqlite::KnowledgeDatabase;
 
     fn setup() -> (tempfile::TempDir, Arc<KgEpisodeRepository>) {
         let tmp = tempfile::tempdir().unwrap();

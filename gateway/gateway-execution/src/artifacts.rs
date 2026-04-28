@@ -4,9 +4,9 @@
 //! and persists metadata to the artifacts table.
 
 use execution_state::{Artifact, StateService};
-use zero_stores_sqlite::DatabaseManager;
 use std::path::Path;
 use std::sync::Arc;
+use zero_stores_sqlite::DatabaseManager;
 
 /// Process artifact declarations from a respond action.
 ///

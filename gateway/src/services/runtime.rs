@@ -16,8 +16,8 @@ use crate::hooks::HookContext;
 use crate::services::{AgentService, McpService, ProviderService, SharedVaultPaths, SkillService};
 use api_logs::LogService;
 use execution_state::StateService;
-use zero_stores_sqlite::MemoryRepository;
 use std::sync::Arc;
+use zero_stores_sqlite::MemoryRepository;
 
 /// Execution state for a conversation.
 #[derive(Debug, Clone)]

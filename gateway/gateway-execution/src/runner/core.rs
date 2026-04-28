@@ -11,7 +11,6 @@
 use agent_runtime::{AgentExecutor, ChatMessage};
 use api_logs::LogService;
 use execution_state::StateService;
-use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths};
 use serde_json::Value;
@@ -20,6 +19,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock, Semaphore};
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 /// Callback invoked after session creation but before any events are emitted.
 /// Receives the session_id so the caller can set up subscriptions before events fire.
@@ -490,7 +490,10 @@ impl ExecutionRunner {
 
     /// Late-wired setter. Mirrored to `self.bootstrap.graph_storage` because
     /// `InvokeBootstrap::finish_setup` reads its own clone at session-setup time.
-    pub fn set_graph_storage(&mut self, storage: Arc<zero_stores_sqlite::kg::storage::GraphStorage>) {
+    pub fn set_graph_storage(
+        &mut self,
+        storage: Arc<zero_stores_sqlite::kg::storage::GraphStorage>,
+    ) {
         self.bootstrap.graph_storage = Some(storage.clone());
         self.graph_storage = Some(storage);
     }

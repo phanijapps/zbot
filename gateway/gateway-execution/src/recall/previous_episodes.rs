@@ -14,8 +14,8 @@
 //! other pools.
 
 use crate::recall::scored_item::{ItemKind, Provenance, ScoredItem};
-use zero_stores_sqlite::{EpisodeRepository, SessionEpisode};
 use std::sync::Arc;
+use zero_stores_sqlite::{EpisodeRepository, SessionEpisode};
 
 /// Adapter that projects a ward's recent successful/partial episodes into
 /// [`ScoredItem`]s suitable for [`rrf_merge`](crate::recall::rrf_merge).
@@ -73,8 +73,8 @@ pub fn episode_to_item(ep: &SessionEpisode, rank: usize) -> ScoredItem {
 mod tests {
     use super::*;
     use crate::recall::scored_item::ItemKind;
-    use zero_stores_sqlite::{KnowledgeDatabase, SqliteVecIndex};
     use gateway_services::VaultPaths;
+    use zero_stores_sqlite::{KnowledgeDatabase, SqliteVecIndex};
 
     fn setup() -> (tempfile::TempDir, Arc<EpisodeRepository>) {
         let tmp = tempfile::tempdir().expect("tempdir");

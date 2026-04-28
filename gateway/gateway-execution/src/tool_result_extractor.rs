@@ -8,12 +8,12 @@
 //! and `source_ref = tool_call_id`, enabling drill-down from graph to
 //! the exact tool invocation that produced it.
 
-use zero_stores_sqlite::{EpisodeSource, KgEpisode, KgEpisodeRepository};
 use knowledge_graph::{Entity, EntityType, ExtractedKnowledge};
-use zero_stores_sqlite::kg::storage::GraphStorage;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
+use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::{EpisodeSource, KgEpisode, KgEpisodeRepository};
 
 /// Extract entities from a tool result and persist them with episode provenance.
 ///

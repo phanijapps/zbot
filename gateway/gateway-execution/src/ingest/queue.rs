@@ -7,8 +7,8 @@ use std::time::Duration;
 use tokio::sync::{mpsc, Notify};
 
 use crate::ingest::extractor::Extractor;
-use zero_stores_sqlite::KgEpisodeRepository;
 use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::KgEpisodeRepository;
 
 const WAKE_CHANNEL_CAPACITY: usize = 256;
 const CLAIM_FAILURE_BACKOFF: Duration = Duration::from_millis(500);

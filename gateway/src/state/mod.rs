@@ -23,17 +23,17 @@ use agent_tools::MemoryStore;
 use api_logs::LogService;
 use chrono::Utc;
 use execution_state::StateService;
+use gateway_services::EmbeddingService;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use zero_stores_sqlite::kg::service::GraphService;
+use zero_stores_sqlite::kg::storage::GraphStorage;
 use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
 use zero_stores_sqlite::{
     DistillationRepository, EpisodeRepository, KgEpisodeRepository, KnowledgeDatabase,
     MemoryRepository, ProcedureRepository, RecallLogRepository, WardWikiRepository,
 };
-use gateway_services::EmbeddingService;
-use zero_stores_sqlite::kg::service::GraphService;
-use zero_stores_sqlite::kg::storage::GraphStorage;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
 
 /// Shared application state for the gateway.
 #[derive(Clone)]
@@ -300,7 +300,9 @@ impl AppState {
                 .expect("vec index init"),
         );
         let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
-        let goal_repo = Arc::new(zero_stores_sqlite::GoalRepository::new(knowledge_db.clone()));
+        let goal_repo = Arc::new(zero_stores_sqlite::GoalRepository::new(
+            knowledge_db.clone(),
+        ));
         let distillation_repo = Arc::new(DistillationRepository::new(db_manager.clone()));
         let episode_vec: Arc<dyn VectorIndex> = Arc::new(
             SqliteVecIndex::new(knowledge_db.clone(), "session_episodes_index", "episode_id")
@@ -410,13 +412,12 @@ impl AppState {
         let early_memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = {
             #[cfg(feature = "surreal-backend")]
             {
-                surreal_bundle
-                    .as_ref()
-                    .map(|b| b.memory.clone())
-                    .or(Some(persistence_factory::build_memory_store(
+                surreal_bundle.as_ref().map(|b| b.memory.clone()).or(Some(
+                    persistence_factory::build_memory_store(
                         memory_repo.clone(),
                         embedding_client.clone(),
-                    )))
+                    ),
+                ))
             }
             #[cfg(not(feature = "surreal-backend"))]
             {

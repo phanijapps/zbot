@@ -3,10 +3,10 @@
 //! Callback formatting and handling for delegation completion.
 
 use super::context::DelegationContext;
-use zero_stores_sqlite::ConversationRepository;
 use gateway_events::{EventBus, GatewayEvent};
 use serde_json::Value;
 use std::sync::Arc;
+use zero_stores_sqlite::ConversationRepository;
 
 // ============================================================================
 // CALLBACK FORMATTING

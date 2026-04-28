@@ -13,11 +13,9 @@ use std::sync::Arc;
 
 use agent_tools::{IngestionAccess, StructuredCounts, StructuredEntity, StructuredRelationship};
 use chrono::Utc;
-use zero_stores_sqlite::KgEpisodeRepository;
-use knowledge_graph::{
-    Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType,
-};
+use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType};
 use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::KgEpisodeRepository;
 
 use crate::ingest::{
     chunker::{chunk_text, ChunkOptions},
@@ -166,8 +164,8 @@ fn build_knowledge(
 mod tests {
     use super::*;
     use crate::ingest::extractor::Extractor;
-    use zero_stores_sqlite::{KgEpisode, KnowledgeDatabase};
     use gateway_services::VaultPaths;
+    use zero_stores_sqlite::{KgEpisode, KnowledgeDatabase};
 
     /// Minimal no-op extractor — lets IngestionQueue::start spawn cleanly
     /// without needing a provider/LLM. Tests never exercise the worker loop.

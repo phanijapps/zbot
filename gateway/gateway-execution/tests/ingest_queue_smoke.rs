@@ -5,10 +5,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
 
-use zero_stores_sqlite::{KgEpisodeRepository, KnowledgeDatabase};
 use gateway_execution::ingest::{IngestionQueue, NoopExtractor};
 use gateway_services::VaultPaths;
 use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::{KgEpisodeRepository, KnowledgeDatabase};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn queue_drains_pending_episodes() {

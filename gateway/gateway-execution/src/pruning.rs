@@ -12,8 +12,8 @@
 
 use std::collections::HashMap;
 
-use zero_stores_sqlite::MemoryRepository;
 use gateway_services::recall_config::TemporalDecayConfig;
+use zero_stores_sqlite::MemoryRepository;
 
 /// Summary of a pruning run.
 pub struct PruneResult {
@@ -102,10 +102,10 @@ pub fn prune_decayed_facts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zero_stores_sqlite::vector_index::VectorIndex;
-    use zero_stores_sqlite::{KnowledgeDatabase, MemoryFact, SqliteVecIndex};
     use gateway_services::VaultPaths;
     use std::sync::Arc;
+    use zero_stores_sqlite::vector_index::VectorIndex;
+    use zero_stores_sqlite::{KnowledgeDatabase, MemoryFact, SqliteVecIndex};
 
     struct Harness {
         _tmp: tempfile::TempDir,

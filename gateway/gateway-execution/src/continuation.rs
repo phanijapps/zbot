@@ -6,8 +6,8 @@
 //! this module spawns a new execution turn for the root agent to process the results.
 
 use execution_state::{AgentExecution, StateService};
-use zero_stores_sqlite::DatabaseManager;
 use gateway_events::{EventBus, GatewayEvent};
+use zero_stores_sqlite::DatabaseManager;
 
 /// Spawn a continuation turn for a session.
 ///
