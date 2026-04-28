@@ -107,12 +107,18 @@ Scope tags:
 - **Consumer migration:** explicitly NOT part of this scaffold. All sites continue to hold `Arc<OutboxRepository>` directly; promoting to `Arc<dyn OutboxStore>` is out of scope.
 - **Status:** done — Phase 6 hygiene
 
-#### TD-023 ⏳ [Both] `AppState` factory pattern established; `graph_service` retirement deferred
+#### TD-023 ⏳ [Both] `AppState` factory pattern established; `graph_service` retirement mostly done
 - **Location:** `gateway/src/state/mod.rs` — concrete persistence types alongside trait objects.
 - **Progress (Phase 5):** Factory pattern landed at `gateway/src/state/persistence_factory.rs`. `kg_store` construction goes through `build_kg_store_from_storage()`; the canonical `build_kg_store(knowledge_db, embedding_client)` entrypoint is gated until `graph_service` retires (it's where the SurrealDB config-driven branch will live). When SurrealDB support lands, this is where the branch goes — consumers don't need to change because they hold `Arc<dyn KnowledgeGraphStore>`.
 - **Progress (MemoryFactStore relocation):** Trait moved out of `framework/zero-core` into a new dependency-light `stores/zero-stores-traits` crate (re-exported from `stores/zero-stores` for the design-canonical `zero_stores::MemoryFactStore` import path). `SqliteMemoryStore` now lives at `stores/zero-stores-sqlite/src/memory_facts.rs` (a re-export of `gateway_database::GatewayMemoryFactStore`). New `persistence_factory::build_memory_store(memory_repo, embedding_client)` factory; new `AppState::memory_store: Option<Arc<dyn MemoryFactStore>>` field coexists with the legacy concrete `memory_repo` field (same pattern as `kg_store` / `graph_service`).
-- **Deferred:** Retirement of `graph_service: Option<Arc<GraphService>>` and `memory_repo: Option<Arc<MemoryRepository>>` (the parallel concrete fields on `AppState`). Migrating their dozens of consumers — HTTP handlers in `gateway/src/http/graph.rs`, sleep jobs, distillation, default-policy seeding, etc. — is a multi-PR workstream.
-- **Status:** factory pattern done; `memory_store` field added; `graph_service` + `memory_repo` retirement deferred to a future workstream
+- **Progress (HTTP handler migration):** All `state.graph_service` callsites in `gateway/src/http/graph.rs` (8 handlers — `get_graph_stats`, `list_entities`, `list_relationships`, `get_entity_neighbors`, `get_entity_subgraph`, `search_entities`, `graph_stats`, `all_entities`, `all_relationships`) routed through `state.kg_store`. `KnowledgeGraphStore` grew 10 new trait methods (`graph_stats`, `list_entities`, `list_relationships`, `get_neighbors_full`, `get_subgraph`, `count_all_entities`/`relationships`, `list_all_entities`/`relationships`, `vec_index_health`). `MemoryFactStore` grew 3 (`aggregate_stats`, `health_metrics`, `count_all_facts`). `gateway/src/http/embeddings.rs::get_health` migrated to `kg_store.vec_index_health()`. `gateway/src/http/memory.rs::stats` + `health` migrated to trait stores. `gateway/src/http/memory_search.rs` episode LIKE search relocated to `EpisodeRepository::keyword_search` (typed-record level). Response shapes unchanged across the board.
+- **Deferred (HTTP-handler retirement follow-up):**
+  - `gateway/src/http/memory.rs` typed-MemoryFact CRUD handlers (`list_memory_facts`, `search_memory_facts`, `get_memory_fact`, `delete_memory_fact`, `create_memory_fact`, `search_all_memory_facts`, `list_all_memory_facts`) still call `state.memory_repo` directly. The `MemoryFactStore` trait surface returns `serde_json::Value`; migrating these handlers requires hoisting `MemoryFact` from `gateway-database` up to `zero-stores`, which has 11 import sites (intentionally a separate workstream).
+  - `gateway/src/http/ward_content.rs` — both handlers stay on `state.memory_repo` plus on-demand `WardWikiRepository`/`ProcedureRepository`/`EpisodeRepository` constructors. Same blocker as above plus separate trait-abstraction work for the wiki/procedure/episode subsystems.
+  - `gateway/src/http/graph.rs::reindex_all_wards` still reaches into `state.graph_service` + `state.kg_episode_repo` because `gateway_execution::ward_artifact_indexer::index_ward_with_options` accepts `&Arc<GraphStorage>` + `&KgEpisodeRepository`; plumbing trait objects through `gateway-execution` is its own change.
+  - `gateway/src/http/embeddings.rs::configure` (SSE reindex) still forwards `state.knowledge_db` to `gateway_execution::sleep::embedding_reindex::reindex_all` because the trait's `reindex_embeddings` method intentionally has no progress callback (different impls rebuild differently; trait surface stays portable). Adding a streaming variant is a separate workstream.
+  - Concrete `state.graph_service` / `state.memory_repo` / `state.knowledge_db` fields stay on `AppState` for now — they have remaining consumers in sleep jobs, distillation, default-policy seeding, etc. Retirement of those fields is a separate cleanup PR after the remaining consumer migrations.
+- **Status:** factory pattern done; HTTP-handler migration mostly done (graph + embeddings + stats/health); typed-record CRUD handlers and AppState field retirement remain
 
 ### Dialect-portability debt
 
@@ -137,11 +143,10 @@ Scope tags:
 - **Phase 4 outcome:** Added `stores/zero-stores-sqlite/src/bootstrap.rs` with `bootstrap_schema()` as the canonical hook point for the SQLite backend. Today it delegates to `gateway-database`'s `KnowledgeDatabase::new` (which runs the bootstrap as a constructor side effect) — pattern established without churning 1000+ lines of schema DDL. When SurrealDB lands, its bootstrap mirrors this in `stores/zero-stores-surreal/src/bootstrap.rs`. Full DDL relocation deferred until shapes need to diverge between backends.
 - **Status:** ✅ done (Phase 4) — pattern established, full schema relocation deferred until proven necessary
 
-#### TD-033 🟢 [Both] Hardcoded table-name string literals scattered across crates
-- **Locations:** ~90 in `services/knowledge-graph/src/storage.rs`, ~40 in `services/execution-state/src/repository.rs`, ~12 in `gateway/gateway-bridge/src/outbox.rs`.
-- **Why debt (mild):** Even after trait abstraction, stray `"memory_facts"` literals are coupling reminders. Not a swap blocker — once those callsites route through the store trait, the literals live inside the impl where they belong.
-- **Fix:** No standalone fix. Resolves naturally as TD-012, TD-014, TD-020 land.
-- **Status:** absorbed into other items
+#### TD-033 ✅ [Both] Hardcoded table-name string literals removed from HTTP layer
+- **Locations historically tracked:** ~90 in `services/knowledge-graph/src/storage.rs`, ~40 in `services/execution-state/src/repository.rs`, ~12 in `gateway/gateway-bridge/src/outbox.rs`. Plus inline string literals (e.g. `"memory_facts"`, `"kg_episodes"`, `"session_episodes"`) scattered across `gateway/src/http/memory.rs`, `gateway/src/http/embeddings.rs`, `gateway/src/http/memory_search.rs`.
+- **Resolution:** As of the TD-023 HTTP handler migration, no `gateway/src/http/*.rs` file references table-name string literals. The remaining literals live inside impl crates (`gateway-database`, `services/knowledge-graph`, `services/execution-state`, `gateway-bridge`) where they belong — that's how impl-internal SQL is supposed to be structured. The HTTP layer goes through trait methods that hide the table names.
+- **Status:** ✅ closed naturally — handlers no longer carry impl-level coupling
 
 ### Code smell (low priority)
 

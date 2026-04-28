@@ -11,6 +11,19 @@
 //! The wiki/procedure/episode repositories are built on demand from
 //! `state.knowledge_db` because `AppState` only exposes typed handles for
 //! `memory_repo` and `episode_repo` today.
+//!
+//! ## Migration status (TD-023)
+//!
+//! Both handlers in this file (`get_ward_content`, `list_wards`) still
+//! return typed `MemoryFact` / `WikiArticle` / `Procedure` /
+//! `SessionEpisode` records and serialise them into the per-type JSON
+//! payloads. The underlying repositories (`MemoryRepository`,
+//! `WardWikiRepository`, `ProcedureRepository`, `EpisodeRepository`)
+//! have not been hoisted to `zero-stores` traits. Hoisting any of
+//! them is a non-trivial workstream — `MemoryFact` alone has 11
+//! import sites across the codebase — so this file deliberately
+//! stays on the concrete repos for now. Tracked under TD-023's
+//! HTTP-handler retirement follow-up.
 
 use crate::state::AppState;
 use axum::{
