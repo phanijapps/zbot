@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
+use surrealdb::Surreal;
 use zero_stores_traits::MemoryFactStore;
 
 mod fact;
@@ -32,7 +32,10 @@ impl MemoryFactStore for SurrealMemoryStore {
         confidence: f64,
         session_id: Option<&str>,
     ) -> Result<Value, String> {
-        fact::save_fact(&self.db, agent_id, category, key, content, confidence, session_id).await
+        fact::save_fact(
+            &self.db, agent_id, category, key, content, confidence, session_id,
+        )
+        .await
     }
 
     async fn recall_facts(

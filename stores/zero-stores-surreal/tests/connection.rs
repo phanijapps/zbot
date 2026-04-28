@@ -1,4 +1,4 @@
-use zero_stores_surreal::{SurrealConfig, connect};
+use zero_stores_surreal::{connect, SurrealConfig};
 
 #[tokio::test]
 async fn connect_in_memory_succeeds() {
@@ -38,5 +38,8 @@ async fn vault_placeholder_expanded() {
     let db = connect(&cfg, Some(tmp.path())).await.expect("connect");
     drop(db);
     let expected = tmp.path().join("data").join("knowledge.surreal");
-    assert!(expected.exists(), "rocksdb dir should be created at {expected:?}");
+    assert!(
+        expected.exists(),
+        "rocksdb dir should be created at {expected:?}"
+    );
 }

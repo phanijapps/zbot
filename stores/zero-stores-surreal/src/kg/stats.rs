@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use knowledge_graph::types::{Entity, EntityType, GraphStats, Relationship, RelationshipType};
-use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{RecordId, SurrealValue};
+use surrealdb::Surreal;
 use zero_stores::error::StoreResult;
 use zero_stores::types::{KgStats, VecIndexHealth};
 
@@ -21,10 +21,7 @@ struct CountRow {
 }
 
 async fn run_count(db: &Arc<Surreal<Any>>, query: &str) -> StoreResult<i64> {
-    let mut resp = db
-        .query(query)
-        .await
-        .map_err(map_surreal_error)?;
+    let mut resp = db.query(query).await.map_err(map_surreal_error)?;
     let rows: Vec<CountRow> = resp.take(0).map_err(map_surreal_error)?;
     Ok(rows.first().map(|r| r.n).unwrap_or(0))
 }
@@ -255,7 +252,7 @@ pub async fn vec_index_health(db: &Arc<Surreal<Any>>) -> StoreResult<VecIndexHea
 mod tests {
     use super::*;
     use crate::kg::entity;
-    use crate::{SurrealConfig, connect, schema::apply_schema};
+    use crate::{connect, schema::apply_schema, SurrealConfig};
     use knowledge_graph::types::{Entity, EntityType};
 
     async fn fresh_db() -> Arc<Surreal<Any>> {
@@ -312,5 +309,134 @@ mod tests {
         let db = fresh_db().await;
         assert_eq!(count_all_entities(&db).await.unwrap(), 0);
         assert_eq!(count_all_relationships(&db).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn list_entities_with_type_filter() {
+        let db = fresh_db().await;
+        entity::upsert(
+            &db,
+            "a1",
+            Entity::new("a1".into(), EntityType::Person, "Alice".into()),
+        )
+        .await
+        .unwrap();
+        entity::upsert(
+            &db,
+            "a1",
+            Entity::new("a1".into(), EntityType::Concept, "Idea".into()),
+        )
+        .await
+        .unwrap();
+        let filtered = list_entities(&db, "a1", Some("person"), 10, 0)
+            .await
+            .unwrap();
+        assert!(filtered.iter().all(|e| e.entity_type.as_str() == "person"));
+    }
+
+    #[tokio::test]
+    async fn list_all_entities_unfiltered() {
+        let db = fresh_db().await;
+        entity::upsert(
+            &db,
+            "agent-x",
+            Entity::new("agent-x".into(), EntityType::Concept, "X1".into()),
+        )
+        .await
+        .unwrap();
+        entity::upsert(
+            &db,
+            "agent-y",
+            Entity::new("agent-y".into(), EntityType::Concept, "Y1".into()),
+        )
+        .await
+        .unwrap();
+        let all = list_all_entities(&db, None, None, 100).await.unwrap();
+        assert!(all.len() >= 2);
+    }
+
+    #[tokio::test]
+    async fn list_all_entities_with_type_filter() {
+        let db = fresh_db().await;
+        entity::upsert(
+            &db,
+            "agent-x",
+            Entity::new("agent-x".into(), EntityType::Person, "Alice".into()),
+        )
+        .await
+        .unwrap();
+        entity::upsert(
+            &db,
+            "agent-y",
+            Entity::new("agent-y".into(), EntityType::Concept, "Y1".into()),
+        )
+        .await
+        .unwrap();
+        let people = list_all_entities(&db, None, Some("person"), 100)
+            .await
+            .unwrap();
+        assert!(people.iter().all(|e| e.entity_type.as_str() == "person"));
+    }
+
+    #[tokio::test]
+    async fn list_all_relationships_returns_empty_for_empty_db() {
+        let db = fresh_db().await;
+        let all = list_all_relationships(&db, 100).await.unwrap();
+        assert!(all.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_relationships_paginates() {
+        let db = fresh_db().await;
+        let alice = entity::upsert(
+            &db,
+            "a1",
+            Entity::new("a1".into(), EntityType::Person, "Alice".into()),
+        )
+        .await
+        .unwrap();
+        let bob = entity::upsert(
+            &db,
+            "a1",
+            Entity::new("a1".into(), EntityType::Person, "Bob".into()),
+        )
+        .await
+        .unwrap();
+        use knowledge_graph::types::{Relationship, RelationshipType};
+        crate::kg::relationship::upsert_relationship(
+            &db,
+            "a1",
+            Relationship::new(
+                "a1".into(),
+                alice.0.clone(),
+                bob.0.clone(),
+                RelationshipType::WorksFor,
+            ),
+        )
+        .await
+        .unwrap();
+        let list = list_relationships(&db, "a1", None, 10, 0).await.unwrap();
+        assert!(!list.is_empty());
+        let filtered = list_relationships(&db, "a1", Some("works_for"), 10, 0)
+            .await
+            .unwrap();
+        assert!(!filtered.is_empty());
+    }
+
+    #[tokio::test]
+    async fn graph_stats_returns_zeros_for_unknown_agent() {
+        let db = fresh_db().await;
+        let s = graph_stats(&db, "no-such-agent").await.unwrap();
+        assert_eq!(s.entity_count, 0);
+        assert_eq!(s.relationship_count, 0);
+    }
+
+    #[tokio::test]
+    async fn vec_index_health_after_dim_set() {
+        let db = fresh_db().await;
+        crate::schema::hnsw::ensure_index(&db, 1024).await.unwrap();
+        let h = vec_index_health(&db).await.unwrap();
+        assert!(!h.tables_present.is_empty());
+        assert!(h.tables_missing.is_empty());
     }
 }

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
-use zero_stores_surreal::{SurrealConfig, SurrealMemoryStore, connect, schema::apply_schema};
+use surrealdb::Surreal;
+use zero_stores_surreal::{connect, schema::apply_schema, SurrealConfig, SurrealMemoryStore};
 
 async fn fresh_store() -> SurrealMemoryStore {
     let cfg = SurrealConfig {

@@ -1,4 +1,4 @@
-use zero_stores_surreal::{SurrealConfig, connect, schema::apply_schema};
+use zero_stores_surreal::{connect, schema::apply_schema, SurrealConfig};
 
 fn mem_config() -> SurrealConfig {
     SurrealConfig {
@@ -22,11 +22,9 @@ async fn schema_creates_entity_table() {
     let db = connect(&mem_config(), None).await.expect("connect");
     apply_schema(&db).await.expect("apply");
 
-    db.query(
-        "CREATE entity:test_e SET agent_id='a', name='Alice', entity_type='person'",
-    )
-    .await
-    .expect("insert");
+    db.query("CREATE entity:test_e SET agent_id='a', name='Alice', entity_type='person'")
+        .await
+        .expect("insert");
 
     let mut resp = db
         .query("SELECT name FROM entity:test_e")
@@ -38,7 +36,7 @@ async fn schema_creates_entity_table() {
 
 #[tokio::test]
 async fn schema_version_recorded_on_first_apply() {
-    use zero_stores_surreal::schema::{CURRENT_SCHEMA_VERSION, bootstrap::read_version};
+    use zero_stores_surreal::schema::{bootstrap::read_version, CURRENT_SCHEMA_VERSION};
     let db = connect(&mem_config(), None).await.expect("connect");
     assert_eq!(read_version(&db).await.unwrap(), 0, "fresh DB at v0");
     apply_schema(&db).await.expect("apply");

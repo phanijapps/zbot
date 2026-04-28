@@ -3,16 +3,18 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use knowledge_graph::types::{Entity, EntityType, GraphStats, NeighborInfo, Relationship, Subgraph};
-use surrealdb::Surreal;
+use knowledge_graph::types::{
+    Entity, EntityType, GraphStats, NeighborInfo, Relationship, Subgraph,
+};
 use surrealdb::engine::any::Any;
-use zero_stores::KnowledgeGraphStore;
+use surrealdb::Surreal;
 use zero_stores::error::StoreResult;
 use zero_stores::extracted::ExtractedKnowledge;
 use zero_stores::types::{
     ArchivableEntity, Direction, EntityId, KgStats, Neighbor, ReindexReport, RelationshipId,
     ResolveOutcome, StoreOutcome, TraversalHit, VecIndexHealth,
 };
+use zero_stores::KnowledgeGraphStore;
 
 mod alias;
 mod archival;

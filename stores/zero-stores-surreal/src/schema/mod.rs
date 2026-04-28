@@ -6,8 +6,8 @@ pub mod hnsw;
 
 use std::sync::Arc;
 
-use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
+use surrealdb::Surreal;
 use zero_stores::error::StoreError;
 
 use crate::error::map_surreal_error;

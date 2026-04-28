@@ -4,9 +4,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use knowledge_graph::types::{NeighborInfo, Subgraph};
-use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{RecordId, RecordIdKey, SurrealValue};
+use surrealdb::Surreal;
 use zero_stores::error::StoreResult;
 use zero_stores::types::{Direction, EntityId, Neighbor, RelationshipId, TraversalHit};
 
@@ -175,7 +175,7 @@ pub async fn get_subgraph(
 mod tests {
     use super::*;
     use crate::kg::{entity, relationship};
-    use crate::{SurrealConfig, connect, schema::apply_schema};
+    use crate::{connect, schema::apply_schema, SurrealConfig};
     use knowledge_graph::types::{Entity, EntityType, Relationship, RelationshipType};
 
     async fn fresh_db() -> Arc<Surreal<Any>> {
@@ -202,7 +202,9 @@ mod tests {
             to.0.clone(),
             RelationshipType::RelatedTo,
         );
-        relationship::upsert_relationship(db, "a1", rel).await.unwrap();
+        relationship::upsert_relationship(db, "a1", rel)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

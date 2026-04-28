@@ -41,9 +41,7 @@ pub fn embedding_to_value(emb: &[f32]) -> serde_json::Value {
 /// Convert a serde_json::Value (array of numbers) back to Vec<f32>.
 pub fn value_to_embedding(v: &serde_json::Value) -> Option<Vec<f32>> {
     let arr = v.as_array()?;
-    arr.iter()
-        .map(|x| x.as_f64().map(|f| f as f32))
-        .collect()
+    arr.iter().map(|x| x.as_f64().map(|f| f as f32)).collect()
 }
 
 #[cfg(test)]

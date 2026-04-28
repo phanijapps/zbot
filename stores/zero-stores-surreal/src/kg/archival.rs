@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{RecordId, SurrealValue};
+use surrealdb::Surreal;
 use zero_stores::error::StoreResult;
 use zero_stores::types::{ArchivableEntity, EntityId};
 
@@ -76,7 +76,7 @@ pub async fn mark_entity_archival(
 mod tests {
     use super::*;
     use crate::kg::entity;
-    use crate::{SurrealConfig, connect, schema::apply_schema};
+    use crate::{connect, schema::apply_schema, SurrealConfig};
     use knowledge_graph::types::{Entity, EntityType};
 
     async fn fresh_db() -> Arc<Surreal<Any>> {

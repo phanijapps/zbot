@@ -1,6 +1,7 @@
 use zero_stores_surreal::{
-    SurrealConfig, connect,
+    connect,
     schema::{apply_schema, hnsw},
+    SurrealConfig,
 };
 
 fn cfg() -> SurrealConfig {

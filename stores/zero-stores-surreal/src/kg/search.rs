@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use knowledge_graph::types::{Entity, EntityType};
-use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{RecordId, SurrealValue};
+use surrealdb::Surreal;
 use zero_stores::error::StoreResult;
 use zero_stores::types::EntityId;
 
 use crate::error::map_surreal_error;
-use crate::types::{ThingExt, embedding_to_value};
+use crate::types::{embedding_to_value, ThingExt};
 
 #[derive(SurrealValue)]
 #[surreal(crate = "surrealdb::types")]
@@ -48,9 +48,7 @@ pub async fn search_entities_by_name(
     query: &str,
     limit: usize,
 ) -> StoreResult<Vec<Entity>> {
-    let q = format!(
-        "SELECT * FROM entity WHERE agent_id = $a AND name @@ $q LIMIT {limit}"
-    );
+    let q = format!("SELECT * FROM entity WHERE agent_id = $a AND name @@ $q LIMIT {limit}");
     let mut resp = db
         .query(q)
         .bind(("a", agent_id.to_string()))
@@ -95,7 +93,7 @@ pub async fn search_by_embedding(
 mod tests {
     use super::*;
     use crate::kg::entity;
-    use crate::{SurrealConfig, connect, schema::apply_schema};
+    use crate::{connect, schema::apply_schema, SurrealConfig};
 
     async fn fresh_db() -> Arc<Surreal<Any>> {
         let cfg = SurrealConfig {
@@ -117,7 +115,9 @@ mod tests {
         entity::upsert(&db, "a1", alice).await.unwrap();
         entity::upsert(&db, "a1", bob).await.unwrap();
 
-        let hits = search_entities_by_name(&db, "a1", "alice", 10).await.unwrap();
+        let hits = search_entities_by_name(&db, "a1", "alice", 10)
+            .await
+            .unwrap();
         assert!(hits.iter().any(|e| e.name.contains("Alice")));
     }
 
@@ -129,7 +129,9 @@ mod tests {
         entity::upsert(&db, "a1", alice_a1).await.unwrap();
         entity::upsert(&db, "a2", alice_a2).await.unwrap();
 
-        let hits = search_entities_by_name(&db, "a1", "alice", 10).await.unwrap();
+        let hits = search_entities_by_name(&db, "a1", "alice", 10)
+            .await
+            .unwrap();
         assert!(hits.iter().all(|e| e.agent_id == "a1"));
     }
 }

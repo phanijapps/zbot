@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::SurrealValue;
+use surrealdb::Surreal;
 
 #[derive(SurrealValue)]
 #[surreal(crate = "surrealdb::types")]
@@ -61,7 +61,9 @@ pub async fn recall_facts(
         .bind(("q", query.to_string()))
         .await
         .map_err(|e| format!("recall_facts: {e}"))?;
-    let rows: Vec<FactRow> = resp.take(0).map_err(|e| format!("recall_facts take: {e}"))?;
+    let rows: Vec<FactRow> = resp
+        .take(0)
+        .map_err(|e| format!("recall_facts take: {e}"))?;
     let arr: Vec<Value> = rows
         .into_iter()
         .map(|r| {
@@ -103,7 +105,7 @@ pub async fn count_all_facts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SurrealConfig, connect, schema::apply_schema};
+    use crate::{connect, schema::apply_schema, SurrealConfig};
 
     async fn fresh_db() -> Arc<Surreal<Any>> {
         let cfg = SurrealConfig {
@@ -130,9 +132,17 @@ mod tests {
     #[tokio::test]
     async fn recall_finds_match() {
         let db = fresh_db().await;
-        save_fact(&db, "a1", "preference", "k1", "Loves espresso drinks", 0.9, None)
-            .await
-            .unwrap();
+        save_fact(
+            &db,
+            "a1",
+            "preference",
+            "k1",
+            "Loves espresso drinks",
+            0.9,
+            None,
+        )
+        .await
+        .unwrap();
         let result = recall_facts(&db, "a1", "espresso", 10).await.unwrap();
         let arr = result.as_array().unwrap();
         assert!(!arr.is_empty(), "should find match");
@@ -141,12 +151,28 @@ mod tests {
     #[tokio::test]
     async fn recall_respects_agent_isolation() {
         let db = fresh_db().await;
-        save_fact(&db, "a1", "preference", "k1", "Coffee preference", 0.9, None)
-            .await
-            .unwrap();
-        save_fact(&db, "a2", "preference", "k1", "Coffee preference", 0.9, None)
-            .await
-            .unwrap();
+        save_fact(
+            &db,
+            "a1",
+            "preference",
+            "k1",
+            "Coffee preference",
+            0.9,
+            None,
+        )
+        .await
+        .unwrap();
+        save_fact(
+            &db,
+            "a2",
+            "preference",
+            "k1",
+            "Coffee preference",
+            0.9,
+            None,
+        )
+        .await
+        .unwrap();
         let result = recall_facts(&db, "a1", "coffee", 10).await.unwrap();
         let arr = result.as_array().unwrap();
         assert!(arr.iter().all(|f| f["agent_id"] == "a1"));

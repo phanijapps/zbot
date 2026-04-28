@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
+use surrealdb::Surreal;
 use zero_stores::error::StoreResult;
 use zero_stores::types::ReindexReport;
 
@@ -47,7 +47,7 @@ pub async fn reindex_embeddings(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SurrealConfig, connect, schema::apply_schema};
+    use crate::{connect, schema::apply_schema, SurrealConfig};
 
     async fn fresh_db() -> Arc<Surreal<Any>> {
         let cfg = SurrealConfig {

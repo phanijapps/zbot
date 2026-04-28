@@ -7,9 +7,9 @@
 use std::sync::Arc;
 
 use knowledge_graph::types::Relationship;
-use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{RecordId, RecordIdKey, SurrealValue};
+use surrealdb::Surreal;
 use zero_stores::error::{StoreError, StoreResult};
 use zero_stores::extracted::ExtractedKnowledge;
 use zero_stores::types::{EntityId, RelationshipId, StoreOutcome};
@@ -77,10 +77,7 @@ pub async fn upsert_relationship(
     Ok(record_id_to_relationship_id(&row.id))
 }
 
-pub async fn delete_relationship(
-    db: &Arc<Surreal<Any>>,
-    id: &RelationshipId,
-) -> StoreResult<()> {
+pub async fn delete_relationship(db: &Arc<Surreal<Any>>, id: &RelationshipId) -> StoreResult<()> {
     let thing = RecordId::new("relationship", RecordIdKey::String(id.0.clone()));
     db.query("DELETE $id")
         .bind(("id", thing))
@@ -134,7 +131,7 @@ fn record_id_to_relationship_id(id: &RecordId) -> RelationshipId {
 mod tests {
     use super::*;
     use crate::kg::entity;
-    use crate::{SurrealConfig, connect, schema::apply_schema};
+    use crate::{connect, schema::apply_schema, SurrealConfig};
     use knowledge_graph::types::{Entity, EntityType, RelationshipType};
 
     async fn fresh_db() -> Arc<Surreal<Any>> {

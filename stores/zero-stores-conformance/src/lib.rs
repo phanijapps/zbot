@@ -6,9 +6,9 @@
 //! between impls produces failing assertions.
 
 use knowledge_graph::types::{Entity, EntityType, Relationship, RelationshipType};
-use zero_stores::KnowledgeGraphStore;
 use zero_stores::extracted::ExtractedKnowledge;
 use zero_stores::types::{Direction, EntityId, ResolveOutcome};
+use zero_stores::KnowledgeGraphStore;
 
 // =============================================================================
 // Entity CRUD
@@ -138,8 +138,14 @@ pub async fn store_knowledge_writes_both<S: KnowledgeGraphStore>(store: &S) {
     store.store_knowledge("conf", knowledge).await.unwrap();
     let n_entities = store.count_all_entities().await.unwrap();
     let n_rels = store.count_all_relationships().await.unwrap();
-    assert!(n_entities >= 2, "expected at least 2 entities, got {n_entities}");
-    assert!(n_rels >= 1, "expected at least 1 relationship, got {n_rels}");
+    assert!(
+        n_entities >= 2,
+        "expected at least 2 entities, got {n_entities}"
+    );
+    assert!(
+        n_rels >= 1,
+        "expected at least 1 relationship, got {n_rels}"
+    );
 }
 
 // =============================================================================
@@ -161,7 +167,9 @@ pub async fn neighbors_outgoing<S: KnowledgeGraphStore>(store: &S) {
         .await
         .unwrap();
     assert!(
-        neighbors.iter().any(|n| n.entity_id.as_ref() == bob.as_ref()),
+        neighbors
+            .iter()
+            .any(|n| n.entity_id.as_ref() == bob.as_ref()),
         "outgoing should include Bob"
     );
 }
@@ -181,7 +189,9 @@ pub async fn neighbors_incoming<S: KnowledgeGraphStore>(store: &S) {
         .await
         .unwrap();
     assert!(
-        neighbors.iter().any(|n| n.entity_id.as_ref() == alice.as_ref()),
+        neighbors
+            .iter()
+            .any(|n| n.entity_id.as_ref() == alice.as_ref()),
         "incoming to Bob should include Alice"
     );
 }
@@ -409,12 +419,12 @@ pub async fn memory_recall_respects_agent_isolation<S: MemoryFactStore>(store: &
         .save_fact("agent-mem-b", "preference", "k1", "agent B note", 0.9, None)
         .await
         .unwrap();
-    let result = store
-        .recall_facts("agent-mem-a", "note", 10)
-        .await
-        .unwrap();
+    let result = store.recall_facts("agent-mem-a", "note", 10).await.unwrap();
     let arr = result.as_array().expect("array");
     for item in arr {
-        assert_eq!(item.get("agent_id").and_then(|v| v.as_str()), Some("agent-mem-a"));
+        assert_eq!(
+            item.get("agent_id").and_then(|v| v.as_str()),
+            Some("agent-mem-a")
+        );
     }
 }

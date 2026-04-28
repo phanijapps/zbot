@@ -4,9 +4,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use surrealdb::Surreal;
-use surrealdb::engine::any::{Any, connect as sdk_connect};
+use surrealdb::engine::any::{connect as sdk_connect, Any};
 use surrealdb::opt::auth::Root;
+use surrealdb::Surreal;
 
 use crate::config::SurrealConfig;
 use crate::error::map_surreal_error;

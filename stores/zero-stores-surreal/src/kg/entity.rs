@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use knowledge_graph::types::{Entity, EntityType};
-use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
+use surrealdb::Surreal;
 use zero_stores::error::StoreResult;
 use zero_stores::types::EntityId;
 
@@ -67,12 +67,10 @@ pub async fn delete(db: &Arc<Surreal<Any>>, id: &EntityId) -> StoreResult<()> {
 }
 
 pub async fn bump_mention(db: &Arc<Surreal<Any>>, id: &EntityId) -> StoreResult<()> {
-    db.query(
-        "UPDATE $id SET mention_count = (mention_count OR 0) + 1, last_seen_at = time::now()",
-    )
-    .bind(("id", id.to_thing()))
-    .await
-    .map_err(map_surreal_error)?;
+    db.query("UPDATE $id SET mention_count = (mention_count OR 0) + 1, last_seen_at = time::now()")
+        .bind(("id", id.to_thing()))
+        .await
+        .map_err(map_surreal_error)?;
     Ok(())
 }
 
@@ -108,7 +106,7 @@ impl EntityRow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SurrealConfig, connect, schema::apply_schema};
+    use crate::{connect, schema::apply_schema, SurrealConfig};
 
     async fn fresh_db() -> Arc<Surreal<Any>> {
         let cfg = SurrealConfig {
