@@ -243,6 +243,51 @@ impl EpisodeRepository {
         })
     }
 
+    /// LIKE-based keyword search over `task_summary` and
+    /// `key_learnings`, newest-first. Used as the FTS-mode fallback by
+    /// the unified memory-search endpoint when no embedding is
+    /// available (or `mode=fts` is explicitly requested) — episodes
+    /// don't have an FTS5 partner table, so this matches the
+    /// historical inline implementation. The `query` is sanitized
+    /// (LIKE metacharacters stripped) before being wrapped in `%…%`.
+    /// When `ward_id` is `Some`, results are filtered to that ward.
+    pub fn keyword_search(
+        &self,
+        query: &str,
+        ward_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SessionEpisode>, String> {
+        let pattern = format!("%{}%", query.replace(['%', '_'], ""));
+        self.db.with_connection(|conn| {
+            let sql_with = "SELECT id, session_id, agent_id, ward_id, task_summary, outcome, \
+                            strategy_used, key_learnings, token_cost, created_at \
+                            FROM session_episodes \
+                            WHERE ward_id = ?1 AND (task_summary LIKE ?2 OR COALESCE(key_learnings,'') LIKE ?2) \
+                            ORDER BY created_at DESC LIMIT ?3";
+            let sql_no = "SELECT id, session_id, agent_id, ward_id, task_summary, outcome, \
+                          strategy_used, key_learnings, token_cost, created_at \
+                          FROM session_episodes \
+                          WHERE task_summary LIKE ?1 OR COALESCE(key_learnings,'') LIKE ?1 \
+                          ORDER BY created_at DESC LIMIT ?2";
+            let rows: Vec<SessionEpisode> = if let Some(w) = ward_id {
+                let mut stmt = conn.prepare(sql_with)?;
+                let out: Vec<SessionEpisode> = stmt
+                    .query_map(params![w, pattern, limit as i64], row_to_episode)?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                out
+            } else {
+                let mut stmt = conn.prepare(sql_no)?;
+                let out: Vec<SessionEpisode> = stmt
+                    .query_map(params![pattern, limit as i64], row_to_episode)?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                out
+            };
+            Ok(rows)
+        })
+    }
+
     /// List all episodes for a ward (any outcome), newest first, capped at
     /// `limit`. Used by the ward content aggregator.
     pub fn list_by_ward(&self, ward_id: &str, limit: usize) -> Result<Vec<SessionEpisode>, String> {
