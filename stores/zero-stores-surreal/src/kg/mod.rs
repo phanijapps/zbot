@@ -15,6 +15,7 @@ use zero_stores::types::{
 };
 
 mod alias;
+mod archival;
 mod entity;
 mod reindex;
 mod relationship;
@@ -151,14 +152,14 @@ impl KnowledgeGraphStore for SurrealKgStore {
     // === archival (Task 11) ===
     async fn list_archivable_orphans(
         &self,
-        _min_age_hours: u32,
-        _limit: usize,
+        min_age_hours: u32,
+        limit: usize,
     ) -> StoreResult<Vec<ArchivableEntity>> {
-        Err(unimplemented_err("list_archivable_orphans (Task 11)"))
+        archival::list_archivable_orphans(self.db(), min_age_hours, limit).await
     }
 
-    async fn mark_entity_archival(&self, _id: &EntityId, _reason: &str) -> StoreResult<()> {
-        Err(unimplemented_err("mark_entity_archival (Task 11)"))
+    async fn mark_entity_archival(&self, id: &EntityId, reason: &str) -> StoreResult<()> {
+        archival::mark_entity_archival(self.db(), id, reason).await
     }
 
     // === stats / list / health (Task 12) ===
