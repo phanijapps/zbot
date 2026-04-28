@@ -5,9 +5,14 @@
 // Cargo feature; backend selection from settings.json is a follow-up PR.
 // ============================================================================
 
+import { useState } from "react";
 import { Database } from "lucide-react";
 
+type Backend = "sqlite" | "surreal";
+
 export function PersistenceCard() {
+  const [backend, setBackend] = useState<Backend>("sqlite");
+
   return (
     <div className="card card__padding--lg">
       <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
@@ -21,39 +26,37 @@ export function PersistenceCard() {
       </div>
 
       <div style={{ marginBottom: "var(--spacing-3)" }}>
-        <label className="settings-field-label" htmlFor="persistence-backend">
-          Knowledge Backend
-        </label>
+        <div className="field-label">Knowledge Backend</div>
         <select
-          id="persistence-backend"
           className="form-input"
-          value="sqlite"
-          disabled
-          aria-label="Knowledge backend (read-only — feature-gated)"
-          style={{ marginTop: 4 }}
+          value={backend}
+          onChange={(e) => setBackend(e.target.value as Backend)}
+          aria-label="Knowledge backend"
         >
           <option value="sqlite">SQLite (default)</option>
-          <option value="surreal" disabled>
-            SurrealDB (build with --features surreal-backend)
-          </option>
+          <option value="surreal">SurrealDB 3.0 (experimental)</option>
         </select>
-        <div className="page-subtitle" style={{ marginTop: 4 }}>
-          SQLite is the only backend wired into the running daemon today.
-          SurrealDB 3.0 is available as an opt-in build (Mode A: embedded
-          RocksDB) for testing.
-        </div>
       </div>
 
-      <div
-        className="settings-alert settings-alert--warning"
-        style={{ marginBottom: "var(--spacing-3)" }}
-      >
-        <strong>SurrealDB backend is experimental.</strong> Build the daemon
-        with <code>cargo run -p daemon --features surreal-backend</code> to
-        opt in. The factory plumbing in{" "}
-        <code>persistence_factory::build_surreal_pair</code> is ready;
-        settings.json driven dispatch lands in a follow-up PR.
-      </div>
+      {backend === "surreal" ? (
+        <div
+          className="settings-alert settings-alert--warning"
+          style={{ marginBottom: "var(--spacing-3)" }}
+          role="status"
+        >
+          <strong>SurrealDB requires a daemon rebuild.</strong> Stop the
+          daemon and restart it with{" "}
+          <code>cargo run -p daemon --features surreal-backend</code>. The
+          factory dispatch in{" "}
+          <code>persistence_factory::build_surreal_pair</code> is wired;
+          settings.json driven runtime switching lands in a follow-up PR.
+        </div>
+      ) : (
+        <div className="page-subtitle" style={{ marginBottom: "var(--spacing-3)" }}>
+          SQLite is the only backend wired into the running daemon today.
+          Selecting SurrealDB shows the build instructions.
+        </div>
+      )}
 
       <div className="page-subtitle">
         <strong>Recovery:</strong> on corruption, the daemon refuses to

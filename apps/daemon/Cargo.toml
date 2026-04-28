@@ -46,6 +46,13 @@ dirs = "5"
 # preventing RSS bloat from ONNX model load/unload cycles.
 tikv-jemallocator = "0.6"
 
+[features]
+default = []
+# Forward the SurrealDB 3.0 backend feature down to the gateway crate so
+# `cargo run -p daemon --features surreal-backend` actually wires the
+# zero-stores-surreal dependency through.
+surreal-backend = ["gateway/surreal-backend"]
+
 [[bin]]
 name = "zerod"
 path = "src/main.rs"
