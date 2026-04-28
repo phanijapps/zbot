@@ -201,6 +201,37 @@ pub fn maybe_build_surreal_pair(
 pub async fn build_surreal_pair(
     cfg: &SurrealBackendConfig,
 ) -> Result<(Arc<dyn KnowledgeGraphStore>, Arc<dyn MemoryFactStore>), String> {
+    let bundle = build_surreal_full(cfg).await?;
+    Ok((bundle.kg, bundle.memory))
+}
+
+/// Bundle of SurrealDB-backed trait objects, all sharing one
+/// `Arc<Surreal<Any>>` connection.
+///
+/// The two-step approach (build pair then full bundle) lets AppState wire
+/// the auxiliary stores in the same code path as the KG/Memory pair —
+/// every Option<Arc<dyn …>> field gets populated together when the user
+/// opts into Surreal.
+#[cfg(feature = "surreal-backend")]
+pub struct SurrealStoreBundle {
+    pub kg: Arc<dyn KnowledgeGraphStore>,
+    pub memory: Arc<dyn MemoryFactStore>,
+    pub episode: Arc<dyn zero_stores_traits::EpisodeStore>,
+    pub wiki: Arc<dyn zero_stores_traits::WikiStore>,
+    pub procedure: Arc<dyn zero_stores_traits::ProcedureStore>,
+    pub goal: Arc<dyn zero_stores_traits::GoalStore>,
+    pub recall_log: Arc<dyn zero_stores_traits::RecallLogStore>,
+    pub distillation: Arc<dyn zero_stores_traits::DistillationStore>,
+}
+
+/// Build the full SurrealDB-backed store bundle (KG, Memory, Episode,
+/// Wiki, Procedure, Goal, RecallLog, Distillation) sharing one
+/// connection handle. Schema is applied idempotently as part of
+/// construction. Errors fail fast.
+#[cfg(feature = "surreal-backend")]
+pub async fn build_surreal_full(
+    cfg: &SurrealBackendConfig,
+) -> Result<SurrealStoreBundle, String> {
     let surreal_cfg = zero_stores_surreal::SurrealConfig {
         url: cfg.url.clone(),
         namespace: cfg.namespace.clone(),
@@ -218,8 +249,44 @@ pub async fn build_surreal_pair(
     zero_stores_surreal::schema::apply_schema(&db)
         .await
         .map_err(|e| format!("surreal schema: {e}"))?;
-    let kg: Arc<dyn KnowledgeGraphStore> =
-        Arc::new(zero_stores_surreal::SurrealKgStore::new(db.clone()));
-    let mem: Arc<dyn MemoryFactStore> = Arc::new(zero_stores_surreal::SurrealMemoryStore::new(db));
-    Ok((kg, mem))
+    Ok(SurrealStoreBundle {
+        kg: Arc::new(zero_stores_surreal::SurrealKgStore::new(db.clone())),
+        memory: Arc::new(zero_stores_surreal::SurrealMemoryStore::new(db.clone())),
+        episode: Arc::new(zero_stores_surreal::SurrealEpisodeStore::new(db.clone())),
+        wiki: Arc::new(zero_stores_surreal::SurrealWikiStore::new(db.clone())),
+        procedure: Arc::new(zero_stores_surreal::SurrealProcedureStore::new(db.clone())),
+        goal: Arc::new(zero_stores_surreal::SurrealGoalStore::new(db.clone())),
+        recall_log: Arc::new(zero_stores_surreal::SurrealRecallLogStore::new(db.clone())),
+        distillation: Arc::new(zero_stores_surreal::SurrealDistillationStore::new(db)),
+    })
+}
+
+/// Construct the SurrealDB-backed full bundle when the user has opted in
+/// via settings.json, otherwise return `None`. Failures are fatal — same
+/// policy as `maybe_build_surreal_pair`.
+#[cfg(feature = "surreal-backend")]
+pub fn maybe_build_surreal_full(
+    paths: &gateway_services::paths::VaultPaths,
+) -> Option<SurrealStoreBundle> {
+    let cfg = read_surreal_opt_in(paths)?;
+    tracing::info!(
+        url = %cfg.url,
+        namespace = %cfg.namespace,
+        database = %cfg.database,
+        "SurrealDB backend (full bundle) enabled via settings.json"
+    );
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(build_surreal_full(&cfg))
+    });
+    match result {
+        Ok(bundle) => Some(bundle),
+        Err(e) => {
+            tracing::error!(error = %e, "SurrealDB init failed — daemon refusing to start");
+            panic!(
+                "SurrealDB persistence init failed: {e}. \
+                 If the database appears corrupted, run the recovery CLI \
+                 backed by zero-stores-surreal-recovery."
+            );
+        }
+    }
 }
