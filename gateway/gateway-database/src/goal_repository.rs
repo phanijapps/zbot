@@ -5,22 +5,8 @@ use crate::KnowledgeDatabase;
 use rusqlite::{params, OptionalExtension};
 use std::sync::Arc;
 
-/// A goal row from `kg_goals`.
-#[derive(Debug, Clone)]
-pub struct Goal {
-    pub id: String,
-    pub agent_id: String,
-    pub ward_id: Option<String>,
-    pub title: String,
-    pub description: Option<String>,
-    pub state: String,
-    pub parent_goal_id: Option<String>,
-    pub slots: Option<String>,        // JSON
-    pub filled_slots: Option<String>, // JSON
-    pub created_at: String,
-    pub updated_at: String,
-    pub completed_at: Option<String>,
-}
+// Goal moved to `zero-stores-domain` (Phase D5).
+pub use zero_stores_domain::Goal;
 
 /// Repository for `kg_goals` — provides standard CRUD and state-transition helpers.
 pub struct GoalRepository {

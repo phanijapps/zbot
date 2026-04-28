@@ -17,11 +17,13 @@
 //! - HTTP request/response shapes — those live in the gateway HTTP layer
 //!   (they can derive From/Into the domain types here).
 
+pub mod goal;
 pub mod memory_fact;
 pub mod procedure;
 pub mod session_episode;
 pub mod wiki;
 
+pub use goal::Goal;
 pub use memory_fact::{MemoryFact, ScoredFact};
 pub use procedure::Procedure;
 pub use session_episode::{ScoredEpisode, SessionEpisode};

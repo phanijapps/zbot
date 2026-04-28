@@ -14,6 +14,7 @@ pub mod goal_repository;
 pub mod kg_episode_repository;
 pub mod knowledge_db;
 pub mod knowledge_schema;
+pub mod auxiliary_stores;
 pub mod episode_store;
 pub mod memory_fact_store;
 pub mod memory_repository;
@@ -43,6 +44,7 @@ pub use knowledge_schema::{
 pub use memory_fact_store::GatewayMemoryFactStore;
 pub use memory_repository::{MemoryFact, MemoryRepository, ScoredFact, SkillIndexRow};
 pub use procedure_repository::{Procedure, ProcedureRepository};
+pub use auxiliary_stores::{GatewayDistillationStore, GatewayGoalStore, GatewayRecallLogStore};
 pub use procedure_store::GatewayProcedureStore;
 pub use recall_log_repository::RecallLogRepository;
 pub use repository::{ConversationRepository, Message};
