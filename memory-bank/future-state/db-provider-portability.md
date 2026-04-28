@@ -237,3 +237,77 @@ next backend doesn't repeat them:
 
 After PR-3, the SurrealDB toggle is fully end-to-end for memory + KG.
 After PR-4, the same is true for ward content.
+
+---
+
+## Phase D — full DDD/clean-architecture relocation
+
+The previous phases retire concrete-typed call sites in favor of the
+trait surface, but the trait *implementations* still live in the wrong
+crate (`gateway/gateway-database/`) — and the SQLite-coupled types
+(`MemoryFact`, `KnowledgeDatabase`, `VectorIndex`, etc.) leak from
+`gateway-database` into the rest of the workspace, including pure
+business-logic crates like `services/knowledge-graph/`.
+
+The target architecture (DDD-style) is:
+
+```
+stores/                                   ← all persistence here
+├── zero-stores-domain/                     pure-data structs (MemoryFact,
+│                                            Entity, Relationship, Episode,
+│                                            WikiArticle, Procedure, Goal, etc.)
+├── zero-stores-traits/                     trait surface (FactStore,
+│                                            KnowledgeGraphStore, EpisodeStore,
+│                                            WikiStore, ProcedureStore,
+│                                            DistillationStore, ConversationStore,
+│                                            RecallLogStore, GoalStore, etc.)
+├── zero-stores/                            re-exports + shared error/value types
+├── zero-stores-sqlite/                     full SQLite impl (absorbs
+│                                            gateway-database/ + the SQLite
+│                                            half of services/knowledge-graph/)
+├── zero-stores-surreal/                    full SurrealDB impl (parity)
+└── zero-stores-postgres/                   future
+
+services/
+└── knowledge-graph/                        traversal, resolution, alias logic
+                                             — NO storage code
+
+gateway/                                   ← thin: HTTP + composition
+├── src/state/                                DI container; one place that
+│                                              picks store impls + wires Arcs
+└── src/http/                                 handlers take Arc<dyn Store>
+                                               only; no knowledge_db, no
+                                               memory_repo concrete refs
+```
+
+`gateway-database/` and `services/knowledge-graph/storage/` are deleted.
+`gateway/Cargo.toml` no longer depends on rusqlite, sqlite-vec, etc.
+
+### Slice-by-slice plan (each slice is a green-build, mergeable PR)
+
+| Slice | Description | Effort | Build invariant |
+|---|---|---|---|
+| **D1** | Domain crate: create `stores/zero-stores-domain/`, move `MemoryFact` + sibling pure-data structs into it. `gateway-database` re-exports the moved types so the 80 import sites compile unchanged. | 1-2 hr | All builds + tests pass without any consumer change |
+| **D2** | Add `EpisodeStore` trait + SQLite impl + SurrealDB impl + conformance scenarios. Migrate `/api/wards/:ward/content` episode read paths through it. | 4-6 hr | UI ward content endpoint shape unchanged on either backend |
+| **D3** | Same as D2 for `WikiStore`. Migrates `ward_content.rs` wiki reads. | 4-6 hr | UI wiki tab unchanged on either backend |
+| **D4** | Same as D2 for `ProcedureStore`. Migrates recall-side procedure search. | 3-4 hr | Agent recall behaviour unchanged |
+| **D5** | `RecallLogStore`, `DistillationStore`, `ConversationStore`, `GoalStore` traits + impls. These are smaller surface areas; can batch into one PR. | 4-6 hr | Distillation + conversation save unchanged |
+| **D6** | Relocate the entire `services/knowledge-graph/storage/GraphStorage` into `stores/zero-stores-sqlite/kg/`. `services/knowledge-graph/` keeps only the traversal + resolution logic. Update the 30+ KG storage imports. | 6-8 hr | `cargo check --workspace` passes; conformance + KG tests pass |
+| **D7** | Relocate the rest of `gateway-database` into `stores/zero-stores-sqlite/`. Keep `gateway-database` as a re-export shim during the transition (one-PR move, no consumer churn). | 4-6 hr | Workspace builds; `gateway-database` is now a thin facade |
+| **D8** | Migrate the 80 import sites from `gateway_database::*` to `zero_stores_sqlite::*` (or `zero_stores_domain::*` for types). Subagent-driven mechanical churn. | 6-10 hr | Workspace builds at every commit; tests pass |
+| **D9** | Delete the empty `gateway-database` crate. Remove rusqlite + sqlite-vec from `gateway/Cargo.toml`. Final clippy + fmt pass. | 1-2 hr | `cargo build` is clean; gateway has no SQLite-direct deps |
+
+**Total: 33-50 hours of focused work.** Per-slice commits stay green and
+mergeable, so the work can be paused and resumed at any boundary.
+
+### Sizing for a subagent-driven sprint
+
+The mechanical slices (D1, D7, D8, D9) are excellent subagent targets —
+the change shape is predictable and the verification is `cargo build
+--workspace`. Slices D2-D6 need more design judgment (trait surface
+selection, conformance scenarios) and are best driven by a senior with
+subagent assistance for the impl files.
+
+Recommendation: open one branch per slice, merge sequentially. Don't
+batch — the import-update slice (D8) is high-noise on diff and benefits
+from being its own focused PR.

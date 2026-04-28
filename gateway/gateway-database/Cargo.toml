@@ -19,6 +19,7 @@ agent-runtime = { path = "../../runtime/agent-runtime" }
 gateway-services = { path = "../gateway-services" }
 zero-core = { path = "../../framework/zero-core" }
 zero-stores-traits = { path = "../../stores/zero-stores-traits" }
+zero-stores-domain = { path = "../../stores/zero-stores-domain" }
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled", "load_extension"] }

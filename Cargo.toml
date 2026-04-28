@@ -19,6 +19,7 @@ members = [
     # Stores - Backend-agnostic persistence interfaces
     "stores/zero-stores",
     "stores/zero-stores-conformance",
+    "stores/zero-stores-domain",
     "stores/zero-stores-sqlite",
     "stores/zero-stores-surreal",
     "stores/zero-stores-surreal-recovery",

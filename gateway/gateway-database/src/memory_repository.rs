@@ -11,7 +11,6 @@
 
 use chrono::Utc;
 use rusqlite::params;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::vector_index::VectorIndex;
@@ -51,68 +50,11 @@ pub fn sanitize_fts_query(raw: &str) -> String {
 // callers that imported it from `gateway-database` keep working.
 pub use zero_stores_traits::SkillIndexRow;
 
-/// A structured memory fact extracted from session distillation or manual save.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryFact {
-    pub id: String,
-    pub session_id: Option<String>,
-    pub agent_id: String,
-    pub scope: String,
-    pub category: String,
-    pub key: String,
-    pub content: String,
-    pub confidence: f64,
-    pub mention_count: i32,
-    pub source_summary: Option<String>,
-    /// Raw f32 embedding. Always `None` when loaded from `memory_facts` (the
-    /// column was removed in schema v22). Callers may set this to `Some(v)`
-    /// prior to `upsert_memory_fact` to have the vector persisted through the
-    /// `VectorIndex` — vectors MUST be L2-normalized by the caller.
-    ///
-    /// To read an embedding back, use [`MemoryRepository::get_fact_embedding`].
-    #[serde(skip)]
-    pub embedding: Option<Vec<f32>>,
-    /// Ward (sandbox) this fact belongs to. `"__global__"` means shared across all wards.
-    pub ward_id: String,
-    /// If set, the key of the newer fact that contradicts this one.
-    pub contradicted_by: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-    pub expires_at: Option<String>,
-    /// ISO-8601 timestamp from which this fact is valid.
-    pub valid_from: Option<String>,
-    /// ISO-8601 timestamp after which this fact is no longer current (superseded).
-    pub valid_until: Option<String>,
-    /// Key of the newer fact that replaced this one.
-    pub superseded_by: Option<String>,
-    /// Pinned facts can't be overwritten by distillation. User-authored facts are pinned.
-    #[serde(default)]
-    pub pinned: bool,
-    /// Epistemic classification governing lifecycle behavior:
-    /// - `archival` — historical records, never decay
-    /// - `current` — volatile observed state, decays when superseded
-    /// - `convention` — rules/preferences, stable until explicitly replaced
-    /// - `procedural` — learned patterns, evolve via success counts
-    ///
-    /// Defaults to "current" when not specified.
-    #[serde(default)]
-    pub epistemic_class: Option<String>,
-
-    /// FK to kg_episodes.id — the extraction event that produced this fact.
-    #[serde(default)]
-    pub source_episode_id: Option<String>,
-
-    /// Human-readable pointer to source (e.g., "research_notes.pdf:page_42").
-    #[serde(default)]
-    pub source_ref: Option<String>,
-}
-
-/// A memory fact with a computed relevance score from hybrid search.
-#[derive(Debug, Clone, Serialize)]
-pub struct ScoredFact {
-    pub fact: MemoryFact,
-    pub score: f64,
-}
+// MemoryFact + ScoredFact moved to `zero-stores-domain` (Phase D1) so any
+// backend impl can round-trip them without depending on this SQLite-coupled
+// crate. Re-exported here so the 80+ existing import sites of
+// `gateway_database::MemoryFact` continue to compile unchanged.
+pub use zero_stores_domain::{MemoryFact, ScoredFact};
 
 // ============================================================================
 // MEMORY REPOSITORY
