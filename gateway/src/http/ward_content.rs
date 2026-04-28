@@ -307,9 +307,21 @@ pub async fn get_ward_content(
             .list_articles(&ward_id)
             .map_err(|e| internal("list wiki by ward", e))?,
     };
-    let procedures = procedure_repo
-        .list_by_ward(&ward_id, PROCEDURE_LIMIT)
-        .map_err(|e| internal("list procedures by ward", e))?;
+    // Procedures now trait-routed via state.procedure_store with fallback.
+    let procedures: Vec<Procedure> = match state.procedure_store.as_ref() {
+        Some(store) => {
+            let raw = store
+                .list_by_ward(&ward_id, PROCEDURE_LIMIT)
+                .await
+                .map_err(|e| internal("list procedures by ward (trait)", e))?;
+            raw.into_iter()
+                .filter_map(|v| serde_json::from_value::<Procedure>(v).ok())
+                .collect()
+        }
+        None => procedure_repo
+            .list_by_ward(&ward_id, PROCEDURE_LIMIT)
+            .map_err(|e| internal("list procedures by ward", e))?,
+    };
 
     // Cap wiki at WIKI_LIMIT (list_articles has no LIMIT clause).
     let wiki_articles: Vec<WikiArticle> = wiki_articles.into_iter().take(WIKI_LIMIT).collect();

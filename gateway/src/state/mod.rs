@@ -120,6 +120,9 @@ pub struct AppState {
     /// `WardWikiRepository` directly. `None` in minimal AppStates.
     pub wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>>,
 
+    /// Trait-routed procedure store (Phase D4).
+    pub procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+
     /// Knowledge graph episode repository (Phase 6a+).
     pub kg_episode_repo: Option<Arc<KgEpisodeRepository>>,
 
@@ -432,6 +435,9 @@ impl AppState {
             procedure_vec,
         ));
         memory_recall_inner.set_procedure_repo(procedure_repo.clone());
+        let procedure_store_for_state: Arc<dyn zero_stores_traits::ProcedureStore> = Arc::new(
+            gateway_database::GatewayProcedureStore::new(procedure_repo.clone()),
+        );
         if let Some(ref mem) = early_memory_store {
             memory_recall_inner.set_memory_store(mem.clone());
         }
@@ -734,6 +740,7 @@ impl AppState {
                 episode_repo_ref.clone(),
             )) as Arc<dyn zero_stores_traits::EpisodeStore>),
             wiki_store: Some(wiki_store_for_state),
+            procedure_store: Some(procedure_store_for_state),
             episode_repo: Some(episode_repo_ref),
             kg_episode_repo: Some(kg_episode_repo),
             graph_service,
@@ -822,6 +829,7 @@ impl AppState {
             episode_repo: None,
             episode_store: None,
             wiki_store: None,
+            procedure_store: None,
             kg_episode_repo: None,
             graph_service: None,
             kg_store: None,
@@ -912,6 +920,7 @@ impl AppState {
             episode_repo: None,
             episode_store: None,
             wiki_store: None,
+            procedure_store: None,
             kg_episode_repo: None,
             graph_service: None,
             kg_store: None,

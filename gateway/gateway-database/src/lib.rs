@@ -17,6 +17,7 @@ pub mod knowledge_schema;
 pub mod episode_store;
 pub mod memory_fact_store;
 pub mod memory_repository;
+pub mod procedure_store;
 pub mod wiki_store;
 pub mod procedure_repository;
 pub mod recall_log_repository;
@@ -42,6 +43,7 @@ pub use knowledge_schema::{
 pub use memory_fact_store::GatewayMemoryFactStore;
 pub use memory_repository::{MemoryFact, MemoryRepository, ScoredFact, SkillIndexRow};
 pub use procedure_repository::{Procedure, ProcedureRepository};
+pub use procedure_store::GatewayProcedureStore;
 pub use recall_log_repository::RecallLogRepository;
 pub use repository::{ConversationRepository, Message};
 pub use wiki_repository::{WardWikiRepository, WikiArticle, WikiHit};

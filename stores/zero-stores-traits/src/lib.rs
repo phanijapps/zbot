@@ -12,10 +12,12 @@ pub mod conversation;
 pub mod episodes;
 pub mod memory_facts;
 pub mod outbox;
+pub mod procedures;
 pub mod wiki;
 
 pub use conversation::ConversationStore;
 pub use episodes::{EpisodeStats, EpisodeStore};
 pub use memory_facts::{MemoryAggregateStats, MemoryFactStore, MemoryHealthMetrics, SkillIndexRow};
 pub use outbox::OutboxStore;
+pub use procedures::{ProcedureStats, ProcedureStore};
 pub use wiki::{WikiStats, WikiStore};
