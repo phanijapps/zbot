@@ -238,6 +238,49 @@ next backend doesn't repeat them:
 After PR-3, the SurrealDB toggle is fully end-to-end for memory + KG.
 After PR-4, the same is true for ward content.
 
+## Status snapshot (updated 2026-04-28)
+
+**Delivered on `feature/surrealdb-backend`:**
+- D1 ✅ `zero-stores-domain` crate created; `MemoryFact`, `ScoredFact`,
+  `SessionEpisode`, `ScoredEpisode`, `WikiArticle`, `Procedure`, `Goal`
+  hoisted with re-export shims in `gateway-database` for back-compat.
+- D2 ✅ `EpisodeStore` trait + `GatewayEpisodeStore` SQLite impl + AppState
+  wiring + ward_content episode read trait-routed.
+- D3 ✅ `WikiStore` trait + `GatewayWikiStore` + ward_content wiki read
+  trait-routed.
+- D4 ✅ `ProcedureStore` trait + `GatewayProcedureStore` + ward_content
+  procedure read trait-routed.
+- D5 ✅ `GoalStore`, `RecallLogStore`, `DistillationStore` traits +
+  `GatewayGoalStore` / `GatewayRecallLogStore` / `GatewayDistillationStore`
+  SQLite impls.
+- D6 (partial) ✅ `zero_stores_sqlite::kg::*` re-exports
+  `GraphStorage`, `OrphanCandidate`, `GraphTraversal`,
+  `SqliteGraphTraversal`, `TraversalNode`, `CausalEdge`, `CausalEdgeStore`.
+- D7 ✅ `gateway/gateway-database/` physically relocated to
+  `stores/gateway-database/`. All path deps updated. Package name kept
+  as `gateway-database` so the 80 import sites still compile.
+
+**Deferred (subagent-friendly mechanical passes):**
+- D6b — physically move `services/knowledge-graph/src/{storage,traversal,causal}.rs`
+  (3,872 LoC) into `stores/zero-stores-sqlite/src/kg/`. The re-exports
+  from D6 mean callers can already use the destination path; this slice
+  rehouses the source files.
+- D8 — rename `gateway-database` package to `zero-stores-sqlite-impl` (or
+  merge its files into `zero-stores-sqlite/`), then sed-migrate the 80
+  import sites from `gateway_database::*` to the new path. Mechanical
+  churn on a fresh subagent.
+- D9 — drop `gateway-database` direct dep from `gateway/Cargo.toml` once
+  D8 has moved the impl types into `zero-stores-sqlite`. Drop rusqlite +
+  sqlite-vec from gateway. Final clippy + fmt pass.
+
+**SurrealDB-side parity items (still open):**
+- `SurrealEpisodeStore`, `SurrealWikiStore`, `SurrealProcedureStore`,
+  `SurrealGoalStore`, `SurrealRecallLogStore`, `SurrealDistillationStore`
+  impls. Today these are the trait defaults (empty/no-op) on the
+  Surreal side, so when the toggle is on, those subsystems show empty
+  through the UI.
+- Hybrid search ranking score on Surreal-side recall (currently `0.0`).
+
 ---
 
 ## Phase D — full DDD/clean-architecture relocation
