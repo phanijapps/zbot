@@ -104,11 +104,11 @@ Scope tags:
 - **Fix:** Extract `OutboxStore` trait. Independent of SurrealDB plan.
 - **Status:** pending (defer to Phase 6)
 
-#### TD-023 🟡 [Both] `AppState` holds concrete persistence types
-- **Location:** `gateway/src/state.rs:63-75` — `pub conversations: Arc<ConversationRepository>`, `pub knowledge_db: Arc<KnowledgeDatabase>`, `pub log_service: Arc<LogService<DatabaseManager>>`, `pub state_service: Arc<StateService<DatabaseManager>>`.
-- **Why debt:** The "switch" that picks a backend has to live in `AppState::new`. Today there's nothing to switch — concrete types are baked in.
-- **Fix:** After traits exist (TD-010, TD-014, optionally TD-020+), change `AppState` fields to `Arc<dyn ...>` and add a `PersistenceFactory::new(config)` that constructs the chosen impls.
-- **Status:** pending (last step — do after relevant traits exist)
+#### TD-023 ⏳ [Both] `AppState` factory pattern established; `graph_service` retirement deferred
+- **Location:** `gateway/src/state/mod.rs:63-75` — concrete persistence types alongside trait objects.
+- **Progress (Phase 5):** Factory pattern landed at `gateway/src/state/persistence_factory.rs`. `kg_store` construction goes through `build_kg_store_from_storage()`; the canonical `build_kg_store(knowledge_db, embedding_client)` entrypoint is gated until `graph_service` retires (it's where the SurrealDB config-driven branch will live). When SurrealDB support lands, this is where the branch goes — consumers don't need to change because they hold `Arc<dyn KnowledgeGraphStore>`.
+- **Deferred:** Retirement of `graph_service: Option<Arc<GraphService>>` (the parallel concrete field on `AppState`). Migrating its dozens of consumers — HTTP handlers in `gateway/src/http/graph.rs`, sleep jobs, distillation, etc. — is a multi-PR workstream.
+- **Status:** factory pattern done; `graph_service` retirement deferred to a future workstream
 
 ### Dialect-portability debt
 
