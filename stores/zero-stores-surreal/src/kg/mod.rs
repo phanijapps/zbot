@@ -16,6 +16,7 @@ use zero_stores::types::{
 
 mod alias;
 mod entity;
+mod reindex;
 mod relationship;
 mod search;
 mod traverse;
@@ -143,8 +144,8 @@ impl KnowledgeGraphStore for SurrealKgStore {
     }
 
     // === reindex (Task 10) ===
-    async fn reindex_embeddings(&self, _new_dim: usize) -> StoreResult<ReindexReport> {
-        Err(unimplemented_err("reindex_embeddings (Task 10)"))
+    async fn reindex_embeddings(&self, new_dim: usize) -> StoreResult<ReindexReport> {
+        reindex::reindex_embeddings(self.db(), new_dim).await
     }
 
     // === archival (Task 11) ===
