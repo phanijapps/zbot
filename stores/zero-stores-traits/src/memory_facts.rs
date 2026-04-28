@@ -259,4 +259,17 @@ pub trait MemoryFactStore: Send + Sync {
     ) -> Result<Vec<Value>, String> {
         Ok(Vec::new())
     }
+
+    /// Fetch a single memory fact by id. Returns `None` if the row is
+    /// absent. The shape mirrors the same JSON layout that
+    /// `list_memory_facts` emits per row.
+    async fn get_memory_fact_by_id(&self, _fact_id: &str) -> Result<Option<Value>, String> {
+        Ok(None)
+    }
+
+    /// Delete a single memory fact by id. Returns `true` if a row was
+    /// removed, `false` if the id was absent.
+    async fn delete_memory_fact(&self, _fact_id: &str) -> Result<bool, String> {
+        Ok(false)
+    }
 }

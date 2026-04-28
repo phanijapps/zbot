@@ -147,8 +147,9 @@ pub async fn list_memory_facts(
     Path(agent_id): Path<String>,
     Query(query): Query<MemoryListQuery>,
 ) -> Result<Json<MemoryListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let memory_repo = match &state.memory_repo {
-        Some(repo) => repo,
+    // Trait-routed so SurrealDB is honored when opted-in.
+    let memory_store = match &state.memory_store {
+        Some(s) => s,
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -159,14 +160,15 @@ pub async fn list_memory_facts(
         }
     };
 
-    let facts = memory_repo
+    let raw_facts = memory_store
         .list_memory_facts(
-            &agent_id,
+            Some(&agent_id),
             query.category.as_deref(),
             query.scope.as_deref(),
             query.limit,
             query.offset,
         )
+        .await
         .map_err(|e| {
             tracing::error!("Failed to list memory facts: {}", e);
             (
@@ -177,12 +179,24 @@ pub async fn list_memory_facts(
             )
         })?;
 
-    let total = memory_repo.count_memory_facts(&agent_id).unwrap_or(0);
+    let total = memory_store
+        .count_all_facts(Some(&agent_id))
+        .await
+        .map(|n| n as usize)
+        .unwrap_or(0);
 
-    Ok(Json(MemoryListResponse {
-        facts: facts.into_iter().map(MemoryFactResponse::from).collect(),
-        total,
-    }))
+    let facts: Vec<MemoryFactResponse> = raw_facts
+        .into_iter()
+        .filter_map(|v| match serde_json::from_value::<MemoryFactResponse>(v) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                tracing::warn!("memory fact row decode failed: {e}");
+                None
+            }
+        })
+        .collect();
+
+    Ok(Json(MemoryListResponse { facts, total }))
 }
 
 /// GET /api/memory/:agent_id/search - Search memory facts.
@@ -310,8 +324,8 @@ pub async fn get_memory_fact(
     State(state): State<AppState>,
     Path((agent_id, fact_id)): Path<(String, String)>,
 ) -> Result<Json<MemoryFactResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let memory_repo = match &state.memory_repo {
-        Some(repo) => repo,
+    let memory_store = match &state.memory_store {
+        Some(s) => s,
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -322,18 +336,24 @@ pub async fn get_memory_fact(
         }
     };
 
-    let fact = memory_repo.get_memory_fact_by_id(&fact_id).map_err(|e| {
-        tracing::error!("Failed to get memory fact: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to get memory fact: {}", e),
-            }),
-        )
-    })?;
+    let raw = memory_store
+        .get_memory_fact_by_id(&fact_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get memory fact: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to get memory fact: {}", e),
+                }),
+            )
+        })?;
+
+    let fact: Option<MemoryFactResponse> =
+        raw.and_then(|v| serde_json::from_value::<MemoryFactResponse>(v).ok());
 
     match fact {
-        Some(f) if f.agent_id == agent_id => Ok(Json(MemoryFactResponse::from(f))),
+        Some(f) if f.agent_id == agent_id => Ok(Json(f)),
         Some(_) => Err((
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
@@ -354,8 +374,8 @@ pub async fn delete_memory_fact(
     State(state): State<AppState>,
     Path((agent_id, fact_id)): Path<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let memory_repo = match &state.memory_repo {
-        Some(repo) => repo,
+    let memory_store = match &state.memory_store {
+        Some(s) => s,
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -367,19 +387,27 @@ pub async fn delete_memory_fact(
     };
 
     // First verify the fact belongs to this agent
-    let fact = memory_repo.get_memory_fact_by_id(&fact_id).map_err(|e| {
-        tracing::error!("Failed to get memory fact for deletion: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to get memory fact: {}", e),
-            }),
-        )
-    })?;
+    let raw = memory_store
+        .get_memory_fact_by_id(&fact_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get memory fact for deletion: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to get memory fact: {}", e),
+                }),
+            )
+        })?;
+    let fact: Option<MemoryFactResponse> =
+        raw.and_then(|v| serde_json::from_value::<MemoryFactResponse>(v).ok());
 
     match fact {
         Some(f) if f.agent_id == agent_id => {
-            let deleted = memory_repo.delete_memory_fact(&fact_id).map_err(|e| {
+            let deleted = memory_store
+                .delete_memory_fact(&fact_id)
+                .await
+                .map_err(|e| {
                 tracing::error!("Failed to delete memory fact: {}", e);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,

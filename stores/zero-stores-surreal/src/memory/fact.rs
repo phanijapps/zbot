@@ -162,6 +162,65 @@ struct FactListRow {
     last_used_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+pub async fn get_memory_fact_by_id(
+    db: &Arc<Surreal<Any>>,
+    fact_id: &str,
+) -> Result<Option<Value>, String> {
+    let thing = surrealdb::types::RecordId::new(
+        "memory_fact",
+        surrealdb::types::RecordIdKey::String(fact_id.to_string()),
+    );
+    let mut resp = db
+        .query(
+            "SELECT id, agent_id, content, fact_type, confidence, \
+             created_at, last_used_at FROM ONLY $id",
+        )
+        .bind(("id", thing))
+        .await
+        .map_err(|e| format!("get_memory_fact_by_id: {e}"))?;
+    let row: Option<FactListRow> = resp
+        .take(0)
+        .map_err(|e| format!("get_memory_fact_by_id take: {e}"))?;
+    Ok(row.map(|r| {
+        let id_str = match &r.id.key {
+            surrealdb::types::RecordIdKey::String(s) => s.clone(),
+            other => format!("{other:?}"),
+        };
+        serde_json::json!({
+            "id": id_str,
+            "agent_id": r.agent_id,
+            "scope": "session",
+            "category": r.fact_type,
+            "key": "",
+            "content": r.content,
+            "confidence": r.confidence.unwrap_or(0.8),
+            "mention_count": 0,
+            "source_summary": null,
+            "created_at": r.created_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+            "updated_at": r.last_used_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+        })
+    }))
+}
+
+pub async fn delete_memory_fact(
+    db: &Arc<Surreal<Any>>,
+    fact_id: &str,
+) -> Result<bool, String> {
+    let thing = surrealdb::types::RecordId::new(
+        "memory_fact",
+        surrealdb::types::RecordIdKey::String(fact_id.to_string()),
+    );
+    let mut resp = db
+        .query("DELETE $id RETURN BEFORE")
+        .bind(("id", thing))
+        .await
+        .map_err(|e| format!("delete_memory_fact: {e}"))?;
+    let rows: Vec<Value> = resp
+        .take(0)
+        .map_err(|e| format!("delete_memory_fact take: {e}"))?;
+    Ok(!rows.is_empty())
+}
+
 pub async fn count_all_facts(
     db: &Arc<Surreal<Any>>,
     agent_id: Option<&str>,

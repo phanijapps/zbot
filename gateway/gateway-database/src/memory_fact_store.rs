@@ -652,6 +652,17 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             .map(|f| serde_json::to_value(f).map_err(|e| e.to_string()))
             .collect()
     }
+
+    async fn get_memory_fact_by_id(&self, fact_id: &str) -> Result<Option<Value>, String> {
+        match self.memory_repo.get_memory_fact_by_id(fact_id)? {
+            Some(f) => Ok(Some(serde_json::to_value(f).map_err(|e| e.to_string())?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_memory_fact(&self, fact_id: &str) -> Result<bool, String> {
+        self.memory_repo.delete_memory_fact(fact_id)
+    }
 }
 
 #[cfg(test)]

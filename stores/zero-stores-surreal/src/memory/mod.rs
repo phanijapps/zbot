@@ -61,4 +61,12 @@ impl MemoryFactStore for SurrealMemoryStore {
     ) -> Result<Vec<Value>, String> {
         fact::list_memory_facts(&self.db, agent_id, category, scope, limit, offset).await
     }
+
+    async fn get_memory_fact_by_id(&self, fact_id: &str) -> Result<Option<Value>, String> {
+        fact::get_memory_fact_by_id(&self.db, fact_id).await
+    }
+
+    async fn delete_memory_fact(&self, fact_id: &str) -> Result<bool, String> {
+        fact::delete_memory_fact(&self.db, fact_id).await
+    }
 }
