@@ -24,6 +24,7 @@ thiserror = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 zero-stores-conformance = { path = "../zero-stores-conformance" }
+tempfile = "3"
 
 [lints]
 workspace = true

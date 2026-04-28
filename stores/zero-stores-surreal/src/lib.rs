@@ -16,5 +16,7 @@ pub mod types;
 
 pub use config::{SurrealConfig, SurrealCredentials};
 pub use connection::connect;
+pub use error::{map_surreal_error, MapSurreal};
 pub use kg::SurrealKgStore;
 pub use memory::SurrealMemoryStore;
+pub use types::{embedding_to_value, value_to_embedding, EntityIdExt, ThingExt};
