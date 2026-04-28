@@ -1262,7 +1262,7 @@ impl AppState {
         self.seed_default_skills();
 
         // Seed default policies from bundled template if no policies exist
-        self.seed_default_policies();
+        self.seed_default_policies().await;
 
         // Preload skills into cache
         if let Err(e) = self.skills.preload().await {
@@ -1346,15 +1346,19 @@ impl AppState {
     }
 
     /// Seed default policies from bundled template if no policies/corrections exist.
-    fn seed_default_policies(&self) {
-        let memory_repo = match &self.memory_repo {
-            Some(repo) => repo,
+    async fn seed_default_policies(&self) {
+        // Route through the trait surface so both SQLite and SurrealDB
+        // backends seed identically. `memory_store` is wired in both
+        // modes (SQLite-wrapper or SurrealMemoryStore via the bundle).
+        let memory_store = match &self.memory_store {
+            Some(s) => s,
             None => return,
         };
 
-        // Check if any correction facts already exist
-        let existing = memory_repo
-            .get_facts_by_category("root", "correction", 1)
+        // Check if any correction facts already exist for the root agent.
+        let existing = memory_store
+            .list_memory_facts(Some("root"), Some("correction"), None, 1, 0)
+            .await
             .unwrap_or_default();
         if !existing.is_empty() {
             tracing::debug!("Policies already exist, skipping seed");
@@ -1388,33 +1392,32 @@ impl AppState {
                 continue;
             }
 
-            let fact = zero_stores_sqlite::MemoryFact {
-                id: format!("policy-{}", uuid::Uuid::new_v4()),
-                session_id: None,
-                agent_id: "root".to_string(),
-                scope: "agent".to_string(),
-                category: category.to_string(),
-                key: key.to_string(),
-                content: content.to_string(),
-                confidence,
-                mention_count: 5,
-                source_summary: Some("Default policy".to_string()),
-                embedding: None,
-                ward_id: "__global__".to_string(),
-                contradicted_by: None,
-                created_at: now.clone(),
-                updated_at: now.clone(),
-                expires_at: None,
-                valid_from: None,
-                valid_until: None,
-                superseded_by: None,
-                pinned,
-                epistemic_class: Some("current".to_string()),
-                source_episode_id: None,
-                source_ref: None,
-            };
+            let fact_value = serde_json::json!({
+                "id": format!("policy-{}", uuid::Uuid::new_v4()),
+                "session_id": null,
+                "agent_id": "root",
+                "scope": "agent",
+                "category": category,
+                "key": key,
+                "content": content,
+                "confidence": confidence,
+                "mention_count": 5,
+                "source_summary": "Default policy",
+                "ward_id": "__global__",
+                "contradicted_by": null,
+                "created_at": now,
+                "updated_at": now,
+                "expires_at": null,
+                "valid_from": null,
+                "valid_until": null,
+                "superseded_by": null,
+                "pinned": pinned,
+                "epistemic_class": "current",
+                "source_episode_id": null,
+                "source_ref": null,
+            });
 
-            if memory_repo.upsert_memory_fact(&fact).is_ok() {
+            if memory_store.upsert_typed_fact(fact_value, None).await.is_ok() {
                 count += 1;
             }
         }
