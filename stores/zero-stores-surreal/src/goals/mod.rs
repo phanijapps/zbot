@@ -67,14 +67,12 @@ impl GoalStore for SurrealGoalStore {
     }
 
     async fn create_goal(&self, goal: Value) -> Result<String, String> {
-        let typed: Goal =
-            serde_json::from_value(goal).map_err(|e| format!("decode Goal: {e}"))?;
+        let typed: Goal = serde_json::from_value(goal).map_err(|e| format!("decode Goal: {e}"))?;
         let thing = surrealdb::types::RecordId::new(
             "goal",
             surrealdb::types::RecordIdKey::String(typed.id.clone()),
         );
-        let payload = serde_json::to_value(&typed)
-            .map_err(|e| format!("encode Goal: {e}"))?;
+        let payload = serde_json::to_value(&typed).map_err(|e| format!("encode Goal: {e}"))?;
         self.db
             .query("CREATE $id CONTENT $g")
             .bind(("id", thing))
@@ -157,7 +155,10 @@ mod tests {
     #[tokio::test]
     async fn create_then_get_roundtrip() {
         let store = fresh_store().await;
-        let id = store.create_goal(sample_goal("g1", "active")).await.unwrap();
+        let id = store
+            .create_goal(sample_goal("g1", "active"))
+            .await
+            .unwrap();
         assert_eq!(id, "g1");
         let fetched = store.get_goal("g1").await.unwrap().expect("present");
         assert_eq!(fetched["title"], "goal g1");
@@ -167,9 +168,18 @@ mod tests {
     #[tokio::test]
     async fn list_active_filters_state() {
         let store = fresh_store().await;
-        store.create_goal(sample_goal("ga", "active")).await.unwrap();
-        store.create_goal(sample_goal("gb", "active")).await.unwrap();
-        store.create_goal(sample_goal("gc", "satisfied")).await.unwrap();
+        store
+            .create_goal(sample_goal("ga", "active"))
+            .await
+            .unwrap();
+        store
+            .create_goal(sample_goal("gb", "active"))
+            .await
+            .unwrap();
+        store
+            .create_goal(sample_goal("gc", "satisfied"))
+            .await
+            .unwrap();
 
         let active = store.list_active_goals("root").await.unwrap();
         assert_eq!(active.len(), 2);
@@ -181,14 +191,20 @@ mod tests {
     #[tokio::test]
     async fn update_state_stamps_completed_at_on_terminal() {
         let store = fresh_store().await;
-        store.create_goal(sample_goal("g1", "active")).await.unwrap();
+        store
+            .create_goal(sample_goal("g1", "active"))
+            .await
+            .unwrap();
         store.update_goal_state("g1", "satisfied").await.unwrap();
         let fetched = store.get_goal("g1").await.unwrap().expect("present");
         assert_eq!(fetched["state"], "satisfied");
         assert!(fetched["completed_at"].is_string());
 
         // Non-terminal: blocked must not stamp completed_at.
-        store.create_goal(sample_goal("g2", "active")).await.unwrap();
+        store
+            .create_goal(sample_goal("g2", "active"))
+            .await
+            .unwrap();
         store.update_goal_state("g2", "blocked").await.unwrap();
         let fetched = store.get_goal("g2").await.unwrap().expect("present");
         assert_eq!(fetched["state"], "blocked");

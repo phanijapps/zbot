@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use tempfile::tempdir;
 
-use zero_stores_sqlite::KnowledgeDatabase;
 use gateway_services::VaultPaths;
+use zero_stores_sqlite::KnowledgeDatabase;
 
 fn db() -> (tempfile::TempDir, Arc<KnowledgeDatabase>) {
     let tmp = tempdir().unwrap();

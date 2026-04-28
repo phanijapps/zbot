@@ -3,8 +3,8 @@
 //! CRUD operations for causal edges in the knowledge graph.
 //! Causal edges represent cause-effect relationships between entities.
 
-use knowledge_graph::error::{GraphError, GraphResult};
 use crate::KnowledgeDatabase;
+use knowledge_graph::error::{GraphError, GraphResult};
 use rusqlite::params;
 use std::sync::Arc;
 

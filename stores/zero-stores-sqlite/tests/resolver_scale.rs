@@ -7,10 +7,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use zero_stores_sqlite::KnowledgeDatabase;
 use gateway_services::VaultPaths;
 use knowledge_graph::{Entity, EntityType, ExtractedKnowledge};
 use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::KnowledgeDatabase;
 
 fn normalized(v: Vec<f32>) -> Vec<f32> {
     let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();

@@ -53,9 +53,7 @@ impl WikiStore for SurrealWikiStore {
             .bind(("t", title.to_string()))
             .await
             .map_err(|e| format!("get_article: {e}"))?;
-        let rows: Vec<Value> = resp
-            .take(0)
-            .map_err(|e| format!("get_article take: {e}"))?;
+        let rows: Vec<Value> = resp.take(0).map_err(|e| format!("get_article take: {e}"))?;
         Ok(rows.into_iter().next().map(row_to_article_value))
     }
 
@@ -88,10 +86,7 @@ impl WikiStore for SurrealWikiStore {
             Some(prev) => {
                 let flat = crate::row_value::flatten_record_id(prev);
                 let prev_id = flat["id"].as_str().unwrap_or_default().to_string();
-                let prev_version = flat
-                    .get("version")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(1);
+                let prev_version = flat.get("version").and_then(|v| v.as_i64()).unwrap_or(1);
                 let thing = surrealdb::types::RecordId::new(
                     "wiki_doc",
                     surrealdb::types::RecordIdKey::String(prev_id),
@@ -165,9 +160,7 @@ impl WikiStore for SurrealWikiStore {
             .query("SELECT count() AS n FROM wiki_doc GROUP ALL")
             .await
             .map_err(|e| format!("wiki_stats: {e}"))?;
-        let rows: Vec<Value> = resp
-            .take(0)
-            .map_err(|e| format!("wiki_stats take: {e}"))?;
+        let rows: Vec<Value> = resp.take(0).map_err(|e| format!("wiki_stats take: {e}"))?;
         let total = rows
             .first()
             .and_then(|v| v.get("n"))
@@ -180,11 +173,7 @@ impl WikiStore for SurrealWikiStore {
 impl SurrealWikiStore {
     /// Run the FTS branch of hybrid search and return raw rows.
     /// Empty query short-circuits to an empty vec.
-    async fn fts_branch(
-        &self,
-        ward_id: Option<&str>,
-        query: &str,
-    ) -> Result<Vec<Value>, String> {
+    async fn fts_branch(&self, ward_id: Option<&str>, query: &str) -> Result<Vec<Value>, String> {
         if query.is_empty() {
             return Ok(Vec::new());
         }
@@ -207,7 +196,9 @@ impl SurrealWikiStore {
                 )
                 .bind(("q", query.to_string())),
         };
-        let mut resp = q.await.map_err(|e| format!("search_wiki_hybrid fts: {e}"))?;
+        let mut resp = q
+            .await
+            .map_err(|e| format!("search_wiki_hybrid fts: {e}"))?;
         resp.take(0)
             .map_err(|e| format!("search_wiki_hybrid fts take: {e}"))
     }
@@ -229,7 +220,9 @@ impl SurrealWikiStore {
                 .bind(("w", ward_id.unwrap().to_string())),
             None => self.db.query("SELECT * FROM wiki_doc"),
         };
-        let mut resp = q.await.map_err(|e| format!("search_wiki_hybrid vec: {e}"))?;
+        let mut resp = q
+            .await
+            .map_err(|e| format!("search_wiki_hybrid vec: {e}"))?;
         let candidates: Vec<Value> = resp
             .take(0)
             .map_err(|e| format!("search_wiki_hybrid vec take: {e}"))?;
@@ -434,5 +427,74 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(store.wiki_stats().await.unwrap().total, 1);
+    }
+
+    #[tokio::test]
+    async fn search_wiki_hybrid_fts_finds_match() {
+        let store = fresh_store().await;
+        store
+            .upsert_article(sample_article("a1", "wardA", "coffee brewing", "How to brew pour-over coffee"), None)
+            .await
+            .unwrap();
+        store
+            .upsert_article(sample_article("a2", "wardA", "tea guide", "Herbal tea at night"), None)
+            .await
+            .unwrap();
+        let results = store
+            .search_wiki_hybrid(Some("wardA"), "coffee", 10, None)
+            .await
+            .unwrap();
+        assert!(
+            results.iter().any(|r| r["article"]["title"].as_str().unwrap_or("").contains("coffee")),
+            "FTS should find the coffee article"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_wiki_hybrid_empty_query_returns_nothing() {
+        let store = fresh_store().await;
+        store
+            .upsert_article(sample_article("a1", "wardA", "topic", "content"), None)
+            .await
+            .unwrap();
+        let results = store
+            .search_wiki_hybrid(Some("wardA"), "", 10, None)
+            .await
+            .unwrap();
+        assert!(results.is_empty(), "empty query should return nothing");
+    }
+
+    #[tokio::test]
+    async fn search_wiki_hybrid_with_embedding() {
+        let store = fresh_store().await;
+        let mut article = sample_article("a1", "wardA", "embedded topic", "content with vector");
+        article.as_object_mut().unwrap().insert(
+            "embedding".to_string(),
+            serde_json::json!([1.0, 0.0, 0.0]),
+        );
+        store.upsert_article(article, None).await.unwrap();
+        let query_emb: Vec<f32> = vec![1.0, 0.0, 0.0];
+        let results = store
+            .search_wiki_hybrid(Some("wardA"), "topic", 10, Some(&query_emb))
+            .await
+            .unwrap();
+        assert!(!results.is_empty(), "should find article via embedding");
+        let found = &results[0];
+        assert!(found.get("score").is_some());
+        assert!(found.get("match_source").is_some());
+    }
+
+    #[tokio::test]
+    async fn search_wiki_hybrid_no_ward_filter() {
+        let store = fresh_store().await;
+        store
+            .upsert_article(sample_article("a1", "wardA", "global topic", "shared content"), None)
+            .await
+            .unwrap();
+        let results = store
+            .search_wiki_hybrid(None, "shared", 10, None)
+            .await
+            .unwrap();
+        assert!(!results.is_empty(), "should find without ward filter");
     }
 }

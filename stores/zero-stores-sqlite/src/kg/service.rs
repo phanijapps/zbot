@@ -2,9 +2,11 @@
 //!
 //! Business logic layer providing higher-level operations on the knowledge graph.
 
-use knowledge_graph::error::GraphResult;
 use super::storage::GraphStorage;
-use knowledge_graph::types::{Direction, Entity, EntityWithConnections, GraphStats, Relationship, Subgraph};
+use knowledge_graph::error::GraphResult;
+use knowledge_graph::types::{
+    Direction, Entity, EntityWithConnections, GraphStats, Relationship, Subgraph,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -411,7 +413,9 @@ fn collect_neighbors(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use knowledge_graph::types::{Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType};
+    use knowledge_graph::types::{
+        Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType,
+    };
     use tempfile::tempdir;
 
     async fn create_test_service() -> GraphService {

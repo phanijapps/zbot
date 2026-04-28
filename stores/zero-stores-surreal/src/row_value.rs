@@ -40,7 +40,10 @@ fn extract_id_key(v: &Value) -> String {
             return s.to_string();
         }
     }
-    v.to_string().trim_matches('"').trim_matches('`').to_string()
+    v.to_string()
+        .trim_matches('"')
+        .trim_matches('`')
+        .to_string()
 }
 
 #[cfg(test)]

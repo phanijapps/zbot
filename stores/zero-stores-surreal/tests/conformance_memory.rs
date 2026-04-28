@@ -33,3 +33,45 @@ async fn memory_recall_respects_agent_isolation() {
     let s = fresh_store().await;
     zero_stores_conformance::memory_recall_respects_agent_isolation(&s).await;
 }
+
+#[tokio::test]
+async fn memory_list_facts_filters_and_paginates() {
+    let s = fresh_store().await;
+    zero_stores_conformance::memory_list_facts_filters_and_paginates(&s).await;
+}
+
+#[tokio::test]
+async fn memory_get_by_id_round_trip() {
+    let s = fresh_store().await;
+    zero_stores_conformance::memory_get_by_id_round_trip(&s).await;
+}
+
+#[tokio::test]
+async fn memory_delete_fact_removes_it() {
+    let s = fresh_store().await;
+    zero_stores_conformance::memory_delete_fact_removes_it(&s).await;
+}
+
+#[tokio::test]
+async fn memory_archive_fact_hides_from_listing() {
+    let s = fresh_store().await;
+    zero_stores_conformance::memory_archive_fact_hides_from_listing(&s).await;
+}
+
+#[tokio::test]
+async fn memory_supersede_fact_succeeds() {
+    let s = fresh_store().await;
+    zero_stores_conformance::memory_supersede_fact_succeeds(&s).await;
+}
+
+#[tokio::test]
+async fn memory_upsert_typed_fact_round_trip() {
+    let s = fresh_store().await;
+    zero_stores_conformance::memory_upsert_typed_fact_round_trip(&s).await;
+}
+
+#[tokio::test]
+async fn memory_hybrid_search_finds_match() {
+    let s = fresh_store().await;
+    zero_stores_conformance::memory_hybrid_search_finds_match(&s).await;
+}

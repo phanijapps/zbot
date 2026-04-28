@@ -264,7 +264,9 @@ impl GraphTraversal for SqliteGraphTraversal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use knowledge_graph::types::{Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType};
+    use knowledge_graph::types::{
+        Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType,
+    };
     use tempfile::tempdir;
 
     /// Spin up an in-memory-ish test storage and return it wrapped in Arc.

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use tempfile::tempdir;
 
+use gateway_services::VaultPaths;
 use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
 use zero_stores_sqlite::{KnowledgeDatabase, WardWikiRepository};
-use gateway_services::VaultPaths;
 
 fn setup() -> (
     tempfile::TempDir,

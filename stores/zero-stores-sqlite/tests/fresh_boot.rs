@@ -4,8 +4,8 @@
 use std::sync::Arc;
 use tempfile::tempdir;
 
-use zero_stores_sqlite::{DatabaseManager, KnowledgeDatabase};
 use gateway_services::VaultPaths;
+use zero_stores_sqlite::{DatabaseManager, KnowledgeDatabase};
 
 #[test]
 fn fresh_boot_creates_both_databases_with_vec0_working() {

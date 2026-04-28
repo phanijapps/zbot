@@ -50,8 +50,8 @@ impl EpisodeStore for SurrealEpisodeStore {
         episode: Value,
         embedding: Option<Vec<f32>>,
     ) -> Result<String, String> {
-        let mut typed: SessionEpisode = serde_json::from_value(episode)
-            .map_err(|e| format!("decode SessionEpisode: {e}"))?;
+        let mut typed: SessionEpisode =
+            serde_json::from_value(episode).map_err(|e| format!("decode SessionEpisode: {e}"))?;
         if embedding.is_some() {
             typed.embedding = embedding;
         }

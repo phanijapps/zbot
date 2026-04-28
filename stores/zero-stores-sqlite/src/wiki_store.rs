@@ -65,12 +65,9 @@ impl WikiStore for GatewayWikiStore {
         limit: usize,
         query_embedding: Option<&[f32]>,
     ) -> Result<Vec<Value>, String> {
-        let hits = self.repo.search_hybrid(
-            query,
-            ward_id,
-            query_embedding.map(|e| e.to_vec()),
-            limit,
-        )?;
+        let hits =
+            self.repo
+                .search_hybrid(query, ward_id, query_embedding.map(|e| e.to_vec()), limit)?;
         Ok(hits
             .into_iter()
             .map(|h| {

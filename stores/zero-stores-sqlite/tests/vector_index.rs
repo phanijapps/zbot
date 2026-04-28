@@ -3,9 +3,9 @@
 use std::sync::Arc;
 use tempfile::tempdir;
 
+use gateway_services::VaultPaths;
 use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
 use zero_stores_sqlite::KnowledgeDatabase;
-use gateway_services::VaultPaths;
 
 fn setup() -> (tempfile::TempDir, Arc<KnowledgeDatabase>) {
     let tmp = tempdir().expect("tempdir");

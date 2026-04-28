@@ -428,3 +428,250 @@ pub async fn memory_recall_respects_agent_isolation<S: MemoryFactStore>(store: &
         );
     }
 }
+
+pub async fn memory_list_facts_filters_and_paginates<S: MemoryFactStore>(store: &S) {
+    let _ = store
+        .save_fact(
+            "conf-a",
+            "preference",
+            "k1",
+            "Alice likes coffee",
+            0.9,
+            None,
+        )
+        .await
+        .unwrap();
+    let _ = store
+        .save_fact("conf-a", "skill", "k2", "Alice knows Rust", 0.8, None)
+        .await
+        .unwrap();
+    let _ = store
+        .save_fact("conf-b", "preference", "k3", "Bob likes tea", 0.9, None)
+        .await
+        .unwrap();
+
+    let a_facts = store
+        .list_memory_facts(Some("conf-a"), None, None, 100, 0)
+        .await
+        .unwrap();
+    assert!(
+        a_facts.len() >= 2,
+        "agent filter should return >= 2 facts, got {}",
+        a_facts.len()
+    );
+
+    let a_pref = store
+        .list_memory_facts(Some("conf-a"), Some("preference"), None, 100, 0)
+        .await
+        .unwrap();
+    assert!(
+        a_pref.iter().all(|f| f["category"] == "preference"),
+        "category filter should hold"
+    );
+
+    let all = store
+        .list_memory_facts(None, None, None, 100, 0)
+        .await
+        .unwrap();
+    assert!(
+        all.len() >= 3,
+        "unfiltered should return >= 3, got {}",
+        all.len()
+    );
+
+    for row in &all {
+        assert!(row.get("id").is_some(), "row should have id");
+        assert!(row.get("agent_id").is_some(), "row should have agent_id");
+        assert!(row.get("content").is_some(), "row should have content");
+    }
+}
+
+pub async fn memory_get_by_id_round_trip<S: MemoryFactStore>(store: &S) {
+    let _ = store
+        .save_fact("conf-gbi", "preference", "k1", "Milk no sugar", 0.9, None)
+        .await
+        .unwrap();
+
+    let listed = store
+        .list_memory_facts(Some("conf-gbi"), None, None, 10, 0)
+        .await
+        .unwrap();
+    assert!(!listed.is_empty(), "should have at least one fact");
+    let id = listed[0]["id"].as_str().expect("id should be a string");
+
+    let fetched = store
+        .get_memory_fact_by_id(id)
+        .await
+        .expect("get_by_id should not error");
+    assert!(fetched.is_some(), "fact should exist by id");
+    let fact = fetched.unwrap();
+    assert_eq!(fact["content"], "Milk no sugar");
+
+    let missing = store
+        .get_memory_fact_by_id("nonexistent-id-xyz")
+        .await
+        .expect("get_by_id for missing should not error");
+    assert!(missing.is_none(), "missing id should return None");
+}
+
+pub async fn memory_delete_fact_removes_it<S: MemoryFactStore>(store: &S) {
+    let _ = store
+        .save_fact("conf-del", "preference", "k1", "To be deleted", 0.9, None)
+        .await
+        .unwrap();
+
+    let listed = store
+        .list_memory_facts(Some("conf-del"), None, None, 10, 0)
+        .await
+        .unwrap();
+    assert!(!listed.is_empty(), "should have at least one fact");
+    let id = listed[0]["id"].as_str().expect("id should be a string");
+
+    let deleted = store
+        .delete_memory_fact(id)
+        .await
+        .expect("delete should not error");
+    assert!(deleted, "delete should return true for existing fact");
+
+    let gone = store
+        .get_memory_fact_by_id(id)
+        .await
+        .expect("get after delete should not error");
+    assert!(gone.is_none(), "fact should be gone after delete");
+}
+
+pub async fn memory_archive_fact_hides_from_listing<S: MemoryFactStore>(store: &S) {
+    let _ = store
+        .save_fact("conf-arch", "preference", "k1", "To be archived", 0.9, None)
+        .await
+        .unwrap();
+
+    let listed = store
+        .list_memory_facts(Some("conf-arch"), None, None, 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1, "should see one active fact");
+    let id = listed[0]["id"].as_str().expect("id should be a string");
+
+    let archived = store
+        .archive_fact(id)
+        .await
+        .expect("archive should not error");
+    assert!(archived, "archive should return true for existing fact");
+
+    let after = store
+        .list_memory_facts(Some("conf-arch"), None, None, 10, 0)
+        .await
+        .unwrap();
+    assert!(
+        after.is_empty(),
+        "archived fact should not appear in listing"
+    );
+
+    let still_exists = store
+        .get_memory_fact_by_id(id)
+        .await
+        .expect("get_by_id should not error");
+    assert!(
+        still_exists.is_some(),
+        "archived fact should still be retrievable by id"
+    );
+}
+
+pub async fn memory_supersede_fact_succeeds<S: MemoryFactStore>(store: &S) {
+    let _ = store
+        .save_fact("conf-sup", "preference", "k1", "Old fact", 0.9, None)
+        .await
+        .unwrap();
+
+    let listed = store
+        .list_memory_facts(Some("conf-sup"), None, None, 10, 0)
+        .await
+        .unwrap();
+    let old_id = listed[0]["id"].as_str().expect("id should be a string");
+
+    store
+        .supersede_fact(old_id, "replacement-fact-id")
+        .await
+        .expect("supersede should not error");
+}
+
+pub async fn memory_upsert_typed_fact_round_trip<S: MemoryFactStore>(store: &S) {
+    let fact_id = "conf-typed-001";
+    let fact = serde_json::json!({
+        "id": fact_id,
+        "session_id": null,
+        "agent_id": "conf-typed",
+        "scope": "session",
+        "category": "preference",
+        "fact_type": "preference",
+        "key": "k1",
+        "content": "Typed fact content",
+        "confidence": 0.95,
+        "mention_count": 0,
+        "source_summary": null,
+        "ward_id": "__global__",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "expires_at": null,
+        "valid_from": null,
+        "valid_until": null,
+        "superseded_by": null,
+        "contradicted_by": null,
+        "pinned": false,
+        "epistemic_class": "current",
+    });
+
+    store
+        .upsert_typed_fact(fact, None)
+        .await
+        .expect("upsert_typed_fact should not error");
+
+    let fetched = store
+        .get_memory_fact_by_id(fact_id)
+        .await
+        .expect("get_by_id should not error");
+    assert!(fetched.is_some(), "typed fact should exist");
+    let row = fetched.unwrap();
+    assert_eq!(row["content"], "Typed fact content");
+}
+
+pub async fn memory_hybrid_search_finds_match<S: MemoryFactStore>(store: &S) {
+    let _ = store
+        .save_fact(
+            "conf-hybrid",
+            "preference",
+            "k1",
+            "Dark roast coffee beans",
+            0.9,
+            None,
+        )
+        .await
+        .unwrap();
+    let _ = store
+        .save_fact(
+            "conf-hybrid",
+            "preference",
+            "k2",
+            "Herbal tea at night",
+            0.8,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let results = store
+        .search_memory_facts_hybrid(Some("conf-hybrid"), "coffee", "fts", 10, None, None)
+        .await
+        .expect("hybrid search should not error");
+    assert!(
+        !results.is_empty(),
+        "hybrid search should find at least one match"
+    );
+    assert!(
+        results
+            .iter()
+            .any(|r| r["content"].as_str().unwrap_or("").contains("coffee")),
+        "results should contain the coffee fact"
+    );
+}

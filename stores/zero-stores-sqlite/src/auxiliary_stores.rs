@@ -79,10 +79,7 @@ impl RecallLogStore for GatewayRecallLogStore {
         self.repo.get_keys_for_session(session_id)
     }
 
-    async fn get_keys_for_sessions(
-        &self,
-        session_ids: &[String],
-    ) -> Result<Vec<String>, String> {
+    async fn get_keys_for_sessions(&self, session_ids: &[String]) -> Result<Vec<String>, String> {
         // Repo returns HashMap<String, usize> (count per key); the trait
         // surface is "list of distinct keys" so we collapse to keys-only.
         let id_refs: Vec<&str> = session_ids.iter().map(|s| s.as_str()).collect();
@@ -139,7 +136,6 @@ impl DistillationStore for GatewayDistillationStore {
         // trait — passing zeros is fine because the actual production
         // updater goes through the concrete repo path. Trait is for tests
         // and trait-aware executors that don't track these.
-        self.repo
-            .update_success(session_id, 0, 0, 0, false, 0)
+        self.repo.update_success(session_id, 0, 0, 0, false, 0)
     }
 }

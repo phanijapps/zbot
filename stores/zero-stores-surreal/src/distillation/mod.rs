@@ -184,7 +184,10 @@ mod tests {
     #[tokio::test]
     async fn insert_then_get_by_session() {
         let store = fresh_store().await;
-        store.insert_run(sample_run("sess-1", "failed")).await.unwrap();
+        store
+            .insert_run(sample_run("sess-1", "failed"))
+            .await
+            .unwrap();
         let fetched = store
             .get_run_by_session("sess-1")
             .await
@@ -221,7 +224,10 @@ mod tests {
     #[tokio::test]
     async fn update_retry_bumps_count_and_status() {
         let store = fresh_store().await;
-        store.insert_run(sample_run("sess-1", "failed")).await.unwrap();
+        store
+            .insert_run(sample_run("sess-1", "failed"))
+            .await
+            .unwrap();
         store.update_retry("sess-1").await.unwrap();
         let fetched = store
             .get_run_by_session("sess-1")
@@ -235,7 +241,10 @@ mod tests {
     #[tokio::test]
     async fn update_success_marks_status() {
         let store = fresh_store().await;
-        store.insert_run(sample_run("sess-1", "failed")).await.unwrap();
+        store
+            .insert_run(sample_run("sess-1", "failed"))
+            .await
+            .unwrap();
         store
             .update_success("sess-1", Some("done".to_string()))
             .await

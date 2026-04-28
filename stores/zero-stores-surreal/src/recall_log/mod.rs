@@ -72,10 +72,7 @@ impl RecallLogStore for SurrealRecallLogStore {
         Ok(rows.into_iter().map(|r| r.fact_key).collect())
     }
 
-    async fn get_keys_for_sessions(
-        &self,
-        session_ids: &[String],
-    ) -> Result<Vec<String>, String> {
+    async fn get_keys_for_sessions(&self, session_ids: &[String]) -> Result<Vec<String>, String> {
         if session_ids.is_empty() {
             return Ok(Vec::new());
         }

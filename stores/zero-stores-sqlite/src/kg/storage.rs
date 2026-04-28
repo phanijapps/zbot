@@ -2,11 +2,11 @@
 //!
 //! SQLite storage for knowledge graph entities and relationships.
 
+use crate::KnowledgeDatabase;
 use knowledge_graph::error::{GraphError, GraphResult};
 use knowledge_graph::types::{
     Direction, Entity, EntityType, ExtractedKnowledge, NeighborInfo, Relationship, RelationshipType,
 };
-use crate::KnowledgeDatabase;
 use rusqlite::{params, Connection};
 use std::sync::Arc;
 
@@ -1938,9 +1938,9 @@ impl GraphStorage {
                     )
                     .map_err(GraphError::Other)?
                     {
-                        knowledge_graph::resolver::ResolveOutcome::Merge { existing_id, .. } => {
-                            Ok(Some(existing_id))
-                        }
+                        knowledge_graph::resolver::ResolveOutcome::Merge {
+                            existing_id, ..
+                        } => Ok(Some(existing_id)),
                         knowledge_graph::resolver::ResolveOutcome::Create => Ok(None),
                     }
                 })()
@@ -2046,8 +2046,13 @@ fn resolve_via_resolver(
     agent_id: &str,
     entity: &Entity,
 ) -> GraphResult<Option<String>> {
-    match knowledge_graph::resolver::resolve(conn, agent_id, entity, entity.name_embedding.as_deref())
-        .map_err(GraphError::Other)?
+    match knowledge_graph::resolver::resolve(
+        conn,
+        agent_id,
+        entity,
+        entity.name_embedding.as_deref(),
+    )
+    .map_err(GraphError::Other)?
     {
         knowledge_graph::resolver::ResolveOutcome::Merge {
             existing_id,
