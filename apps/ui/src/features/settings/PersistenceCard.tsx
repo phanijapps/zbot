@@ -44,17 +44,29 @@ export function PersistenceCard() {
           style={{ marginBottom: "var(--spacing-3)" }}
           role="status"
         >
-          <strong>SurrealDB requires a daemon rebuild.</strong> Stop the
-          daemon and restart it with{" "}
-          <code>cargo run -p daemon --features surreal-backend</code>. The
-          factory dispatch in{" "}
-          <code>persistence_factory::build_surreal_pair</code> is wired;
-          settings.json driven runtime switching lands in a follow-up PR.
+          <strong>To switch to SurrealDB:</strong>
+          <ol style={{ marginTop: 6, marginBottom: 0, paddingLeft: 20 }}>
+            <li>
+              Build with the feature flag:{" "}
+              <code>cargo run -p daemon --features surreal-backend</code>
+            </li>
+            <li>
+              Set{" "}
+              <code>{`{"persistence": {"knowledge_backend": "surreal"}}`}</code>{" "}
+              in <code>config/settings.json</code>
+            </li>
+            <li>Restart the daemon</li>
+          </ol>
+          <div style={{ marginTop: 6 }}>
+            Mixed-mode: trait-routed paths use SurrealDB; legacy concrete-typed
+            callers (a few HTTP handlers + sleep jobs) still hit SQLite until
+            the TD-023 follow-up retires them.
+          </div>
         </div>
       ) : (
         <div className="page-subtitle" style={{ marginBottom: "var(--spacing-3)" }}>
-          SQLite is the only backend wired into the running daemon today.
-          Selecting SurrealDB shows the build instructions.
+          SQLite is the default backend. Selecting SurrealDB shows the
+          steps to opt in.
         </div>
       )}
 

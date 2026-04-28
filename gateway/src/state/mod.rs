@@ -421,22 +421,45 @@ impl AppState {
         // so it follows ArcSwap backend changes — same client the
         // gateway-side wrapper at
         // `gateway-execution::sleep::embedding_reindex` already uses.
-        let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
-            runner_graph_storage.as_ref().map(|gs| {
-                let embedder = embedding_client
-                    .clone()
-                    .expect("embedding_client wired above for distillation/recall");
-                persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
+        // Detect whether the user opted in to SurrealDB via settings.json.
+        // The branch is feature-gated: without `surreal-backend`, the dep
+        // isn't even compiled in, and `surreal_override` is always `None`.
+        // Mixed-mode: the legacy graph_service / memory_repo concrete fields
+        // still flow through SQLite for callers that haven't migrated to the
+        // trait surface yet (TD-023 deferred half).
+        #[cfg(feature = "surreal-backend")]
+        let surreal_override: Option<(
+            Arc<dyn zero_stores::KnowledgeGraphStore>,
+            Arc<dyn zero_stores::MemoryFactStore>,
+        )> = persistence_factory::maybe_build_surreal_pair(&paths);
+        #[cfg(not(feature = "surreal-backend"))]
+        let surreal_override: Option<(
+            Arc<dyn zero_stores::KnowledgeGraphStore>,
+            Arc<dyn zero_stores::MemoryFactStore>,
+        )> = None;
+
+        let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> = surreal_override
+            .as_ref()
+            .map(|(kg, _)| kg.clone())
+            .or_else(|| {
+                runner_graph_storage.as_ref().map(|gs| {
+                    let embedder = embedding_client
+                        .clone()
+                        .expect("embedding_client wired above for distillation/recall");
+                    persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
+                })
             });
 
         // Build the trait-object MemoryFactStore from the same `MemoryRepository`
         // and `LiveEmbeddingClient` that the gateway-side fact-store callsites
-        // use. Construction is centralized in `persistence_factory` (TD-023):
-        // when SurrealDB support lands, the config-driven branch goes there
-        // and this callsite stays the same.
-        let memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = Some(
-            persistence_factory::build_memory_store(memory_repo.clone(), embedding_client.clone()),
-        );
+        // use, OR override with the SurrealDB-backed store when opted-in.
+        let memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = surreal_override
+            .as_ref()
+            .map(|(_, mem)| mem.clone())
+            .or(Some(persistence_factory::build_memory_store(
+                memory_repo.clone(),
+                embedding_client.clone(),
+            )));
 
         let episode_repo_ref = episode_repo.clone();
 

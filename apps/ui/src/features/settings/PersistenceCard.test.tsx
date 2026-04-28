@@ -36,38 +36,34 @@ describe("PersistenceCard", () => {
     ]);
   });
 
-  it("shows the SQLite hint by default and no rebuild banner", () => {
+  it("shows the SQLite hint by default and no switch instructions", () => {
     render(<PersistenceCard />);
     expect(
-      screen.getByText(/SQLite is the only backend wired/i),
+      screen.getByText(/SQLite is the default backend/i),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText(/SurrealDB requires a daemon rebuild/i),
+      screen.queryByText(/To switch to SurrealDB/i),
     ).not.toBeInTheDocument();
   });
 
-  it("reveals the rebuild banner when SurrealDB is selected", () => {
+  it("reveals the switch instructions when SurrealDB is selected", () => {
     render(<PersistenceCard />);
     const select = screen.getByLabelText(/knowledge backend/i) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: "surreal" } });
-    expect(
-      screen.getByText(/SurrealDB requires a daemon rebuild/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/To switch to SurrealDB/i)).toBeInTheDocument();
     expect(
       screen.getByText(/cargo run -p daemon --features surreal-backend/i),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/SQLite is the only backend wired/i),
-    ).not.toBeInTheDocument();
+    expect(screen.getByText(/config\/settings\.json/i)).toBeInTheDocument();
   });
 
-  it("hides the rebuild banner when switching back to SQLite", () => {
+  it("hides the switch instructions when going back to SQLite", () => {
     render(<PersistenceCard />);
     const select = screen.getByLabelText(/knowledge backend/i) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: "surreal" } });
     fireEvent.change(select, { target: { value: "sqlite" } });
     expect(
-      screen.queryByText(/SurrealDB requires a daemon rebuild/i),
+      screen.queryByText(/To switch to SurrealDB/i),
     ).not.toBeInTheDocument();
   });
 

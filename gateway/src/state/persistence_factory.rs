@@ -111,6 +111,80 @@ pub struct SurrealBackendConfig {
     pub vault_root: std::path::PathBuf,
 }
 
+/// Read `config/settings.json` and return `Some(config)` if the user has
+/// opted into SurrealDB (`persistence.knowledge_backend = "surreal"`).
+/// Returns `None` for any other state — missing file, missing key,
+/// "sqlite", parse error. Failing closed keeps SQLite as the safe default.
+#[cfg(feature = "surreal-backend")]
+fn read_surreal_opt_in(paths: &gateway_services::paths::VaultPaths) -> Option<SurrealBackendConfig> {
+    let raw = std::fs::read_to_string(paths.settings()).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let backend = value
+        .get("persistence")
+        .and_then(|p| p.get("knowledge_backend"))
+        .and_then(|b| b.as_str())?;
+    if backend != "surreal" {
+        return None;
+    }
+    let surreal_obj = value.get("persistence").and_then(|p| p.get("surreal"));
+    let url = surreal_obj
+        .and_then(|s| s.get("url"))
+        .and_then(|u| u.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| "rocksdb://$VAULT/data/knowledge.surreal".to_string());
+    let namespace = surreal_obj
+        .and_then(|s| s.get("namespace"))
+        .and_then(|n| n.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| "memory_kg".to_string());
+    let database = surreal_obj
+        .and_then(|s| s.get("database"))
+        .and_then(|d| d.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| "main".to_string());
+    Some(SurrealBackendConfig {
+        url,
+        namespace,
+        database,
+        credentials: None,
+        vault_root: paths.vault_dir().clone(),
+    })
+}
+
+/// Construct the SurrealDB-backed store pair when the user has opted in
+/// via settings.json, otherwise return `None`. Failures are fatal: a
+/// configured-but-broken Surreal connection means the daemon refuses to
+/// start (logged + panicked) — falling back to SQLite would silently
+/// hide the problem.
+#[cfg(feature = "surreal-backend")]
+pub fn maybe_build_surreal_pair(
+    paths: &gateway_services::paths::VaultPaths,
+) -> Option<(Arc<dyn KnowledgeGraphStore>, Arc<dyn MemoryFactStore>)> {
+    let cfg = read_surreal_opt_in(paths)?;
+    tracing::info!(
+        url = %cfg.url,
+        namespace = %cfg.namespace,
+        database = %cfg.database,
+        "SurrealDB backend enabled via settings.json"
+    );
+    // Bridge to async via the ambient tokio runtime — AppState::new is
+    // called from a tokio context (daemon main).
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(build_surreal_pair(&cfg))
+    });
+    match result {
+        Ok(pair) => Some(pair),
+        Err(e) => {
+            tracing::error!(error = %e, "SurrealDB init failed — daemon refusing to start");
+            panic!(
+                "SurrealDB persistence init failed: {e}. \
+                 If the database appears corrupted, run the recovery CLI \
+                 backed by zero-stores-surreal-recovery."
+            );
+        }
+    }
+}
+
 /// Build both SurrealDB-backed stores sharing one connection handle.
 /// Schema is applied idempotently as part of construction. Returns the
 /// (KG, Memory) pair. Errors fail fast — the daemon is expected to
