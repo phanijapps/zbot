@@ -12,6 +12,8 @@ use gateway_database::{DistillationStats, UndistilledSession};
 use knowledge_graph::{Direction, Entity, GraphStats, Relationship, Subgraph};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
+use zero_stores::{Direction as StoreDirection, KnowledgeGraphStore};
 
 // ============================================================================
 // REQUEST/RESPONSE TYPES
@@ -227,27 +229,12 @@ pub async fn get_graph_stats(
     Path(agent_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Json<GraphStatsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let graph_service = match &state.graph_service {
-        Some(service) => service,
-        None => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    error: "Knowledge graph service not available".to_string(),
-                }),
-            ));
-        }
-    };
-
-    match graph_service.get_stats(normalize_agent_id(&agent_id)).await {
-        Ok(stats) => Ok(Json(GraphStatsResponse::from(stats))),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to get graph stats: {}", e),
-            }),
-        )),
-    }
+    let kg_store = require_kg_store(&state)?;
+    kg_store
+        .graph_stats(normalize_agent_id(&agent_id))
+        .await
+        .map(|stats| Json(GraphStatsResponse::from(stats)))
+        .map_err(store_err_to_http)
 }
 
 /// GET /api/graph/:agent_id/entities
@@ -257,19 +244,8 @@ pub async fn list_entities(
     Query(query): Query<EntityListQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<EntityListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let graph_service = match &state.graph_service {
-        Some(service) => service,
-        None => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    error: "Knowledge graph service not available".to_string(),
-                }),
-            ));
-        }
-    };
-
-    match graph_service
+    let kg_store = require_kg_store(&state)?;
+    let entities = kg_store
         .list_entities(
             normalize_agent_id(&agent_id),
             query.entity_type.as_deref(),
@@ -277,21 +253,12 @@ pub async fn list_entities(
             query.offset,
         )
         .await
-    {
-        Ok(entities) => {
-            let total = entities.len();
-            Ok(Json(EntityListResponse {
-                entities: entities.into_iter().map(EntityResponse::from).collect(),
-                total,
-            }))
-        }
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to list entities: {}", e),
-            }),
-        )),
-    }
+        .map_err(store_err_to_http)?;
+    let total = entities.len();
+    Ok(Json(EntityListResponse {
+        entities: entities.into_iter().map(EntityResponse::from).collect(),
+        total,
+    }))
 }
 
 /// GET /api/graph/:agent_id/relationships
@@ -301,46 +268,24 @@ pub async fn list_relationships(
     Query(query): Query<RelationshipListQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<RelationshipListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let graph_service = match &state.graph_service {
-        Some(service) => service,
-        None => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    error: "Knowledge graph service not available".to_string(),
-                }),
-            ));
-        }
-    };
-
-    let normalized = normalize_agent_id(&agent_id);
-
-    match graph_service
+    let kg_store = require_kg_store(&state)?;
+    let relationships = kg_store
         .list_relationships(
-            normalized,
+            normalize_agent_id(&agent_id),
             query.relationship_type.as_deref(),
             query.limit,
             query.offset,
         )
         .await
-    {
-        Ok(relationships) => {
-            let total = relationships.len();
-            Ok(Json(RelationshipListResponse {
-                relationships: relationships
-                    .into_iter()
-                    .map(RelationshipResponse::from)
-                    .collect(),
-                total,
-            }))
-        }
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to list relationships: {}", e),
-            }),
-        )),
-    }
+        .map_err(store_err_to_http)?;
+    let total = relationships.len();
+    Ok(Json(RelationshipListResponse {
+        relationships: relationships
+            .into_iter()
+            .map(RelationshipResponse::from)
+            .collect(),
+        total,
+    }))
 }
 
 /// GET /api/graph/:agent_id/entities/:entity_id/neighbors
@@ -350,60 +295,43 @@ pub async fn get_entity_neighbors(
     Query(query): Query<NeighborQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<NeighborResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let graph_service = match &state.graph_service {
-        Some(service) => service,
-        None => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    error: "Knowledge graph service not available".to_string(),
-                }),
-            ));
-        }
-    };
-
-    // Parse direction
-    let direction = match query.direction.as_deref() {
-        Some("outgoing") => Direction::Outgoing,
-        Some("incoming") => Direction::Incoming,
-        _ => Direction::Both,
-    };
-
-    // Get neighbors through GraphService
-    match graph_service
-        .get_neighbors(
+    let kg_store = require_kg_store(&state)?;
+    let direction = parse_direction(query.direction.as_deref());
+    let neighbors = kg_store
+        .get_neighbors_full(
             normalize_agent_id(&agent_id),
             &entity_id,
             direction,
             query.limit,
         )
         .await
-    {
-        Ok(neighbors) => {
-            let neighbor_entries: Vec<NeighborEntry> = neighbors
-                .into_iter()
-                .map(|n| NeighborEntry {
-                    entity: EntityResponse::from(n.entity),
-                    relationship: RelationshipResponse::from(n.relationship),
-                    direction: match n.direction {
-                        Direction::Outgoing => "outgoing".to_string(),
-                        Direction::Incoming => "incoming".to_string(),
-                        Direction::Both => "both".to_string(),
-                    },
-                })
-                .collect();
+        .map_err(store_err_to_http)?;
+    let neighbor_entries: Vec<NeighborEntry> = neighbors
+        .into_iter()
+        .map(|n| NeighborEntry {
+            entity: EntityResponse::from(n.entity),
+            relationship: RelationshipResponse::from(n.relationship),
+            direction: match n.direction {
+                Direction::Outgoing => "outgoing".to_string(),
+                Direction::Incoming => "incoming".to_string(),
+                Direction::Both => "both".to_string(),
+            },
+        })
+        .collect();
+    Ok(Json(NeighborResponse {
+        entity_id,
+        neighbors: neighbor_entries,
+    }))
+}
 
-            Ok(Json(NeighborResponse {
-                entity_id,
-                neighbors: neighbor_entries,
-            }))
-        }
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to get neighbors: {}", e),
-            }),
-        )),
+/// Parse the optional `?direction=` query string into the trait-side
+/// `StoreDirection`. Default = `Both`. Unknown values fall back to
+/// `Both` to match the historical handler behavior.
+fn parse_direction(s: Option<&str>) -> StoreDirection {
+    match s {
+        Some("outgoing") => StoreDirection::Outgoing,
+        Some("incoming") => StoreDirection::Incoming,
+        _ => StoreDirection::Both,
     }
 }
 
@@ -414,72 +342,54 @@ pub async fn get_entity_subgraph(
     Query(query): Query<SubgraphQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<SubgraphResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let graph_service = match &state.graph_service {
-        Some(service) => service,
-        None => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    error: "Knowledge graph service not available".to_string(),
-                }),
-            ));
-        }
-    };
-
-    match graph_service
+    let kg_store = require_kg_store(&state)?;
+    kg_store
         .get_subgraph(normalize_agent_id(&agent_id), &entity_id, query.max_hops)
         .await
-    {
-        Ok(subgraph) => Ok(Json(SubgraphResponse::from(subgraph))),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to get subgraph: {}", e),
-            }),
-        )),
-    }
+        .map(|subgraph| Json(SubgraphResponse::from(subgraph)))
+        .map_err(store_err_to_http)
 }
 
 /// GET /api/graph/:agent_id/search
 /// Search entities by name.
 ///
-/// Migrated from `graph_service` to `kg_store` (KnowledgeGraphStore trait).
-/// Response shape is identical; only the backing call changed.
+/// Backed by `kg_store` (KnowledgeGraphStore trait). Response shape
+/// is identical to the historical handler.
 pub async fn search_entities(
     Path(agent_id): Path<String>,
     Query(query): Query<SearchQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<EntityListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let kg_store = match &state.kg_store {
-        Some(store) => store,
-        None => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    error: "Knowledge graph store unavailable".to_string(),
-                }),
-            ));
-        }
-    };
-
-    match kg_store
+    let kg_store = require_kg_store(&state)?;
+    let entities = kg_store
         .search_entities_by_name(
             normalize_agent_id(&agent_id),
             &query.q,
             query.limit.unwrap_or(20),
         )
         .await
-        .map_err(store_err_to_http)
-    {
-        Ok(entities) => {
-            let total = entities.len();
-            Ok(Json(EntityListResponse {
-                entities: entities.into_iter().map(EntityResponse::from).collect(),
-                total,
-            }))
-        }
-        Err(e) => Err(e),
-    }
+        .map_err(store_err_to_http)?;
+    let total = entities.len();
+    Ok(Json(EntityListResponse {
+        entities: entities.into_iter().map(EntityResponse::from).collect(),
+        total,
+    }))
+}
+
+/// Resolve `state.kg_store` or short-circuit with 503. Centralised so
+/// every graph handler emits the same payload when the trait-erased
+/// store hasn't been wired (smoke tests, partial init).
+fn require_kg_store(
+    state: &AppState,
+) -> Result<Arc<dyn KnowledgeGraphStore>, (StatusCode, Json<ErrorResponse>)> {
+    state.kg_store.clone().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "Knowledge graph store unavailable".to_string(),
+            }),
+        )
+    })
 }
 
 /// Map a [`zero_stores::StoreError`] to the HTTP error pair used by graph
@@ -685,22 +595,32 @@ pub async fn trigger_distillation(
 
 /// GET /api/graph/stats
 /// Aggregate graph statistics for the Observatory health bar.
+///
+/// Counts come from trait-erased stores where possible: `kg_store`
+/// for entity/relationship counts and `memory_store` for fact count.
+/// `episode_repo` and `distillation_repo` remain on their concrete
+/// repos — neither has been migrated to a `zero-stores` trait yet.
 pub async fn graph_stats(
     State(state): State<AppState>,
 ) -> Result<Json<AggregateGraphStats>, (StatusCode, Json<ErrorResponse>)> {
-    // Entity + relationship counts from graph service
-    let (entities, relationships) = match &state.graph_service {
-        Some(service) => {
-            let e = service.count_all_entities().await.unwrap_or(0);
-            let r = service.count_all_relationships().await.unwrap_or(0);
+    // Entity + relationship counts from kg_store.
+    let (entities, relationships) = match &state.kg_store {
+        Some(store) => {
+            let e = store.count_all_entities().await.unwrap_or(0);
+            let r = store.count_all_relationships().await.unwrap_or(0);
             (e, r)
         }
         None => (0, 0),
     };
 
-    // Fact count from memory repo
-    let facts = match &state.memory_repo {
-        Some(repo) => repo.count_all_memory_facts(None).unwrap_or(0),
+    // Fact count from memory_store.
+    let facts = match &state.memory_store {
+        Some(store) => store
+            .count_all_facts(None)
+            .await
+            .ok()
+            .map(|n| n as usize)
+            .unwrap_or(0),
         None => 0,
     };
 
@@ -731,36 +651,19 @@ pub async fn all_relationships(
     Query(query): Query<AllEntitiesQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<RelationshipListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let graph_service = match &state.graph_service {
-        Some(service) => service,
-        None => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    error: "Knowledge graph service not available".to_string(),
-                }),
-            ));
-        }
-    };
-
-    match graph_service.list_all_relationships(query.limit).await {
-        Ok(relationships) => {
-            let total = relationships.len();
-            Ok(Json(RelationshipListResponse {
-                relationships: relationships
-                    .into_iter()
-                    .map(RelationshipResponse::from)
-                    .collect(),
-                total,
-            }))
-        }
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to list all relationships: {}", e),
-            }),
-        )),
-    }
+    let kg_store = require_kg_store(&state)?;
+    let relationships = kg_store
+        .list_all_relationships(query.limit)
+        .await
+        .map_err(store_err_to_http)?;
+    let total = relationships.len();
+    Ok(Json(RelationshipListResponse {
+        relationships: relationships
+            .into_iter()
+            .map(RelationshipResponse::from)
+            .collect(),
+        total,
+    }))
 }
 
 /// GET /api/graph/all/entities
@@ -769,40 +672,20 @@ pub async fn all_entities(
     Query(query): Query<AllEntitiesQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<EntityListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let graph_service = match &state.graph_service {
-        Some(service) => service,
-        None => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    error: "Knowledge graph service not available".to_string(),
-                }),
-            ));
-        }
-    };
-
-    match graph_service
+    let kg_store = require_kg_store(&state)?;
+    let entities = kg_store
         .list_all_entities(
             query.ward_id.as_deref(),
             query.entity_type.as_deref(),
             query.limit,
         )
         .await
-    {
-        Ok(entities) => {
-            let total = entities.len();
-            Ok(Json(EntityListResponse {
-                entities: entities.into_iter().map(EntityResponse::from).collect(),
-                total,
-            }))
-        }
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to list all entities: {}", e),
-            }),
-        )),
-    }
+        .map_err(store_err_to_http)?;
+    let total = entities.len();
+    Ok(Json(EntityListResponse {
+        entities: entities.into_iter().map(EntityResponse::from).collect(),
+        total,
+    }))
 }
 
 /// Response body for the reindex endpoint.
@@ -814,6 +697,15 @@ pub struct ReindexResponse {
 
 /// POST /api/graph/reindex — force re-indexing of every ward on disk.
 /// Idempotent: relationships upsert via UNIQUE(source, target, type).
+///
+/// NOTE (TD-023): This handler still reaches into the concrete
+/// `state.graph_service` and `state.kg_episode_repo` because
+/// `gateway_execution::ward_artifact_indexer::index_ward_with_options`
+/// accepts `&Arc<GraphStorage>` and `&KgEpisodeRepository` rather than
+/// trait objects. Migrating this fully requires plumbing
+/// `Arc<dyn KnowledgeGraphStore>` (or a narrower indexer-specific
+/// trait) through `gateway-execution`, which is a separate workstream.
+/// Tracked as a follow-up under TD-023's HTTP-handler retirement.
 pub async fn reindex_all_wards(
     State(state): State<AppState>,
 ) -> Result<Json<ReindexResponse>, StatusCode> {

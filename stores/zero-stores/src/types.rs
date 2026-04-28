@@ -133,6 +133,24 @@ impl From<knowledge_graph::traversal::TraversalNode> for TraversalHit {
     }
 }
 
+/// Snapshot of vector-index table health for the embeddings health
+/// endpoint. `tables_present` and `tables_missing` are backend-defined
+/// labels (e.g. SQLite-vec virtual table names like `memory_facts_index`).
+/// `indexed_rows` is the total number of indexed rows across all
+/// vector indexes — a faithful "how much is currently searchable"
+/// number rather than a row count of the source tables.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VecIndexHealth {
+    /// Vector-index labels that currently exist in the backing store.
+    pub tables_present: Vec<String>,
+    /// Vector-index labels that are expected but missing — a non-empty
+    /// list signals degraded recall (FTS-only) until reindex completes.
+    pub tables_missing: Vec<String>,
+    /// Sum of indexed rows across all vector indexes that exist. Returns
+    /// `0` when no indexes are present rather than an error.
+    pub indexed_rows: usize,
+}
+
 /// An entity that meets the orphan-archival heuristic: low confidence,
 /// only seen once, old enough to be past the reinforcement grace period,
 /// and with zero relationships in either direction. Returned by

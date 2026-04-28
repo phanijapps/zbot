@@ -621,6 +621,20 @@ impl MemoryFactStore for GatewayMemoryFactStore {
     async fn delete_skill_index(&self, name: &str) -> Result<bool, String> {
         self.memory_repo.delete_skill_index_state(name)
     }
+
+    async fn aggregate_stats(&self) -> Result<zero_stores_traits::MemoryAggregateStats, String> {
+        self.memory_repo.aggregate_subsystem_stats()
+    }
+
+    async fn health_metrics(&self) -> Result<zero_stores_traits::MemoryHealthMetrics, String> {
+        self.memory_repo.episode_health_metrics()
+    }
+
+    async fn count_all_facts(&self, agent_id: Option<&str>) -> Result<i64, String> {
+        self.memory_repo
+            .count_all_memory_facts(agent_id)
+            .map(|n| n as i64)
+    }
 }
 
 #[cfg(test)]

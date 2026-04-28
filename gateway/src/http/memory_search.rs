@@ -12,12 +12,29 @@
 //!
 //! The `filters` field is accepted but ignored in v1. `limit` applies
 //! per-type, not globally.
+//!
+//! ## Migration status (TD-023)
+//!
+//! - The episode FTS-fallback path used to inline raw LIKE SQL via
+//!   `state.knowledge_db.with_connection`. It now calls
+//!   `EpisodeRepository::keyword_search`, so the handler no longer
+//!   touches the connection pool directly for that path.
+//! - Wiki / procedure / episode repos are built on demand from
+//!   `state.knowledge_db`. That's still a typed-repo construction
+//!   (not a raw SQL reach-in) — `WardWikiRepository`,
+//!   `ProcedureRepository`, and `EpisodeRepository` haven't been
+//!   migrated to `zero-stores` traits yet. Tracked under TD-023's
+//!   HTTP-handler retirement follow-up.
+//! - Memory-fact search continues to call `MemoryRepository`
+//!   directly because the `MemoryFactStore` trait surface is JSON-
+//!   oriented; converting these handlers requires hoisting `MemoryFact`
+//!   to `zero-stores`, which is a separate workstream.
 
 use crate::state::AppState;
 use axum::{extract::State, http::StatusCode, Json};
 use gateway_database::{
-    vector_index::VectorIndex, EpisodeRepository, KnowledgeDatabase, ProcedureRepository,
-    SessionEpisode, SqliteVecIndex, WardWikiRepository,
+    vector_index::VectorIndex, EpisodeRepository, ProcedureRepository, SessionEpisode,
+    SqliteVecIndex, WardWikiRepository,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -133,61 +150,11 @@ fn build_episode_repo(state: &AppState) -> Result<Arc<EpisodeRepository>, Handle
     )))
 }
 
-/// LIKE-based fallback for episode search when no embedding is available or
-/// `mode=fts`. Matches case-insensitively over `task_summary` and
-/// `key_learnings`.
-fn episodes_like_search(
-    db: &KnowledgeDatabase,
-    query: &str,
-    ward_id: Option<&str>,
-    limit: usize,
-) -> Result<Vec<SessionEpisode>, String> {
-    let pattern = format!("%{}%", query.replace(['%', '_'], ""));
-    db.with_connection(|conn| {
-        let sql_with = "SELECT id, session_id, agent_id, ward_id, task_summary, outcome, \
-                        strategy_used, key_learnings, token_cost, created_at \
-                        FROM session_episodes \
-                        WHERE ward_id = ?1 AND (task_summary LIKE ?2 OR COALESCE(key_learnings,'') LIKE ?2) \
-                        ORDER BY created_at DESC LIMIT ?3";
-        let sql_no = "SELECT id, session_id, agent_id, ward_id, task_summary, outcome, \
-                      strategy_used, key_learnings, token_cost, created_at \
-                      FROM session_episodes \
-                      WHERE task_summary LIKE ?1 OR COALESCE(key_learnings,'') LIKE ?1 \
-                      ORDER BY created_at DESC LIMIT ?2";
-        let row_to = |r: &rusqlite::Row| -> rusqlite::Result<SessionEpisode> {
-            Ok(SessionEpisode {
-                id: r.get(0)?,
-                session_id: r.get(1)?,
-                agent_id: r.get(2)?,
-                ward_id: r.get(3)?,
-                task_summary: r.get(4)?,
-                outcome: r.get(5)?,
-                strategy_used: r.get(6)?,
-                key_learnings: r.get(7)?,
-                token_cost: r.get(8)?,
-                embedding: None,
-                created_at: r.get(9)?,
-            })
-        };
-        let rows: Vec<SessionEpisode> = if let Some(w) = ward_id {
-            let mut stmt = conn.prepare(sql_with)?;
-            let out: Vec<SessionEpisode> = stmt
-                .query_map(rusqlite::params![w, pattern, limit as i64], row_to)?
-                .filter_map(|r| r.ok())
-                .collect();
-            out
-        } else {
-            let mut stmt = conn.prepare(sql_no)?;
-            let out: Vec<SessionEpisode> = stmt
-                .query_map(rusqlite::params![pattern, limit as i64], row_to)?
-                .filter_map(|r| r.ok())
-                .collect();
-            out
-        };
-        Ok(rows)
-    })
-    .map_err(|e| e.to_string())
-}
+// `episodes_like_search` was relocated into
+// `EpisodeRepository::keyword_search` so this handler no longer reaches
+// into `state.knowledge_db` to run raw LIKE SQL. The repo method
+// preserves the historical sanitization (`%`/`_` stripped) and the
+// ward-scoped vs. unscoped variants.
 
 fn wiki_article_to_value(hit: gateway_database::WikiHit) -> Value {
     let snippet: String = hit.article.content.chars().take(240).collect();
@@ -425,7 +392,6 @@ pub async fn memory_search(
 
     let eps_fut = {
         let episode_repo = episode_repo.clone();
-        let db = state.knowledge_db.clone();
         let query = query.clone();
         let mode = mode.clone();
         let emb = embedding.clone();
@@ -438,8 +404,9 @@ pub async fn memory_search(
             let t0 = Instant::now();
             let scope_agent = agent.as_deref().unwrap_or(FALLBACK_AGENT);
             let hits: Vec<Value> = match (mode.as_str(), emb.as_ref()) {
-                // Pure FTS path → LIKE fallback.
-                ("fts", _) => episodes_like_search(&db, &query, ward.as_deref(), limit)
+                // Pure FTS path → LIKE fallback (no FTS5 partner table for episodes).
+                ("fts", _) => episode_repo
+                    .keyword_search(&query, ward.as_deref(), limit)
                     .unwrap_or_default()
                     .into_iter()
                     .map(|ep| episode_to_value(ep, None, "fts"))
@@ -453,7 +420,8 @@ pub async fn memory_search(
                     .filter(|(ep, _)| ward.as_deref().is_none_or(|w| ep.ward_id == w))
                     .map(|(ep, s)| episode_to_value(ep, Some(s), "vec"))
                     .collect(),
-                (_, None) => episodes_like_search(&db, &query, ward.as_deref(), limit)
+                (_, None) => episode_repo
+                    .keyword_search(&query, ward.as_deref(), limit)
                     .unwrap_or_default()
                     .into_iter()
                     .map(|ep| episode_to_value(ep, None, "fts"))
