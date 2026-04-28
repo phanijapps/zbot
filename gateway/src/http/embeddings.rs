@@ -59,56 +59,38 @@ pub async fn get_health(State(state): State<AppState>) -> Json<HealthResponse> {
         Health::ModelMissing => "model_missing".to_string(),
         Health::Misconfigured(_) => "misconfigured".to_string(),
     };
-    let (tables_present, tables_missing) = vec_table_presence(&state.knowledge_db);
+    let vec_health = vec_health_snapshot(&state).await;
     Json(HealthResponse {
         backend: snapshot.backend.as_str().to_string(),
         model: Some(client.model_name().to_string()),
         dim: svc.dimensions(),
         status: status_str,
-        indexed_count: count_indexed_rows(&state.knowledge_db),
+        indexed_count: vec_health.indexed_rows,
         needs_reindex: svc.needs_reindex(),
-        tables_present,
-        tables_missing,
+        tables_present: vec_health.tables_present,
+        tables_missing: vec_health.tables_missing,
     })
 }
 
-/// Query the knowledge DB for which of the 5 expected vec0 tables exist.
-/// Returns `(Vec::new(), REQUIRED_VEC_TABLES)` on DB errors so the health
-/// endpoint keeps responding and the UI can warn that something is wrong.
-fn vec_table_presence(db: &gateway_database::KnowledgeDatabase) -> (Vec<String>, Vec<String>) {
-    db.with_connection(|conn| Ok(gateway_database::list_vec_table_presence(conn)))
-        .unwrap_or_else(|_| {
-            (
-                Vec::new(),
-                gateway_database::REQUIRED_VEC_TABLES
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-            )
-        })
-}
-
-/// Sum of indexed rows across the three sqlite-vec tables. Each
-/// `*_index_rowids` aux table holds one row per indexed item, so this is
-/// a faithful count of what's actually searchable. Returns 0 if any query
-/// fails (e.g., aux tables not yet created on a fresh install).
-fn count_indexed_rows(db: &gateway_database::KnowledgeDatabase) -> usize {
-    const TABLES: &[&str] = &[
-        "memory_facts_index_rowids",
-        "kg_name_index_rowids",
-        "session_episodes_index_rowids",
-    ];
-    db.with_connection(|conn| {
-        let mut total = 0usize;
-        for tbl in TABLES {
-            let n: i64 = conn
-                .query_row(&format!("SELECT count(*) FROM {tbl}"), [], |r| r.get(0))
-                .unwrap_or(0);
-            total = total.saturating_add(n as usize);
+/// Pull the vector-index health snapshot from `state.kg_store`. When
+/// the trait-erased store is unavailable (smoke tests, partial init),
+/// fall back to "all five tables missing, zero indexed" so the
+/// endpoint keeps responding — same degraded-but-honest behavior the
+/// historical handler exhibited on DB errors.
+async fn vec_health_snapshot(state: &AppState) -> zero_stores::VecIndexHealth {
+    if let Some(kg_store) = state.kg_store.as_ref() {
+        if let Ok(h) = kg_store.vec_index_health().await {
+            return h;
         }
-        Ok(total)
-    })
-    .unwrap_or(0)
+    }
+    zero_stores::VecIndexHealth {
+        tables_present: Vec::new(),
+        tables_missing: gateway_database::REQUIRED_VEC_TABLES
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        indexed_rows: 0,
+    }
 }
 
 // ============================================================================
@@ -216,6 +198,15 @@ pub async fn configure(
     Json(new): Json<EmbeddingConfig>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)> {
     let svc = state.embedding_service.clone();
+    // NOTE (TD-023): `state.knowledge_db` is forwarded to the streaming
+    // reindex orchestrator (`gateway_execution::sleep::embedding_reindex::
+    // reindex_all`) which emits per-table progress events. The
+    // `KnowledgeGraphStore::reindex_embeddings` trait method
+    // intentionally does NOT expose a progress callback (see its
+    // doc — different impls rebuild differently and the surface stays
+    // portable). This handler streams progress over SSE, so it stays
+    // on the concrete database handle. Migrating would require a
+    // progress-callback variant on the trait, deferred.
     let knowledge_db = state.knowledge_db.clone();
     // Persist the intent first so a daemon restart will honor the selection.
     svc.persist_settings(&new)
