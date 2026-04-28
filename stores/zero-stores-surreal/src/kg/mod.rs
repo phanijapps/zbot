@@ -14,6 +14,7 @@ use zero_stores::types::{
     ResolveOutcome, StoreOutcome, TraversalHit, VecIndexHealth,
 };
 
+mod alias;
 mod entity;
 
 #[derive(Clone)]
@@ -55,18 +56,18 @@ impl KnowledgeGraphStore for SurrealKgStore {
     }
 
     // === alias / resolve (Task 6) ===
-    async fn add_alias(&self, _entity_id: &EntityId, _surface: &str) -> StoreResult<()> {
-        Err(unimplemented_err("add_alias (Task 6)"))
+    async fn add_alias(&self, entity_id: &EntityId, surface: &str) -> StoreResult<()> {
+        alias::add_alias(self.db(), entity_id, surface).await
     }
 
     async fn resolve_entity(
         &self,
-        _agent_id: &str,
-        _entity_type: &EntityType,
-        _name: &str,
-        _embedding: Option<&[f32]>,
+        agent_id: &str,
+        entity_type: &EntityType,
+        name: &str,
+        embedding: Option<&[f32]>,
     ) -> StoreResult<ResolveOutcome> {
-        Err(unimplemented_err("resolve_entity (Task 6)"))
+        alias::resolve_entity(self.db(), agent_id, entity_type, name, embedding).await
     }
 
     // === relationships (Task 7) ===
