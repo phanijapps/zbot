@@ -421,7 +421,7 @@ fn store_err_to_http(err: zero_stores::StoreError) -> (StatusCode, Json<ErrorRes
                 error: "Knowledge graph store temporarily unavailable".to_string(),
             }),
         ),
-        StoreError::Schema(msg) | StoreError::Backend(msg) => (
+        StoreError::Schema(msg) | StoreError::Backend(msg) | StoreError::Config(msg) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Knowledge graph error: {}", msg),
