@@ -29,6 +29,13 @@
 //!   directly because the `MemoryFactStore` trait surface is JSON-
 //!   oriented; converting these handlers requires hoisting `MemoryFact`
 //!   to `zero-stores`, which is a separate workstream.
+//!
+//! Phase E: when the user has opted into the SurrealDB backend,
+//! `state.knowledge_db` is `None` and this handler returns
+//! `503 Service Unavailable` rather than reach for a SQLite handle
+//! that wasn't initialized. Migrating the unified search to trait
+//! stores is the natural follow-up — every type already has a
+//! `*Store` trait method covering the per-type query.
 
 use crate::state::AppState;
 use axum::{extract::State, http::StatusCode, Json};
@@ -108,46 +115,43 @@ fn err(status: StatusCode, msg: impl Into<String>) -> HandlerError {
     (status, Json(ErrorBody { error: msg.into() }))
 }
 
-fn build_wiki_repo(state: &AppState) -> Result<Arc<WardWikiRepository>, HandlerError> {
-    let idx = SqliteVecIndex::new(
-        state.knowledge_db.clone(),
-        "wiki_articles_index",
-        "article_id",
+/// Error helper: this handler is not yet migrated to trait stores;
+/// when SurrealDB-backend mode disables the SQLite knowledge DB the
+/// caller gets a clear 503 instead of a silent SQL reach-in attempt.
+fn surreal_unavailable() -> HandlerError {
+    err(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "unified search not yet migrated to trait stores; \
+         toggle SurrealDB off in Settings to use the SQLite path",
     )
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("wiki vec: {e}")))?;
+}
+
+fn build_wiki_repo(state: &AppState) -> Result<Arc<WardWikiRepository>, HandlerError> {
+    let knowledge_db = state.knowledge_db.as_ref().ok_or_else(surreal_unavailable)?;
+    let idx = SqliteVecIndex::new(knowledge_db.clone(), "wiki_articles_index", "article_id")
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("wiki vec: {e}")))?;
     let vec: Arc<dyn VectorIndex> = Arc::new(idx);
-    Ok(Arc::new(WardWikiRepository::new(
-        state.knowledge_db.clone(),
-        vec,
-    )))
+    Ok(Arc::new(WardWikiRepository::new(knowledge_db.clone(), vec)))
 }
 
 fn build_procedure_repo(state: &AppState) -> Result<Arc<ProcedureRepository>, HandlerError> {
-    let idx = SqliteVecIndex::new(
-        state.knowledge_db.clone(),
-        "procedures_index",
-        "procedure_id",
-    )
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("proc vec: {e}")))?;
+    let knowledge_db = state.knowledge_db.as_ref().ok_or_else(surreal_unavailable)?;
+    let idx = SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("proc vec: {e}")))?;
     let vec: Arc<dyn VectorIndex> = Arc::new(idx);
-    Ok(Arc::new(ProcedureRepository::new(
-        state.knowledge_db.clone(),
-        vec,
-    )))
+    Ok(Arc::new(ProcedureRepository::new(knowledge_db.clone(), vec)))
 }
 
 fn build_episode_repo(state: &AppState) -> Result<Arc<EpisodeRepository>, HandlerError> {
+    let knowledge_db = state.knowledge_db.as_ref().ok_or_else(surreal_unavailable)?;
     let idx = SqliteVecIndex::new(
-        state.knowledge_db.clone(),
+        knowledge_db.clone(),
         "session_episodes_index",
         "episode_id",
     )
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("ep vec: {e}")))?;
     let vec: Arc<dyn VectorIndex> = Arc::new(idx);
-    Ok(Arc::new(EpisodeRepository::new(
-        state.knowledge_db.clone(),
-        vec,
-    )))
+    Ok(Arc::new(EpisodeRepository::new(knowledge_db.clone(), vec)))
 }
 
 // `episodes_like_search` was relocated into

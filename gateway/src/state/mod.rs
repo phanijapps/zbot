@@ -66,7 +66,16 @@ pub struct AppState {
     pub conversations: Arc<ConversationRepository>,
 
     /// Knowledge database — memory facts, graph, vec0 indexes.
-    pub knowledge_db: Arc<KnowledgeDatabase>,
+    ///
+    /// `None` when the user has opted into the SurrealDB backend
+    /// (`execution.featureFlags.surreal_backend = true` in settings.json).
+    /// In that mode the daemon never opens `knowledge.db` — all reads /
+    /// writes go through the trait-routed stores
+    /// (`memory_store`, `kg_store`, `episode_store`, `wiki_store`,
+    /// `procedure_store`). HTTP handlers that haven't migrated to the
+    /// trait surface return `503 Service Unavailable` in this mode
+    /// rather than reach for a SQLite handle that doesn't exist.
+    pub knowledge_db: Option<Arc<KnowledgeDatabase>>,
 
     /// Settings service for application configuration.
     pub settings: Arc<SettingsService>,
@@ -272,6 +281,11 @@ impl AppState {
         let conversation_repo = Arc::new(ConversationRepository::new(db_manager.clone()));
 
         // Initialize knowledge database (memory facts, graph, vec0 indexes)
+        // Held as Option<Arc<…>> on AppState — Phase E gates the actual
+        // initialization further below behind `surreal_bundle.is_none()`,
+        // so when the user opts into SurrealDB the daemon never opens
+        // `knowledge.db`. Today this branch always runs because the
+        // surreal_bundle is built later; the gate flips in Phase E commit 2.
         let knowledge_db = Arc::new(
             KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
         );
@@ -794,7 +808,7 @@ impl AppState {
             hook_registry: Some(hook_registry),
             delegation_registry,
             conversations: conversation_repo,
-            knowledge_db,
+            knowledge_db: Some(knowledge_db),
             settings,
             log_service,
             state_service,
@@ -883,7 +897,7 @@ impl AppState {
             hook_registry: None,
             delegation_registry: Arc::new(DelegationRegistry::new()),
             conversations: conversation_repo,
-            knowledge_db,
+            knowledge_db: Some(knowledge_db),
             settings: Arc::new(SettingsService::new(paths.clone())),
             log_service,
             state_service,
@@ -974,7 +988,7 @@ impl AppState {
             hook_registry: None,
             delegation_registry: Arc::new(DelegationRegistry::new()),
             conversations,
-            knowledge_db,
+            knowledge_db: Some(knowledge_db),
             settings: Arc::new(SettingsService::new(paths.clone())),
             log_service,
             state_service,
@@ -1037,8 +1051,25 @@ impl AppState {
         self.embedding_service.preflight().await;
 
         // 2. Reindex if the marker dim disagrees with the live dim.
+        // The reindex pipeline targets SQLite vec0 tables — when the user
+        // is on the SurrealDB backend (`knowledge_db is None`), there is
+        // nothing for this path to operate on; the Surreal backend keeps
+        // its own embeddings inline. Mark the marker as in sync and bail.
         if self.embedding_service.needs_reindex() {
             let current_dim = self.embedding_service.dimensions();
+            let Some(knowledge_db) = self.knowledge_db.as_ref() else {
+                tracing::info!(
+                    dim = current_dim,
+                    "Embedding marker mismatch but SQLite knowledge DB is disabled (SurrealDB backend) — marking indexed without reindex"
+                );
+                if let Err(e) = self.embedding_service.mark_indexed(current_dim) {
+                    tracing::warn!("mark_indexed failed in surreal mode: {e}");
+                }
+                self.embedding_service
+                    .publish_health(gateway_services::Health::Ready);
+                let _handle = self.embedding_service.clone().start_health_loop();
+                return;
+            };
             tracing::info!(
                 dim = current_dim,
                 "Embedding dim/model mismatch vs marker — reindexing at boot"
@@ -1053,7 +1084,7 @@ impl AppState {
                 });
             };
             match gateway_execution::sleep::embedding_reindex::reindex_all(
-                &self.knowledge_db,
+                knowledge_db,
                 client,
                 current_dim,
                 &on_progress,

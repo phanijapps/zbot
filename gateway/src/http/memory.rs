@@ -525,8 +525,14 @@ pub async fn search_all_memory_facts(
     State(state): State<AppState>,
     Query(query): Query<GlobalMemorySearchQuery>,
 ) -> Result<Json<MemoryListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let memory_repo = match &state.memory_repo {
-        Some(repo) => repo,
+    // Routed through the trait surface so the SurrealDB backend is
+    // honored when opted in. Defaults to the FTS arm — the historical
+    // handler was FTS-only and the trait's `mode = "fts"` matches.
+    // The trait method does not accept a category filter; for now we
+    // post-filter on the deserialized Value rows. Migrating the
+    // category filter into the trait surface is a follow-up.
+    let memory_store = match &state.memory_store {
+        Some(s) => s,
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -537,8 +543,9 @@ pub async fn search_all_memory_facts(
         }
     };
 
-    let results = memory_repo
-        .search_all_memory_facts_fts(&query.q, query.limit, query.category.as_deref())
+    let raw = memory_store
+        .search_memory_facts_hybrid(None, &query.q, "fts", query.limit, None, None)
+        .await
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -548,9 +555,19 @@ pub async fn search_all_memory_facts(
             )
         })?;
 
-    let facts: Vec<MemoryFactResponse> = results
+    let facts: Vec<MemoryFactResponse> = raw
         .into_iter()
-        .map(|sf| MemoryFactResponse::from(sf.fact))
+        .filter_map(|v| match serde_json::from_value::<MemoryFactResponse>(v) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                tracing::warn!("memory fact row decode failed: {e}");
+                None
+            }
+        })
+        .filter(|f| match query.category.as_deref() {
+            Some(cat) => f.category == cat,
+            None => true,
+        })
         .collect();
     let total = facts.len();
 
