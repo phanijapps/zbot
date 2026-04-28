@@ -7,7 +7,7 @@ use knowledge_graph::types::{Entity, EntityType, GraphStats, NeighborInfo, Relat
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use zero_stores::KnowledgeGraphStore;
-use zero_stores::error::{StoreError, StoreResult};
+use zero_stores::error::StoreResult;
 use zero_stores::extracted::ExtractedKnowledge;
 use zero_stores::types::{
     ArchivableEntity, Direction, EntityId, KgStats, Neighbor, ReindexReport, RelationshipId,
@@ -20,6 +20,7 @@ mod entity;
 mod reindex;
 mod relationship;
 mod search;
+mod stats;
 mod traverse;
 
 #[derive(Clone)]
@@ -35,10 +36,6 @@ impl SurrealKgStore {
     pub(crate) fn db(&self) -> &Arc<Surreal<Any>> {
         &self.db
     }
-}
-
-fn unimplemented_err(task: &str) -> StoreError {
-    StoreError::Backend(format!("SurrealKgStore: {task} pending"))
 }
 
 #[async_trait]
@@ -164,55 +161,55 @@ impl KnowledgeGraphStore for SurrealKgStore {
 
     // === stats / list / health (Task 12) ===
     async fn stats(&self) -> StoreResult<KgStats> {
-        Err(unimplemented_err("stats (Task 12)"))
+        stats::stats(self.db()).await
     }
 
-    async fn graph_stats(&self, _agent_id: &str) -> StoreResult<GraphStats> {
-        Err(unimplemented_err("graph_stats (Task 12)"))
+    async fn graph_stats(&self, agent_id: &str) -> StoreResult<GraphStats> {
+        stats::graph_stats(self.db(), agent_id).await
     }
 
     async fn list_entities(
         &self,
-        _agent_id: &str,
-        _entity_type: Option<&str>,
-        _limit: usize,
-        _offset: usize,
+        agent_id: &str,
+        entity_type: Option<&str>,
+        limit: usize,
+        offset: usize,
     ) -> StoreResult<Vec<Entity>> {
-        Err(unimplemented_err("list_entities (Task 12)"))
+        stats::list_entities(self.db(), agent_id, entity_type, limit, offset).await
     }
 
     async fn list_relationships(
         &self,
-        _agent_id: &str,
-        _relationship_type: Option<&str>,
-        _limit: usize,
-        _offset: usize,
+        agent_id: &str,
+        relationship_type: Option<&str>,
+        limit: usize,
+        offset: usize,
     ) -> StoreResult<Vec<Relationship>> {
-        Err(unimplemented_err("list_relationships (Task 12)"))
+        stats::list_relationships(self.db(), agent_id, relationship_type, limit, offset).await
     }
 
     async fn count_all_entities(&self) -> StoreResult<usize> {
-        Err(unimplemented_err("count_all_entities (Task 12)"))
+        stats::count_all_entities(self.db()).await
     }
 
     async fn count_all_relationships(&self) -> StoreResult<usize> {
-        Err(unimplemented_err("count_all_relationships (Task 12)"))
+        stats::count_all_relationships(self.db()).await
     }
 
     async fn list_all_entities(
         &self,
-        _ward_id: Option<&str>,
-        _entity_type: Option<&str>,
-        _limit: usize,
+        ward_id: Option<&str>,
+        entity_type: Option<&str>,
+        limit: usize,
     ) -> StoreResult<Vec<Entity>> {
-        Err(unimplemented_err("list_all_entities (Task 12)"))
+        stats::list_all_entities(self.db(), ward_id, entity_type, limit).await
     }
 
-    async fn list_all_relationships(&self, _limit: usize) -> StoreResult<Vec<Relationship>> {
-        Err(unimplemented_err("list_all_relationships (Task 12)"))
+    async fn list_all_relationships(&self, limit: usize) -> StoreResult<Vec<Relationship>> {
+        stats::list_all_relationships(self.db(), limit).await
     }
 
     async fn vec_index_health(&self) -> StoreResult<VecIndexHealth> {
-        Err(unimplemented_err("vec_index_health (Task 12)"))
+        stats::vec_index_health(self.db()).await
     }
 }
