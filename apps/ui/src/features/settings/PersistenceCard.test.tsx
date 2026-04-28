@@ -2,74 +2,148 @@
 // PersistenceCard tests
 // ============================================================================
 
-import { describe, it, expect } from "vitest";
-import { render, screen, fireEvent } from "@/test/utils";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor, fireEvent } from "@/test/utils";
+
+import type { ExecutionSettings } from "@/services/transport";
+
+const mockGetExec = vi.fn();
+const mockUpdateExec = vi.fn();
+
+vi.mock("@/services/transport", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("@/services/transport");
+  return {
+    ...actual,
+    getTransport: async () => ({
+      getExecutionSettings: mockGetExec,
+      updateExecutionSettings: mockUpdateExec,
+    }),
+  };
+});
 
 import { PersistenceCard } from "./PersistenceCard";
 
+const BASE_EXEC: ExecutionSettings & { restartRequired: boolean } = {
+  maxParallelAgents: 2,
+  setupComplete: true,
+  featureFlags: {},
+  restartRequired: false,
+};
+
+beforeEach(() => {
+  mockGetExec.mockReset();
+  mockUpdateExec.mockReset();
+  mockGetExec.mockResolvedValue({ success: true, data: BASE_EXEC });
+  mockUpdateExec.mockResolvedValue({
+    success: true,
+    data: {
+      ...BASE_EXEC,
+      featureFlags: { surreal_backend: true },
+      restartRequired: true,
+    },
+  });
+});
+
 describe("PersistenceCard", () => {
-  it("renders the Persistence header", () => {
+  it("renders the Persistence header after loading settings", async () => {
     render(<PersistenceCard />);
-    expect(
-      screen.getByRole("heading", { name: /persistence/i, level: 2 }),
-    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: /persistence/i, level: 2 }),
+      ).toBeInTheDocument(),
+    );
   });
 
-  it("renders the Knowledge Backend dropdown defaulting to SQLite", () => {
+  it("defaults to SQLite when feature flag is unset", async () => {
     render(<PersistenceCard />);
-    const select = screen.getByLabelText(/knowledge backend/i) as HTMLSelectElement;
-    expect(select).toBeInTheDocument();
+    const select = (await screen.findByLabelText(
+      /knowledge backend/i,
+    )) as HTMLSelectElement;
     expect(select.value).toBe("sqlite");
-    expect(select.disabled).toBe(false);
   });
 
-  it("offers both SQLite and SurrealDB as enabled options", () => {
+  it("shows SurrealDB selected when feature flag is true", async () => {
+    mockGetExec.mockResolvedValue({
+      success: true,
+      data: { ...BASE_EXEC, featureFlags: { surreal_backend: true } },
+    });
     render(<PersistenceCard />);
-    const select = screen.getByLabelText(/knowledge backend/i) as HTMLSelectElement;
-    const options = Array.from(select.options).map((o) => ({
-      value: o.value,
-      disabled: o.disabled,
-    }));
-    expect(options).toEqual([
-      { value: "sqlite", disabled: false },
-      { value: "surreal", disabled: false },
-    ]);
+    const select = (await screen.findByLabelText(
+      /knowledge backend/i,
+    )) as HTMLSelectElement;
+    expect(select.value).toBe("surreal");
   });
 
-  it("shows the SQLite hint by default and no switch instructions", () => {
+  it("calls updateExecutionSettings with surreal_backend=true on switch", async () => {
     render(<PersistenceCard />);
-    expect(
-      screen.getByText(/SQLite is the default backend/i),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/To switch to SurrealDB/i),
-    ).not.toBeInTheDocument();
-  });
-
-  it("reveals the switch instructions when SurrealDB is selected", () => {
-    render(<PersistenceCard />);
-    const select = screen.getByLabelText(/knowledge backend/i) as HTMLSelectElement;
+    const select = (await screen.findByLabelText(
+      /knowledge backend/i,
+    )) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: "surreal" } });
-    expect(screen.getByText(/To switch to SurrealDB/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/cargo run -p daemon --features surreal-backend/i),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/config\/settings\.json/i)).toBeInTheDocument();
+    await waitFor(() => expect(mockUpdateExec).toHaveBeenCalledTimes(1));
+    const call = mockUpdateExec.mock.calls[0][0] as ExecutionSettings;
+    expect(call.featureFlags?.surreal_backend).toBe(true);
   });
 
-  it("hides the switch instructions when going back to SQLite", () => {
+  it("calls updateExecutionSettings with surreal_backend=false on switch back", async () => {
+    mockGetExec.mockResolvedValue({
+      success: true,
+      data: { ...BASE_EXEC, featureFlags: { surreal_backend: true } },
+    });
+    mockUpdateExec.mockResolvedValue({
+      success: true,
+      data: {
+        ...BASE_EXEC,
+        featureFlags: { surreal_backend: false },
+        restartRequired: true,
+      },
+    });
     render(<PersistenceCard />);
-    const select = screen.getByLabelText(/knowledge backend/i) as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "surreal" } });
+    const select = (await screen.findByLabelText(
+      /knowledge backend/i,
+    )) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: "sqlite" } });
-    expect(
-      screen.queryByText(/To switch to SurrealDB/i),
-    ).not.toBeInTheDocument();
+    await waitFor(() => expect(mockUpdateExec).toHaveBeenCalledTimes(1));
+    const call = mockUpdateExec.mock.calls[0][0] as ExecutionSettings;
+    expect(call.featureFlags?.surreal_backend).toBe(false);
   });
 
-  it("documents the recovery path", () => {
+  it("shows the restart banner when SurrealDB is selected", async () => {
+    mockGetExec.mockResolvedValue({
+      success: true,
+      data: { ...BASE_EXEC, featureFlags: { surreal_backend: true } },
+    });
     render(<PersistenceCard />);
-    expect(screen.getByText(/Recovery:/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByText(/SurrealDB selected/i),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText(/npm run daemon:surreal:watch/i),
+    ).toBeInTheDocument();
+  });
+
+  it("surfaces a save error when the transport fails", async () => {
+    mockUpdateExec.mockResolvedValue({
+      success: false,
+      error: "kaboom",
+    });
+    render(<PersistenceCard />);
+    const select = (await screen.findByLabelText(
+      /knowledge backend/i,
+    )) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "surreal" } });
+    await waitFor(() =>
+      expect(screen.getByText(/kaboom/i)).toBeInTheDocument(),
+    );
+  });
+
+  it("documents the recovery path", async () => {
+    render(<PersistenceCard />);
+    await waitFor(() =>
+      expect(screen.getByText(/Recovery:/i)).toBeInTheDocument(),
+    );
     expect(
       screen.getByText(/zero-stores-surreal-recovery/i),
     ).toBeInTheDocument();

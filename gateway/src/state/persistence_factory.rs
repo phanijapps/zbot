@@ -112,18 +112,26 @@ pub struct SurrealBackendConfig {
 }
 
 /// Read `config/settings.json` and return `Some(config)` if the user has
-/// opted into SurrealDB (`persistence.knowledge_backend = "surreal"`).
-/// Returns `None` for any other state — missing file, missing key,
-/// "sqlite", parse error. Failing closed keeps SQLite as the safe default.
+/// opted into SurrealDB via the UI dropdown. The opt-in lives in
+/// `execution.featureFlags.surreal_backend` (the free-form feature_flags
+/// bag that backs the Settings UI experimental toggles).
+///
+/// Optional override knobs (advanced — edit settings.json directly):
+/// `persistence.surreal.{url,namespace,database}` override the defaults.
+///
+/// Returns `None` for any other state — missing file, flag absent or
+/// false, parse error. Failing closed keeps SQLite as the safe default.
 #[cfg(feature = "surreal-backend")]
 fn read_surreal_opt_in(paths: &gateway_services::paths::VaultPaths) -> Option<SurrealBackendConfig> {
     let raw = std::fs::read_to_string(paths.settings()).ok()?;
     let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let backend = value
-        .get("persistence")
-        .and_then(|p| p.get("knowledge_backend"))
-        .and_then(|b| b.as_str())?;
-    if backend != "surreal" {
+    let opted_in = value
+        .get("execution")
+        .and_then(|e| e.get("featureFlags"))
+        .and_then(|f| f.get("surreal_backend"))
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false);
+    if !opted_in {
         return None;
     }
     let surreal_obj = value.get("persistence").and_then(|p| p.get("surreal"));
