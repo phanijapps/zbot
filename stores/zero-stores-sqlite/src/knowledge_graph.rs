@@ -1,14 +1,17 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use agent_runtime::llm::EmbeddingClient;
 use async_trait::async_trait;
 use knowledge_graph::storage::{ArchivableEntityRow, GraphStorage};
-use knowledge_graph::types::{Entity, EntityType, Relationship};
+use knowledge_graph::types::{
+    Direction as KgDirection, Entity, EntityType, GraphStats, NeighborInfo, Relationship, Subgraph,
+};
 use zero_stores::error::StoreError;
 use zero_stores::extracted::ExtractedKnowledge;
 use zero_stores::types::{
     ArchivableEntity, Direction, EntityId, KgStats, Neighbor, ReindexReport, RelationshipId,
-    ResolveOutcome, StoreOutcome, TraversalHit,
+    ResolveOutcome, StoreOutcome, TraversalHit, VecIndexHealth,
 };
 use zero_stores::KnowledgeGraphStore;
 use zero_stores::StoreResult;
@@ -308,5 +311,290 @@ impl KnowledgeGraphStore for SqliteKgStore {
                 .map_err(map_graph_err)
         })
         .await
+    }
+
+    // -------- HTTP read paths -----------------------------------------------
+
+    async fn graph_stats(&self, agent_id: &str) -> StoreResult<GraphStats> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        block(move || compute_graph_stats(&storage, &agent_id)).await
+    }
+
+    async fn list_entities(
+        &self,
+        agent_id: &str,
+        entity_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> StoreResult<Vec<Entity>> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        let entity_type = entity_type.map(|s| s.to_string());
+        block(move || {
+            storage
+                .list_entities(&agent_id, entity_type.as_deref(), limit, offset)
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
+    async fn list_relationships(
+        &self,
+        agent_id: &str,
+        relationship_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> StoreResult<Vec<Relationship>> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        let relationship_type = relationship_type.map(|s| s.to_string());
+        block(move || {
+            storage
+                .list_relationships(&agent_id, relationship_type.as_deref(), limit, offset)
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
+    async fn get_neighbors_full(
+        &self,
+        agent_id: &str,
+        entity_id: &str,
+        direction: Direction,
+        limit: usize,
+    ) -> StoreResult<Vec<NeighborInfo>> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        let entity_id = entity_id.to_string();
+        block(move || {
+            storage
+                .get_neighbors(&agent_id, &entity_id, direction.into(), limit)
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
+    async fn get_subgraph(
+        &self,
+        agent_id: &str,
+        center_entity_id: &str,
+        max_hops: usize,
+    ) -> StoreResult<Subgraph> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        let center = center_entity_id.to_string();
+        block(move || compute_subgraph(&storage, &agent_id, &center, max_hops)).await
+    }
+
+    async fn count_all_entities(&self) -> StoreResult<usize> {
+        let storage = self.storage.clone();
+        block(move || storage.count_all_entities().map_err(map_graph_err)).await
+    }
+
+    async fn count_all_relationships(&self) -> StoreResult<usize> {
+        let storage = self.storage.clone();
+        block(move || storage.count_all_relationships().map_err(map_graph_err)).await
+    }
+
+    async fn list_all_entities(
+        &self,
+        ward_id: Option<&str>,
+        entity_type: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<Vec<Entity>> {
+        let storage = self.storage.clone();
+        let ward_id = ward_id.map(|s| s.to_string());
+        let entity_type = entity_type.map(|s| s.to_string());
+        block(move || {
+            storage
+                .list_all_entities(ward_id.as_deref(), entity_type.as_deref(), limit)
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
+    async fn list_all_relationships(&self, limit: usize) -> StoreResult<Vec<Relationship>> {
+        let storage = self.storage.clone();
+        block(move || storage.list_all_relationships(limit).map_err(map_graph_err)).await
+    }
+
+    async fn vec_index_health(&self) -> StoreResult<VecIndexHealth> {
+        // SQLite-vec maintains an aux `<table>_rowids` table per index;
+        // counting its rows is the faithful "indexed row count" used by
+        // the embeddings health endpoint. This SQL is intentionally
+        // SQLite-specific and stays inside the impl crate — the trait
+        // surface stays portable.
+        let db = self.storage.knowledge_db().clone();
+        block(move || {
+            const ROWID_TABLES: &[&str] = &[
+                "memory_facts_index_rowids",
+                "kg_name_index_rowids",
+                "session_episodes_index_rowids",
+            ];
+            let (tables_present, tables_missing) = db
+                .with_connection(|conn| Ok(gateway_database::list_vec_table_presence(conn)))
+                .map_err(|e| StoreError::Backend(format!("vec_index_health: {e}")))?;
+            let indexed_rows = db
+                .with_connection(|conn| {
+                    let mut total = 0usize;
+                    for tbl in ROWID_TABLES {
+                        let n: i64 = conn
+                            .query_row(&format!("SELECT count(*) FROM {tbl}"), [], |r| r.get(0))
+                            .unwrap_or(0);
+                        total = total.saturating_add(n.max(0) as usize);
+                    }
+                    Ok(total)
+                })
+                .unwrap_or(0);
+            Ok(VecIndexHealth {
+                tables_present,
+                tables_missing,
+                indexed_rows,
+            })
+        })
+        .await
+    }
+}
+
+// ============================================================================
+// Helpers — extracted from the trait body so each impl method stays small.
+// ============================================================================
+
+/// Compute the rich stats view used by `GET /api/graph/:agent_id/stats`.
+/// Mirrors the historical `GraphService::get_stats` — port lives here so
+/// the handler can call through the trait without depending on
+/// `GraphService`. Synchronous; runs inside a `spawn_blocking`.
+fn compute_graph_stats(storage: &GraphStorage, agent_id: &str) -> StoreResult<GraphStats> {
+    let entity_count = storage.count_entities(agent_id).map_err(map_graph_err)?;
+    let relationship_count = storage
+        .count_relationships(agent_id)
+        .map_err(map_graph_err)?;
+
+    let entities = storage
+        .list_entities(agent_id, None, 10_000, 0)
+        .map_err(map_graph_err)?;
+    let mut entity_types: HashMap<String, usize> = HashMap::new();
+    for entity in &entities {
+        *entity_types
+            .entry(entity.entity_type.as_str().to_string())
+            .or_default() += 1;
+    }
+
+    let relationships = storage
+        .list_relationships(agent_id, None, 10_000, 0)
+        .map_err(map_graph_err)?;
+    let mut relationship_types: HashMap<String, usize> = HashMap::new();
+    let mut entity_connections: HashMap<String, usize> = HashMap::new();
+    for rel in &relationships {
+        *relationship_types
+            .entry(rel.relationship_type.as_str().to_string())
+            .or_default() += 1;
+        *entity_connections
+            .entry(rel.source_entity_id.clone())
+            .or_default() += 1;
+        *entity_connections
+            .entry(rel.target_entity_id.clone())
+            .or_default() += 1;
+    }
+
+    let entity_id_to_name: HashMap<&str, &str> = entities
+        .iter()
+        .map(|e| (e.id.as_str(), e.name.as_str()))
+        .collect();
+
+    let mut connection_vec: Vec<(String, usize)> = entity_connections
+        .into_iter()
+        .filter_map(|(id, count)| {
+            entity_id_to_name
+                .get(id.as_str())
+                .map(|name| (name.to_string(), count))
+        })
+        .collect();
+    connection_vec.sort_by(|a, b| b.1.cmp(&a.1));
+    connection_vec.truncate(10);
+
+    Ok(GraphStats {
+        entity_count,
+        relationship_count,
+        entity_types,
+        relationship_types,
+        most_connected_entities: connection_vec,
+    })
+}
+
+/// BFS subgraph centered on `center_entity_id` out to `max_hops`.
+/// Mirrors the historical `GraphService::get_subgraph`.
+fn compute_subgraph(
+    storage: &GraphStorage,
+    agent_id: &str,
+    center_entity_id: &str,
+    max_hops: usize,
+) -> StoreResult<Subgraph> {
+    let mut visited_entities: HashSet<String> = HashSet::new();
+    let mut visited_relationships: HashSet<String> = HashSet::new();
+    let mut entities: Vec<Entity> = Vec::new();
+    let mut relationships: Vec<Relationship> = Vec::new();
+
+    let mut current_hop: Vec<String> = vec![center_entity_id.to_string()];
+    visited_entities.insert(center_entity_id.to_string());
+
+    for _hop in 0..max_hops {
+        if current_hop.is_empty() {
+            break;
+        }
+        let mut next_hop: Vec<String> = Vec::new();
+        for entity_id in &current_hop {
+            let neighbors = storage
+                .get_neighbors(agent_id, entity_id, KgDirection::Both, 1_000)
+                .map_err(map_graph_err)?;
+            collect_subgraph_neighbors(
+                neighbors,
+                &mut visited_entities,
+                &mut visited_relationships,
+                &mut entities,
+                &mut relationships,
+                &mut next_hop,
+            );
+        }
+        current_hop = next_hop;
+    }
+
+    // Insert the center entity at the front, matching the historical shape.
+    let all_entities = storage
+        .list_entities(agent_id, None, 10_000, 0)
+        .map_err(map_graph_err)?;
+    if let Some(center) = all_entities.into_iter().find(|e| e.id == center_entity_id) {
+        entities.insert(0, center);
+    }
+
+    Ok(Subgraph {
+        entities,
+        relationships,
+        center: center_entity_id.to_string(),
+        max_hops,
+    })
+}
+
+/// Process one hop's worth of neighbors into the BFS accumulators.
+fn collect_subgraph_neighbors(
+    neighbors: Vec<NeighborInfo>,
+    visited_entities: &mut HashSet<String>,
+    visited_relationships: &mut HashSet<String>,
+    entities: &mut Vec<Entity>,
+    relationships: &mut Vec<Relationship>,
+    next_hop: &mut Vec<String>,
+) {
+    for neighbor in neighbors {
+        if !visited_relationships.contains(&neighbor.relationship.id) {
+            visited_relationships.insert(neighbor.relationship.id.clone());
+            relationships.push(neighbor.relationship);
+        }
+        let neighbor_id = neighbor.entity.id.clone();
+        if !visited_entities.contains(&neighbor_id) {
+            visited_entities.insert(neighbor_id.clone());
+            entities.push(neighbor.entity);
+            next_hop.push(neighbor_id);
+        }
     }
 }

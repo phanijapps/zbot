@@ -156,6 +156,43 @@ impl MemoryRepository {
         self.db.clone()
     }
 
+    /// Aggregate counts for the memory subsystem stats endpoint.
+    /// Returns zeros for tables that don't exist (handles fresh DBs).
+    pub fn aggregate_subsystem_stats(
+        &self,
+    ) -> Result<zero_stores_traits::MemoryAggregateStats, String> {
+        self.db.with_connection(|conn| {
+            let row =
+                |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0) };
+            Ok(zero_stores_traits::MemoryAggregateStats {
+                facts: row("SELECT COUNT(*) FROM memory_facts"),
+                episodes: row("SELECT COUNT(*) FROM kg_episodes"),
+                procedures: row("SELECT COUNT(*) FROM procedures"),
+                wiki_articles: row("SELECT COUNT(*) FROM ward_wiki_articles"),
+                goals_active: row("SELECT COUNT(*) FROM kg_goals WHERE state = 'active'"),
+            })
+        })
+    }
+
+    /// Episode-pipeline health snapshot for the memory health endpoint:
+    /// pending + running + failed counts from `kg_episodes`.
+    pub fn episode_health_metrics(
+        &self,
+    ) -> Result<zero_stores_traits::MemoryHealthMetrics, String> {
+        self.db.with_connection(|conn| {
+            let row =
+                |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0) };
+            let pending = row("SELECT COUNT(*) FROM kg_episodes WHERE status = 'pending'");
+            let running = row("SELECT COUNT(*) FROM kg_episodes WHERE status = 'running'");
+            let failed = row("SELECT COUNT(*) FROM kg_episodes WHERE status = 'failed'");
+            Ok(zero_stores_traits::MemoryHealthMetrics {
+                queue_pending: pending.max(0) as u64,
+                queue_running: running.max(0) as u64,
+                failed_recent: failed.max(0) as u64,
+            })
+        })
+    }
+
     // =========================================================================
     // FACT CRUD
     // =========================================================================

@@ -6,6 +6,40 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
+/// Aggregate counts across the memory subsystem. Returned by
+/// `MemoryFactStore::aggregate_stats` for the `GET /api/memory/stats`
+/// endpoint. Tables that aren't present in the backing store
+/// (e.g. wiki, procedures) report `0` rather than erroring — the
+/// trait contract is "best-effort snapshot".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemoryAggregateStats {
+    /// `memory_facts` row count.
+    pub facts: i64,
+    /// `kg_episodes` row count (durable per-session episode log).
+    pub episodes: i64,
+    /// `procedures` row count.
+    pub procedures: i64,
+    /// `ward_wiki_articles` row count.
+    pub wiki_articles: i64,
+    /// `kg_goals` row count where `state = 'active'`.
+    pub goals_active: i64,
+}
+
+/// Snapshot of ingestion / consolidation health for
+/// `GET /api/memory/health`. Pending and running counts are reported
+/// from the kg-episode lifecycle table; failed_recent counts the
+/// `status='failed'` rows. Compaction metrics live on a separate
+/// repository (`compaction_repo`) and are not part of this snapshot.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemoryHealthMetrics {
+    /// Episodes currently waiting in the pending queue.
+    pub queue_pending: u64,
+    /// Episodes currently running through extraction.
+    pub queue_running: u64,
+    /// Episodes that failed during extraction.
+    pub failed_recent: u64,
+}
+
 /// One row in the per-skill staleness tracker. Lives in `zero-core`
 /// (rather than `gateway-database`) so this trait can use it without
 /// dragging the SQLite stack into agent-tools.
@@ -182,5 +216,32 @@ pub trait MemoryFactStore: Send + Sync {
     /// Delete a single row from the per-skill staleness tracker.
     async fn delete_skill_index(&self, _name: &str) -> Result<bool, String> {
         Ok(false)
+    }
+
+    // =========================================================================
+    // AGGREGATE / HEALTH METRICS (HTTP handlers)
+    // Used by `GET /api/memory/stats` and `/api/memory/health`. Default
+    // implementations return zeros so stores that don't track these
+    // (mocks, in-memory) inherit safe behavior.
+    // =========================================================================
+
+    /// Aggregate counts across memory_facts, kg_episodes, procedures,
+    /// ward_wiki_articles, and active kg_goals. Used by the memory
+    /// stats endpoint. Default returns all zeros.
+    async fn aggregate_stats(&self) -> Result<MemoryAggregateStats, String> {
+        Ok(MemoryAggregateStats::default())
+    }
+
+    /// Counts of pending / running / failed episodes for the memory
+    /// health endpoint. Default returns all zeros.
+    async fn health_metrics(&self) -> Result<MemoryHealthMetrics, String> {
+        Ok(MemoryHealthMetrics::default())
+    }
+
+    /// Count of all memory facts visible to `agent_id` (`Some`) or
+    /// across all agents (`None`). Used by aggregate graph stats. The
+    /// default returns `0`.
+    async fn count_all_facts(&self, _agent_id: Option<&str>) -> Result<i64, String> {
+        Ok(0)
     }
 }

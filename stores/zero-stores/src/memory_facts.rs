@@ -10,4 +10,6 @@
 //! This module re-exports the public surface unchanged so existing
 //! callers that import `zero_stores::MemoryFactStore` continue to work.
 
-pub use zero_stores_traits::{MemoryFactStore, SkillIndexRow};
+pub use zero_stores_traits::{
+    MemoryAggregateStats, MemoryFactStore, MemoryHealthMetrics, SkillIndexRow,
+};

@@ -13,5 +13,5 @@ pub mod memory_facts;
 pub mod outbox;
 
 pub use conversation::ConversationStore;
-pub use memory_facts::{MemoryFactStore, SkillIndexRow};
+pub use memory_facts::{MemoryAggregateStats, MemoryFactStore, MemoryHealthMetrics, SkillIndexRow};
 pub use outbox::OutboxStore;
