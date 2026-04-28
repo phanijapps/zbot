@@ -9,9 +9,11 @@
 //! `zero_stores::*` import paths.
 
 pub mod conversation;
+pub mod episodes;
 pub mod memory_facts;
 pub mod outbox;
 
 pub use conversation::ConversationStore;
+pub use episodes::{EpisodeStats, EpisodeStore};
 pub use memory_facts::{MemoryAggregateStats, MemoryFactStore, MemoryHealthMetrics, SkillIndexRow};
 pub use outbox::OutboxStore;

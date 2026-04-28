@@ -25,6 +25,7 @@ agent-tools = { path = "../runtime/agent-tools" }
 zero-core = { path = "../framework/zero-core" }
 zero-app = { path = "../framework/zero-app" }
 zero-stores = { path = "../stores/zero-stores" }
+zero-stores-traits = { path = "../stores/zero-stores-traits" }
 zero-stores-sqlite = { path = "../stores/zero-stores-sqlite" }
 zero-stores-surreal = { path = "../stores/zero-stores-surreal", optional = true }
 gateway-events = { path = "gateway-events" }

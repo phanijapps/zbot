@@ -18,5 +18,7 @@
 //!   (they can derive From/Into the domain types here).
 
 pub mod memory_fact;
+pub mod session_episode;
 
 pub use memory_fact::{MemoryFact, ScoredFact};
+pub use session_episode::{ScoredEpisode, SessionEpisode};

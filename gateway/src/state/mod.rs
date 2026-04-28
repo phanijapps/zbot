@@ -110,6 +110,11 @@ pub struct AppState {
     /// Episode repository for accessing session episodes.
     pub episode_repo: Option<Arc<EpisodeRepository>>,
 
+    /// Trait-routed episode store (Phase D2). Coexists with `episode_repo`
+    /// for now; consumers migrate incrementally per the portability doc.
+    /// `None` when `episode_repo` itself is `None`.
+    pub episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>>,
+
     /// Knowledge graph episode repository (Phase 6a+).
     pub kg_episode_repo: Option<Arc<KgEpisodeRepository>>,
 
@@ -717,6 +722,9 @@ impl AppState {
             goal_repo: Some(goal_repo),
             distillation_repo: Some(distillation_repo),
             distiller: Some(distiller_ref),
+            episode_store: Some(Arc::new(gateway_database::GatewayEpisodeStore::new(
+                episode_repo_ref.clone(),
+            )) as Arc<dyn zero_stores_traits::EpisodeStore>),
             episode_repo: Some(episode_repo_ref),
             kg_episode_repo: Some(kg_episode_repo),
             graph_service,
@@ -803,6 +811,7 @@ impl AppState {
             distillation_repo: None,
             distiller: None,
             episode_repo: None,
+            episode_store: None,
             kg_episode_repo: None,
             graph_service: None,
             kg_store: None,
@@ -891,6 +900,7 @@ impl AppState {
             distillation_repo: None,
             distiller: None,
             episode_repo: None,
+            episode_store: None,
             kg_episode_repo: None,
             graph_service: None,
             kg_store: None,

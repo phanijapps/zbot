@@ -14,6 +14,7 @@ pub mod goal_repository;
 pub mod kg_episode_repository;
 pub mod knowledge_db;
 pub mod knowledge_schema;
+pub mod episode_store;
 pub mod memory_fact_store;
 pub mod memory_repository;
 pub mod procedure_repository;
@@ -30,6 +31,7 @@ pub use distillation_repository::{
     DistillationRepository, DistillationRun, DistillationStats, UndistilledSession,
 };
 pub use episode_repository::{EpisodeRepository, SessionEpisode};
+pub use episode_store::GatewayEpisodeStore;
 pub use goal_repository::{Goal, GoalRepository};
 pub use kg_episode_repository::{EpisodeSource, KgEpisode, KgEpisodeRepository};
 pub use knowledge_db::KnowledgeDatabase;

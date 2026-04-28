@@ -269,7 +269,24 @@ pub async fn get_ward_content(
 
     let wiki_repo = build_wiki_repo(&state)?;
     let procedure_repo = build_procedure_repo(&state)?;
-    let episode_repo = build_episode_repo(&state)?;
+    // Episodes are now trait-routed via state.episode_store so the
+    // SurrealDB backend (when opted-in) gets the call. Falls back to a
+    // direct EpisodeRepository for SQLite-only deployments where the
+    // store wasn't wired (defensive — should always be Some in practice).
+    let episode_values: Vec<Value> = match state.episode_store.as_ref() {
+        Some(store) => store
+            .list_by_ward(&ward_id, EPISODE_LIMIT)
+            .await
+            .map_err(|e| internal("list episodes by ward", e))?,
+        None => {
+            let repo = build_episode_repo(&state)?;
+            repo.list_by_ward(&ward_id, EPISODE_LIMIT)
+                .map_err(|e| internal("list episodes by ward", e))?
+                .into_iter()
+                .map(|ep| serde_json::to_value(ep).unwrap_or(Value::Null))
+                .collect()
+        }
+    };
 
     let facts = memory_repo
         .list_by_ward(&ward_id, FACT_LIMIT)
@@ -280,9 +297,6 @@ pub async fn get_ward_content(
     let procedures = procedure_repo
         .list_by_ward(&ward_id, PROCEDURE_LIMIT)
         .map_err(|e| internal("list procedures by ward", e))?;
-    let episodes = episode_repo
-        .list_by_ward(&ward_id, EPISODE_LIMIT)
-        .map_err(|e| internal("list episodes by ward", e))?;
 
     // Cap wiki at WIKI_LIMIT (list_articles has no LIMIT clause).
     let wiki_articles: Vec<WikiArticle> = wiki_articles.into_iter().take(WIKI_LIMIT).collect();
@@ -295,7 +309,7 @@ pub async fn get_ward_content(
         facts: facts.len(),
         wiki: wiki_articles.len(),
         procedures: procedures.len(),
-        episodes: episodes.len(),
+        episodes: episode_values.len(),
     };
 
     let facts_json: Vec<Value> = facts.into_iter().map(|f| fact_to_value(f, now)).collect();
@@ -307,8 +321,12 @@ pub async fn get_ward_content(
         .into_iter()
         .map(|p| procedure_to_value(p, now))
         .collect();
-    let episodes_json: Vec<Value> = episodes
+    // Episode values come from the trait already as MemoryFactResponse-style
+    // JSON; deserialize each into SessionEpisode for the response decorator,
+    // and skip rows that fail to decode.
+    let episodes_json: Vec<Value> = episode_values
         .into_iter()
+        .filter_map(|v| serde_json::from_value::<gateway_database::SessionEpisode>(v).ok())
         .map(|e| episode_to_value(e, now))
         .collect();
 

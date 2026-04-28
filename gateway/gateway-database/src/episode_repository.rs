@@ -12,37 +12,17 @@ use crate::vector_index::VectorIndex;
 use crate::KnowledgeDatabase;
 use chrono::{Duration, Utc};
 use rusqlite::params;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
-/// A session episode capturing what happened, what worked, and what was learned.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SessionEpisode {
-    pub id: String,
-    pub session_id: String,
-    pub agent_id: String,
-    /// `'__global__'` or a specific ward name.
-    pub ward_id: String,
-    pub task_summary: String,
-    /// One of: `'success'`, `'partial'`, `'failed'`, `'crashed'`.
-    pub outcome: String,
-    pub strategy_used: Option<String>,
-    pub key_learnings: Option<String>,
-    pub token_cost: Option<i64>,
-    /// Raw f32 embedding. Always `None` when loaded from `session_episodes`
-    /// (the column was removed in schema v22). Callers may set this to `Some(v)`
-    /// prior to `insert` to have the vector persisted through the `VectorIndex`
-    /// — vectors MUST be L2-normalized by the caller.
-    ///
-    /// To read an embedding back, use [`EpisodeRepository::get_episode_embedding`].
-    #[serde(skip)]
-    pub embedding: Option<Vec<f32>>,
-    pub created_at: String,
-}
+// SessionEpisode + ScoredEpisode moved to `zero-stores-domain` (Phase D2)
+// so any backend impl can round-trip them without depending on this
+// SQLite-coupled crate. Re-exported so existing imports of
+// `gateway_database::SessionEpisode` continue to compile unchanged.
+pub use zero_stores_domain::SessionEpisode;
 
 // ============================================================================
 // EPISODE REPOSITORY
