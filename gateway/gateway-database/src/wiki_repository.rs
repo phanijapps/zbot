@@ -13,27 +13,9 @@ use crate::KnowledgeDatabase;
 use rusqlite::params;
 use std::sync::Arc;
 
-/// A compiled wiki article for a ward.
-#[derive(Debug, Clone)]
-pub struct WikiArticle {
-    pub id: String,
-    pub ward_id: String,
-    pub agent_id: String,
-    pub title: String,
-    pub content: String,
-    pub tags: Option<String>,
-    pub source_fact_ids: Option<String>,
-    /// Raw f32 embedding. Always `None` when loaded from `ward_wiki_articles`
-    /// (the column was removed in schema v22). Callers may set this to `Some(v)`
-    /// prior to `upsert_article` to have the vector persisted through the
-    /// `VectorIndex` — vectors MUST be L2-normalized by the caller.
-    ///
-    /// To read an embedding back, use [`WardWikiRepository::get_article_embedding`].
-    pub embedding: Option<Vec<f32>>,
-    pub version: i32,
-    pub created_at: String,
-    pub updated_at: String,
-}
+// WikiArticle moved to `zero-stores-domain` (Phase D3) so any backend
+// impl can round-trip it without depending on this SQLite-coupled crate.
+pub use zero_stores_domain::WikiArticle;
 
 /// A single wiki hit with provenance of why it matched.
 #[derive(Debug, Clone)]

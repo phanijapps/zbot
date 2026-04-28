@@ -291,9 +291,22 @@ pub async fn get_ward_content(
     let facts = memory_repo
         .list_by_ward(&ward_id, FACT_LIMIT)
         .map_err(|e| internal("list facts by ward", e))?;
-    let wiki_articles = wiki_repo
-        .list_articles(&ward_id)
-        .map_err(|e| internal("list wiki by ward", e))?;
+    // Wiki list is now trait-routed via state.wiki_store; falls back to
+    // the direct WardWikiRepository when the store is unwired.
+    let wiki_articles: Vec<WikiArticle> = match state.wiki_store.as_ref() {
+        Some(store) => {
+            let raw = store
+                .list_articles(&ward_id)
+                .await
+                .map_err(|e| internal("list wiki by ward (trait)", e))?;
+            raw.into_iter()
+                .filter_map(|v| serde_json::from_value::<WikiArticle>(v).ok())
+                .collect()
+        }
+        None => wiki_repo
+            .list_articles(&ward_id)
+            .map_err(|e| internal("list wiki by ward", e))?,
+    };
     let procedures = procedure_repo
         .list_by_ward(&ward_id, PROCEDURE_LIMIT)
         .map_err(|e| internal("list procedures by ward", e))?;

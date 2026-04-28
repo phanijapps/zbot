@@ -19,6 +19,8 @@
 
 pub mod memory_fact;
 pub mod session_episode;
+pub mod wiki;
 
 pub use memory_fact::{MemoryFact, ScoredFact};
 pub use session_episode::{ScoredEpisode, SessionEpisode};
+pub use wiki::WikiArticle;

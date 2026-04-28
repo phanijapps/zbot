@@ -115,6 +115,11 @@ pub struct AppState {
     /// `None` when `episode_repo` itself is `None`.
     pub episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>>,
 
+    /// Trait-routed wiki store (Phase D3). The handler-side migrations
+    /// route through this; legacy callers still build a
+    /// `WardWikiRepository` directly. `None` in minimal AppStates.
+    pub wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>>,
+
     /// Knowledge graph episode repository (Phase 6a+).
     pub kg_episode_repo: Option<Arc<KgEpisodeRepository>>,
 
@@ -412,7 +417,10 @@ impl AppState {
             knowledge_db.clone(),
             wiki_vec.clone(),
         ));
-        memory_recall_inner.set_wiki_repo(wiki_repo);
+        memory_recall_inner.set_wiki_repo(wiki_repo.clone());
+        let wiki_store_for_state: Arc<dyn zero_stores_traits::WikiStore> = Arc::new(
+            gateway_database::GatewayWikiStore::new(wiki_repo.clone()),
+        );
 
         // Wire procedure repository for procedure recall during intent analysis
         let procedure_vec: Arc<dyn VectorIndex> = Arc::new(
@@ -725,6 +733,7 @@ impl AppState {
             episode_store: Some(Arc::new(gateway_database::GatewayEpisodeStore::new(
                 episode_repo_ref.clone(),
             )) as Arc<dyn zero_stores_traits::EpisodeStore>),
+            wiki_store: Some(wiki_store_for_state),
             episode_repo: Some(episode_repo_ref),
             kg_episode_repo: Some(kg_episode_repo),
             graph_service,
@@ -812,6 +821,7 @@ impl AppState {
             distiller: None,
             episode_repo: None,
             episode_store: None,
+            wiki_store: None,
             kg_episode_repo: None,
             graph_service: None,
             kg_store: None,
@@ -901,6 +911,7 @@ impl AppState {
             distiller: None,
             episode_repo: None,
             episode_store: None,
+            wiki_store: None,
             kg_episode_repo: None,
             graph_service: None,
             kg_store: None,

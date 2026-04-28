@@ -17,6 +17,7 @@ pub mod knowledge_schema;
 pub mod episode_store;
 pub mod memory_fact_store;
 pub mod memory_repository;
+pub mod wiki_store;
 pub mod procedure_repository;
 pub mod recall_log_repository;
 pub mod repository;
@@ -44,6 +45,7 @@ pub use procedure_repository::{Procedure, ProcedureRepository};
 pub use recall_log_repository::RecallLogRepository;
 pub use repository::{ConversationRepository, Message};
 pub use wiki_repository::{WardWikiRepository, WikiArticle, WikiHit};
+pub use wiki_store::GatewayWikiStore;
 
 pub mod vector_index;
 pub use vector_index::{SqliteVecIndex, VectorIndex};
