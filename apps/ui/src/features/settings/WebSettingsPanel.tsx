@@ -21,6 +21,7 @@ import {
 import { TabBar, TabPanel } from "@/components/TabBar";
 import { HelpBox } from "@/components/HelpBox";
 import { EmbeddingsCard } from "./EmbeddingsCard";
+import { PersistenceCard } from "./PersistenceCard";
 import { ProvidersEmptyState } from "./ProvidersEmptyState";
 import { ProvidersGrid } from "./ProvidersGrid";
 import { ProviderSlideover } from "./ProviderSlideover";
@@ -907,6 +908,9 @@ export function WebSettingsPanel() {
 
                 {/* ── Embeddings Card ── */}
                 <EmbeddingsCard />
+
+                {/* ── Persistence Card ── */}
+                <PersistenceCard />
               </div>
             </>
           ) : null}
