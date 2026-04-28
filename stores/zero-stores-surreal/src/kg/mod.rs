@@ -16,6 +16,7 @@ use zero_stores::types::{
 
 mod alias;
 mod entity;
+mod relationship;
 
 #[derive(Clone)]
 pub struct SurrealKgStore {
@@ -73,22 +74,22 @@ impl KnowledgeGraphStore for SurrealKgStore {
     // === relationships (Task 7) ===
     async fn upsert_relationship(
         &self,
-        _agent_id: &str,
-        _rel: Relationship,
+        agent_id: &str,
+        rel: Relationship,
     ) -> StoreResult<RelationshipId> {
-        Err(unimplemented_err("upsert_relationship (Task 7)"))
+        relationship::upsert_relationship(self.db(), agent_id, rel).await
     }
 
-    async fn delete_relationship(&self, _id: &RelationshipId) -> StoreResult<()> {
-        Err(unimplemented_err("delete_relationship (Task 7)"))
+    async fn delete_relationship(&self, id: &RelationshipId) -> StoreResult<()> {
+        relationship::delete_relationship(self.db(), id).await
     }
 
     async fn store_knowledge(
         &self,
-        _agent_id: &str,
-        _knowledge: ExtractedKnowledge,
+        agent_id: &str,
+        knowledge: ExtractedKnowledge,
     ) -> StoreResult<StoreOutcome> {
-        Err(unimplemented_err("store_knowledge (Task 7)"))
+        relationship::store_knowledge(self.db(), agent_id, knowledge).await
     }
 
     // === traverse (Task 8) ===
