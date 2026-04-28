@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use agent_runtime::llm::EmbeddingClient;
-use gateway_database::{KnowledgeDatabase, MemoryRepository};
+use zero_stores_sqlite::{KnowledgeDatabase, MemoryRepository};
 use zero_stores::{KnowledgeGraphStore, MemoryFactStore};
 use zero_stores_sqlite::kg::storage::GraphStorage;
 use zero_stores_sqlite::{SqliteKgStore, SqliteMemoryStore};
@@ -68,7 +68,7 @@ pub fn build_kg_store_from_storage(
 /// Build the `Arc<dyn MemoryFactStore>` used by `AppState`.
 ///
 /// Today this always returns a `SqliteMemoryStore` (a re-export of
-/// `gateway_database::GatewayMemoryFactStore`). When SurrealDB support
+/// `zero_stores_sqlite::GatewayMemoryFactStore`). When SurrealDB support
 /// lands, this is the branch point — `match config.knowledge_backend
 /// { Sqlite => SqliteMemoryStore::new(…), Surreal => SurrealMemoryStore::new(…) }`.
 ///

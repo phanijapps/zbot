@@ -19,7 +19,7 @@ use axum_test::TestServer;
 use execution_state::StateService;
 use gateway::database::DatabaseManager;
 use gateway::{http::create_http_router, websocket::WebSocketHandler, AppState, GatewayConfig};
-use gateway_database::{
+use zero_stores_sqlite::{
     vector_index::VectorIndex, EpisodeRepository, ProcedureRepository, SqliteVecIndex,
     WardWikiRepository,
 };

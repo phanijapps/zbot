@@ -27,7 +27,7 @@
 
 use std::sync::Arc;
 
-use gateway_database::KnowledgeDatabase;
+use zero_stores_sqlite::KnowledgeDatabase;
 use rusqlite::params;
 use serde_json::{Map, Value};
 
@@ -352,7 +352,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gateway_database::KnowledgeDatabase;
+    use zero_stores_sqlite::KnowledgeDatabase;
     use gateway_services::VaultPaths;
     use tempfile::TempDir;
 

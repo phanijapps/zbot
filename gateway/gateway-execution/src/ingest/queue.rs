@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, Notify};
 
 use crate::ingest::extractor::Extractor;
-use gateway_database::KgEpisodeRepository;
+use zero_stores_sqlite::KgEpisodeRepository;
 use zero_stores_sqlite::kg::storage::GraphStorage;
 
 const WAKE_CHANNEL_CAPACITY: usize = 256;

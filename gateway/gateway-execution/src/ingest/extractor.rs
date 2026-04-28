@@ -5,7 +5,7 @@
 use crate::ingest::json_shape::parse_llm_json;
 use agent_runtime::llm::{ChatMessage, LlmClient};
 use async_trait::async_trait;
-use gateway_database::KgEpisode;
+use zero_stores_sqlite::KgEpisode;
 use gateway_services::ProviderService;
 use knowledge_graph::{Entity, EntityType};
 use zero_stores_sqlite::kg::storage::GraphStorage;

@@ -8,7 +8,7 @@
 //! and `source_ref = tool_call_id`, enabling drill-down from graph to
 //! the exact tool invocation that produced it.
 
-use gateway_database::{EpisodeSource, KgEpisode, KgEpisodeRepository};
+use zero_stores_sqlite::{EpisodeSource, KgEpisode, KgEpisodeRepository};
 use knowledge_graph::{Entity, EntityType, ExtractedKnowledge};
 use zero_stores_sqlite::kg::storage::GraphStorage;
 use serde_json::{Map, Value};

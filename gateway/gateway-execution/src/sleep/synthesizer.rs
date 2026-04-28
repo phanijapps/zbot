@@ -13,7 +13,7 @@ use std::sync::Arc;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::{ChatMessage, LlmClient, LlmConfig};
 use async_trait::async_trait;
-use gateway_database::{CompactionRepository, KnowledgeDatabase, MemoryFact, MemoryRepository};
+use zero_stores_sqlite::{CompactionRepository, KnowledgeDatabase, MemoryFact, MemoryRepository};
 use gateway_services::ProviderService;
 use rusqlite::params;
 use serde::Deserialize;
@@ -623,7 +623,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gateway_database::vector_index::{SqliteVecIndex, VectorIndex};
+    use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
     use gateway_services::VaultPaths;
     use std::sync::Mutex;
 

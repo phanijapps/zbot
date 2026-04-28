@@ -9,7 +9,7 @@
 use agent_runtime::llm::client::LlmClient;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::types::ChatMessage;
-use gateway_database::{WardWikiRepository, WikiArticle};
+use zero_stores_sqlite::{WardWikiRepository, WikiArticle};
 use serde::Deserialize;
 
 /// Summary of a fact for the compilation prompt.
@@ -384,8 +384,8 @@ mod tests {
     use agent_runtime::llm::embedding::EmbeddingError;
     use agent_runtime::llm::LlmError;
     use async_trait::async_trait;
-    use gateway_database::vector_index::VectorIndex;
-    use gateway_database::{KnowledgeDatabase, SqliteVecIndex};
+    use zero_stores_sqlite::vector_index::VectorIndex;
+    use zero_stores_sqlite::{KnowledgeDatabase, SqliteVecIndex};
     use gateway_services::VaultPaths;
     use std::sync::{Arc, Mutex};
 

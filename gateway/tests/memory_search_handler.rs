@@ -11,7 +11,7 @@ mod common;
 use axum_test::TestServer;
 use common::{make_state, now_iso};
 use gateway::{http::create_http_router, websocket::WebSocketHandler, GatewayConfig};
-use gateway_database::MemoryFact;
+use zero_stores_sqlite::MemoryFact;
 use serde_json::Value;
 use std::sync::Arc;
 use tempfile::TempDir;

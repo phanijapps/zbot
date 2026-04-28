@@ -4,7 +4,7 @@
 //! and persists metadata to the artifacts table.
 
 use execution_state::{Artifact, StateService};
-use gateway_database::DatabaseManager;
+use zero_stores_sqlite::DatabaseManager;
 use std::path::Path;
 use std::sync::Arc;
 

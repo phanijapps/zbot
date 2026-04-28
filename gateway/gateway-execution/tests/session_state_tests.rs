@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use api_logs::LogService;
-use gateway_database::{ConversationRepository, DatabaseManager};
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 use gateway_execution::session_state::{SessionPhase, SessionStateBuilder};
 use gateway_services::VaultPaths;
 #[allow(deprecated)]

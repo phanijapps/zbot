@@ -24,7 +24,7 @@
 
 use std::sync::Arc;
 
-use gateway_database::{CompactionRepository, KnowledgeDatabase};
+use zero_stores_sqlite::{CompactionRepository, KnowledgeDatabase};
 use zero_stores::types::EntityId;
 use zero_stores::KnowledgeGraphStore;
 
@@ -144,7 +144,7 @@ impl OrphanArchiver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gateway_database::{CompactionRepository, KnowledgeDatabase};
+    use zero_stores_sqlite::{CompactionRepository, KnowledgeDatabase};
     use gateway_services::VaultPaths;
     use zero_stores_sqlite::kg::storage::GraphStorage;
     use rusqlite::params;

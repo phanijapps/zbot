@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use gateway_database::MemoryRepository;
+use zero_stores_sqlite::MemoryRepository;
 use gateway_services::recall_config::TemporalDecayConfig;
 
 /// Summary of a pruning run.
@@ -102,8 +102,8 @@ pub fn prune_decayed_facts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gateway_database::vector_index::VectorIndex;
-    use gateway_database::{KnowledgeDatabase, MemoryFact, SqliteVecIndex};
+    use zero_stores_sqlite::vector_index::VectorIndex;
+    use zero_stores_sqlite::{KnowledgeDatabase, MemoryFact, SqliteVecIndex};
     use gateway_services::VaultPaths;
     use std::sync::Arc;
 

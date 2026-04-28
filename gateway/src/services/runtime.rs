@@ -16,7 +16,7 @@ use crate::hooks::HookContext;
 use crate::services::{AgentService, McpService, ProviderService, SharedVaultPaths, SkillService};
 use api_logs::LogService;
 use execution_state::StateService;
-use gateway_database::MemoryRepository;
+use zero_stores_sqlite::MemoryRepository;
 use std::sync::Arc;
 
 /// Execution state for a conversation.
@@ -113,7 +113,7 @@ impl RuntimeService {
         embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
         max_parallel_agents: u32,
         graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
-        kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+        kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
         ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
         goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     ) -> Self {

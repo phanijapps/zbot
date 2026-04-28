@@ -5,7 +5,7 @@
 //! into working memory so the LLM has relevant context at the right moment.
 
 use super::working_memory::WorkingMemory;
-use gateway_database::{MemoryFact, MemoryRepository};
+use zero_stores_sqlite::{MemoryFact, MemoryRepository};
 use zero_stores_sqlite::kg::storage::GraphStorage;
 use regex::Regex;
 use std::sync::Arc;

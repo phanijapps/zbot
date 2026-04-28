@@ -10,7 +10,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use gateway_database::CompactionRepository;
+use zero_stores_sqlite::CompactionRepository;
 use knowledge_graph::{Entity, EntityType};
 use zero_stores_sqlite::kg::storage::GraphStorage;
 
@@ -203,7 +203,7 @@ fn pick_loser_winner(entities: &[Entity], a: &str, b: &str) -> (String, String) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gateway_database::KnowledgeDatabase;
+    use zero_stores_sqlite::KnowledgeDatabase;
     use gateway_services::VaultPaths;
     use knowledge_graph::{Entity, EntityType, ExtractedKnowledge};
     use zero_stores_sqlite::kg::storage::GraphStorage;

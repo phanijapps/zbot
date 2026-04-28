@@ -222,8 +222,8 @@ mod tests {
     use crate::sleep::pattern_extractor::{PatternExtractLlm, PatternInput, PatternResponse};
     use crate::sleep::synthesizer::{SynthesisInput, SynthesisLlm, SynthesisResponse};
     use async_trait::async_trait;
-    use gateway_database::vector_index::{SqliteVecIndex, VectorIndex};
-    use gateway_database::{
+    use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+    use zero_stores_sqlite::{
         CompactionRepository, DatabaseManager, KnowledgeDatabase, MemoryRepository,
         ProcedureRepository,
     };

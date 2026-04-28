@@ -1,6 +1,6 @@
 //! # Ingestion Adapter
 //!
-//! Bridges [`gateway_database::KgEpisodeRepository`] + [`IngestionQueue`] +
+//! Bridges [`zero_stores_sqlite::KgEpisodeRepository`] + [`IngestionQueue`] +
 //! [`zero_stores_sqlite::kg::storage::GraphStorage`] to [`agent_tools::IngestionAccess`].
 //! Wired into the agent tool registry so the `ingest` tool can both
 //! (a) enqueue text chunks for background LLM extraction, and
@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use agent_tools::{IngestionAccess, StructuredCounts, StructuredEntity, StructuredRelationship};
 use chrono::Utc;
-use gateway_database::KgEpisodeRepository;
+use zero_stores_sqlite::KgEpisodeRepository;
 use knowledge_graph::{
     Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType,
 };
@@ -166,7 +166,7 @@ fn build_knowledge(
 mod tests {
     use super::*;
     use crate::ingest::extractor::Extractor;
-    use gateway_database::{KgEpisode, KnowledgeDatabase};
+    use zero_stores_sqlite::{KgEpisode, KnowledgeDatabase};
     use gateway_services::VaultPaths;
 
     /// Minimal no-op extractor — lets IngestionQueue::start spawn cleanly

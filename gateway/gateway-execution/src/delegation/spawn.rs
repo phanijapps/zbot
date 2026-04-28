@@ -8,7 +8,7 @@ use super::registry::DelegationRegistry;
 use agent_runtime::AgentExecutor;
 use api_logs::LogService;
 use execution_state::StateService;
-use gateway_database::{ConversationRepository, DatabaseManager};
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths, SkillService};
 use std::collections::HashMap;
@@ -59,7 +59,7 @@ pub async fn spawn_delegated_agent(
     state_service: Arc<StateService<DatabaseManager>>,
     workspace_cache: WorkspaceCache,
     delegation_permit: Option<OwnedSemaphorePermit>,
-    memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
     embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     memory_recall: Option<Arc<MemoryRecall>>,
     rate_limiters: Arc<
@@ -290,7 +290,7 @@ pub async fn spawn_delegated_agent(
     // Build fact store for subagent (so save_fact uses DB, not file fallback)
     let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
         memory_repo.as_ref().map(|repo| {
-            Arc::new(gateway_database::GatewayMemoryFactStore::new(
+            Arc::new(zero_stores_sqlite::GatewayMemoryFactStore::new(
                 repo.clone(),
                 embedding_client.clone(),
             )) as Arc<dyn zero_stores::MemoryFactStore>
@@ -391,7 +391,7 @@ pub async fn spawn_delegated_agent(
     // builder) — this one only drives session_ctx writes, not the executor.
     let fact_store_for_ctx: Option<Arc<dyn zero_stores::MemoryFactStore>> =
         memory_repo.as_ref().map(|repo| {
-            Arc::new(gateway_database::GatewayMemoryFactStore::new(
+            Arc::new(zero_stores_sqlite::GatewayMemoryFactStore::new(
                 repo.clone(),
                 embedding_client.clone(),
             )) as Arc<dyn zero_stores::MemoryFactStore>
@@ -506,7 +506,7 @@ struct SpawnContext {
 
     // --- Optional memory wiring (Phase 4b + 7 ward_snapshot preamble) ---
     fact_store_for_ctx: Option<Arc<dyn zero_stores::MemoryFactStore>>,
-    memory_repo_for_snapshot: Option<Arc<gateway_database::MemoryRepository>>,
+    memory_repo_for_snapshot: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
 }
 
 /// Spawn the async execution task for the delegated agent.

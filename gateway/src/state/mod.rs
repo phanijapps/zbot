@@ -23,8 +23,8 @@ use agent_tools::MemoryStore;
 use api_logs::LogService;
 use chrono::Utc;
 use execution_state::StateService;
-use gateway_database::vector_index::{SqliteVecIndex, VectorIndex};
-use gateway_database::{
+use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+use zero_stores_sqlite::{
     DistillationRepository, EpisodeRepository, KgEpisodeRepository, KnowledgeDatabase,
     MemoryRepository, ProcedureRepository, RecallLogRepository, WardWikiRepository,
 };
@@ -100,7 +100,7 @@ pub struct AppState {
     pub memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
 
     /// Goal repository — active goals used for intent boost in unified recall.
-    pub goal_repo: Option<Arc<gateway_database::GoalRepository>>,
+    pub goal_repo: Option<Arc<zero_stores_sqlite::GoalRepository>>,
 
     /// Distillation repository for tracking distillation run outcomes.
     pub distillation_repo: Option<Arc<DistillationRepository>>,
@@ -158,7 +158,7 @@ pub struct AppState {
 
     /// Compaction repository — read-model for the last compaction run.
     /// Set by server.start() in Phase 4 Task 10; `None` until then.
-    pub compaction_repo: Option<Arc<gateway_database::CompactionRepository>>,
+    pub compaction_repo: Option<Arc<zero_stores_sqlite::CompactionRepository>>,
 
     /// Model capabilities registry (bundled + local overrides).
     pub model_registry: Arc<ModelRegistry>,
@@ -186,7 +186,7 @@ pub struct AppState {
 /// reconfigures.
 fn sync_reconcile_vec_dim_at_boot(
     embedding_service: &Arc<EmbeddingService>,
-    knowledge_db: &Arc<gateway_database::KnowledgeDatabase>,
+    knowledge_db: &Arc<zero_stores_sqlite::KnowledgeDatabase>,
 ) {
     let current_dim = embedding_service.dimensions();
     if current_dim == 0 {
@@ -223,7 +223,7 @@ fn build_episode_store_for_state(
 ) -> Arc<dyn zero_stores_traits::EpisodeStore> {
     match surreal_bundle {
         Some(b) => b.episode.clone(),
-        None => Arc::new(gateway_database::GatewayEpisodeStore::new(episode_repo))
+        None => Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo))
             as Arc<dyn zero_stores_traits::EpisodeStore>,
     }
 }
@@ -231,7 +231,7 @@ fn build_episode_store_for_state(
 fn build_episode_store_for_state(
     episode_repo: Arc<EpisodeRepository>,
 ) -> Arc<dyn zero_stores_traits::EpisodeStore> {
-    Arc::new(gateway_database::GatewayEpisodeStore::new(episode_repo))
+    Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo))
         as Arc<dyn zero_stores_traits::EpisodeStore>
 }
 
@@ -300,7 +300,7 @@ impl AppState {
                 .expect("vec index init"),
         );
         let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
-        let goal_repo = Arc::new(gateway_database::GoalRepository::new(knowledge_db.clone()));
+        let goal_repo = Arc::new(zero_stores_sqlite::GoalRepository::new(knowledge_db.clone()));
         let distillation_repo = Arc::new(DistillationRepository::new(db_manager.clone()));
         let episode_vec: Arc<dyn VectorIndex> = Arc::new(
             SqliteVecIndex::new(knowledge_db.clone(), "session_episodes_index", "episode_id")
@@ -468,13 +468,13 @@ impl AppState {
                     .as_ref()
                     .map(|b| b.wiki.clone())
                     .unwrap_or_else(|| {
-                        Arc::new(gateway_database::GatewayWikiStore::new(wiki_repo.clone()))
+                        Arc::new(zero_stores_sqlite::GatewayWikiStore::new(wiki_repo.clone()))
                             as Arc<dyn zero_stores_traits::WikiStore>
                     })
             }
             #[cfg(not(feature = "surreal-backend"))]
             {
-                Arc::new(gateway_database::GatewayWikiStore::new(wiki_repo.clone()))
+                Arc::new(zero_stores_sqlite::GatewayWikiStore::new(wiki_repo.clone()))
                     as Arc<dyn zero_stores_traits::WikiStore>
             }
         };
@@ -496,14 +496,14 @@ impl AppState {
                     .as_ref()
                     .map(|b| b.procedure.clone())
                     .unwrap_or_else(|| {
-                        Arc::new(gateway_database::GatewayProcedureStore::new(
+                        Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(
                             procedure_repo.clone(),
                         )) as Arc<dyn zero_stores_traits::ProcedureStore>
                     })
             }
             #[cfg(not(feature = "surreal-backend"))]
             {
-                Arc::new(gateway_database::GatewayProcedureStore::new(
+                Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(
                     procedure_repo.clone(),
                 )) as Arc<dyn zero_stores_traits::ProcedureStore>
             }
@@ -672,7 +672,7 @@ impl AppState {
         ));
 
         // Phase 4: CompactionRepository + SleepTimeWorker (background maintenance).
-        let compaction_repo = Arc::new(gateway_database::CompactionRepository::new(
+        let compaction_repo = Arc::new(zero_stores_sqlite::CompactionRepository::new(
             knowledge_db.clone(),
         ));
 
@@ -1267,7 +1267,7 @@ impl AppState {
                 continue;
             }
 
-            let fact = gateway_database::MemoryFact {
+            let fact = zero_stores_sqlite::MemoryFact {
                 id: format!("policy-{}", uuid::Uuid::new_v4()),
                 session_id: None,
                 agent_id: "root".to_string(),

@@ -9,7 +9,7 @@ mod common;
 
 use common::{make_episode_repo, make_procedure_repo, make_wiki_repo, now_iso, setup};
 use gateway::AppState;
-use gateway_database::{MemoryFact, Procedure, SessionEpisode, WikiArticle};
+use zero_stores_sqlite::{MemoryFact, Procedure, SessionEpisode, WikiArticle};
 use serde_json::{json, Value};
 
 const TEST_WARD: &str = "maritime-vessel-tracking";

@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use gateway_database::CompactionRepository;
+use zero_stores_sqlite::CompactionRepository;
 use zero_stores_sqlite::kg::storage::GraphStorage;
 
 use crate::sleep::decay::PruneCandidate;
@@ -65,7 +65,7 @@ impl Pruner {
 mod tests {
     use super::*;
     use crate::sleep::decay::{DecayConfig, DecayEngine};
-    use gateway_database::{CompactionRepository, KnowledgeDatabase};
+    use zero_stores_sqlite::{CompactionRepository, KnowledgeDatabase};
     use gateway_services::VaultPaths;
     use knowledge_graph::{Entity, EntityType, ExtractedKnowledge};
     use zero_stores_sqlite::kg::storage::GraphStorage;

@@ -14,7 +14,7 @@
 //! other pools.
 
 use crate::recall::scored_item::{ItemKind, Provenance, ScoredItem};
-use gateway_database::{EpisodeRepository, SessionEpisode};
+use zero_stores_sqlite::{EpisodeRepository, SessionEpisode};
 use std::sync::Arc;
 
 /// Adapter that projects a ward's recent successful/partial episodes into
@@ -73,7 +73,7 @@ pub fn episode_to_item(ep: &SessionEpisode, rank: usize) -> ScoredItem {
 mod tests {
     use super::*;
     use crate::recall::scored_item::ItemKind;
-    use gateway_database::{KnowledgeDatabase, SqliteVecIndex};
+    use zero_stores_sqlite::{KnowledgeDatabase, SqliteVecIndex};
     use gateway_services::VaultPaths;
 
     fn setup() -> (tempfile::TempDir, Arc<EpisodeRepository>) {

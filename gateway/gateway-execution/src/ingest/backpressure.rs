@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use gateway_database::KgEpisodeRepository;
+use zero_stores_sqlite::KgEpisodeRepository;
 
 #[derive(Debug, Clone)]
 pub struct BackpressureConfig {
@@ -65,7 +65,7 @@ impl Backpressure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gateway_database::KnowledgeDatabase;
+    use zero_stores_sqlite::KnowledgeDatabase;
     use gateway_services::VaultPaths;
 
     fn setup() -> (tempfile::TempDir, Arc<KgEpisodeRepository>) {

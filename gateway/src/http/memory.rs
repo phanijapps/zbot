@@ -33,7 +33,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use gateway_database::MemoryFact;
+use zero_stores_sqlite::MemoryFact;
 use serde::{Deserialize, Serialize};
 
 // ============================================================================

@@ -31,7 +31,7 @@ use std::sync::Arc;
 use api_logs::LogService;
 use async_trait::async_trait;
 use execution_state::StateService;
-use gateway_database::{ConversationRepository, DatabaseManager};
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 use gateway_events::EventBus;
 use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths};
 use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock, Semaphore};
@@ -219,7 +219,7 @@ pub(crate) struct RunnerDelegationInvoker {
     pub(crate) log_service: Arc<LogService<DatabaseManager>>,
     pub(crate) state_service: Arc<StateService<DatabaseManager>>,
     pub(crate) workspace_cache: WorkspaceCache,
-    pub(crate) memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    pub(crate) memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
     pub(crate) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     pub(crate) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub(crate) rate_limiters: Arc<

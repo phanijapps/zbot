@@ -5,7 +5,7 @@
 use agent_runtime::StreamEvent;
 use api_logs::{ExecutionLog, LogCategory, LogLevel, LogService};
 use execution_state::{AgentExecution, DelegationType, StateService};
-use gateway_database::DatabaseManager;
+use zero_stores_sqlite::DatabaseManager;
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::skills::{SkillFrontmatter, WardSetup};
 use std::path::{Path, PathBuf};

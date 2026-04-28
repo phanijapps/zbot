@@ -8,7 +8,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use gateway_database::{DistillationStats, UndistilledSession};
+use zero_stores_sqlite::{DistillationStats, UndistilledSession};
 use knowledge_graph::{Direction, Entity, GraphStats, Relationship, Subgraph};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

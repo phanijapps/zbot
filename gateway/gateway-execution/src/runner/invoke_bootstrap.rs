@@ -19,7 +19,7 @@ use agent_runtime::{AgentExecutor, ChatMessage};
 use api_logs::LogService;
 use arc_swap::ArcSwapOption;
 use execution_state::StateService;
-use gateway_database::{ConversationRepository, DatabaseManager};
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::{
     AgentService, McpService, ModelRegistry, ProviderService, SharedVaultPaths, SkillService,
@@ -52,7 +52,7 @@ pub(super) struct InvokeBootstrap {
     pub(super) log_service: Arc<LogService<DatabaseManager>>,
     pub(super) conversation_repo: Arc<ConversationRepository>,
     pub(super) paths: SharedVaultPaths,
-    pub(super) memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    pub(super) memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
     pub(super) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub(super) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     pub(super) model_registry: Arc<ArcSwapOption<ModelRegistry>>,
@@ -421,7 +421,7 @@ impl InvokeBootstrap {
         // Build fact store from memory repo + embedding client (if available)
         let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
             self.memory_repo.as_ref().map(|repo| {
-                Arc::new(gateway_database::GatewayMemoryFactStore::new(
+                Arc::new(zero_stores_sqlite::GatewayMemoryFactStore::new(
                     repo.clone(),
                     self.embedding_client.clone(),
                 )) as Arc<dyn zero_stores::MemoryFactStore>
@@ -819,7 +819,7 @@ mod tests {
     use api_logs::LogService;
     use arc_swap::ArcSwapOption;
     use execution_state::StateService;
-    use gateway_database::{ConversationRepository, DatabaseManager};
+    use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
     use gateway_events::EventBus;
     use gateway_services::VaultPaths;
     use tokio::sync::RwLock;

@@ -9,7 +9,7 @@
 #![cfg(feature = "test-stubs")]
 
 use execution_state::StateService;
-use gateway_database::DatabaseManager;
+use zero_stores_sqlite::DatabaseManager;
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_execution::runner::{ContinuationSpawner, ContinuationWatcher, StubSessionInvoker};
 use gateway_services::VaultPaths;

@@ -9,7 +9,7 @@
 use std::sync::Arc;
 use tempfile::tempdir;
 
-use gateway_database::{
+use zero_stores_sqlite::{
     EpisodeRepository, KnowledgeDatabase, MemoryFact, MemoryRepository, SessionEpisode,
     SqliteVecIndex, VectorIndex,
 };

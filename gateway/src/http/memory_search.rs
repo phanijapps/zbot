@@ -32,7 +32,7 @@
 
 use crate::state::AppState;
 use axum::{extract::State, http::StatusCode, Json};
-use gateway_database::{
+use zero_stores_sqlite::{
     vector_index::VectorIndex, EpisodeRepository, ProcedureRepository, SessionEpisode,
     SqliteVecIndex, WardWikiRepository,
 };
@@ -156,7 +156,7 @@ fn build_episode_repo(state: &AppState) -> Result<Arc<EpisodeRepository>, Handle
 // preserves the historical sanitization (`%`/`_` stripped) and the
 // ward-scoped vs. unscoped variants.
 
-fn wiki_article_to_value(hit: gateway_database::WikiHit) -> Value {
+fn wiki_article_to_value(hit: zero_stores_sqlite::WikiHit) -> Value {
     let snippet: String = hit.article.content.chars().take(240).collect();
     json!({
         "id": hit.article.id,
@@ -169,7 +169,7 @@ fn wiki_article_to_value(hit: gateway_database::WikiHit) -> Value {
     })
 }
 
-fn procedure_to_value(proc: gateway_database::Procedure, score: f64) -> Value {
+fn procedure_to_value(proc: zero_stores_sqlite::Procedure, score: f64) -> Value {
     json!({
         "id": proc.id,
         "agent_id": proc.agent_id,
@@ -206,7 +206,7 @@ fn episode_to_value(ep: SessionEpisode, score: Option<f64>, source: &str) -> Val
     v
 }
 
-fn fact_to_value(fact: gateway_database::MemoryFact, source: &str, score: Option<f64>) -> Value {
+fn fact_to_value(fact: zero_stores_sqlite::MemoryFact, source: &str, score: Option<f64>) -> Value {
     let mut v = json!({
         "id": fact.id,
         "session_id": fact.session_id,
@@ -453,7 +453,7 @@ pub async fn memory_search(
 /// unfiltered pool (admin/debug).
 #[allow(clippy::too_many_arguments)]
 fn run_facts(
-    memory_repo: &gateway_database::MemoryRepository,
+    memory_repo: &zero_stores_sqlite::MemoryRepository,
     query: &str,
     mode: &str,
     embedding: Option<&[f32]>,

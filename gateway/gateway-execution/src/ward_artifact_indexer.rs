@@ -7,7 +7,7 @@
 //! (timeline.json, people.json, etc.) now reaches the knowledge graph.
 
 use crate::indexer::relationship_rules;
-use gateway_database::{EpisodeSource, KgEpisode, KgEpisodeRepository};
+use zero_stores_sqlite::{EpisodeSource, KgEpisode, KgEpisodeRepository};
 use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, Relationship};
 use zero_stores_sqlite::kg::storage::GraphStorage;
 use serde_json::Value;

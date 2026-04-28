@@ -11,7 +11,7 @@ use std::sync::Arc;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use gateway_database::DatabaseManager;
+use zero_stores_sqlite::DatabaseManager;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
