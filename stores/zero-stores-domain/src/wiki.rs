@@ -21,4 +21,3 @@ pub struct WikiArticle {
     pub created_at: String,
     pub updated_at: String,
 }
-

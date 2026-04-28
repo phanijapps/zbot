@@ -79,14 +79,18 @@ sha2 = "0.10"
 # Cron scheduling
 tokio-cron-scheduler = "0.13"
 
-# Database
-rusqlite = { version = "0.32", features = ["bundled"] }
-r2d2 = "0.8"
-r2d2_sqlite = "0.25"
+# Database — D9: gateway no longer depends on rusqlite/r2d2 directly.
+# All SQLite-coupled types come through `zero-stores-sqlite` (the trait
+# implementation) and `zero-stores-traits` (the abstract surface). New
+# backends drop in by implementing the same traits in their own crate.
 
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"
+# Used only by the `query_session` debug example. The lib + bin do not
+# depend on rusqlite directly — all SQLite access flows through
+# `zero-stores-sqlite` (the trait impl) per the D-phase architecture.
+rusqlite = { version = "0.32", features = ["bundled"] }
 assert_matches = "1.5"
 tower = { version = "0.5", features = ["util"] }
 axum-test = "16"

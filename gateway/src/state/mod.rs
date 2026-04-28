@@ -408,7 +408,7 @@ impl AppState {
         let surreal_bundle: Option<persistence_factory::SurrealStoreBundle> =
             persistence_factory::maybe_build_surreal_full(&paths);
         #[cfg(not(feature = "surreal-backend"))]
-        let surreal_bundle: Option<()> = None;
+        let _surreal_bundle: Option<()> = None;
         let early_memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = {
             #[cfg(feature = "surreal-backend")]
             {

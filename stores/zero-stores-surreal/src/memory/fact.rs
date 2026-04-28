@@ -202,10 +202,7 @@ pub async fn get_memory_fact_by_id(
     }))
 }
 
-pub async fn delete_memory_fact(
-    db: &Arc<Surreal<Any>>,
-    fact_id: &str,
-) -> Result<bool, String> {
+pub async fn delete_memory_fact(db: &Arc<Surreal<Any>>, fact_id: &str) -> Result<bool, String> {
     let thing = surrealdb::types::RecordId::new(
         "memory_fact",
         surrealdb::types::RecordIdKey::String(fact_id.to_string()),
@@ -328,9 +325,7 @@ pub async fn search_memory_facts_hybrid(
     let mut resp = q
         .await
         .map_err(|e| format!("search_memory_facts_hybrid: {e}"))?;
-    let rows: Vec<FactSearchRow> = resp
-        .take(0)
-        .map_err(|e| format!("search take: {e}"))?;
+    let rows: Vec<FactSearchRow> = resp.take(0).map_err(|e| format!("search take: {e}"))?;
     let src = match mode {
         "fts" => "fts",
         "semantic" => "vec",
@@ -467,7 +462,9 @@ mod tests {
         assert_eq!(a1_pref[0]["category"], "preference");
 
         // Cross-agent
-        let all = list_memory_facts(&db, None, None, None, 100, 0).await.unwrap();
+        let all = list_memory_facts(&db, None, None, None, 100, 0)
+            .await
+            .unwrap();
         assert_eq!(all.len(), 3);
     }
 

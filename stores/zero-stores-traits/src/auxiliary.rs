@@ -51,10 +51,7 @@ pub trait RecallLogStore: Send + Sync {
         Ok(Vec::new())
     }
 
-    async fn get_keys_for_sessions(
-        &self,
-        _session_ids: &[String],
-    ) -> Result<Vec<String>, String> {
+    async fn get_keys_for_sessions(&self, _session_ids: &[String]) -> Result<Vec<String>, String> {
         Ok(Vec::new())
     }
 }
