@@ -624,12 +624,17 @@ impl MemoryRepository {
         older_than_days: u32,
         decay_factor: f64,
     ) -> Result<usize, String> {
+        // Pre-compute the staleness cutoff in Rust so the SQL stays portable
+        // (no SQLite-specific `julianday()` time arithmetic). Matches the
+        // Phase 2 `datetime('now')` cleanup pattern. (TD-042)
+        let cutoff = (Utc::now() - chrono::Duration::days(older_than_days as i64)).to_rfc3339();
+        let now = Utc::now().to_rfc3339();
         self.db.with_connection(|conn| {
             let count = conn.execute(
-                "UPDATE memory_facts SET confidence = confidence * ?1, updated_at = ?3
-                 WHERE julianday('now') - julianday(updated_at) > ?2
+                "UPDATE memory_facts SET confidence = confidence * ?1, updated_at = ?2
+                 WHERE updated_at < ?3
                  AND confidence > 0.1",
-                params![decay_factor, older_than_days, Utc::now().to_rfc3339()],
+                params![decay_factor, now, cutoff],
             )?;
             Ok(count)
         })

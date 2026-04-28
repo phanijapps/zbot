@@ -104,11 +104,11 @@ Scope tags:
 - **Fix:** Extract `OutboxStore` trait. Independent of SurrealDB plan.
 - **Status:** pending (defer to Phase 6)
 
-#### TD-023 🟡 [Both] `AppState` holds concrete persistence types
-- **Location:** `gateway/src/state.rs:63-75` — `pub conversations: Arc<ConversationRepository>`, `pub knowledge_db: Arc<KnowledgeDatabase>`, `pub log_service: Arc<LogService<DatabaseManager>>`, `pub state_service: Arc<StateService<DatabaseManager>>`.
-- **Why debt:** The "switch" that picks a backend has to live in `AppState::new`. Today there's nothing to switch — concrete types are baked in.
-- **Fix:** After traits exist (TD-010, TD-014, optionally TD-020+), change `AppState` fields to `Arc<dyn ...>` and add a `PersistenceFactory::new(config)` that constructs the chosen impls.
-- **Status:** pending (last step — do after relevant traits exist)
+#### TD-023 ⏳ [Both] `AppState` factory pattern established; `graph_service` retirement deferred
+- **Location:** `gateway/src/state/mod.rs:63-75` — concrete persistence types alongside trait objects.
+- **Progress (Phase 5):** Factory pattern landed at `gateway/src/state/persistence_factory.rs`. `kg_store` construction goes through `build_kg_store_from_storage()`; the canonical `build_kg_store(knowledge_db, embedding_client)` entrypoint is gated until `graph_service` retires (it's where the SurrealDB config-driven branch will live). When SurrealDB support lands, this is where the branch goes — consumers don't need to change because they hold `Arc<dyn KnowledgeGraphStore>`.
+- **Deferred:** Retirement of `graph_service: Option<Arc<GraphService>>` (the parallel concrete field on `AppState`). Migrating its dozens of consumers — HTTP handlers in `gateway/src/http/graph.rs`, sleep jobs, distillation, etc. — is a multi-PR workstream.
+- **Status:** factory pattern done; `graph_service` retirement deferred to a future workstream
 
 ### Dialect-portability debt
 
@@ -127,11 +127,11 @@ Scope tags:
 - **Resolution:** Phase 1's trait surface (`KnowledgeGraphStore`, `MemoryFactStore` in `stores/zero-stores`) already exposes upsert vocabulary — `upsert_entity`, `upsert_relationship`, `add_alias`, `save_fact`, etc. The SQLite-specific `INSERT OR …` syntax lives entirely inside the SQLite impl crate and is not visible to any consumer crate. The future SurrealDB impl will use SurrealDB's record-upsert semantics in its own crate — no contract change needed.
 - **Status:** done by Phase 1 — audit confirmed in Phase 2 (no code changes required)
 
-#### TD-032 🟡 [K] Schema bootstrap is per-impl, idempotent, no cross-version migration in scope
+#### TD-032 ✅ [K] Schema bootstrap is per-impl, idempotent, no cross-version migration in scope
 - **Locations:** `gateway/gateway-database/migrations/{v23_wiki_fts.sql, v24_global_scope_backfill.sql}`, plus inline schema strings in `gateway/gateway-database/src/schema.rs` and `knowledge_schema.rs`.
 - **Resolution direction (per design doc):** Each impl crate has a private `bootstrap_schema()` function called once at startup. SQLite impl runs idempotent `CREATE TABLE IF NOT EXISTS …`. SurrealDB impl runs idempotent `DEFINE TABLE … IF NOT EXISTS`. **No `Migrator` trait in `zero-stores`.** Cross-version data migration and SQLite→SurrealDB data migration are explicitly out of this design's scope — those become a future `zero-stores-migrate` crate when actually needed.
-- **Fix:** Refactor existing inline migrations into `zero-stores-sqlite/src/bootstrap.rs`. Add `zero-stores-surreal/src/bootstrap.rs` for SurrealDB's `DEFINE …` calls when that impl is added.
-- **Status:** pending
+- **Phase 4 outcome:** Added `stores/zero-stores-sqlite/src/bootstrap.rs` with `bootstrap_schema()` as the canonical hook point for the SQLite backend. Today it delegates to `gateway-database`'s `KnowledgeDatabase::new` (which runs the bootstrap as a constructor side effect) — pattern established without churning 1000+ lines of schema DDL. When SurrealDB lands, its bootstrap mirrors this in `stores/zero-stores-surreal/src/bootstrap.rs`. Full DDL relocation deferred until shapes need to diverge between backends.
+- **Status:** ✅ done (Phase 4) — pattern established, full schema relocation deferred until proven necessary
 
 #### TD-033 🟢 [Both] Hardcoded table-name string literals scattered across crates
 - **Locations:** ~90 in `services/knowledge-graph/src/storage.rs`, ~40 in `services/execution-state/src/repository.rs`, ~12 in `gateway/gateway-bridge/src/outbox.rs`.
@@ -152,11 +152,11 @@ Scope tags:
 - **Fix:** No urgency. Standardize on numbered (`?1`) opportunistically as files are touched for other work.
 - **Status:** opportunistic
 
-#### TD-042 🟢 [K] `julianday('now')` date-arithmetic at memory_repository.rs:629
+#### TD-042 ✅ [K] `julianday('now')` date-arithmetic at memory_repository.rs:629
 - **Location:** `gateway/gateway-database/src/memory_repository.rs:629` — `julianday('now') - julianday(updated_at) > ?2` (in `decay_stale_facts`).
 - **Why debt:** `julianday()` is a SQLite-specific time function. Like `datetime('now')`, it bakes a clock assumption into the SQL — but unlike `datetime('now')`, it can't be replaced by a single bound parameter. The fix requires a semantic change: pre-compute a threshold timestamp in Rust (`Utc::now() - Duration::days(N)`) and rewrite the WHERE clause to compare `updated_at < ?threshold`.
-- **Why deferred:** Phase 2 was scoped to mechanical `datetime('now')` substitution; this is a semantic change. Best addressed alongside Phase 4 (schema bootstrap) when the full SQL surface is reviewed for SurrealDB portability anyway.
-- **Status:** pending — Phase 4
+- **Phase 4 fix:** `decay_stale_facts` now computes `cutoff = (Utc::now() - chrono::Duration::days(older_than_days as i64)).to_rfc3339()` in Rust and binds it as `?3` in `WHERE updated_at < ?3`. Params reordered: `?1` decay_factor, `?2` now (for `updated_at` write), `?3` cutoff. Same flavor as Phase 2's `datetime('now')` cleanup — keeps the SQL portable across SQLite and SurrealDB.
+- **Status:** ✅ done (Phase 4)
 
 ---
 

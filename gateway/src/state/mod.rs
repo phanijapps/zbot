@@ -2,6 +2,8 @@
 //!
 //! Shared state for the gateway application.
 
+pub(crate) mod persistence_factory;
+
 use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
 use crate::database::{ConversationRepository, DatabaseManager};
@@ -400,20 +402,24 @@ impl AppState {
         // Build the trait-object KG store from runner_graph_storage.
         // Coexists with graph_service/graph_storage until Phase 5 retirement.
         //
-        // We use `with_embedding_client` (not `new`) so the trait method
-        // `reindex_embeddings` is functional. The wired client is the
-        // `LiveEmbeddingClient` constructed above, so it follows ArcSwap
-        // backend changes — same client the gateway-side wrapper at
+        // Construction is centralized in `persistence_factory` (TD-023):
+        // when SurrealDB support lands, the config-driven branch goes
+        // there, and this callsite stays the same. We use the
+        // `_from_storage` helper because AppState shares one
+        // `Arc<GraphStorage>` between `kg_store` and the legacy
+        // `graph_service`; once `graph_service` retires, callers migrate
+        // to `build_kg_store(knowledge_db, …)`.
+        //
+        // The wired client is the `LiveEmbeddingClient` constructed above,
+        // so it follows ArcSwap backend changes — same client the
+        // gateway-side wrapper at
         // `gateway-execution::sleep::embedding_reindex` already uses.
         let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
             runner_graph_storage.as_ref().map(|gs| {
                 let embedder = embedding_client
                     .clone()
                     .expect("embedding_client wired above for distillation/recall");
-                Arc::new(zero_stores_sqlite::SqliteKgStore::with_embedding_client(
-                    gs.clone(),
-                    embedder,
-                )) as Arc<dyn zero_stores::KnowledgeGraphStore>
+                persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
             });
 
         let episode_repo_ref = episode_repo.clone();

@@ -3,6 +3,7 @@
 //! API into async via `tokio::task::spawn_blocking`.
 
 mod blocking;
+pub mod bootstrap;
 mod knowledge_graph;
 pub mod reindex;
 
