@@ -222,28 +222,6 @@ fn sync_reconcile_vec_dim_at_boot(
     );
 }
 
-/// Pick the right `EpisodeStore` impl for AppState — Surreal when the
-/// user's opted in, SQLite-backed otherwise. Extracted so the call-site
-/// inside `AppState::new` stays readable.
-#[cfg(feature = "surreal-backend")]
-fn build_episode_store_for_state(
-    surreal_bundle: Option<&persistence_factory::SurrealStoreBundle>,
-    episode_repo: Arc<EpisodeRepository>,
-) -> Arc<dyn zero_stores_traits::EpisodeStore> {
-    match surreal_bundle {
-        Some(b) => b.episode.clone(),
-        None => Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo))
-            as Arc<dyn zero_stores_traits::EpisodeStore>,
-    }
-}
-#[cfg(not(feature = "surreal-backend"))]
-fn build_episode_store_for_state(
-    episode_repo: Arc<EpisodeRepository>,
-) -> Arc<dyn zero_stores_traits::EpisodeStore> {
-    Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo))
-        as Arc<dyn zero_stores_traits::EpisodeStore>
-}
-
 impl AppState {
     /// Create a new application state.
     ///
@@ -918,13 +896,27 @@ impl AppState {
             goal_repo,
             distillation_repo,
             distiller: distiller_ref,
-            episode_store: episode_repo_ref.as_ref().map(|er| {
-                build_episode_store_for_state(
-                    #[cfg(feature = "surreal-backend")]
-                    surreal_bundle.as_ref(),
-                    er.clone(),
-                )
-            }),
+            episode_store: {
+                #[cfg(feature = "surreal-backend")]
+                {
+                    surreal_bundle
+                        .as_ref()
+                        .map(|b| b.episode.clone())
+                        .or_else(|| {
+                            episode_repo_ref.as_ref().map(|er| {
+                                Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(er.clone()))
+                                    as Arc<dyn zero_stores_traits::EpisodeStore>
+                            })
+                        })
+                }
+                #[cfg(not(feature = "surreal-backend"))]
+                {
+                    episode_repo_ref.as_ref().map(|er| {
+                        Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(er.clone()))
+                            as Arc<dyn zero_stores_traits::EpisodeStore>
+                    })
+                }
+            },
             wiki_store: wiki_store_for_state,
             procedure_store: procedure_store_for_state,
             episode_repo: episode_repo_ref,
