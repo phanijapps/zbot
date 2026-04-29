@@ -61,6 +61,7 @@ pub async fn ingest(
 
     backpressure
         .check(&req.source_id)
+        .await
         .map_err(|e| (StatusCode::TOO_MANY_REQUESTS, e))?;
 
     let opts = ChunkOptions {

@@ -756,11 +756,17 @@ impl AppState {
 
         // Create streaming ingestion queue + backpressure BEFORE the runtime so the
         // runner can be wired with an IngestionAdapter.
-        // Requires graph_storage AND kg_episode_repo — if either is unavailable
-        // (SurrealDB mode, or graph init failed), we skip.
+        //
+        // Phase B2: trait-routed. Queue + backpressure now consume
+        // Arc<dyn KgEpisodeStore> + Arc<dyn KnowledgeGraphStore>. Both
+        // are wired in BOTH backends (kg_episode_store from
+        // surreal_bundle.kg_episode or GatewayKgEpisodeStore wrap;
+        // kg_store from surreal_bundle.kg or sqlite kg_store builder).
+        // So the queue runs on Surreal too — pending ingestion episodes
+        // get processed instead of accumulating forever.
         let (ingestion_queue, ingestion_backpressure) =
-            match (runner_graph_storage.as_ref().cloned(), kg_episode_repo.as_ref()) {
-                (Some(gs), Some(kg_ep)) => {
+            match (kg_episode_store.as_ref(), kg_store.as_ref()) {
+                (Some(eps), Some(kgs)) => {
                     let extractor =
                         Arc::new(gateway_execution::ingest::extractor::LlmExtractor::new(
                             provider_service.clone(),
@@ -768,13 +774,13 @@ impl AppState {
                         ));
                     let queue = Arc::new(gateway_execution::ingest::IngestionQueue::start(
                         2,
-                        kg_ep.clone(),
-                        gs,
+                        eps.clone(),
+                        kgs.clone(),
                         extractor,
                     ));
                     let bp = Arc::new(gateway_execution::ingest::Backpressure::new(
                         gateway_execution::ingest::BackpressureConfig::default(),
-                        kg_ep.clone(),
+                        eps.clone(),
                     ));
                     (
                         Some(queue) as Option<Arc<gateway_execution::ingest::IngestionQueue>>,
@@ -785,18 +791,18 @@ impl AppState {
             };
 
         // Build agent-tool adapters so runner can register `ingest` + `goal` tools.
-        // The adapter needs graph_storage so the structured-ingest path can
-        // call `store_knowledge` directly without going through LLM extraction.
+        // Phase B2: also trait-routed. The IngestionAdapter is migrated
+        // alongside the queue so subagent ingestion works on Surreal.
         let ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>> = match (
             ingestion_queue.as_ref(),
-            runner_graph_storage.as_ref(),
-            kg_episode_repo.as_ref(),
+            kg_store.as_ref(),
+            kg_episode_store.as_ref(),
         ) {
-            (Some(q), Some(gs), Some(kg_ep)) => Some(Arc::new(
+            (Some(q), Some(kgs), Some(eps)) => Some(Arc::new(
                 gateway_execution::invoke::ingest_adapter::IngestionAdapter::new(
                     q.clone(),
-                    kg_ep.clone(),
-                    gs.clone(),
+                    eps.clone(),
+                    kgs.clone(),
                 ),
             )
                 as Arc<dyn agent_tools::IngestionAccess>),
@@ -1065,6 +1071,14 @@ impl AppState {
             None, // bus is set later by server.start()
         ));
 
+        // Phase B: minimal still wires the trait-routed memory_store
+        // so tests that hit /api/memory/.../search succeed without
+        // needing to construct full AppState. Fallback no-op
+        // embedding client lets save_fact path complete.
+        let memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
+        ));
+
         Self {
             agents: Arc::new(AgentService::new(agents_dir)),
             skills: Arc::new(SkillService::with_roots(skills_roots)),
@@ -1097,7 +1111,7 @@ impl AppState {
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
-            memory_store: None,
+            memory_store,
             goal_repo: None,
             distillation_repo: None,
             distiller: None,
@@ -1138,6 +1152,12 @@ impl AppState {
                 .expect("vec index init"),
         );
         let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
+
+        // Phase B: same trait wrap as `minimal()` so test paths see a
+        // wired memory_store and search/recall handlers don't 503.
+        let memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
+        ));
 
         // Create bridge registry and outbox
         let bridge_registry = Arc::new(gateway_bridge::BridgeRegistry::new());
@@ -1189,7 +1209,7 @@ impl AppState {
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
-            memory_store: None,
+            memory_store,
             goal_repo: None,
             distillation_repo: None,
             distiller: None,

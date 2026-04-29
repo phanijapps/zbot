@@ -14,8 +14,12 @@ use tempfile::tempdir;
 
 use gateway_execution::ingest::{extractor::Extractor, IngestionQueue};
 use gateway_services::VaultPaths;
+use zero_stores::KnowledgeGraphStore;
 use zero_stores_sqlite::kg::storage::GraphStorage;
-use zero_stores_sqlite::{KgEpisode, KgEpisodeRepository, KnowledgeDatabase};
+use zero_stores_sqlite::{
+    GatewayKgEpisodeStore, KgEpisodeRepository, KnowledgeDatabase, SqliteKgStore,
+};
+use zero_stores_traits::KgEpisodeStore;
 
 struct PanicExtractor {
     invocations: Arc<AtomicU64>,
@@ -26,9 +30,9 @@ struct PanicExtractor {
 impl Extractor for PanicExtractor {
     async fn process(
         &self,
-        _episode: &KgEpisode,
+        _episode_id: &str,
         _chunk_text: &str,
-        _graph: &Arc<GraphStorage>,
+        _kg_store: &Arc<dyn KnowledgeGraphStore>,
     ) -> Result<(), String> {
         let n = self.invocations.fetch_add(1, Ordering::SeqCst) + 1;
         if n == self.panic_on {
@@ -45,7 +49,10 @@ async fn worker_panic_does_not_kill_siblings() {
     std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
     let db = Arc::new(KnowledgeDatabase::new(paths).unwrap());
     let repo = Arc::new(KgEpisodeRepository::new(db.clone()));
-    let graph = Arc::new(GraphStorage::new(db.clone()).unwrap());
+    let graph_storage = Arc::new(GraphStorage::new(db.clone()).unwrap());
+    let episode_store: Arc<dyn KgEpisodeStore> =
+        Arc::new(GatewayKgEpisodeStore::new(repo.clone()));
+    let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(graph_storage));
 
     let invocations = Arc::new(AtomicU64::new(0));
     let extractor = Arc::new(PanicExtractor {
@@ -53,7 +60,7 @@ async fn worker_panic_does_not_kill_siblings() {
         panic_on: 2, // second invocation panics
     });
 
-    let queue = IngestionQueue::start(2, repo.clone(), graph, extractor);
+    let queue = IngestionQueue::start(2, episode_store, kg_store, extractor);
 
     // Enqueue 5 episodes with payloads.
     for i in 0..5 {
