@@ -229,6 +229,7 @@ pub(crate) struct RunnerDelegationInvoker {
         >,
     >,
     pub(crate) graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
+    pub(crate) kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     pub(crate) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(crate) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 }
@@ -262,6 +263,7 @@ impl DelegationSpawner for RunnerDelegationInvoker {
             self.memory_recall.clone(),
             self.rate_limiters.clone(),
             self.graph_storage.clone(),
+            self.kg_store.clone(),
             self.ingestion_adapter.clone(),
             self.goal_adapter.clone(),
         )

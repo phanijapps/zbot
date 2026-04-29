@@ -68,6 +68,7 @@ pub(super) struct InvokeBootstrap {
     pub(super) bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
     pub(super) bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
     pub(super) graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
+    pub(super) kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     pub(super) event_bus: Arc<EventBus>,
@@ -483,6 +484,9 @@ impl InvokeBootstrap {
         if let Some(cp) = connector_provider {
             builder = builder.with_connector_provider(cp);
         }
+        if let Some(ref ks) = self.kg_store {
+            builder = builder.with_kg_store(ks.clone());
+        }
         if let Some(ref gs) = self.graph_storage {
             builder = builder.with_graph_storage(gs.clone());
         }
@@ -863,6 +867,7 @@ mod tests {
             bridge_registry: None,
             bridge_outbox: None,
             graph_storage: None,
+            kg_store: None,
             ingestion_adapter: None,
             goal_adapter: None,
             event_bus: Arc::new(EventBus::new()),

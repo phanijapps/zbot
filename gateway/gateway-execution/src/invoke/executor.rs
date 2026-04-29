@@ -89,6 +89,9 @@ pub struct ExecutorBuilder {
     is_delegated: bool,
     subagent_non_streaming: bool,
     graph_storage: Option<Arc<GraphStorage>>,
+    /// Trait-routed kg store. Preferred over `graph_storage` for the
+    /// graph_query tool — wired in both backends.
+    kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
@@ -109,6 +112,7 @@ impl ExecutorBuilder {
             is_delegated: false,
             subagent_non_streaming: true,
             graph_storage: None,
+            kg_store: None,
             ingestion_adapter: None,
             goal_adapter: None,
             extra_initial_state: None,
@@ -164,6 +168,14 @@ impl ExecutorBuilder {
     /// Set the knowledge graph storage for the graph_query tool.
     pub fn with_graph_storage(mut self, storage: Arc<GraphStorage>) -> Self {
         self.graph_storage = Some(storage);
+        self
+    }
+
+    /// Set the trait-routed kg store for the `graph_query` tool.
+    /// Preferred over `with_graph_storage` — wired in both SQLite and
+    /// SurrealDB modes via `state.kg_store`.
+    pub fn with_kg_store(mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) -> Self {
+        self.kg_store = Some(store);
         self
     }
 
@@ -567,8 +579,13 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(RespondTool::new()));
             tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
 
-            // Knowledge graph query (if storage available)
-            if let Some(ref gs) = self.graph_storage {
+            // Knowledge graph query (Phase E5b): prefer trait-routed
+            // kg_store (wired in both backends) over the legacy concrete
+            // GraphStorage so subagents on SurrealDB also get the tool.
+            if let Some(ref ks) = self.kg_store {
+                let adapter = Arc::new(super::kg_store_adapter::KgStoreAdapter::new(ks.clone()));
+                tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
+            } else if let Some(ref gs) = self.graph_storage {
                 let adapter = Arc::new(GraphStorageAdapter::new(gs.clone()));
                 tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
             }
@@ -606,8 +623,13 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(DelegateTool::new()));
             tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
 
-            // Knowledge graph query (if storage available)
-            if let Some(ref gs) = self.graph_storage {
+            // Knowledge graph query (Phase E5b): prefer trait-routed
+            // kg_store (wired in both backends) over the legacy concrete
+            // GraphStorage so subagents on SurrealDB also get the tool.
+            if let Some(ref ks) = self.kg_store {
+                let adapter = Arc::new(super::kg_store_adapter::KgStoreAdapter::new(ks.clone()));
+                tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
+            } else if let Some(ref gs) = self.graph_storage {
                 let adapter = Arc::new(GraphStorageAdapter::new(gs.clone()));
                 tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
             }

@@ -9,6 +9,7 @@ mod batch_writer;
 mod executor;
 pub mod goal_adapter;
 pub mod graph_adapter;
+pub mod kg_store_adapter;
 pub mod ingest_adapter;
 pub mod micro_recall;
 pub mod setup;

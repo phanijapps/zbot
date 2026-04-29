@@ -86,6 +86,7 @@ impl RuntimeService {
             None, // embedding_client
             2,    // default max_parallel_agents
             None, // graph_storage
+            None, // kg_store
             None, // kg_episode_repo
             None, // ingestion_adapter
             None, // goal_adapter
@@ -115,6 +116,7 @@ impl RuntimeService {
         embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
         max_parallel_agents: u32,
         graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
+        kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
         kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
         ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
         goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
@@ -152,6 +154,10 @@ impl RuntimeService {
 
         if let Some(gs) = graph_storage {
             runner.set_graph_storage(gs);
+        }
+
+        if let Some(ks) = kg_store {
+            runner.set_kg_store(ks);
         }
 
         if let Some(repo) = kg_episode_repo {

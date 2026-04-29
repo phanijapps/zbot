@@ -69,6 +69,7 @@ pub async fn spawn_delegated_agent(
         >,
     >,
     graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
+    kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 ) -> Result<String, String> {
@@ -307,6 +308,9 @@ pub async fn spawn_delegated_agent(
         builder = builder.with_fact_store(fs);
     }
     let graph_storage_for_recall = graph_storage.clone();
+    if let Some(ks) = kg_store.clone() {
+        builder = builder.with_kg_store(ks);
+    }
     if let Some(gs) = graph_storage {
         builder = builder.with_graph_storage(gs);
     }

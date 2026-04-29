@@ -747,6 +747,7 @@ impl AppState {
             runner_embedding_client,
             max_parallel_agents,
             runner_graph_storage.clone(),
+            kg_store.clone(),
             kg_episode_repo.clone(),
             ingestion_adapter,
             goal_adapter,

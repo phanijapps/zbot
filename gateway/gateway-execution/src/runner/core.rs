@@ -117,6 +117,9 @@ pub struct ExecutionRunner {
     >,
     /// Knowledge graph storage for the graph_query tool.
     graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
+    /// Trait-routed kg store. Phase E5b — preferred over `graph_storage`
+    /// for the graph_query tool wiring; wired in both backends.
+    kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     /// KG episode repository for ward artifact indexing after distillation.
     kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     /// Adapter for the `ingest` agent tool. Wired via [`Self::set_ingestion_adapter`].
@@ -200,6 +203,7 @@ pub(super) struct ContinuationArgs<'a> {
     pub(super) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub(super) model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
     pub(super) graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
+    pub(super) kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     pub(super) kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
@@ -429,6 +433,7 @@ impl ExecutionRunner {
             bridge_registry: bridge_registry.clone(),
             bridge_outbox: bridge_outbox.clone(),
             graph_storage: None,
+            kg_store: None,
             ingestion_adapter: None,
             goal_adapter: None,
             event_bus: event_bus.clone(),
@@ -462,6 +467,7 @@ impl ExecutionRunner {
             model_registry,
             rate_limiters,
             graph_storage: None,
+            kg_store: None,
             kg_episode_repo: None,
             ingestion_adapter: None,
             goal_adapter: None,
@@ -514,6 +520,15 @@ impl ExecutionRunner {
         self.kg_episode_repo = Some(repo);
     }
 
+    /// Late-wired setter for the trait-routed kg store. Mirrored to the
+    /// bootstrap so `InvokeBootstrap::finish_setup` reads its own clone
+    /// at session-setup time. Phase E5b — wired in both backends so the
+    /// `graph_query` tool registers regardless of SQLite vs SurrealDB.
+    pub fn set_kg_store(&mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) {
+        self.bootstrap.kg_store = Some(store.clone());
+        self.kg_store = Some(store);
+    }
+
     /// Late-wired setter. Mirrored to `self.bootstrap.ingestion_adapter` because
     /// `InvokeBootstrap::finish_setup` reads its own clone at session-setup time.
     pub fn set_ingestion_adapter(&mut self, adapter: Arc<dyn agent_tools::IngestionAccess>) {
@@ -558,6 +573,7 @@ impl ExecutionRunner {
             memory_recall: self.memory_recall.clone(),
             model_registry: self.model_registry.clone(),
             graph_storage: self.graph_storage.clone(),
+            kg_store: self.kg_store.clone(),
             kg_episode_repo: self.kg_episode_repo.clone(),
             ingestion_adapter: self.ingestion_adapter.clone(),
             goal_adapter: self.goal_adapter.clone(),
@@ -592,6 +608,7 @@ impl ExecutionRunner {
             memory_recall: self.memory_recall.clone(),
             rate_limiters: self.rate_limiters.clone(),
             graph_storage: self.graph_storage.clone(),
+            kg_store: self.kg_store.clone(),
             ingestion_adapter: self.ingestion_adapter.clone(),
             goal_adapter: self.goal_adapter.clone(),
         }
@@ -873,6 +890,7 @@ impl ExecutionRunner {
             self.memory_recall.clone(),
             self.rate_limiters.clone(),
             self.graph_storage.clone(),
+            self.kg_store.clone(),
             self.ingestion_adapter.clone(),
             self.goal_adapter.clone(),
         )
@@ -1053,6 +1071,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         memory_recall,
         model_registry,
         graph_storage,
+        kg_store,
         kg_episode_repo,
         ingestion_adapter,
         goal_adapter,
@@ -1180,6 +1199,9 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         builder = builder.with_fact_store(fs);
     }
     let graph_storage_for_indexer = graph_storage.clone();
+    if let Some(ks) = kg_store.clone() {
+        builder = builder.with_kg_store(ks);
+    }
     if let Some(gs) = graph_storage {
         builder = builder.with_graph_storage(gs);
     }

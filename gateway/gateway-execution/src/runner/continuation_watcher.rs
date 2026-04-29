@@ -75,6 +75,7 @@ pub(crate) struct RunnerContinuationInvoker {
     pub(crate) model_registry:
         Arc<arc_swap::ArcSwapOption<gateway_services::models::ModelRegistry>>,
     pub(crate) graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
+    pub(crate) kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     pub(crate) kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     pub(crate) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(crate) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
@@ -116,6 +117,7 @@ impl ContinuationSpawner for RunnerContinuationInvoker {
             // Read the live registry at fire time — not a stale capture.
             model_registry: self.model_registry.load_full(),
             graph_storage: self.graph_storage.clone(),
+            kg_store: self.kg_store.clone(),
             kg_episode_repo: self.kg_episode_repo.clone(),
             ingestion_adapter: self.ingestion_adapter.clone(),
             goal_adapter: self.goal_adapter.clone(),
