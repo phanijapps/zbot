@@ -620,10 +620,17 @@ pub async fn graph_stats(
         None => 0,
     };
 
-    // Episode count from episode repo
-    let episodes = match &state.episode_repo {
-        Some(repo) => repo.count().unwrap_or(0),
-        None => 0,
+    // Episode count: prefer the trait surface (wired in both backends)
+    // so Surreal mode reports the real count; fall back to the SQLite
+    // repo when only that is available (legacy / minimal AppStates).
+    let episodes = match (&state.episode_store, &state.episode_repo) {
+        (Some(store), _) => store
+            .episode_stats()
+            .await
+            .map(|s| s.total)
+            .unwrap_or(0),
+        (None, Some(repo)) => repo.count().unwrap_or(0),
+        (None, None) => 0,
     };
 
     // Distillation stats
