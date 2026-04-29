@@ -652,6 +652,9 @@ impl AppState {
             if let Some(mem) = memory_store.as_ref() {
                 distiller_inner.set_memory_store(mem.clone());
             }
+            if let Some(kgs) = kg_store.as_ref() {
+                distiller_inner.set_kg_store(kgs.clone());
+            }
             Some(Arc::new(distiller_inner))
         } else {
             None

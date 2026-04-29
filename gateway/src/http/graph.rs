@@ -471,19 +471,19 @@ pub struct AggregateGraphStats {
 
 /// GET /api/distillation/status
 /// Get aggregate distillation statistics.
+///
+/// On the SurrealDB backend the SQLite-only `distillation_repo` is `None`
+/// (no `distillation_runs` table on Surreal yet — the trait surface is
+/// wired but doesn't expose `get_stats` / `get_undistilled_sessions`).
+/// Return zeroed stats instead of 503 so the Observatory health bar
+/// renders cleanly. Migrating these to a `DistillationStore` trait
+/// extension is a follow-up.
 pub async fn distillation_status(
     State(state): State<AppState>,
 ) -> Result<Json<DistillationStats>, (StatusCode, Json<ErrorResponse>)> {
     let repo = match &state.distillation_repo {
         Some(repo) => repo,
-        None => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    error: "Distillation repository not available".to_string(),
-                }),
-            ));
-        }
+        None => return Ok(Json(DistillationStats::default())),
     };
 
     match repo.get_stats() {
@@ -499,19 +499,15 @@ pub async fn distillation_status(
 
 /// GET /api/distillation/undistilled
 /// Returns undistilled sessions (session_id + agent_id pairs).
+///
+/// On the SurrealDB backend returns an empty list (same rationale as
+/// `distillation_status` — SQLite-only repo, trait extension TBD).
 pub async fn undistilled_sessions(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<UndistilledSession>>, (StatusCode, Json<ErrorResponse>)> {
     let repo = match &state.distillation_repo {
         Some(repo) => repo,
-        None => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    error: "Distillation repository not available".to_string(),
-                }),
-            ));
-        }
+        None => return Ok(Json(Vec::new())),
     };
 
     match repo.get_undistilled_sessions() {

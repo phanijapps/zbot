@@ -45,6 +45,12 @@ use zero_stores_sqlite::{
 /// (cached_embedding) and the strategy / failure-cluster paths that
 /// rely on `episode_repo` (also SQLite-only) skip gracefully when
 /// `memory_repo` is `None`.
+///
+/// Phase E4: `kg_store` (the trait surface) is preferred over
+/// `graph_storage` (concrete SQLite) for entity / relationship writes.
+/// In SurrealDB mode `graph_storage` is `None` and `kg_store` is the
+/// only path; on SQLite both are wired and we still prefer the trait
+/// so the implementation has a single canonical path.
 pub struct SessionDistiller {
     provider_service: Arc<ProviderService>,
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
@@ -52,6 +58,7 @@ pub struct SessionDistiller {
     memory_repo: Option<Arc<MemoryRepository>>,
     memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     graph_storage: Option<Arc<GraphStorage>>,
+    kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     distillation_repo: Option<Arc<DistillationRepository>>,
     episode_repo: Option<Arc<EpisodeRepository>>,
     paths: Arc<VaultPaths>,
@@ -228,6 +235,7 @@ impl SessionDistiller {
             memory_repo,
             memory_store: None,
             graph_storage,
+            kg_store: None,
             distillation_repo,
             episode_repo,
             paths,
@@ -241,6 +249,13 @@ impl SessionDistiller {
     /// through this handle so SurrealDB is honored when opted-in.
     pub fn set_memory_store(&mut self, store: Arc<dyn zero_stores::MemoryFactStore>) {
         self.memory_store = Some(store);
+    }
+
+    /// Wire the trait-routed knowledge-graph store. When set, entity /
+    /// relationship writes go through this handle (Phase E4) so SurrealDB
+    /// is honored. Falls back to `graph_storage` when `kg_store` is None.
+    pub fn set_kg_store(&mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) {
+        self.kg_store = Some(store);
     }
 
     /// Set the ward wiki repository for post-distillation wiki compilation.
@@ -576,23 +591,29 @@ impl SessionDistiller {
             }
         }
 
-        // 5. Store entities and relationships in knowledge graph
-        if let Some(graph) = &self.graph_storage {
+        // 5. Store entities and relationships in knowledge graph.
+        //
+        // Phase E4: prefer `kg_store` (trait — wired in both backends) over
+        // the legacy concrete `graph_storage`. When kg_store is set, writes
+        // route through it so SurrealDB is honored. When neither is wired
+        // (defensive), the block is a no-op.
+        if self.kg_store.is_some() || self.graph_storage.is_some() {
             // Build entity map for relationship resolution
             let mut entity_map: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
 
             for ee in &response.entities {
-                // Check if entity already exists (dedup by name, case-insensitive)
-                match graph.find_entity_by_name(agent_id, &ee.name) {
-                    Ok(Some(existing_id)) => {
+                // Check if entity already exists (dedup by name).
+                let existing_id = self.find_entity_by_name(agent_id, &ee.name).await;
+                match existing_id {
+                    Some(id) => {
                         // Entity already exists — bump mention count and reuse ID
-                        if let Err(e) = graph.bump_entity_mention(&existing_id) {
+                        if let Err(e) = self.bump_entity_mention(&id).await {
                             tracing::warn!(entity = %ee.name, error = %e, "Failed to bump entity mention");
                         }
-                        entity_map.insert(ee.name.clone(), existing_id);
+                        entity_map.insert(ee.name.clone(), id);
                     }
-                    _ => {
+                    None => {
                         // Entity not found — create new
                         let mut entity = Entity::new(
                             agent_id.to_string(),
@@ -602,11 +623,10 @@ impl SessionDistiller {
                         entity.properties = ee.properties.clone();
                         entity_map.insert(ee.name.clone(), entity.id.clone());
 
-                        let knowledge = knowledge_graph::types::ExtractedKnowledge {
-                            entities: vec![entity],
-                            relationships: vec![],
-                        };
-                        if let Err(e) = graph.store_knowledge(agent_id, knowledge) {
+                        if let Err(e) = self
+                            .store_knowledge_one_entity(agent_id, entity)
+                            .await
+                        {
                             tracing::warn!(entity = %ee.name, error = %e, "Failed to store entity");
                         }
                     }
@@ -623,18 +643,14 @@ impl SessionDistiller {
                 .collect();
 
             for er in &canonicalized {
-                // Resolve both endpoints to real `kg_entities.id` values. The
-                // LLM sometimes names an entity only in the relationships
-                // block without also declaring it in `response.entities` —
-                // the old fallback used the name itself as the id, which
-                // blew up the FOREIGN KEY constraint on `kg_relationships`
-                // and silently dropped the edge. See
-                // `resolve_relationship_endpoint` for the resolve-or-create
-                // policy.
-                let source_id =
-                    resolve_relationship_endpoint(graph, agent_id, &er.source, &mut entity_map);
-                let target_id =
-                    resolve_relationship_endpoint(graph, agent_id, &er.target, &mut entity_map);
+                // Resolve both endpoints to real entity IDs (creating stubs
+                // if the LLM only named them in the relationships block).
+                let source_id = self
+                    .resolve_relationship_endpoint(agent_id, &er.source, &mut entity_map)
+                    .await;
+                let target_id = self
+                    .resolve_relationship_endpoint(agent_id, &er.target, &mut entity_map)
+                    .await;
 
                 let relationship = Relationship::new(
                     agent_id.to_string(),
@@ -643,11 +659,10 @@ impl SessionDistiller {
                     RelationshipType::from_str(&er.relationship_type),
                 );
 
-                let knowledge = knowledge_graph::types::ExtractedKnowledge {
-                    entities: vec![],
-                    relationships: vec![relationship],
-                };
-                if let Err(e) = graph.store_knowledge(agent_id, knowledge) {
+                if let Err(e) = self
+                    .store_knowledge_one_relationship(agent_id, relationship)
+                    .await
+                {
                     tracing::warn!(
                         source = %er.source, target = %er.target,
                         error = %e, "Failed to store relationship"
@@ -1475,6 +1490,149 @@ impl SessionDistiller {
     }
 
     // =========================================================================
+    // Knowledge graph helpers (trait-routed)
+    // =========================================================================
+
+    /// Find an entity by exact name. Prefers the trait `kg_store`
+    /// (case-insensitive name match via `search_entities_by_name`)
+    /// and falls back to the legacy concrete `graph_storage` if only
+    /// that is wired.
+    async fn find_entity_by_name(&self, agent_id: &str, name: &str) -> Option<String> {
+        if let Some(store) = &self.kg_store {
+            if let Ok(hits) = store.search_entities_by_name(agent_id, name, 1).await {
+                let needle = name.to_lowercase();
+                if let Some(hit) = hits.into_iter().find(|e| e.name.to_lowercase() == needle) {
+                    return Some(hit.id);
+                }
+            }
+            return None;
+        }
+        if let Some(graph) = &self.graph_storage {
+            return graph.find_entity_by_name(agent_id, name).ok().flatten();
+        }
+        None
+    }
+
+    /// Bump an entity's mention counter. Trait-routed when available.
+    async fn bump_entity_mention(&self, id: &str) -> Result<(), String> {
+        if let Some(store) = &self.kg_store {
+            return store
+                .bump_entity_mention(&zero_stores::EntityId::from(id.to_string()))
+                .await
+                .map_err(|e| e.to_string());
+        }
+        if let Some(graph) = &self.graph_storage {
+            return graph.bump_entity_mention(id).map_err(|e| e.to_string());
+        }
+        Err("no kg store wired".to_string())
+    }
+
+    /// Persist a single new entity. Trait-routed when available.
+    async fn store_knowledge_one_entity(
+        &self,
+        agent_id: &str,
+        entity: Entity,
+    ) -> Result<(), String> {
+        if let Some(store) = &self.kg_store {
+            let knowledge = zero_stores::ExtractedKnowledge {
+                entities: vec![entity],
+                relationships: vec![],
+            };
+            return store
+                .store_knowledge(agent_id, knowledge)
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+        }
+        if let Some(graph) = &self.graph_storage {
+            let knowledge = knowledge_graph::types::ExtractedKnowledge {
+                entities: vec![entity],
+                relationships: vec![],
+            };
+            return graph
+                .store_knowledge(agent_id, knowledge)
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+        }
+        Err("no kg store wired".to_string())
+    }
+
+    /// Persist a single new relationship. Trait-routed when available.
+    async fn store_knowledge_one_relationship(
+        &self,
+        agent_id: &str,
+        rel: Relationship,
+    ) -> Result<(), String> {
+        if let Some(store) = &self.kg_store {
+            let knowledge = zero_stores::ExtractedKnowledge {
+                entities: vec![],
+                relationships: vec![rel],
+            };
+            return store
+                .store_knowledge(agent_id, knowledge)
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+        }
+        if let Some(graph) = &self.graph_storage {
+            let knowledge = knowledge_graph::types::ExtractedKnowledge {
+                entities: vec![],
+                relationships: vec![rel],
+            };
+            return graph
+                .store_knowledge(agent_id, knowledge)
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+        }
+        Err("no kg store wired".to_string())
+    }
+
+    /// Resolve a relationship endpoint (source/target name) to a real
+    /// entity id. Lookup order: cached `entity_map` -> trait
+    /// `find_entity_by_name` -> auto-create a stub of type `custom("unknown")`
+    /// so the FK constraint on `relationship` is satisfied. Never fails;
+    /// stub-insert errors are logged but the stub id is still returned.
+    async fn resolve_relationship_endpoint(
+        &self,
+        agent_id: &str,
+        name: &str,
+        entity_map: &mut std::collections::HashMap<String, String>,
+    ) -> String {
+        if let Some(id) = entity_map.get(name) {
+            return id.clone();
+        }
+        if let Some(existing_id) = self.find_entity_by_name(agent_id, name).await {
+            entity_map.insert(name.to_string(), existing_id.clone());
+            return existing_id;
+        }
+        // Nothing found — create a stub so the relationship can be persisted.
+        let stub = Entity::new(
+            agent_id.to_string(),
+            EntityType::Custom("unknown".to_string()),
+            name.to_string(),
+        );
+        let stub_id = stub.id.clone();
+        if let Err(e) = self
+            .store_knowledge_one_entity(agent_id, stub.clone())
+            .await
+        {
+            tracing::warn!(
+                name = %name,
+                error = %e,
+                "Failed to auto-create stub entity for relationship endpoint"
+            );
+        } else {
+            tracing::debug!(
+                name = %name,
+                id = %stub_id,
+                "Auto-created stub entity for undeclared relationship endpoint"
+            );
+        }
+        entity_map.insert(name.to_string(), stub_id.clone());
+        stub_id
+    }
+
+    // =========================================================================
     // Embedding
     // =========================================================================
 
@@ -1515,44 +1673,13 @@ impl SessionDistiller {
     }
 }
 
-/// Canonicalize a relationship extracted by the LLM — fix common direction
-/// errors before persisting to the knowledge graph.
-///
-/// The LLM is instructed in the distillation prompt about directional
-/// semantics, but it still makes mistakes. This function applies rule-based
-/// fixes that catch the common patterns:
-///
-/// 1. **Passive voice normalization**: `analyzed_by`, `used_by`, `created_by`
-///    must have the agent entity as TARGET (object of the passive verb), not
-///    source. If the LLM inverts, we swap source and target.
-///
-/// 2. **Agent-ticker confusion**: Agents (ending in `-agent`) don't analyze
-///    tickers or projects directly — wards/workspaces do. If we see
-///    `agent --analyzed_by--> ticker`, we drop it rather than store garbage.
-///
-/// 3. **Bidirectional redundancy**: If a relationship has both `uses` and
-///    `used_by` between the same pair, keep only `uses` (we canonicalize
-///    `used_by` → inverse `uses`).
-///
-/// Returns `None` to drop the relationship, `Some(canonical)` to keep it.
-///
-/// Resolve a relationship endpoint (source or target name) to a real
-/// `kg_entities.id` value. Lookup order:
-///
-/// 1. `entity_map` — entities declared in this turn's `response.entities`
-///    (already stored or reused during step 5 above).
-/// 2. `graph.find_entity_by_name` — the entity may exist from a prior
-///    session. Cheap case-insensitive lookup.
-/// 3. Auto-create a stub entity with type `custom("unknown")` so the
-///    FOREIGN KEY on `kg_relationships` is satisfied and the edge survives.
-///    The LLM clearly surfaced the name in its relationships block; just
-///    because it wasn't in the entity array doesn't mean it's worthless.
-///    A later distillation (or a direct tool call) can refine the type.
-///
-/// Never panics. If the stub insert itself fails, logs and returns the
-/// stub id anyway — at worst we end up in the same bucket as the old
-/// fallback (FK will then fail and `store_knowledge` for the relationship
-/// will log + drop), so this is strictly an improvement.
+/// Test-only synchronous helper that mirrors
+/// `SessionDistiller::resolve_relationship_endpoint` against a concrete
+/// `GraphStorage`. Production calls the trait-routed instance method;
+/// this exists so the FK-survival contract test below can run without
+/// having to construct a full SessionDistiller (provider service +
+/// conversation repo + paths + settings + embedding client).
+#[cfg(test)]
 fn resolve_relationship_endpoint(
     graph: &GraphStorage,
     agent_id: &str,
@@ -1566,7 +1693,6 @@ fn resolve_relationship_endpoint(
         entity_map.insert(name.to_string(), existing_id.clone());
         return existing_id;
     }
-    // Nothing found — create a stub so the relationship can be persisted.
     let stub = Entity::new(
         agent_id.to_string(),
         EntityType::Custom("unknown".to_string()),
@@ -1577,23 +1703,22 @@ fn resolve_relationship_endpoint(
         entities: vec![stub],
         relationships: vec![],
     };
-    if let Err(e) = graph.store_knowledge(agent_id, knowledge) {
-        tracing::warn!(
-            name = %name,
-            error = %e,
-            "Failed to auto-create stub entity for relationship endpoint"
-        );
-    } else {
-        tracing::debug!(
-            name = %name,
-            id = %stub_id,
-            "Auto-created stub entity for undeclared relationship endpoint"
-        );
-    }
+    let _ = graph.store_knowledge(agent_id, knowledge);
     entity_map.insert(name.to_string(), stub_id.clone());
     stub_id
 }
 
+/// Canonicalize a relationship extracted by the LLM — fix common direction
+/// errors before persisting to the knowledge graph.
+///
+/// 1. Passive voice normalization (`analyzed_by`, `used_by`, `created_by`):
+///    swap source and target if the LLM inverted them.
+/// 2. Agent-ticker confusion: drop nonsensical
+///    `agent --analyzed_by--> ticker` edges rather than store garbage.
+/// 3. Bidirectional redundancy: keep only `uses` when both `uses` and
+///    `used_by` appear between the same pair.
+///
+/// Returns `None` to drop the relationship, `Some(canonical)` to keep it.
 fn canonicalize_relationship(
     er: &ExtractedRelationship,
     entities: &[ExtractedEntity],
