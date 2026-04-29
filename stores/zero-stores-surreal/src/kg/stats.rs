@@ -88,6 +88,8 @@ struct EntityListRow {
     agent_id: String,
     name: String,
     entity_type: String,
+    // Schema field is `metadata`; surfaced as `properties` to callers.
+    metadata: Option<serde_json::Value>,
     mention_count: Option<i64>,
     first_seen_at: Option<DateTime<Utc>>,
     last_seen_at: Option<DateTime<Utc>>,
@@ -96,12 +98,17 @@ struct EntityListRow {
 impl EntityListRow {
     fn into_entity(self) -> Entity {
         let now = Utc::now();
+        let properties: std::collections::HashMap<String, serde_json::Value> =
+            match self.metadata {
+                Some(serde_json::Value::Object(map)) => map.into_iter().collect(),
+                _ => std::collections::HashMap::new(),
+            };
         Entity {
             id: self.id.to_entity_id().0,
             agent_id: self.agent_id,
             entity_type: EntityType::from_str(&self.entity_type),
             name: self.name,
-            properties: Default::default(),
+            properties,
             first_seen_at: self.first_seen_at.unwrap_or(now),
             last_seen_at: self.last_seen_at.unwrap_or(now),
             mention_count: self.mention_count.unwrap_or(0),

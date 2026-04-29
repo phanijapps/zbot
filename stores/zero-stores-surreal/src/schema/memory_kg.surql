@@ -23,7 +23,7 @@ DEFINE FIELD IF NOT EXISTS last_seen_at    ON entity TYPE datetime DEFAULT time:
 DEFINE FIELD IF NOT EXISTS epistemic_class ON entity TYPE string DEFAULT 'standard';
 DEFINE FIELD IF NOT EXISTS compressed_into ON entity TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS embedding       ON entity TYPE option<array<float>>;
-DEFINE FIELD IF NOT EXISTS metadata        ON entity TYPE option<object>;
+DEFINE FIELD IF NOT EXISTS metadata        ON entity TYPE option<object> FLEXIBLE;
 
 DEFINE INDEX IF NOT EXISTS entity_agent_name_type
     ON entity FIELDS agent_id, name, entity_type UNIQUE;
@@ -46,7 +46,7 @@ DEFINE FIELD IF NOT EXISTS confidence        ON relationship TYPE float DEFAULT 
 DEFINE FIELD IF NOT EXISTS mention_count     ON relationship TYPE int DEFAULT 0;
 DEFINE FIELD IF NOT EXISTS first_seen_at     ON relationship TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS last_seen_at      ON relationship TYPE datetime DEFAULT time::now();
-DEFINE FIELD IF NOT EXISTS metadata          ON relationship TYPE option<object>;
+DEFINE FIELD IF NOT EXISTS metadata          ON relationship TYPE option<object> FLEXIBLE;
 
 DEFINE INDEX IF NOT EXISTS rel_agent_type
     ON relationship FIELDS agent_id, relationship_type;

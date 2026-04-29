@@ -56,11 +56,18 @@ pub async fn upsert_relationship(
         return Ok(record_id_to_relationship_id(&row.id));
     }
 
-    // Create new relationship via RELATE.
+    // Create new relationship via RELATE. Stamp `first_seen_at` and
+    // `last_seen_at` so the listing handlers don't fall back to "now"
+    // on every read (without these the row reads with the default-on-
+    // missing path and the timeline-style UI shows wrong ages).
     let mut resp = db
         .query(
             "RELATE $from -> relationship -> $to SET \
-             agent_id = $agent_id, relationship_type = $rt, mention_count = 1 \
+             agent_id = $agent_id, \
+             relationship_type = $rt, \
+             mention_count = 1, \
+             first_seen_at = time::now(), \
+             last_seen_at = time::now() \
              RETURN id",
         )
         .bind(("from", from))
