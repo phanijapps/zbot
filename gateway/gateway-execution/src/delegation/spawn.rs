@@ -60,6 +60,7 @@ pub async fn spawn_delegated_agent(
     workspace_cache: WorkspaceCache,
     delegation_permit: Option<OwnedSemaphorePermit>,
     memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
+    memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     memory_recall: Option<Arc<MemoryRecall>>,
     rate_limiters: Arc<
@@ -287,13 +288,20 @@ pub async fn spawn_delegated_agent(
         builder = builder.with_rate_limiter(limiter);
     }
 
-    // Build fact store for subagent (so save_fact uses DB, not file fallback)
+    // Build fact store for subagent (so save_fact uses DB, not file fallback).
+    // Phase E5: prefer trait-routed `memory_store` (wired in both backends)
+    // over re-wrapping the SQLite-only `memory_repo`. This is what makes
+    // `memory.get_fact` / `memory.save_fact` for ctx-namespace keys
+    // (intent / prompt / plan / state.<exec>) work for subagents on
+    // SurrealDB — the legacy path silently 503'd at the tool layer.
     let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
-        memory_repo.as_ref().map(|repo| {
-            Arc::new(zero_stores_sqlite::GatewayMemoryFactStore::new(
-                repo.clone(),
-                embedding_client.clone(),
-            )) as Arc<dyn zero_stores::MemoryFactStore>
+        memory_store.clone().or_else(|| {
+            memory_repo.as_ref().map(|repo| {
+                Arc::new(zero_stores_sqlite::GatewayMemoryFactStore::new(
+                    repo.clone(),
+                    embedding_client.clone(),
+                )) as Arc<dyn zero_stores::MemoryFactStore>
+            })
         });
     if let Some(fs) = fact_store {
         builder = builder.with_fact_store(fs);

@@ -77,12 +77,13 @@ impl RuntimeService {
             state_service,
             None,
             new_workspace_cache(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            None, // memory_repo
+            None, // memory_store
+            None, // distiller
+            None, // memory_recall
+            None, // bridge_registry
+            None, // bridge_outbox
+            None, // embedding_client
             2,    // default max_parallel_agents
             None, // graph_storage
             None, // kg_episode_repo
@@ -106,6 +107,7 @@ impl RuntimeService {
         connector_registry: Option<Arc<ConnectorRegistry>>,
         workspace_cache: WorkspaceCache,
         memory_repo: Option<Arc<MemoryRepository>>,
+        memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
         distiller: Option<Arc<SessionDistiller>>,
         memory_recall: Option<Arc<MemoryRecall>>,
         bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
@@ -130,6 +132,7 @@ impl RuntimeService {
             connector_registry,
             workspace_cache,
             memory_repo,
+            memory_store,
             distiller,
             memory_recall,
             bridge_registry,

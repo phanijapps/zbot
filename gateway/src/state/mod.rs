@@ -739,6 +739,7 @@ impl AppState {
             Some(connector_registry.clone()),
             workspace_cache.clone(),
             memory_repo.clone(),
+            memory_store.clone(),
             distiller,
             memory_recall,
             Some(bridge_registry.clone()),

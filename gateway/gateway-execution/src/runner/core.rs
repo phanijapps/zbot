@@ -86,6 +86,10 @@ pub struct ExecutionRunner {
     workspace_cache: WorkspaceCache,
     /// Memory repository for structured fact storage
     memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
+    /// Trait-routed memory store. Preferred over `memory_repo` for new
+    /// fact_store wiring — wired in both SQLite and SurrealDB modes
+    /// while `memory_repo` is `None` in SurrealDB mode.
+    memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     /// Session distiller for automatic fact extraction after sessions
     distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     /// Memory recall for automatic fact retrieval at session start
@@ -153,6 +157,9 @@ pub struct ExecutionRunnerConfig {
     pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     pub workspace_cache: WorkspaceCache,
     pub memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
+    /// Trait-routed memory store (preferred over `memory_repo` for fact_store
+    /// wiring; wired in both SQLite and SurrealDB modes).
+    pub memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
@@ -187,6 +194,7 @@ pub(super) struct ContinuationArgs<'a> {
     pub(super) state_service: Arc<StateService<DatabaseManager>>,
     pub(super) workspace_cache: WorkspaceCache,
     pub(super) memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
+    pub(super) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub(super) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     pub(super) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub(super) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
@@ -373,6 +381,7 @@ impl ExecutionRunner {
             connector_registry,
             workspace_cache,
             memory_repo,
+            memory_store,
             distiller,
             memory_recall,
             bridge_registry,
@@ -411,6 +420,7 @@ impl ExecutionRunner {
             conversation_repo: conversation_repo.clone(),
             paths: paths.clone(),
             memory_repo: memory_repo.clone(),
+            memory_store: memory_store.clone(),
             memory_recall: memory_recall.clone(),
             embedding_client: embedding_client.clone(),
             model_registry: model_registry.clone(),
@@ -444,6 +454,7 @@ impl ExecutionRunner {
             bridge_outbox,
             workspace_cache,
             memory_repo,
+            memory_store,
             distiller,
             memory_recall,
             delegation_semaphore,
@@ -541,6 +552,7 @@ impl ExecutionRunner {
             state_service: self.state_service.clone(),
             workspace_cache: self.workspace_cache.clone(),
             memory_repo: self.memory_repo.clone(),
+            memory_store: self.memory_store.clone(),
             embedding_client: self.embedding_client.clone(),
             distiller: self.distiller.clone(),
             memory_recall: self.memory_recall.clone(),
@@ -575,6 +587,7 @@ impl ExecutionRunner {
             state_service: self.state_service.clone(),
             workspace_cache: self.workspace_cache.clone(),
             memory_repo: self.memory_repo.clone(),
+            memory_store: self.memory_store.clone(),
             embedding_client: self.embedding_client.clone(),
             memory_recall: self.memory_recall.clone(),
             rate_limiters: self.rate_limiters.clone(),
@@ -855,6 +868,7 @@ impl ExecutionRunner {
             self.workspace_cache.clone(),
             None, // No delegation permit needed for resume
             self.memory_repo.clone(),
+            self.memory_store.clone(),
             self.embedding_client.clone(),
             self.memory_recall.clone(),
             self.rate_limiters.clone(),
@@ -1033,6 +1047,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         state_service,
         workspace_cache,
         memory_repo,
+        memory_store,
         embedding_client,
         distiller,
         memory_recall,
@@ -1141,13 +1156,21 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         builder = builder.with_model_registry(registry);
     }
 
-    // Build fact store for continuation (so save_fact uses DB, not file fallback)
+    // Build fact store for continuation (so save_fact uses DB, not file fallback).
+    // Phase E5: prefer the trait-routed `memory_store` (wired in both
+    // SQLite and SurrealDB modes) over re-wrapping the concrete
+    // `memory_repo` (None on Surreal). Falls back to the legacy wrap
+    // only when memory_store is unavailable AND memory_repo is Some —
+    // a state that should never occur in production but the fallback
+    // keeps test paths and any future minimal callers working.
     let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
-        memory_repo.as_ref().map(|repo| {
-            Arc::new(zero_stores_sqlite::GatewayMemoryFactStore::new(
-                repo.clone(),
-                embedding_client.clone(),
-            )) as Arc<dyn zero_stores::MemoryFactStore>
+        memory_store.clone().or_else(|| {
+            memory_repo.as_ref().map(|repo| {
+                Arc::new(zero_stores_sqlite::GatewayMemoryFactStore::new(
+                    repo.clone(),
+                    embedding_client.clone(),
+                )) as Arc<dyn zero_stores::MemoryFactStore>
+            })
         });
     // Clone for session-ctx plan_snapshot below — the builder moves the
     // primary Arc, so we keep a separate handle to write plan text to
