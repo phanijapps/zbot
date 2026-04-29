@@ -42,7 +42,10 @@ use zero_stores_sqlite::{
 /// migrate in a separate phase that introduces their own trait surfaces.
 pub struct MemoryRecall {
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
-    memory_repo: Arc<MemoryRepository>,
+    /// Phase E8: now `Option`. `None` in SurrealDB mode (knowledge.db
+    /// closed, no SQLite-backed `MemoryRepository` to wrap). Recall
+    /// path then routes exclusively through `memory_store`.
+    memory_repo: Option<Arc<MemoryRepository>>,
     memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     graph_service: Option<Arc<GraphService>>,
     config: Arc<RecallConfig>,
@@ -56,7 +59,7 @@ impl MemoryRecall {
     /// Create a new memory recall service.
     pub fn new(
         embedding_client: Option<Arc<dyn EmbeddingClient>>,
-        memory_repo: Arc<MemoryRepository>,
+        memory_repo: Option<Arc<MemoryRepository>>,
         config: Arc<RecallConfig>,
     ) -> Self {
         Self {
@@ -86,7 +89,7 @@ impl MemoryRecall {
     /// Create a new memory recall service with graph support.
     pub fn with_graph(
         embedding_client: Option<Arc<dyn EmbeddingClient>>,
-        memory_repo: Arc<MemoryRepository>,
+        memory_repo: Option<Arc<MemoryRepository>>,
         graph_service: Arc<GraphService>,
         config: Arc<RecallConfig>,
     ) -> Self {
@@ -190,8 +193,8 @@ impl MemoryRecall {
                         .map(|fact| ScoredFact { fact, score: 0.0 })
                 })
                 .collect()
-        } else {
-            let (results, _sources) = self.memory_repo.search_memory_facts_hybrid(
+        } else if let Some(repo) = self.memory_repo.as_ref() {
+            let (results, _sources) = repo.search_memory_facts_hybrid(
                 user_message,
                 query_embedding.as_deref(),
                 Some(agent_id),
@@ -201,20 +204,43 @@ impl MemoryRecall {
                 None, // ward_id — no ward filtering in recall service (for now)
             )?;
             results
+        } else {
+            // Phase E8: neither store wired (defensive — production
+            // always has at least one). Return empty rather than panic.
+            Vec::new()
         };
 
-        // 3. Also fetch high-confidence facts (always relevant)
+        // 3. Also fetch high-confidence facts (always relevant). SQLite-only
+        // path — the trait surface doesn't expose the dedicated
+        // `get_high_confidence_facts` shortcut yet. On Surreal these
+        // facts still surface via the hybrid search above (with their
+        // confidence baked into the score), just not as a separate
+        // augment.
         let high_conf_facts = self
             .memory_repo
-            .get_high_confidence_facts(Some(agent_id), self.config.high_confidence_threshold, limit)
+            .as_ref()
+            .map(|repo| {
+                repo.get_high_confidence_facts(
+                    Some(agent_id),
+                    self.config.high_confidence_threshold,
+                    limit,
+                )
+                .unwrap_or_default()
+            })
             .unwrap_or_default();
 
         // 3b. Include relevant corrections — corrections get a 1.5x category boost
         //     but must still have minimum relevance to the query. This prevents
         //     "WiZ lights" corrections appearing for currency questions.
+        // Same SQLite-only fallback as above; corrections still flow
+        // through the hybrid path on Surreal (category-weighted later).
         let all_corrections = self
             .memory_repo
-            .get_facts_by_category(agent_id, "correction", 10)
+            .as_ref()
+            .map(|repo| {
+                repo.get_facts_by_category(agent_id, "correction", 10)
+                    .unwrap_or_default()
+            })
             .unwrap_or_default();
 
         // Corrections: include all, capped at a reasonable limit.
@@ -343,10 +369,32 @@ impl MemoryRecall {
     ) -> Result<Vec<ScoredItem>, String> {
         let query_emb = self.embed_query(query).await;
 
-        // 1. Facts via hybrid search.
-        let fact_items: Vec<ScoredItem> = self
-            .memory_repo
-            .search_memory_facts_hybrid(
+        // 1. Facts via hybrid search. Phase E8: prefer the trait
+        // `memory_store` (wired in both backends), fall back to the
+        // SQLite repo. On Surreal, scores aren't yet preserved by the
+        // trait surface — we synthesize 0.5 so facts still rank into
+        // the fused pool but don't dominate it.
+        let fact_items: Vec<ScoredItem> = if let Some(store) = self.memory_store.as_ref() {
+            store
+                .search_memory_facts_hybrid(
+                    Some(agent_id),
+                    query,
+                    "hybrid",
+                    10,
+                    ward_id,
+                    query_emb.as_deref(),
+                )
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|v| {
+                    serde_json::from_value::<zero_stores_sqlite::MemoryFact>(v)
+                        .ok()
+                        .map(|fact| adapters::fact_to_item(&fact, 0.5))
+                })
+                .collect()
+        } else if let Some(repo) = self.memory_repo.as_ref() {
+            repo.search_memory_facts_hybrid(
                 query,
                 query_emb.as_deref(),
                 Some(agent_id),
@@ -359,7 +407,10 @@ impl MemoryRecall {
             .unwrap_or_default()
             .into_iter()
             .map(|sf| adapters::fact_to_item(&sf.fact, sf.score))
-            .collect();
+            .collect()
+        } else {
+            Vec::new()
+        };
 
         // 2. Wiki articles (ward-scoped).
         let wiki_items: Vec<ScoredItem> =

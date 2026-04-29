@@ -57,7 +57,7 @@ async fn recall_unified_returns_scored_items_from_facts() {
     };
     memory_repo.upsert_memory_fact(&fact).unwrap();
 
-    let recall = MemoryRecall::new(None, memory_repo, config);
+    let recall = MemoryRecall::new(None, Some(memory_repo), config);
     let items = recall
         .recall_unified("root", "tickers", None, &[], 10)
         .await
@@ -104,7 +104,7 @@ async fn recall_unified_injects_previous_episodes_for_ward() {
     episode_repo.insert(&ep).unwrap();
 
     let config = Arc::new(RecallConfig::default());
-    let mut recall = MemoryRecall::new(None, memory_repo, config);
+    let mut recall = MemoryRecall::new(None, Some(memory_repo), config);
     recall.set_episode_repo(episode_repo);
 
     let items = recall

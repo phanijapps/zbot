@@ -466,23 +466,31 @@ impl AppState {
             }
         };
 
-        // Create memory recall with optional graph enrichment and episodic recall.
-        // None entirely when knowledge_db is None — handlers route through
-        // memory_store directly in that path.
-        let mut memory_recall_inner: Option<MemoryRecall> = match (&memory_repo, &graph_service) {
-            (Some(mr), Some(gs)) => Some(MemoryRecall::with_graph(
-                embedding_client.clone(),
-                mr.clone(),
-                gs.clone(),
-                recall_config.clone(),
-            )),
-            (Some(mr), None) => Some(MemoryRecall::new(
-                embedding_client.clone(),
-                mr.clone(),
-                recall_config.clone(),
-            )),
-            (None, _) => None,
-        };
+        // Create memory recall. Phase E8: builds whenever EITHER
+        // memory_store (trait) OR memory_repo (concrete) is wired —
+        // recall now runs on Surreal too. Graph enrichment via
+        // GraphService still requires the concrete graph_storage; on
+        // Surreal it's None and recall falls back to non-enriched
+        // hybrid (still finds facts, just no KG-traversal boost).
+        let mut memory_recall_inner: Option<MemoryRecall> =
+            if early_memory_store.is_some() || memory_repo.is_some() {
+                let recall = match graph_service.as_ref() {
+                    Some(gs) => MemoryRecall::with_graph(
+                        embedding_client.clone(),
+                        memory_repo.clone(),
+                        gs.clone(),
+                        recall_config.clone(),
+                    ),
+                    None => MemoryRecall::new(
+                        embedding_client.clone(),
+                        memory_repo.clone(),
+                        recall_config.clone(),
+                    ),
+                };
+                Some(recall)
+            } else {
+                None
+            };
         if let (Some(recall), Some(er)) = (memory_recall_inner.as_mut(), episode_repo.as_ref()) {
             recall.set_episode_repo(er.clone());
         }
