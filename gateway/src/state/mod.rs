@@ -136,6 +136,13 @@ pub struct AppState {
     /// Knowledge graph episode repository (Phase 6a+).
     pub kg_episode_repo: Option<Arc<KgEpisodeRepository>>,
 
+    /// Trait-routed kg-ingestion-episode store (Phase B). Wired in both
+    /// SQLite (wraps kg_episode_repo) and SurrealDB modes (via
+    /// surreal_bundle.kg_episode). Backend-agnostic — adding a new
+    /// datastore means implementing the trait and adding a build branch
+    /// in persistence_factory.rs; consumers don't change.
+    pub kg_episode_store: Option<Arc<dyn zero_stores_traits::KgEpisodeStore>>,
+
     /// Graph service for knowledge graph operations.
     pub graph_service: Option<Arc<GraphService>>,
 
@@ -514,6 +521,34 @@ impl AppState {
         if let (Some(recall), Some(wr)) = (memory_recall_inner.as_mut(), wiki_repo.as_ref()) {
             recall.set_wiki_repo(wr.clone());
         }
+        // Phase B: trait-routed kg ingestion store. Prefer the surreal
+        // bundle's impl (wired when the user opts in); fall back to a
+        // GatewayKgEpisodeStore wrapping the SQLite kg_episode_repo.
+        // Backend-agnostic — handlers + queue + adapter all consume the
+        // trait, so a third backend (Postgres / etc.) plugs in by
+        // implementing the trait and adding a build branch above.
+        let kg_episode_store: Option<Arc<dyn zero_stores_traits::KgEpisodeStore>> = {
+            #[cfg(feature = "surreal-backend")]
+            {
+                surreal_bundle
+                    .as_ref()
+                    .map(|b| b.kg_episode.clone())
+                    .or_else(|| {
+                        kg_episode_repo.as_ref().map(|r| {
+                            Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
+                                as Arc<dyn zero_stores_traits::KgEpisodeStore>
+                        })
+                    })
+            }
+            #[cfg(not(feature = "surreal-backend"))]
+            {
+                kg_episode_repo.as_ref().map(|r| {
+                    Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
+                        as Arc<dyn zero_stores_traits::KgEpisodeStore>
+                })
+            }
+        };
+
         // Trait-routed wiki store — Surreal when opted in, else SQLite wrapper
         // (when wiki_repo exists), else None.
         let wiki_store_for_state: Option<Arc<dyn zero_stores_traits::WikiStore>> = {
@@ -982,6 +1017,7 @@ impl AppState {
             procedure_store: procedure_store_for_state,
             episode_repo: episode_repo_ref,
             kg_episode_repo,
+            kg_episode_store,
             graph_service,
             kg_store,
             ingestion_queue,
@@ -1070,6 +1106,7 @@ impl AppState {
             wiki_store: None,
             procedure_store: None,
             kg_episode_repo: None,
+            kg_episode_store: None,
             graph_service: None,
             kg_store: None,
             ingestion_queue: None,
@@ -1161,6 +1198,7 @@ impl AppState {
             wiki_store: None,
             procedure_store: None,
             kg_episode_repo: None,
+            kg_episode_store: None,
             graph_service: None,
             kg_store: None,
             ingestion_queue: None,

@@ -11,6 +11,7 @@
 pub mod auxiliary;
 pub mod conversation;
 pub mod episodes;
+pub mod kg_episodes;
 pub mod memory_facts;
 pub mod outbox;
 pub mod procedures;
@@ -19,6 +20,7 @@ pub mod wiki;
 pub use auxiliary::{DistillationStore, GoalStore, RecallLogStore};
 pub use conversation::ConversationStore;
 pub use episodes::{EpisodeStats, EpisodeStore};
+pub use kg_episodes::{KgEpisodeStatusCounts, KgEpisodeStore};
 pub use memory_facts::{MemoryAggregateStats, MemoryFactStore, MemoryHealthMetrics, SkillIndexRow};
 pub use outbox::OutboxStore;
 pub use procedures::{ProcedureStats, ProcedureStore};

@@ -26,6 +26,7 @@ pub mod episode_repository;
 pub mod episode_store;
 pub mod goal_repository;
 pub mod kg_episode_repository;
+pub mod kg_episode_store;
 pub mod knowledge_db;
 pub mod knowledge_schema;
 pub mod memory_fact_store;
@@ -55,6 +56,7 @@ pub use episode_repository::{EpisodeRepository, SessionEpisode};
 pub use episode_store::GatewayEpisodeStore;
 pub use goal_repository::{Goal, GoalRepository};
 pub use kg_episode_repository::{EpisodeSource, KgEpisode, KgEpisodeRepository};
+pub use kg_episode_store::GatewayKgEpisodeStore;
 pub use knowledge_db::KnowledgeDatabase;
 pub use knowledge_schema::{
     drop_and_recreate_vec_tables_at_dim, list_vec_table_presence, REQUIRED_VEC_TABLES,

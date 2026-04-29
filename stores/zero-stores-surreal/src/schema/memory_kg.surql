@@ -136,6 +136,28 @@ DEFINE FIELD IF NOT EXISTS status     ON distillation_run TYPE string;
 DEFINE INDEX IF NOT EXISTS distillation_session
     ON distillation_run FIELDS session_id UNIQUE;
 
+-- --- kg_ingestion_episode ----------------------------------------------
+-- One row per chunk staged for KG extraction. The background queue
+-- claims pending rows, runs LLM extraction, and marks them done/failed.
+-- SCHEMALESS so the canonical KgEpisode JSON shape can evolve without
+-- a migration step. `payload_text` is stored on the row itself rather
+-- than a side table — at the chunk size (~1k tokens) the storage cost
+-- is reasonable and round-trips become a single SELECT.
+DEFINE TABLE IF NOT EXISTS kg_ingestion_episode SCHEMALESS;
+DEFINE FIELD IF NOT EXISTS source_type    ON kg_ingestion_episode TYPE string;
+DEFINE FIELD IF NOT EXISTS source_ref     ON kg_ingestion_episode TYPE string;
+DEFINE FIELD IF NOT EXISTS content_hash   ON kg_ingestion_episode TYPE string;
+DEFINE FIELD IF NOT EXISTS status         ON kg_ingestion_episode TYPE string DEFAULT 'pending';
+DEFINE FIELD IF NOT EXISTS retry_count    ON kg_ingestion_episode TYPE int DEFAULT 0;
+DEFINE INDEX IF NOT EXISTS kg_ingestion_dedup
+    ON kg_ingestion_episode FIELDS source_type, content_hash UNIQUE;
+DEFINE INDEX IF NOT EXISTS kg_ingestion_status
+    ON kg_ingestion_episode FIELDS status;
+DEFINE INDEX IF NOT EXISTS kg_ingestion_source_ref
+    ON kg_ingestion_episode FIELDS source_ref;
+DEFINE INDEX IF NOT EXISTS kg_ingestion_session
+    ON kg_ingestion_episode FIELDS session_id;
+
 -- --- meta tracking ------------------------------------------------------
 -- zmeta is intentionally SCHEMALESS — it carries arbitrary metadata payloads
 -- (schema_version, embedding_config, etc.) that don't fit a single fixed shape.
