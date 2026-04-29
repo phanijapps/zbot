@@ -61,10 +61,20 @@ pub struct SessionDistiller {
     kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     distillation_repo: Option<Arc<DistillationRepository>>,
     episode_repo: Option<Arc<EpisodeRepository>>,
+    /// Trait-routed episode store. Phase E6a — preferred over
+    /// `episode_repo`; wired in both backends so episode storage,
+    /// strategy emergence, and failure clustering work on Surreal.
+    episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>>,
     paths: Arc<VaultPaths>,
     settings_service: Option<Arc<SettingsService>>,
     pub wiki_repo: Option<Arc<WardWikiRepository>>,
     pub procedure_repo: Option<Arc<ProcedureRepository>>,
+    /// Trait-routed wiki store. Phase E6b — preferred over `wiki_repo`
+    /// for ward-wiki compilation; wired in both backends.
+    pub wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>>,
+    /// Trait-routed procedure store. Phase E6b — preferred over
+    /// `procedure_repo` for procedure upsert; wired in both backends.
+    pub procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
 }
 
 /// A single fact extracted by the distillation LLM call.
@@ -238,10 +248,13 @@ impl SessionDistiller {
             kg_store: None,
             distillation_repo,
             episode_repo,
+            episode_store: None,
             paths,
             settings_service,
             wiki_repo: None,
             procedure_repo: None,
+            wiki_store: None,
+            procedure_store: None,
         }
     }
 
@@ -256,6 +269,25 @@ impl SessionDistiller {
     /// is honored. Falls back to `graph_storage` when `kg_store` is None.
     pub fn set_kg_store(&mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) {
         self.kg_store = Some(store);
+    }
+
+    /// Wire the trait-routed episode store. When set, episode insert and
+    /// similarity-search route through this handle (Phase E6a) so
+    /// SurrealDB is honored. Falls back to `episode_repo` when None.
+    pub fn set_episode_store(&mut self, store: Arc<dyn zero_stores_traits::EpisodeStore>) {
+        self.episode_store = Some(store);
+    }
+
+    /// Wire the trait-routed wiki store (Phase E6b). When set, ward-wiki
+    /// compilation routes through this handle. Falls back to `wiki_repo`.
+    pub fn set_wiki_store(&mut self, store: Arc<dyn zero_stores_traits::WikiStore>) {
+        self.wiki_store = Some(store);
+    }
+
+    /// Wire the trait-routed procedure store (Phase E6b). Procedure
+    /// upserts during distillation flow through this when set.
+    pub fn set_procedure_store(&mut self, store: Arc<dyn zero_stores_traits::ProcedureStore>) {
+        self.procedure_store = Some(store);
     }
 
     /// Set the ward wiki repository for post-distillation wiki compilation.
@@ -702,9 +734,10 @@ impl SessionDistiller {
             }
         }
 
-        // 6b. Store extracted procedure (if any)
+        // 6b. Store extracted procedure (if any). Phase E6b: trait first,
+        // SQLite repo as fallback so Surreal mode persists procedures too.
         if let Some(ref procedure) = response.procedure {
-            if let Some(ref procedure_repo) = self.procedure_repo {
+            if self.procedure_store.is_some() || self.procedure_repo.is_some() {
                 let ward_id = self
                     .conversation_repo
                     .get_session_ward_id(session_id)
@@ -735,10 +768,24 @@ impl SessionDistiller {
                     updated_at: chrono::Utc::now().to_rfc3339(),
                 };
 
-                if let Err(e) = procedure_repo.upsert_procedure(&proc) {
-                    tracing::warn!(name = %procedure.name, error = %e, "Failed to store procedure");
+                let upsert_res = if let Some(store) = &self.procedure_store {
+                    match serde_json::to_value(&proc) {
+                        Ok(v) => store.upsert_procedure(v, None).await,
+                        Err(e) => Err(format!("encode procedure: {e}")),
+                    }
+                } else if let Some(repo) = &self.procedure_repo {
+                    repo.upsert_procedure(&proc).map(|_| ())
                 } else {
-                    tracing::info!(name = %procedure.name, "Stored procedure from session");
+                    Err("no procedure store wired".to_string())
+                };
+
+                match upsert_res {
+                    Ok(()) => tracing::info!(
+                        name = %procedure.name, "Stored procedure from session"
+                    ),
+                    Err(e) => tracing::warn!(
+                        name = %procedure.name, error = %e, "Failed to store procedure"
+                    ),
                 }
             }
         }
@@ -1128,10 +1175,13 @@ impl SessionDistiller {
         extracted: &ExtractedEpisode,
         now: &str,
     ) -> Result<bool, String> {
-        let episode_repo = match &self.episode_repo {
-            Some(repo) => repo,
-            None => return Ok(false),
-        };
+        // Phase E6a: episode storage available when EITHER the trait
+        // store OR the SQLite repo is wired. Surreal mode has the trait
+        // store via surreal_bundle.episode; SQLite has the repo (and
+        // also gets the trait wrapper).
+        if self.episode_store.is_none() && self.episode_repo.is_none() {
+            return Ok(false);
+        }
 
         // Look up ward_id from the sessions table
         let ward_id = self
@@ -1157,7 +1207,7 @@ impl SessionDistiller {
             created_at: now.to_string(),
         };
 
-        episode_repo.insert(&episode)?;
+        self.insert_episode_internal(&episode).await?;
 
         // Attempt strategy emergence for successful episodes
         if extracted.outcome == "success" {
@@ -1202,18 +1252,19 @@ impl SessionDistiller {
         embedding: Option<&[f32]>,
         now: &str,
     ) -> Result<(), String> {
-        let episode_repo = match &self.episode_repo {
-            Some(repo) => repo,
-            None => return Ok(()),
-        };
+        if self.episode_store.is_none() && self.episode_repo.is_none() {
+            return Ok(());
+        }
 
         let query_embedding = match embedding {
             Some(emb) => emb,
             None => return Ok(()), // No embedding — cannot search by similarity
         };
 
-        // Search for similar episodes
-        let similar = episode_repo.search_by_similarity(agent_id, query_embedding, 0.7, 10)?;
+        // Search for similar episodes (trait preferred)
+        let similar = self
+            .search_episodes_by_similarity_internal(agent_id, query_embedding, 0.7, 10)
+            .await?;
 
         // Filter to only successful episodes (excluding the one we just inserted)
         let successful_similar: Vec<_> = similar
@@ -1345,10 +1396,9 @@ impl SessionDistiller {
         episode: &SessionEpisode,
         ward_id: &str,
     ) -> Result<(), String> {
-        let episode_repo = match &self.episode_repo {
-            Some(repo) => repo,
-            None => return Ok(()),
-        };
+        if self.episode_store.is_none() && self.episode_repo.is_none() {
+            return Ok(());
+        }
 
         // Embed the task summary for similarity search
         let embedding = self.embed_text(&episode.task_summary).await;
@@ -1357,8 +1407,11 @@ impl SessionDistiller {
             None => return Ok(()), // No embedding — cannot search by similarity
         };
 
-        // Search for similar episodes (wider threshold than strategy: 0.6 vs 0.7)
-        let similar = episode_repo.search_by_similarity(agent_id, query_embedding, 0.6, 20)?;
+        // Search for similar episodes (trait preferred; wider threshold than
+        // strategy: 0.6 vs 0.7)
+        let similar = self
+            .search_episodes_by_similarity_internal(agent_id, query_embedding, 0.6, 20)
+            .await?;
 
         // Filter to only failed/partial episodes (excluding the one we just inserted)
         let failed_similar: Vec<_> = similar
@@ -1487,6 +1540,57 @@ impl SessionDistiller {
         }
 
         Ok(())
+    }
+
+    // =========================================================================
+    // Episode helpers (trait-routed)
+    // =========================================================================
+
+    /// Insert a session episode. Trait-routed when `episode_store` is set;
+    /// falls back to the SQLite `episode_repo`. Returns Err only when both
+    /// are unwired (caller is expected to gate on availability beforehand).
+    async fn insert_episode_internal(&self, episode: &SessionEpisode) -> Result<(), String> {
+        if let Some(store) = &self.episode_store {
+            let v = serde_json::to_value(episode).map_err(|e| format!("encode episode: {e}"))?;
+            let emb = episode.embedding.clone();
+            store.insert_episode(v, emb).await.map(|_| ())
+        } else if let Some(repo) = &self.episode_repo {
+            repo.insert(episode).map(|_| ())
+        } else {
+            Err("no episode store wired".to_string())
+        }
+    }
+
+    /// Vector-similarity search for episodes. Trait-routed when wired,
+    /// falls back to SQLite repo. Returns the canonical
+    /// `Vec<(SessionEpisode, f64)>` shape regardless of backend.
+    async fn search_episodes_by_similarity_internal(
+        &self,
+        agent_id: &str,
+        embedding: &[f32],
+        threshold: f64,
+        limit: usize,
+    ) -> Result<Vec<(SessionEpisode, f64)>, String> {
+        if let Some(store) = &self.episode_store {
+            let raw = store
+                .search_episodes_by_similarity(agent_id, embedding, threshold as f32, limit)
+                .await?;
+            // Trait emits Value with shape `{ "episode": <SessionEpisode>, "score": <f64> }`.
+            let pairs: Vec<(SessionEpisode, f64)> = raw
+                .into_iter()
+                .filter_map(|v| {
+                    let score = v.get("score").and_then(|s| s.as_f64())?;
+                    let ep_v = v.get("episode").cloned()?;
+                    let ep = serde_json::from_value::<SessionEpisode>(ep_v).ok()?;
+                    Some((ep, score))
+                })
+                .collect();
+            Ok(pairs)
+        } else if let Some(repo) = &self.episode_repo {
+            repo.search_by_similarity(agent_id, embedding, threshold, limit)
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     // =========================================================================

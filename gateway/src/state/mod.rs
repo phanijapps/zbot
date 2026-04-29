@@ -317,9 +317,14 @@ impl AppState {
         let goal_repo: Option<Arc<zero_stores_sqlite::GoalRepository>> = knowledge_db
             .as_ref()
             .map(|kdb| Arc::new(zero_stores_sqlite::GoalRepository::new(kdb.clone())));
-        let distillation_repo: Option<Arc<DistillationRepository>> = knowledge_db
-            .as_ref()
-            .map(|_| Arc::new(DistillationRepository::new(db_manager.clone())));
+        // Phase E6c: distillation_run rows live on the conversation DB
+        // (DatabaseManager), not knowledge.db. Wire unconditionally —
+        // both backends have the conversation DB. This makes
+        // /api/distillation/status report real numbers on Surreal mode
+        // too, and the distiller's run-tracking (insert/retry/success)
+        // actually persists.
+        let distillation_repo: Option<Arc<DistillationRepository>> =
+            Some(Arc::new(DistillationRepository::new(db_manager.clone())));
         let episode_repo: Option<Arc<EpisodeRepository>> = knowledge_db.as_ref().map(|kdb| {
             let episode_vec: Arc<dyn VectorIndex> = Arc::new(
                 SqliteVecIndex::new(kdb.clone(), "session_episodes_index", "episode_id")
@@ -654,6 +659,43 @@ impl AppState {
             }
             if let Some(kgs) = kg_store.as_ref() {
                 distiller_inner.set_kg_store(kgs.clone());
+            }
+            // Phase E6a/E6b: episode/wiki/procedure trait stores reuse the
+            // same Arc<dyn ...> values we built above for the AppState
+            // fields (`episode_store`, `wiki_store_for_state`,
+            // `procedure_store_for_state`) so the distiller and the HTTP
+            // handlers see the same backing store.
+            let episode_store_for_distiller: Option<
+                Arc<dyn zero_stores_traits::EpisodeStore>,
+            > = {
+                #[cfg(feature = "surreal-backend")]
+                {
+                    surreal_bundle
+                        .as_ref()
+                        .map(|b| b.episode.clone())
+                        .or_else(|| {
+                            episode_repo_ref.as_ref().map(|er| {
+                                Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(er.clone()))
+                                    as Arc<dyn zero_stores_traits::EpisodeStore>
+                            })
+                        })
+                }
+                #[cfg(not(feature = "surreal-backend"))]
+                {
+                    episode_repo_ref.as_ref().map(|er| {
+                        Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(er.clone()))
+                            as Arc<dyn zero_stores_traits::EpisodeStore>
+                    })
+                }
+            };
+            if let Some(es) = episode_store_for_distiller {
+                distiller_inner.set_episode_store(es);
+            }
+            if let Some(ws) = wiki_store_for_state.as_ref() {
+                distiller_inner.set_wiki_store(ws.clone());
+            }
+            if let Some(ps) = procedure_store_for_state.as_ref() {
+                distiller_inner.set_procedure_store(ps.clone());
             }
             Some(Arc::new(distiller_inner))
         } else {
