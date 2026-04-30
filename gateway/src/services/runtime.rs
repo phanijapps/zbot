@@ -6,7 +6,6 @@
 //! and provides a high-level API for invoking agents.
 
 use crate::connectors::ConnectorRegistry;
-use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::{EventBus, GatewayEvent};
 use crate::execution::{
     new_workspace_cache, ExecutionConfig, ExecutionHandle, ExecutionRunner, MemoryRecall,
@@ -17,6 +16,7 @@ use crate::services::{AgentService, McpService, ProviderService, SharedVaultPath
 use api_logs::LogService;
 use execution_state::StateService;
 use std::sync::Arc;
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 /// Execution state for a conversation.
 #[derive(Debug, Clone)]

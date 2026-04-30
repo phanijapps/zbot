@@ -6,7 +6,6 @@ pub(crate) mod persistence_factory;
 
 use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
-use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
 use crate::execution::{
     new_workspace_cache, DelegationRegistry, MemoryRecall, SessionArchiver, SessionDistiller,
@@ -31,8 +30,9 @@ use zero_stores_sqlite::kg::service::GraphService;
 use zero_stores_sqlite::kg::storage::GraphStorage;
 use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
 use zero_stores_sqlite::{
-    DistillationRepository, EpisodeRepository, KgEpisodeRepository, KnowledgeDatabase,
-    MemoryRepository, ProcedureRepository, WardWikiRepository,
+    ConversationRepository, DatabaseManager, DistillationRepository, EpisodeRepository,
+    KgEpisodeRepository, KnowledgeDatabase, MemoryRepository, ProcedureRepository,
+    WardWikiRepository,
 };
 
 /// Shared application state for the gateway.

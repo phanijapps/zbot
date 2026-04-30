@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use axum_test::TestServer;
 use common::{setup, setup_with_state_service};
 use execution_state::{DelegationType, StateService};
-use gateway::database::DatabaseManager;
+use zero_stores_sqlite::DatabaseManager;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tempfile::TempDir;
