@@ -1183,6 +1183,45 @@ impl AppState {
             zero_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
         ));
 
+        // Episode / wiki / procedure trait stores so HTTP handlers reach
+        // these listings without concrete-repo fallbacks. Each wraps the
+        // SQLite repo bound to its own vec0 partner table.
+        let episode_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "session_episodes_index", "episode_id")
+                .expect("episode vec index init"),
+        );
+        let episode_repo_handle = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
+            knowledge_db.clone(),
+            episode_vec,
+        ));
+        let episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo_handle),
+        ));
+
+        let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "wiki_articles_index", "article_id")
+                .expect("wiki vec index init"),
+        );
+        let wiki_repo_handle = Arc::new(zero_stores_sqlite::WardWikiRepository::new(
+            knowledge_db.clone(),
+            wiki_vec,
+        ));
+        let wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayWikiStore::new(wiki_repo_handle),
+        ));
+
+        let proc_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
+                .expect("procedure vec index init"),
+        );
+        let procedure_repo_handle = Arc::new(zero_stores_sqlite::ProcedureRepository::new(
+            knowledge_db.clone(),
+            proc_vec,
+        ));
+        let procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayProcedureStore::new(procedure_repo_handle),
+        ));
+
         Self {
             agents: Arc::new(AgentService::new(agents_dir)),
             skills: Arc::new(SkillService::with_roots(skills_roots)),
@@ -1221,9 +1260,9 @@ impl AppState {
             distillation_repo: None,
             distiller: None,
             episode_repo: None,
-            episode_store: None,
-            wiki_store: None,
-            procedure_store: None,
+            episode_store,
+            wiki_store,
+            procedure_store,
             kg_episode_repo: None,
             kg_episode_store: None,
             graph_service: None,
@@ -1262,6 +1301,44 @@ impl AppState {
         // wired memory_store and search/recall handlers don't 503.
         let memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = Some(Arc::new(
             zero_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
+        ));
+
+        // Episode / wiki / procedure trait stores so HTTP handlers reach
+        // these listings without concrete-repo fallbacks.
+        let episode_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "session_episodes_index", "episode_id")
+                .expect("episode vec index init"),
+        );
+        let episode_repo_handle = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
+            knowledge_db.clone(),
+            episode_vec,
+        ));
+        let episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo_handle),
+        ));
+
+        let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "wiki_articles_index", "article_id")
+                .expect("wiki vec index init"),
+        );
+        let wiki_repo_handle = Arc::new(zero_stores_sqlite::WardWikiRepository::new(
+            knowledge_db.clone(),
+            wiki_vec,
+        ));
+        let wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayWikiStore::new(wiki_repo_handle),
+        ));
+
+        let proc_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
+                .expect("procedure vec index init"),
+        );
+        let procedure_repo_handle = Arc::new(zero_stores_sqlite::ProcedureRepository::new(
+            knowledge_db.clone(),
+            proc_vec,
+        ));
+        let procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayProcedureStore::new(procedure_repo_handle),
         ));
 
         // Create bridge registry and outbox
@@ -1320,9 +1397,9 @@ impl AppState {
             distillation_repo: None,
             distiller: None,
             episode_repo: None,
-            episode_store: None,
-            wiki_store: None,
-            procedure_store: None,
+            episode_store,
+            wiki_store,
+            procedure_store,
             kg_episode_repo: None,
             kg_episode_store: None,
             graph_service: None,

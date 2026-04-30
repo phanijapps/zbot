@@ -17,7 +17,6 @@ mod knowledge_graph;
 pub mod reindex;
 
 // -- Per-table stores (originally gateway-database) ---------------------------
-pub mod age_bucket;
 pub mod auxiliary_stores;
 pub mod compaction_repository;
 pub mod compaction_store;
@@ -46,7 +45,6 @@ pub mod wiki_store;
 pub use knowledge_graph::SqliteKgStore;
 
 // -- Public surface (originally gateway-database lib.rs) ----------------------
-pub use age_bucket::age_bucket;
 pub use auxiliary_stores::{GatewayDistillationStore, GatewayGoalStore, GatewayRecallLogStore};
 pub use compaction_repository::{Compaction, CompactionRepository, RunSummary};
 pub use compaction_store::GatewayCompactionStore;

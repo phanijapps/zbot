@@ -3,31 +3,19 @@
 //! Returns a single snapshot of everything that belongs to one ward: the four
 //! content types (facts, wiki, procedures, episodes), counts per type, and a
 //! derived summary sourced from the ward's `__index__` wiki article (if any).
-//! Each item is stamped with a server-computed `age_bucket` using the helper
-//! in [`zero_stores_sqlite::age_bucket`] so the UI doesn't need to reimplement
-//! recency classification.
+//! Each item is stamped with a server-computed `age_bucket` (inline helper)
+//! so the UI doesn't need to reimplement recency classification.
 //!
 //! Limits: facts, wiki and procedures are capped at 100 rows; episodes at 50.
 //! The episode/wiki/procedure paths are trait-routed (`state.episode_store`,
 //! `state.wiki_store`, `state.procedure_store`) so the SurrealDB backend
 //! is honored when opted in.
 //!
-//! ## Migration status (TD-023)
-//!
-//! Episode / wiki / procedure listings route through the trait stores;
-//! the legacy SQLite-backed repositories are built lazily as a
-//! fallback ONLY when both the trait store is unwired AND
-//! `state.knowledge_db` is `Some`. In SurrealDB-backend mode the
-//! SQLite handle is `None` so the trait stores are the only path —
-//! requests that arrive before stores are wired return
-//! `503 Service Unavailable` rather than panic.
-//!
-//! Memory-fact listings (`facts` field, `list_wards` endpoint)
-//! still depend on the concrete `MemoryRepository`. Migrating those
-//! requires hoisting `MemoryFact` from `zero-stores-sqlite` up to
-//! `zero-stores`, which has a large blast radius (11 import sites)
-//! and is intentionally a separate workstream — when the user is
-//! on the SurrealDB backend these endpoints return 503.
+//! All four content types are read through trait stores
+//! (`memory_store`, `episode_store`, `wiki_store`, `procedure_store`)
+//! so SurrealDB and SQLite both go through the same code path.
+//! Requests that arrive before stores are wired return `503 Service
+//! Unavailable`.
 
 use crate::state::AppState;
 use axum::{
@@ -35,15 +23,23 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::sync::Arc;
 use zero_stores_domain::{MemoryFact, Procedure, SessionEpisode, WikiArticle};
-use zero_stores_sqlite::{
-    age_bucket, vector_index::VectorIndex, EpisodeRepository, ProcedureRepository, SqliteVecIndex,
-    WardWikiRepository,
-};
+
+/// Classify a timestamp into a human-meaningful recency bucket relative to `now`.
+/// Returns one of: "today", "last_7_days", "historical".
+fn age_bucket(now: DateTime<Utc>, created_at: DateTime<Utc>) -> &'static str {
+    let age = now.signed_duration_since(created_at);
+    if age < Duration::hours(24) {
+        "today"
+    } else if age < Duration::days(7) {
+        "last_7_days"
+    } else {
+        "historical"
+    }
+}
 
 const FACT_LIMIT: usize = 100;
 const WIKI_LIMIT: usize = 100;
@@ -140,67 +136,16 @@ fn build_summary(ward_id: &str, wiki: &[WikiArticle]) -> WardSummary {
     }
 }
 
-/// Error helper for the SurrealDB-backend path: the SQLite trait stores are
-/// unwired AND the SQLite knowledge DB is disabled, so this listing has
-/// nowhere to come from.
-fn surreal_unavailable(what: &str) -> HandlerError {
+/// Error helper: the relevant trait store isn't wired (e.g. partial test
+/// state). Returns 503 so the UI can surface a clean error instead of a
+/// panic.
+fn store_unavailable(what: &str) -> HandlerError {
     (
         StatusCode::SERVICE_UNAVAILABLE,
         Json(ErrorBody {
-            error: format!(
-                "{what} listing not yet migrated to trait stores; \
-                 toggle SurrealDB off in Settings to use the SQLite path"
-            ),
+            error: format!("{what} store unavailable"),
         }),
     )
-}
-
-/// Build the legacy SQLite-backed wiki repository. Returns `None` when
-/// `state.knowledge_db` is `None` (SurrealDB mode) so callers can decide
-/// whether to fall back to the trait store or 503.
-fn build_wiki_repo(state: &AppState) -> Result<Option<Arc<WardWikiRepository>>, HandlerError> {
-    let Some(knowledge_db) = state.knowledge_db.as_ref() else {
-        return Ok(None);
-    };
-    let idx = SqliteVecIndex::new(knowledge_db.clone(), "wiki_articles_index", "article_id")
-        .map_err(|e| internal("wiki vec index", e))?;
-    let vec: Arc<dyn VectorIndex> = Arc::new(idx);
-    Ok(Some(Arc::new(WardWikiRepository::new(
-        knowledge_db.clone(),
-        vec,
-    ))))
-}
-
-fn build_procedure_repo(
-    state: &AppState,
-) -> Result<Option<Arc<ProcedureRepository>>, HandlerError> {
-    let Some(knowledge_db) = state.knowledge_db.as_ref() else {
-        return Ok(None);
-    };
-    let idx = SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
-        .map_err(|e| internal("procedure vec index", e))?;
-    let vec: Arc<dyn VectorIndex> = Arc::new(idx);
-    Ok(Some(Arc::new(ProcedureRepository::new(
-        knowledge_db.clone(),
-        vec,
-    ))))
-}
-
-fn build_episode_repo(state: &AppState) -> Result<Option<Arc<EpisodeRepository>>, HandlerError> {
-    let Some(knowledge_db) = state.knowledge_db.as_ref() else {
-        return Ok(None);
-    };
-    let idx = SqliteVecIndex::new(
-        knowledge_db.clone(),
-        "session_episodes_index",
-        "episode_id",
-    )
-    .map_err(|e| internal("episode vec index", e))?;
-    let vec: Arc<dyn VectorIndex> = Arc::new(idx);
-    Ok(Some(Arc::new(EpisodeRepository::new(
-        knowledge_db.clone(),
-        vec,
-    ))))
 }
 
 fn fact_to_value(fact: MemoryFact, now: DateTime<Utc>) -> Value {
@@ -286,86 +231,57 @@ pub async fn get_ward_content(
     State(state): State<AppState>,
     Path(ward_id): Path<String>,
 ) -> Result<Json<WardContentResponse>, HandlerError> {
-    // Memory facts: SQLite path uses `MemoryRepository::list_by_ward` (a
-    // single WHERE-on-index query). SurrealDB path streams via the trait
-    // surface and filters in handler — the trait surface doesn't yet
-    // accept a ward_id argument.
-    let facts: Vec<MemoryFact> = if let Some(memory_repo) = state.memory_repo.as_ref() {
-        memory_repo
-            .list_by_ward(&ward_id, FACT_LIMIT)
-            .map_err(|e| internal("list facts by ward", e))?
-    } else if let Some(memory_store) = state.memory_store.as_ref() {
-        const FACT_AGG_LIMIT: usize = 5000;
-        let raw = memory_store
-            .list_memory_facts(None, None, None, FACT_AGG_LIMIT, 0)
-            .await
-            .map_err(|e| internal("list facts by ward (trait)", e))?;
-        raw.into_iter()
-            .filter(|v| {
-                v.get("ward_id").and_then(|w| w.as_str()) == Some(ward_id.as_str())
-            })
-            .filter_map(|v| serde_json::from_value::<MemoryFact>(v).ok())
-            .take(FACT_LIMIT)
-            .collect()
-    } else {
-        return Err(surreal_unavailable("ward facts"));
-    };
+    let memory_store = state
+        .memory_store
+        .as_ref()
+        .ok_or_else(|| store_unavailable("memory"))?;
+    let episode_store = state
+        .episode_store
+        .as_ref()
+        .ok_or_else(|| store_unavailable("episode"))?;
+    let wiki_store = state
+        .wiki_store
+        .as_ref()
+        .ok_or_else(|| store_unavailable("wiki"))?;
+    let procedure_store = state
+        .procedure_store
+        .as_ref()
+        .ok_or_else(|| store_unavailable("procedure"))?;
 
-    // Episode / wiki / procedure listings prefer the trait store when
-    // it's wired (SurrealDB or SQLite). The SQLite-backed repo build
-    // is a fallback only when the trait store is `None` — which only
-    // happens for `AppState::minimal()` test builds today.
-    let episode_values: Vec<Value> = match state.episode_store.as_ref() {
-        Some(store) => store
-            .list_by_ward(&ward_id, EPISODE_LIMIT)
-            .await
-            .map_err(|e| internal("list episodes by ward", e))?,
-        None => match build_episode_repo(&state)? {
-            Some(repo) => repo
-                .list_by_ward(&ward_id, EPISODE_LIMIT)
-                .map_err(|e| internal("list episodes by ward", e))?
-                .into_iter()
-                .map(|ep| serde_json::to_value(ep).unwrap_or(Value::Null))
-                .collect(),
-            None => return Err(surreal_unavailable("episodes")),
-        },
-    };
+    // Memory facts: trait surface lacks a `list_by_ward` projection so we
+    // pull a generous slice and filter in-handler. The cap is high enough
+    // that any single ward's row count comfortably fits.
+    const FACT_AGG_LIMIT: usize = 5000;
+    let facts: Vec<MemoryFact> = memory_store
+        .list_memory_facts(None, None, None, FACT_AGG_LIMIT, 0)
+        .await
+        .map_err(|e| internal("list facts by ward", e))?
+        .into_iter()
+        .filter(|v| v.get("ward_id").and_then(|w| w.as_str()) == Some(ward_id.as_str()))
+        .filter_map(|v| serde_json::from_value::<MemoryFact>(v).ok())
+        .take(FACT_LIMIT)
+        .collect();
 
-    let wiki_articles: Vec<WikiArticle> = match state.wiki_store.as_ref() {
-        Some(store) => {
-            let raw = store
-                .list_articles(&ward_id)
-                .await
-                .map_err(|e| internal("list wiki by ward (trait)", e))?;
-            raw.into_iter()
-                .filter_map(|v| serde_json::from_value::<WikiArticle>(v).ok())
-                .collect()
-        }
-        None => match build_wiki_repo(&state)? {
-            Some(repo) => repo
-                .list_articles(&ward_id)
-                .map_err(|e| internal("list wiki by ward", e))?,
-            None => return Err(surreal_unavailable("wiki articles")),
-        },
-    };
+    let episode_values: Vec<Value> = episode_store
+        .list_by_ward(&ward_id, EPISODE_LIMIT)
+        .await
+        .map_err(|e| internal("list episodes by ward", e))?;
 
-    let procedures: Vec<Procedure> = match state.procedure_store.as_ref() {
-        Some(store) => {
-            let raw = store
-                .list_by_ward(&ward_id, PROCEDURE_LIMIT)
-                .await
-                .map_err(|e| internal("list procedures by ward (trait)", e))?;
-            raw.into_iter()
-                .filter_map(|v| serde_json::from_value::<Procedure>(v).ok())
-                .collect()
-        }
-        None => match build_procedure_repo(&state)? {
-            Some(repo) => repo
-                .list_by_ward(&ward_id, PROCEDURE_LIMIT)
-                .map_err(|e| internal("list procedures by ward", e))?,
-            None => return Err(surreal_unavailable("procedures")),
-        },
-    };
+    let wiki_articles: Vec<WikiArticle> = wiki_store
+        .list_articles(&ward_id)
+        .await
+        .map_err(|e| internal("list wiki by ward", e))?
+        .into_iter()
+        .filter_map(|v| serde_json::from_value::<WikiArticle>(v).ok())
+        .collect();
+
+    let procedures: Vec<Procedure> = procedure_store
+        .list_by_ward(&ward_id, PROCEDURE_LIMIT)
+        .await
+        .map_err(|e| internal("list procedures by ward", e))?
+        .into_iter()
+        .filter_map(|v| serde_json::from_value::<Procedure>(v).ok())
+        .collect();
 
     // Cap wiki at WIKI_LIMIT (list_articles has no LIMIT clause).
     let wiki_articles: Vec<WikiArticle> = wiki_articles.into_iter().take(WIKI_LIMIT).collect();
@@ -390,12 +306,12 @@ pub async fn get_ward_content(
         .into_iter()
         .map(|p| procedure_to_value(p, now))
         .collect();
-    // Episode values come from the trait already as MemoryFactResponse-style
-    // JSON; deserialize each into SessionEpisode for the response decorator,
-    // and skip rows that fail to decode.
+    // Episode values come from the trait as JSON; deserialize each into
+    // SessionEpisode for the response decorator, and skip rows that fail
+    // to decode.
     let episodes_json: Vec<Value> = episode_values
         .into_iter()
-        .filter_map(|v| serde_json::from_value::<zero_stores_sqlite::SessionEpisode>(v).ok())
+        .filter_map(|v| serde_json::from_value::<SessionEpisode>(v).ok())
         .map(|e| episode_to_value(e, now))
         .collect();
 
@@ -419,34 +335,22 @@ pub struct WardListItem {
 
 /// GET /api/wards — list distinct wards with fact counts.
 ///
-/// SQLite path uses `MemoryRepository::list_wards` (a single GROUP BY).
-/// SurrealDB path streams up to `WARD_AGG_LIMIT` facts via the trait
-/// surface and aggregates `ward_id` distinct counts in the handler —
-/// the trait does not expose a distinct-projection method yet.
+/// Streams up to `WARD_AGG_LIMIT` facts via the trait surface and
+/// aggregates ward_id-distinct counts in the handler — the trait does
+/// not expose a distinct-projection method yet.
 pub async fn list_wards(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<WardListItem>>, HandlerError> {
-    if let Some(memory_repo) = state.memory_repo.as_ref() {
-        let rows = memory_repo
-            .list_wards()
-            .map_err(|e| internal("list wards", e))?;
-        return Ok(Json(
-            rows.into_iter()
-                .map(|(id, count)| WardListItem { id, count })
-                .collect(),
-        ));
-    }
-
     let memory_store = state
         .memory_store
         .as_ref()
-        .ok_or_else(|| surreal_unavailable("ward listing"))?;
+        .ok_or_else(|| store_unavailable("memory"))?;
 
     const WARD_AGG_LIMIT: usize = 5000;
     let rows = memory_store
         .list_memory_facts(None, None, None, WARD_AGG_LIMIT, 0)
         .await
-        .map_err(|e| internal("list wards (trait)", e))?;
+        .map_err(|e| internal("list wards", e))?;
 
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for row in rows {
