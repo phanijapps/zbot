@@ -70,3 +70,28 @@ pub struct ScoredFact {
     pub fact: MemoryFact,
     pub score: f64,
 }
+
+/// Result of `MemoryFactStore::find_strategy_fact_by_similarity`.
+/// Captures only what the Synthesizer needs to decide whether to bump
+/// or insert.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrategyFactMatch {
+    pub fact_id: String,
+    /// Comma-separated csv of episode ids previously attributed to
+    /// this fact, or `None` if the column is null.
+    pub source_episode_id: Option<String>,
+}
+
+/// Request shape for `MemoryFactStore::insert_strategy_fact`. Flat
+/// field set chosen so backends construct their canonical fact row
+/// without callers needing to know the full `MemoryFact` shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrategyFactInsert {
+    pub agent_id: String,
+    pub key: String,
+    pub content: String,
+    pub confidence: f64,
+    pub source_summary: Option<String>,
+    pub embedding: Option<Vec<f32>>,
+    pub source_episode_id: Option<String>,
+}

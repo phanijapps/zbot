@@ -2,6 +2,9 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
+// Domain types live in `zero-stores-domain`; re-export here so the
+// trait surface keeps working for callers that import from this crate.
+pub use zero_stores_domain::{PatternProcedureInsert, ProcedureSummary};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProcedureStats {
@@ -79,29 +82,4 @@ pub trait ProcedureStore: Send + Sync {
     ) -> Result<String, String> {
         Err("insert_pattern_procedure not implemented for this store".to_string())
     }
-}
-
-/// Result of `get_procedure_summary_by_name`. Captures only the
-/// dedup-relevant fields.
-#[derive(Debug, Clone)]
-pub struct ProcedureSummary {
-    pub id: String,
-    pub name: String,
-    pub success_count: i32,
-}
-
-/// Request shape for `insert_pattern_procedure`. Flat field set so
-/// the trait crate doesn't need the full `Procedure` type from
-/// `zero-stores-sqlite`.
-#[derive(Debug, Clone)]
-pub struct PatternProcedureInsert {
-    pub agent_id: String,
-    pub ward_id: Option<String>,
-    pub name: String,
-    pub description: String,
-    pub trigger_pattern: Option<String>,
-    /// JSON-serialised `Vec<PatternStep>`.
-    pub steps_json: String,
-    /// JSON-serialised `Vec<String>`, or `None` if no parameters.
-    pub parameters_json: Option<String>,
 }

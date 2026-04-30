@@ -18,13 +18,15 @@
 //!   (they can derive From/Into the domain types here).
 
 pub mod goal;
+pub mod kg_ops;
 pub mod memory_fact;
 pub mod procedure;
 pub mod session_episode;
 pub mod wiki;
 
 pub use goal::Goal;
-pub use memory_fact::{MemoryFact, ScoredFact};
-pub use procedure::Procedure;
-pub use session_episode::{ScoredEpisode, SessionEpisode};
+pub use kg_ops::{DecayCandidate, DuplicateCandidate, RelationshipContext, StrategyCandidate};
+pub use memory_fact::{MemoryFact, ScoredFact, StrategyFactInsert, StrategyFactMatch};
+pub use procedure::{PatternProcedureInsert, Procedure, ProcedureSummary};
+pub use session_episode::{ScoredEpisode, SessionEpisode, SuccessfulEpisode};
 pub use wiki::WikiArticle;

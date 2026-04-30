@@ -5,6 +5,9 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
+// Domain types live in `zero-stores-domain`; re-export here so the
+// trait surface keeps working for callers that import from this crate.
+pub use zero_stores_domain::{StrategyFactInsert, StrategyFactMatch};
 
 /// Aggregate counts across the memory subsystem. Returned by
 /// `MemoryFactStore::aggregate_stats` for the `GET /api/memory/stats`
@@ -359,28 +362,4 @@ pub trait MemoryFactStore: Send + Sync {
     async fn insert_strategy_fact(&self, _req: StrategyFactInsert) -> Result<String, String> {
         Err("insert_strategy_fact not implemented for this store".to_string())
     }
-}
-
-/// Result of `find_strategy_fact_by_similarity`. Captures only what
-/// the Synthesizer needs to decide whether to bump or insert.
-#[derive(Debug, Clone)]
-pub struct StrategyFactMatch {
-    pub fact_id: String,
-    /// Comma-separated csv of episode ids previously attributed to
-    /// this fact, or `None` if the column is null.
-    pub source_episode_id: Option<String>,
-}
-
-/// Request shape for `insert_strategy_fact`. Flat field set chosen so
-/// the trait crate doesn't need to depend on the full `MemoryFact`
-/// type from `zero-stores-sqlite`.
-#[derive(Debug, Clone)]
-pub struct StrategyFactInsert {
-    pub agent_id: String,
-    pub key: String,
-    pub content: String,
-    pub confidence: f64,
-    pub source_summary: Option<String>,
-    pub embedding: Option<Vec<f32>>,
-    pub source_episode_id: Option<String>,
 }

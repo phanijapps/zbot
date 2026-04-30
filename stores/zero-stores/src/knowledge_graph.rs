@@ -5,6 +5,13 @@ use async_trait::async_trait;
 use knowledge_graph::types::{
     Entity, EntityType, GraphStats, NeighborInfo, Relationship, Subgraph,
 };
+// Port request/response shapes live in `zero-stores-domain`; re-export
+// at this crate's surface so existing imports of
+// `zero_stores::{DuplicateCandidate, DecayCandidate, StrategyCandidate,
+// RelationshipContext}` keep compiling.
+pub use zero_stores_domain::{
+    DecayCandidate, DuplicateCandidate, RelationshipContext, StrategyCandidate,
+};
 
 /// Backend-agnostic persistence for the knowledge graph subsystem.
 #[async_trait]
@@ -266,43 +273,4 @@ pub trait KnowledgeGraphStore: Send + Sync {
     ) -> StoreResult<Vec<String>> {
         Ok(Vec::new())
     }
-}
-
-/// One pair returned by `find_duplicate_candidates`.
-#[derive(Debug, Clone)]
-pub struct DuplicateCandidate {
-    pub loser_entity_id: String,
-    pub winner_entity_id: String,
-    pub cosine_similarity: f32,
-}
-
-/// One row returned by `list_orphan_old_candidates`.
-#[derive(Debug, Clone)]
-pub struct DecayCandidate {
-    pub id: String,
-    pub name: String,
-    pub entity_type: String,
-    pub mention_count: i64,
-}
-
-/// One row returned by `list_strategy_candidates`. Captures just the
-/// fields the Synthesizer needs to seed an LLM call — no embeddings,
-/// no full Entity payload.
-#[derive(Debug, Clone)]
-pub struct StrategyCandidate {
-    pub entity_id: String,
-    pub agent_id: String,
-    pub name: String,
-    pub entity_type: String,
-    pub n_sessions: i64,
-}
-
-/// Result of `relationship_context_for_entity`. `summaries` holds
-/// human-readable relationship strings (e.g. `src --[uses]--> tgt`);
-/// `session_ids` is the set of distinct sessions whose episodes
-/// referenced any of those relationships within the lookback window.
-#[derive(Debug, Clone, Default)]
-pub struct RelationshipContext {
-    pub summaries: Vec<String>,
-    pub session_ids: Vec<String>,
 }

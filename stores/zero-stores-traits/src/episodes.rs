@@ -2,25 +2,15 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
+// Domain types live in `zero-stores-domain`; re-export here so the
+// trait surface keeps working for callers that import from this crate.
+pub use zero_stores_domain::SuccessfulEpisode;
 
 /// Aggregate health metrics returned alongside episode reads.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EpisodeStats {
     /// Total session_episodes rows.
     pub total: i64,
-}
-
-/// One row returned by `list_successful_episodes_with_embedding`.
-/// Captures the fields the PatternExtractor needs without serialising
-/// the full SessionEpisode shape.
-#[derive(Debug, Clone)]
-pub struct SuccessfulEpisode {
-    pub id: String,
-    pub session_id: String,
-    pub agent_id: String,
-    pub task_summary: String,
-    /// L2-normalised embedding of `task_summary`, if one is indexed.
-    pub embedding: Option<Vec<f32>>,
 }
 
 /// Backend-agnostic interface for the session-episode subsystem.

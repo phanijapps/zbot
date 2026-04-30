@@ -30,3 +30,16 @@ pub struct ScoredEpisode {
     pub episode: SessionEpisode,
     pub score: f64,
 }
+
+/// One row returned by `EpisodeStore::list_successful_episodes_with_embedding`.
+/// Captures the fields the PatternExtractor needs without serialising
+/// the full SessionEpisode shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuccessfulEpisode {
+    pub id: String,
+    pub session_id: String,
+    pub agent_id: String,
+    pub task_summary: String,
+    /// L2-normalised embedding of `task_summary`, if one is indexed.
+    pub embedding: Option<Vec<f32>>,
+}
