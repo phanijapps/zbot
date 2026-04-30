@@ -701,28 +701,23 @@ pub struct ReindexResponse {
 /// POST /api/graph/reindex — force re-indexing of every ward on disk.
 /// Idempotent: relationships upsert via UNIQUE(source, target, type).
 ///
-/// NOTE (TD-023): This handler still reaches into the concrete
-/// `state.graph_service` and `state.kg_episode_repo` because
-/// `gateway_execution::ward_artifact_indexer::index_ward_with_options`
-/// accepts `&Arc<GraphStorage>` and `&KgEpisodeRepository` rather than
-/// trait objects. Migrating this fully requires plumbing
-/// `Arc<dyn KnowledgeGraphStore>` (or a narrower indexer-specific
-/// trait) through `gateway-execution`, which is a separate workstream.
-/// Tracked as a follow-up under TD-023's HTTP-handler retirement.
+/// Phase C: trait-routed via `state.kg_episode_store` +
+/// `state.kg_store`. Works on both SQLite and SurrealDB. Returns 503
+/// only when neither trait is wired (defensive — production always
+/// has both).
 pub async fn reindex_all_wards(
     State(state): State<AppState>,
 ) -> Result<Json<ReindexResponse>, StatusCode> {
     use gateway_execution::ward_artifact_indexer::{index_ward_with_options, IndexOptions};
 
-    let episode_repo = state
-        .kg_episode_repo
+    let episode_store = state
+        .kg_episode_store
         .clone()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let graph_service = state
-        .graph_service
+    let kg_store = state
+        .kg_store
         .clone()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let graph = graph_service.storage().clone();
 
     let wards_dir = state.paths.wards_dir();
     let Ok(read) = std::fs::read_dir(&wards_dir) else {
@@ -743,8 +738,8 @@ pub async fn reindex_all_wards(
             &path,
             "admin-reindex",
             "root",
-            &episode_repo,
-            &graph,
+            &episode_store,
+            &kg_store,
             IndexOptions {
                 force_reindex: true,
             },

@@ -5,15 +5,22 @@
 //!
 //! Zero LLM cost. Domain content that previously lived only in ward files
 //! (timeline.json, people.json, etc.) now reaches the knowledge graph.
+//!
+//! Phase C: backend-agnostic via the trait surface. Both
+//! `KgEpisodeStore` (for the dedup probe + episode insert) and
+//! `KnowledgeGraphStore` (for the entity/relationship store) work on
+//! SQLite and SurrealDB. Adding a new datastore plugs in with zero
+//! changes to this module.
 
 use crate::indexer::relationship_rules;
-use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, Relationship};
+use knowledge_graph::{Entity, EntityType, Relationship};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use zero_stores_sqlite::kg::storage::GraphStorage;
-use zero_stores_sqlite::{EpisodeSource, KgEpisode, KgEpisodeRepository};
+use zero_stores::KnowledgeGraphStore;
+use zero_stores_sqlite::EpisodeSource;
+use zero_stores_traits::KgEpisodeStore;
 
 /// Options for ward indexing.
 #[derive(Debug, Clone, Copy, Default)]
@@ -32,15 +39,15 @@ pub async fn index_ward(
     ward_path: &Path,
     session_id: &str,
     agent_id: &str,
-    episode_repo: &KgEpisodeRepository,
-    graph: &Arc<GraphStorage>,
+    episode_store: &Arc<dyn KgEpisodeStore>,
+    kg_store: &Arc<dyn KnowledgeGraphStore>,
 ) -> usize {
     index_ward_with_options(
         ward_path,
         session_id,
         agent_id,
-        episode_repo,
-        graph,
+        episode_store,
+        kg_store,
         IndexOptions::default(),
     )
     .await
@@ -51,15 +58,16 @@ pub async fn index_ward_with_options(
     ward_path: &Path,
     session_id: &str,
     agent_id: &str,
-    episode_repo: &KgEpisodeRepository,
-    graph: &Arc<GraphStorage>,
+    episode_store: &Arc<dyn KgEpisodeStore>,
+    kg_store: &Arc<dyn KnowledgeGraphStore>,
     opts: IndexOptions,
 ) -> usize {
     let mut created = 0_usize;
     let files = collect_structured_files(ward_path);
 
     for file_path in files {
-        match index_one_file(&file_path, session_id, agent_id, episode_repo, graph, opts).await {
+        match index_one_file(&file_path, session_id, agent_id, episode_store, kg_store, opts).await
+        {
             Ok(n) => created += n,
             Err(e) => tracing::warn!(
                 file = ?file_path,
@@ -126,8 +134,8 @@ async fn index_one_file(
     file_path: &Path,
     session_id: &str,
     agent_id: &str,
-    episode_repo: &KgEpisodeRepository,
-    graph: &Arc<GraphStorage>,
+    episode_store: &Arc<dyn KgEpisodeStore>,
+    kg_store: &Arc<dyn KnowledgeGraphStore>,
     opts: IndexOptions,
 ) -> Result<usize, String> {
     let content = std::fs::read_to_string(file_path)
@@ -137,8 +145,9 @@ async fn index_one_file(
 
     // Dedup: skip if we've already indexed this exact content (unless forced)
     if !opts.force_reindex
-        && episode_repo
-            .get_by_content_hash(&content_hash, EpisodeSource::WardFile.as_str())
+        && episode_store
+            .get_by_content_hash(EpisodeSource::WardFile.as_str(), &content_hash)
+            .await
             .map_err(|e| format!("Dedup check failed: {e}"))?
             .is_some()
     {
@@ -150,29 +159,28 @@ async fn index_one_file(
     let value: Value = serde_json::from_str(&content)
         .map_err(|e| format!("JSON parse failed for {:?}: {e}", file_path))?;
 
-    // Create the episode record
+    // Create the episode record. The trait's `upsert_pending` returns
+    // the persisted id; we then transition straight to `done` because
+    // ward-file indexing is synchronous (no LLM extraction needed).
     let source_ref = file_path.to_string_lossy().to_string();
-    let episode = KgEpisode {
-        id: format!("ep-{}", uuid::Uuid::new_v4()),
-        source_type: EpisodeSource::WardFile.as_str().to_string(),
-        source_ref: source_ref.clone(),
-        content_hash,
-        session_id: Some(session_id.to_string()),
-        agent_id: agent_id.to_string(),
-        status: "done".to_string(),
-        retry_count: 0,
-        error: None,
-        created_at: chrono::Utc::now().to_rfc3339(),
-        started_at: None,
-        completed_at: None,
-    };
-    episode_repo
-        .upsert_episode(&episode)
+    let episode_id = episode_store
+        .upsert_pending(
+            EpisodeSource::WardFile.as_str(),
+            &source_ref,
+            &content_hash,
+            Some(session_id),
+            agent_id,
+        )
+        .await
         .map_err(|e| format!("Episode insert failed: {e}"))?;
+    episode_store
+        .mark_done(&episode_id)
+        .await
+        .map_err(|e| format!("Episode mark_done failed: {e}"))?;
 
     // Extract entities based on the detected schema
     let schema = detect_collection_schema(&value);
-    let primary_entities = extract_entities(&value, schema, agent_id, &episode.id, &source_ref);
+    let primary_entities = extract_entities(&value, schema, agent_id, &episode_id, &source_ref);
     let paired_objects: Vec<serde_json::Map<String, Value>> =
         object_iter_for_schema(&value, schema);
 
@@ -184,19 +192,20 @@ async fn index_one_file(
     // what pairs — best-effort, no panic.
     for (entity, obj) in primary_entities.into_iter().zip(paired_objects.into_iter()) {
         let (ents, rels) =
-            entity_with_relationships(entity, &obj, agent_id, &episode.id, &source_ref);
+            entity_with_relationships(entity, &obj, agent_id, &episode_id, &source_ref);
         all_entities.extend(ents);
         all_rels.extend(rels);
     }
 
     let count = all_entities.len();
     if count > 0 {
-        let knowledge = ExtractedKnowledge {
+        let knowledge = zero_stores::ExtractedKnowledge {
             entities: all_entities,
             relationships: all_rels,
         };
-        graph
+        kg_store
             .store_knowledge(agent_id, knowledge)
+            .await
             .map_err(|e| format!("Graph store failed: {e}"))?;
     }
 

@@ -1471,8 +1471,17 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                         .ok()
                         .flatten()
                         .and_then(|s| s.ward_id);
-                    let kg_episode_repo_for_indexer = kg_episode_repo.clone();
-                    let graph_storage_for_indexer = graph_storage_for_indexer.clone();
+                    // Phase C: indexer is trait-routed. Build a
+                    // KgEpisodeStore wrapper from the SQLite repo (or
+                    // re-use whatever trait impl is wired). graph_storage
+                    // -> kg_store is already on the runner via
+                    // set_kg_store, so we pass that directly.
+                    let kg_episode_store_for_indexer: Option<Arc<dyn zero_stores_traits::KgEpisodeStore>> =
+                        kg_episode_repo.as_ref().map(|r| {
+                            Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
+                                as Arc<dyn zero_stores_traits::KgEpisodeStore>
+                        });
+                    let kg_store_for_indexer = kg_store.clone();
                     let paths_for_indexer = paths.clone();
                     tokio::spawn(async move {
                         if let Err(e) = distiller.distill(&sid, &aid).await {
@@ -1482,8 +1491,8 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                             &ward_id_for_indexer,
                             &sid,
                             &aid,
-                            kg_episode_repo_for_indexer.as_ref(),
-                            graph_storage_for_indexer.as_ref(),
+                            kg_episode_store_for_indexer.as_ref(),
+                            kg_store_for_indexer.as_ref(),
                             &paths_for_indexer,
                         )
                         .await;
@@ -1581,18 +1590,18 @@ fn find_latest_plan(specs_dir: &std::path::Path) -> Option<String> {
 
 /// Phase 6a: index structured ward artifacts into the knowledge graph after distillation.
 ///
-/// Skips when the session has no ward (scratch), the KG episode repo is not wired,
-/// graph storage is unavailable, or the ward path does not exist on disk. All errors
-/// from the indexer are logged and never propagate — this must not crash the pipeline.
+/// Phase C: trait-routed. Skips when the session has no ward (scratch),
+/// either trait store is unwired, or the ward path does not exist on disk.
+/// All errors from the indexer are logged and never propagate.
 pub(super) async fn run_ward_artifact_indexer(
     ward_id: &Option<String>,
     session_id: &str,
     agent_id: &str,
-    kg_episode_repo: Option<&Arc<zero_stores_sqlite::KgEpisodeRepository>>,
-    graph_storage: Option<&Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
+    kg_episode_store: Option<&Arc<dyn zero_stores_traits::KgEpisodeStore>>,
+    kg_store: Option<&Arc<dyn zero_stores::KnowledgeGraphStore>>,
     paths: &SharedVaultPaths,
 ) {
-    let (Some(wid), Some(ep_repo), Some(graph)) = (ward_id, kg_episode_repo, graph_storage) else {
+    let (Some(wid), Some(ep_store), Some(kg)) = (ward_id, kg_episode_store, kg_store) else {
         return;
     };
     let ward_path = paths.vault_dir().join("wards").join(wid);
@@ -1603,8 +1612,8 @@ pub(super) async fn run_ward_artifact_indexer(
         &ward_path,
         session_id,
         agent_id,
-        ep_repo.as_ref(),
-        graph,
+        ep_store,
+        kg,
     )
     .await;
     tracing::info!(

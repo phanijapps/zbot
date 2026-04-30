@@ -478,8 +478,22 @@ impl ExecutionStream {
                     let sid = session_id.clone();
                     let aid = agent_id.clone();
                     let ward_id_for_indexer = session_ward.clone();
-                    let kg_episode_repo_for_indexer = self.kg_episode_repo.clone();
-                    let graph_storage_for_indexer = self.graph_storage.clone();
+                    // Phase C: trait-routed indexer. Wrap the SQLite
+                    // kg_episode_repo as a KgEpisodeStore for the test
+                    // path; production already has the trait wired via
+                    // AppState but ExecutionStream's struct still holds
+                    // the concrete repo for backward compat. Same shape
+                    // for kg_store: the SqliteKgStore wrap of graph_storage.
+                    let kg_episode_store_for_indexer: Option<Arc<dyn zero_stores_traits::KgEpisodeStore>> =
+                        self.kg_episode_repo.as_ref().map(|r| {
+                            Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
+                                as Arc<dyn zero_stores_traits::KgEpisodeStore>
+                        });
+                    let kg_store_for_indexer: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
+                        self.graph_storage.as_ref().map(|gs| {
+                            Arc::new(zero_stores_sqlite::SqliteKgStore::new(gs.clone()))
+                                as Arc<dyn zero_stores::KnowledgeGraphStore>
+                        });
                     let paths_for_indexer = self.paths.clone();
                     tokio::spawn(async move {
                         if let Err(e) = distiller.distill(&sid, &aid).await {
@@ -489,8 +503,8 @@ impl ExecutionStream {
                             &ward_id_for_indexer,
                             &sid,
                             &aid,
-                            kg_episode_repo_for_indexer.as_ref(),
-                            graph_storage_for_indexer.as_ref(),
+                            kg_episode_store_for_indexer.as_ref(),
+                            kg_store_for_indexer.as_ref(),
                             &paths_for_indexer,
                         )
                         .await;
