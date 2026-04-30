@@ -606,6 +606,21 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         Ok(json!({ "primitives": primitives }))
     }
 
+    async fn list_primitives_for_ward(
+        &self,
+        ward_id: &str,
+    ) -> Result<Vec<MemoryFact>, String> {
+        self.memory_repo.list_primitives_for_ward(ward_id)
+    }
+
+    async fn list_recent_state_handoffs(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        self.memory_repo.list_recent_state_handoffs(session_id, limit)
+    }
+
     async fn delete_facts_by_key(&self, category: &str, key: &str) -> Result<usize, String> {
         self.memory_repo.delete_facts_by_key(category, key)
     }

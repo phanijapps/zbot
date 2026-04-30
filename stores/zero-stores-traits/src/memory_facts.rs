@@ -191,6 +191,29 @@ pub trait MemoryFactStore: Send + Sync {
         Ok(serde_json::json!({ "primitives": [] }))
     }
 
+    /// Typed variant of `list_primitives` returning `Vec<MemoryFact>`.
+    /// Used by the ward snapshot builder so it gets the raw key /
+    /// content / source_summary triple without re-decoding the
+    /// rendered JSON. Default returns empty.
+    async fn list_primitives_for_ward(
+        &self,
+        _ward_id: &str,
+    ) -> Result<Vec<MemoryFact>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Recent `ctx.<session_id>.state.<exec_id>` rows for the given
+    /// session, newest-first, capped at `limit`. Used by the ward
+    /// snapshot builder to render the "prior steps this session"
+    /// section. Default returns empty.
+    async fn list_recent_state_handoffs(
+        &self,
+        _session_id: &str,
+        _limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        Ok(Vec::new())
+    }
+
     // =========================================================================
     // SKILL INDEX STATE
     // Per-skill staleness tracker for the incremental skill reindex.

@@ -59,7 +59,6 @@ pub async fn spawn_delegated_agent(
     state_service: Arc<StateService<DatabaseManager>>,
     workspace_cache: WorkspaceCache,
     delegation_permit: Option<OwnedSemaphorePermit>,
-    memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
     memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     memory_recall: Option<Arc<MemoryRecall>>,
     rate_limiters: Arc<
@@ -388,9 +387,9 @@ pub async fn spawn_delegated_agent(
     // handoff fire after the executor has consumed its own copy.
     let fact_store_for_ctx: Option<Arc<dyn zero_stores::MemoryFactStore>> = memory_store.clone();
 
-    // Phase 7: pass a MemoryRepository handle through so spawn_execution_task
+    // Phase 7: pass the memory_store handle through so spawn_execution_task
     // can query ctx.state.* rows when building the ward_snapshot preamble.
-    let memory_repo_for_snapshot = memory_repo.clone();
+    let memory_store_for_snapshot = memory_store.clone();
 
     // Spawn the execution task
     spawn_execution_task(SpawnContext {
@@ -411,7 +410,7 @@ pub async fn spawn_delegated_agent(
         delegation_permit,
         initial_history,
         fact_store_for_ctx,
-        memory_repo_for_snapshot,
+        memory_store_for_snapshot,
     });
 
     tracing::info!(
@@ -497,7 +496,7 @@ struct SpawnContext {
 
     // --- Optional memory wiring (Phase 4b + 7 ward_snapshot preamble) ---
     fact_store_for_ctx: Option<Arc<dyn zero_stores::MemoryFactStore>>,
-    memory_repo_for_snapshot: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
+    memory_store_for_snapshot: Option<Arc<dyn zero_stores::MemoryFactStore>>,
 }
 
 /// Spawn the async execution task for the delegated agent.
@@ -520,7 +519,7 @@ fn spawn_execution_task(ctx: SpawnContext) {
         state_service,
         paths,
         fact_store_for_ctx,
-        memory_repo_for_snapshot,
+        memory_store_for_snapshot,
     } = ctx;
 
     let agent_id = request.child_agent_id.clone();
@@ -553,37 +552,43 @@ fn spawn_execution_task(ctx: SpawnContext) {
         &request.task,
     );
 
-    // Step 2: ward_snapshot block (prepended if a real ward is active)
-    let with_snapshot = if let Some(ref ward) = ward_for_preamble {
-        crate::session_ctx::snapshot::prepend_to_task(
-            ward,
-            &session_id,
-            &paths.wards_dir(),
-            memory_repo_for_snapshot.as_ref(),
-            &with_ctx_tag,
-        )
-    } else {
-        with_ctx_tag
-    };
-
-    // Step 3: reuse_check imperative for coding-capable agents.
-    // Placed at the very top of the prompt so the LLM reads it before
-    // any other context. Concrete ✓/✗ examples anchor the behavior —
-    // stronger than free-text policy recall.
-    let task_msg = if let Some(block) = reuse_check_block(&request.child_agent_id) {
-        format!("{}\n\n{}", block, with_snapshot)
-    } else {
-        with_snapshot
-    };
-
     let parent_agent = request.parent_agent_id.clone();
     let parent_execution_id = request.parent_execution_id.clone();
+    let paths_for_snapshot = paths.clone();
+    let session_id_for_snapshot = session_id.clone();
+    let child_agent_id_for_block = request.child_agent_id.clone();
 
     tokio::spawn(async move {
         // Hold the delegation permit for the duration of the task.
         // When this task completes (or is dropped), the permit is released,
         // allowing another queued delegation to proceed.
         let _delegation_permit = delegation_permit;
+
+        // Step 2: ward_snapshot block (prepended if a real ward is active).
+        // Reads ward_snapshot via `MemoryFactStore`, so awaited inside the
+        // spawned task rather than in the sync caller.
+        let with_snapshot = if let Some(ref ward) = ward_for_preamble {
+            crate::session_ctx::snapshot::prepend_to_task(
+                ward,
+                &session_id_for_snapshot,
+                &paths_for_snapshot.wards_dir(),
+                memory_store_for_snapshot.as_ref(),
+                &with_ctx_tag,
+            )
+            .await
+        } else {
+            with_ctx_tag
+        };
+
+        // Step 3: reuse_check imperative for coding-capable agents.
+        // Placed at the very top of the prompt so the LLM reads it before
+        // any other context. Concrete ✓/✗ examples anchor the behavior —
+        // stronger than free-text policy recall.
+        let task_msg = if let Some(block) = reuse_check_block(&child_agent_id_for_block) {
+            format!("{}\n\n{}", block, with_snapshot)
+        } else {
+            with_snapshot
+        };
 
         // Create batch writer with conversation repo for session message streaming
         let batch_writer = spawn_batch_writer_with_repo(
