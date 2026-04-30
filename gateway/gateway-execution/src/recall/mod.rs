@@ -26,72 +26,42 @@ use std::sync::Arc;
 
 use agent_runtime::llm::embedding::EmbeddingClient;
 use gateway_services::RecallConfig;
-#[cfg(test)]
-use zero_stores_sqlite::MemoryFact;
-use zero_stores_sqlite::kg::service::GraphService;
-use zero_stores_sqlite::{
-    EpisodeRepository, MemoryRepository, Procedure, ProcedureRepository, RecallLogRepository,
-    ScoredFact, WardWikiRepository,
-};
+use zero_stores_sqlite::{MemoryFact, Procedure, ScoredFact};
 
 /// Retrieves relevant memory facts for injection at session start.
 ///
-/// Persistence routing: hybrid memory search goes through `memory_store`
-/// (the trait) when set, so SurrealDB is honored when opted-in. Other
-/// repos (episode, wiki, procedure) still hit SQLite directly — those
-/// migrate in a separate phase that introduces their own trait surfaces.
+/// Phase E6c: fully trait-routed. Every store dependency is an
+/// `Arc<dyn ...>`; the composition root (`gateway/src/state/mod.rs`)
+/// picks the concrete adapter (SQLite today, any future backend
+/// tomorrow) and wires it via setters. No SQLite types appear in
+/// this struct's signatures.
 pub struct MemoryRecall {
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
-    /// Phase E8: now `Option`. `None` in SurrealDB mode (knowledge.db
-    /// closed, no SQLite-backed `MemoryRepository` to wrap). Recall
-    /// path then routes exclusively through `memory_store`.
-    memory_repo: Option<Arc<MemoryRepository>>,
     memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
-    graph_service: Option<Arc<GraphService>>,
-    config: Arc<RecallConfig>,
-    episode_repo: Option<Arc<EpisodeRepository>>,
-    /// Trait-routed companion (Phase E6c). When set, episodic recall
-    /// goes through this handle so the path runs on Surreal too.
-    /// Coexists with `episode_repo` until E6c-3 drops the concrete field.
+    kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>>,
-    recall_log: Option<Arc<RecallLogRepository>>,
-    wiki_repo: Option<Arc<WardWikiRepository>>,
-    /// Trait-routed companion (Phase E6c). When set, wiki recall goes
-    /// through this handle so the path runs on Surreal too.
     wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>>,
-    procedure_repo: Option<Arc<ProcedureRepository>>,
-    /// Trait-routed companion (Phase E6c). When set, procedure recall
-    /// goes through this handle so the path runs on Surreal too.
     procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    config: Arc<RecallConfig>,
 }
 
 impl MemoryRecall {
-    /// Create a new memory recall service.
+    /// Create a new memory recall service. All store dependencies are
+    /// wired via setters; the embedding client is optional (recall
+    /// degrades to FTS-only when absent).
     pub fn new(
         embedding_client: Option<Arc<dyn EmbeddingClient>>,
-        memory_repo: Option<Arc<MemoryRepository>>,
         config: Arc<RecallConfig>,
     ) -> Self {
         Self {
             embedding_client,
-            memory_repo,
             memory_store: None,
-            graph_service: None,
-            config,
-            episode_repo: None,
+            kg_store: None,
             episode_store: None,
-            recall_log: None,
-            wiki_repo: None,
             wiki_store: None,
-            procedure_repo: None,
             procedure_store: None,
+            config,
         }
-    }
-
-    /// Wire the trait-routed memory store. When set, hybrid recall goes
-    /// through this handle so SurrealDB is honored when opted-in.
-    pub fn set_memory_store(&mut self, store: Arc<dyn zero_stores::MemoryFactStore>) {
-        self.memory_store = Some(store);
     }
 
     /// Access the recall configuration.
@@ -99,68 +69,27 @@ impl MemoryRecall {
         &self.config
     }
 
-    /// Create a new memory recall service with graph support.
-    pub fn with_graph(
-        embedding_client: Option<Arc<dyn EmbeddingClient>>,
-        memory_repo: Option<Arc<MemoryRepository>>,
-        graph_service: Arc<GraphService>,
-        config: Arc<RecallConfig>,
-    ) -> Self {
-        Self {
-            embedding_client,
-            memory_repo,
-            memory_store: None,
-            graph_service: Some(graph_service),
-            config,
-            episode_repo: None,
-            episode_store: None,
-            recall_log: None,
-            wiki_repo: None,
-            wiki_store: None,
-            procedure_repo: None,
-            procedure_store: None,
-        }
+    /// Wire the memory-fact store (hybrid FTS + vector recall path).
+    pub fn set_memory_store(&mut self, store: Arc<dyn zero_stores::MemoryFactStore>) {
+        self.memory_store = Some(store);
     }
 
-    /// Set the episode repository for episodic recall.
-    pub fn set_episode_repo(&mut self, repo: Arc<EpisodeRepository>) {
-        self.episode_repo = Some(repo);
+    /// Wire the KG store (graph ANN recall path).
+    pub fn set_kg_store(&mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) {
+        self.kg_store = Some(store);
     }
 
-    /// Wire the trait-routed episode store. When set, episodic recall
-    /// routes through this handle so SurrealDB is honored when opted-in.
+    /// Wire the episode store (previous-episode chain recall path).
     pub fn set_episode_store(&mut self, store: Arc<dyn zero_stores_traits::EpisodeStore>) {
         self.episode_store = Some(store);
     }
 
-    /// Set the graph service for enriched recall.
-    pub fn set_graph_service(&mut self, service: Arc<GraphService>) {
-        self.graph_service = Some(service);
-    }
-
-    /// Set the recall log repository for tracking recalled facts per session.
-    pub fn set_recall_log(&mut self, repo: Arc<RecallLogRepository>) {
-        self.recall_log = Some(repo);
-    }
-
-    /// Set the ward wiki repository for wiki-first recall.
-    pub fn set_wiki_repo(&mut self, repo: Arc<WardWikiRepository>) {
-        self.wiki_repo = Some(repo);
-    }
-
-    /// Wire the trait-routed wiki store. When set, wiki recall routes
-    /// through this handle so SurrealDB is honored when opted-in.
+    /// Wire the wiki store (ward-scoped wiki recall path).
     pub fn set_wiki_store(&mut self, store: Arc<dyn zero_stores_traits::WikiStore>) {
         self.wiki_store = Some(store);
     }
 
-    /// Set the procedure repository for procedure recall.
-    pub fn set_procedure_repo(&mut self, repo: Arc<ProcedureRepository>) {
-        self.procedure_repo = Some(repo);
-    }
-
-    /// Wire the trait-routed procedure store. When set, procedure recall
-    /// routes through this handle so SurrealDB is honored when opted-in.
+    /// Wire the procedure store (procedure recall path).
     pub fn set_procedure_store(&mut self, store: Arc<dyn zero_stores_traits::ProcedureStore>) {
         self.procedure_store = Some(store);
     }
@@ -181,17 +110,7 @@ impl MemoryRecall {
             None => return Ok(Vec::new()),
         };
 
-        // Prefer trait-routed procedure_store; fall back to wrapping
-        // procedure_repo for callers that haven't wired the trait yet.
-        let store_view: Option<Arc<dyn zero_stores_traits::ProcedureStore>> =
-            self.procedure_store.clone().or_else(|| {
-                self.procedure_repo.as_ref().map(|r| {
-                    Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(r.clone()))
-                        as Arc<dyn zero_stores_traits::ProcedureStore>
-                })
-            });
-
-        let store = match store_view {
+        let store = match self.procedure_store.as_ref() {
             Some(s) => s,
             None => return Ok(Vec::new()),
         };
@@ -238,55 +157,35 @@ impl MemoryRecall {
                         .map(|fact| ScoredFact { fact, score: 0.0 })
                 })
                 .collect()
-        } else if let Some(repo) = self.memory_repo.as_ref() {
-            let (results, _sources) = repo.search_memory_facts_hybrid(
-                user_message,
-                query_embedding.as_deref(),
-                Some(agent_id),
-                limit * 2, // Fetch more than needed, we'll merge and trim
-                self.config.vector_weight,
-                self.config.bm25_weight,
-                None, // ward_id — no ward filtering in recall service (for now)
-            )?;
-            results
         } else {
-            // Phase E8: neither store wired (defensive — production
-            // always has at least one). Return empty rather than panic.
+            // Phase E6c: memory_store is the only path. Defensive empty
+            // when not wired (production composition root always wires it).
             Vec::new()
         };
 
-        // 3. Also fetch high-confidence facts (always relevant). SQLite-only
-        // path — the trait surface doesn't expose the dedicated
-        // `get_high_confidence_facts` shortcut yet. On Surreal these
-        // facts still surface via the hybrid search above (with their
-        // confidence baked into the score), just not as a separate
-        // augment.
-        let high_conf_facts = self
-            .memory_repo
-            .as_ref()
-            .map(|repo| {
-                repo.get_high_confidence_facts(
+        // 3. Also fetch high-confidence facts (always relevant).
+        let high_conf_facts: Vec<MemoryFact> = match self.memory_store.as_ref() {
+            Some(store) => store
+                .get_high_confidence_facts(
                     Some(agent_id),
                     self.config.high_confidence_threshold,
                     limit,
                 )
-                .unwrap_or_default()
-            })
-            .unwrap_or_default();
+                .await
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
 
         // 3b. Include relevant corrections — corrections get a 1.5x category boost
         //     but must still have minimum relevance to the query. This prevents
         //     "WiZ lights" corrections appearing for currency questions.
-        // Same SQLite-only fallback as above; corrections still flow
-        // through the hybrid path on Surreal (category-weighted later).
-        let all_corrections = self
-            .memory_repo
-            .as_ref()
-            .map(|repo| {
-                repo.get_facts_by_category(agent_id, "correction", 10)
-                    .unwrap_or_default()
-            })
-            .unwrap_or_default();
+        let all_corrections: Vec<MemoryFact> = match self.memory_store.as_ref() {
+            Some(store) => store
+                .get_facts_by_category(agent_id, "correction", 10)
+                .await
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
 
         // Corrections: include all, capped at a reasonable limit.
         // Phase 1c will restore threshold-based filtering via unified scored recall.
@@ -438,92 +337,52 @@ impl MemoryRecall {
                         .map(|fact| adapters::fact_to_item(&fact, 0.5))
                 })
                 .collect()
-        } else if let Some(repo) = self.memory_repo.as_ref() {
-            repo.search_memory_facts_hybrid(
-                query,
-                query_emb.as_deref(),
-                Some(agent_id),
-                10,
-                self.config.vector_weight,
-                self.config.bm25_weight,
-                ward_id,
-            )
-            .map(|(facts, _sources)| facts)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|sf| adapters::fact_to_item(&sf.fact, sf.score))
-            .collect()
         } else {
             Vec::new()
         };
 
-        // 2. Wiki articles (ward-scoped). Prefer trait-routed wiki_store;
-        //    fall back to wrapping wiki_repo for callers that haven't
-        //    wired the trait yet.
-        let wiki_store_view: Option<Arc<dyn zero_stores_traits::WikiStore>> =
-            self.wiki_store.clone().or_else(|| {
-                self.wiki_repo.as_ref().map(|r| {
-                    Arc::new(zero_stores_sqlite::GatewayWikiStore::new(r.clone()))
-                        as Arc<dyn zero_stores_traits::WikiStore>
-                })
-            });
-        let wiki_items: Vec<ScoredItem> = match (wiki_store_view, query_emb.as_ref(), ward_id) {
-            (Some(store), Some(emb), Some(wid)) => store
-                .search_wiki_by_similarity_typed(wid, emb, 5)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(a, s)| adapters::wiki_to_item(&a, s))
-                .collect(),
-            _ => Vec::new(),
-        };
-
-        // 3. Procedures. Prefer trait-routed procedure_store; fall back
-        //    to wrapping procedure_repo.
-        let procedure_store_view: Option<Arc<dyn zero_stores_traits::ProcedureStore>> =
-            self.procedure_store.clone().or_else(|| {
-                self.procedure_repo.as_ref().map(|r| {
-                    Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(r.clone()))
-                        as Arc<dyn zero_stores_traits::ProcedureStore>
-                })
-            });
-        let procedure_items: Vec<ScoredItem> = match (procedure_store_view, query_emb.as_ref()) {
-            (Some(store), Some(emb)) => store
-                .search_procedures_by_similarity_typed(emb, agent_id, ward_id, 5)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(p, s)| adapters::procedure_to_item(&p, s))
-                .collect(),
-            _ => Vec::new(),
-        };
-
-        // 4. Graph ANN over `kg_name_index`.
-        let graph_items: Vec<ScoredItem> = match (self.graph_service.as_ref(), query_emb.as_ref()) {
-            (Some(graph_service), Some(emb)) => {
-                adapters::graph_ann_to_items(graph_service.storage(), emb, 10, agent_id)
+        // 2. Wiki articles (ward-scoped).
+        let wiki_items: Vec<ScoredItem> =
+            match (self.wiki_store.as_ref(), query_emb.as_ref(), ward_id) {
+                (Some(store), Some(emb), Some(wid)) => store
+                    .search_wiki_by_similarity_typed(wid, emb, 5)
                     .await
                     .unwrap_or_default()
-            }
+                    .into_iter()
+                    .map(|(a, s)| adapters::wiki_to_item(&a, s))
+                    .collect(),
+                _ => Vec::new(),
+            };
+
+        // 3. Procedures.
+        let procedure_items: Vec<ScoredItem> =
+            match (self.procedure_store.as_ref(), query_emb.as_ref()) {
+                (Some(store), Some(emb)) => store
+                    .search_procedures_by_similarity_typed(emb, agent_id, ward_id, 5)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(p, s)| adapters::procedure_to_item(&p, s))
+                    .collect(),
+                _ => Vec::new(),
+            };
+
+        // 4. Graph ANN over the entity name embedding index.
+        let graph_items: Vec<ScoredItem> = match (self.kg_store.as_ref(), query_emb.as_ref()) {
+            (Some(store), Some(emb)) => adapters::graph_ann_to_items(store, emb, 10, agent_id)
+                .await
+                .unwrap_or_default(),
             _ => Vec::new(),
         };
 
         // 5a. Previous episodes in this ward (chain continuity).
-        // Prefer the trait-routed episode_store (works on both backends);
-        // fall back to wrapping episode_repo for callers that haven't
-        // wired the trait yet.
-        let episode_store_view: Option<Arc<dyn zero_stores_traits::EpisodeStore>> =
-            self.episode_store.clone().or_else(|| {
-                self.episode_repo.as_ref().map(|r| {
-                    Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(r.clone()))
-                        as Arc<dyn zero_stores_traits::EpisodeStore>
-                })
-            });
-        let episode_items: Vec<ScoredItem> = match (episode_store_view, ward_id) {
-            (Some(store), Some(wid)) => previous_episodes::PreviousEpisodesAdapter::new(store)
-                .fetch(wid)
-                .await
-                .unwrap_or_default(),
+        let episode_items: Vec<ScoredItem> = match (self.episode_store.as_ref(), ward_id) {
+            (Some(store), Some(wid)) => {
+                previous_episodes::PreviousEpisodesAdapter::new(store.clone())
+                    .fetch(wid)
+                    .await
+                    .unwrap_or_default()
+            }
             _ => Vec::new(),
         };
 

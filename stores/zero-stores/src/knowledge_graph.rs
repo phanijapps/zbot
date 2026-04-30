@@ -10,7 +10,8 @@ use knowledge_graph::types::{
 // `zero_stores::{DuplicateCandidate, DecayCandidate, StrategyCandidate,
 // RelationshipContext, GraphView}` keep compiling.
 pub use zero_stores_domain::{
-    DecayCandidate, DuplicateCandidate, GraphView, RelationshipContext, StrategyCandidate,
+    DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit, GraphView, RelationshipContext,
+    StrategyCandidate,
 };
 
 /// Backend-agnostic persistence for the knowledge graph subsystem.
@@ -91,6 +92,21 @@ pub trait KnowledgeGraphStore: Send + Sync {
         limit: usize,
     ) -> StoreResult<Vec<Entity>> {
         self.search_entities_by_name(agent_id, query, limit).await
+    }
+
+    /// ANN search over the name-embedding index. Returns hits ordered by
+    /// ascending L2-squared distance (callers convert to cosine via
+    /// `1 - distance / 2`). The query embedding MUST be L2-normalized.
+    /// Used by the unified-recall graph pool. Default returns empty so
+    /// backends without a vector index over entity names degrade
+    /// gracefully (the recall path just contributes no graph items).
+    async fn search_entities_by_name_embedding(
+        &self,
+        _agent_id: &str,
+        _query_embedding: &[f32],
+        _top_k: usize,
+    ) -> StoreResult<Vec<EntityNameEmbeddingHit>> {
+        Ok(Vec::new())
     }
 
     // ---- Maintenance -----------------------------------------------------

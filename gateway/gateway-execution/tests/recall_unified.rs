@@ -57,7 +57,11 @@ async fn recall_unified_returns_scored_items_from_facts() {
     };
     memory_repo.upsert_memory_fact(&fact).unwrap();
 
-    let recall = MemoryRecall::new(None, Some(memory_repo), config);
+    let memory_store: Arc<dyn zero_stores::MemoryFactStore> = Arc::new(
+        zero_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
+    );
+    let mut recall = MemoryRecall::new(None, config);
+    recall.set_memory_store(memory_store);
     let items = recall
         .recall_unified("root", "tickers", None, &[], 10)
         .await
@@ -104,8 +108,15 @@ async fn recall_unified_injects_previous_episodes_for_ward() {
     episode_repo.insert(&ep).unwrap();
 
     let config = Arc::new(RecallConfig::default());
-    let mut recall = MemoryRecall::new(None, Some(memory_repo), config);
-    recall.set_episode_repo(episode_repo);
+    let memory_store: Arc<dyn zero_stores::MemoryFactStore> = Arc::new(
+        zero_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
+    );
+    let episode_store: Arc<dyn zero_stores_traits::EpisodeStore> = Arc::new(
+        zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo.clone()),
+    );
+    let mut recall = MemoryRecall::new(None, config);
+    recall.set_memory_store(memory_store);
+    recall.set_episode_store(episode_store);
 
     let items = recall
         .recall_unified("root", "earnings", Some(ward), &[], 10)

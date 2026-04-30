@@ -256,6 +256,34 @@ impl KnowledgeGraphStore for SqliteKgStore {
             .map_err(map_graph_err)
     }
 
+    async fn search_entities_by_name_embedding(
+        &self,
+        agent_id: &str,
+        query_embedding: &[f32],
+        top_k: usize,
+    ) -> StoreResult<Vec<zero_stores::EntityNameEmbeddingHit>> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        let query_embedding = query_embedding.to_vec();
+        block(move || {
+            storage
+                .search_entities_by_name_embedding(&query_embedding, top_k, &agent_id)
+                .map(|rows| {
+                    rows.into_iter()
+                        .map(
+                            |(name, entity_type, distance)| zero_stores::EntityNameEmbeddingHit {
+                                name,
+                                entity_type,
+                                distance,
+                            },
+                        )
+                        .collect()
+                })
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
     async fn reindex_embeddings(&self, new_dim: usize) -> StoreResult<ReindexReport> {
         // The trait contract is "rebuild embedding indexes for new dim and
         // return a final report" — there is intentionally no progress

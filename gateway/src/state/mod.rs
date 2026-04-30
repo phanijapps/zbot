@@ -488,26 +488,13 @@ impl AppState {
         // hybrid (still finds facts, just no KG-traversal boost).
         let mut memory_recall_inner: Option<MemoryRecall> =
             if early_memory_store.is_some() || memory_repo.is_some() {
-                let recall = match graph_service.as_ref() {
-                    Some(gs) => MemoryRecall::with_graph(
-                        embedding_client.clone(),
-                        memory_repo.clone(),
-                        gs.clone(),
-                        recall_config.clone(),
-                    ),
-                    None => MemoryRecall::new(
-                        embedding_client.clone(),
-                        memory_repo.clone(),
-                        recall_config.clone(),
-                    ),
-                };
-                Some(recall)
+                Some(MemoryRecall::new(
+                    embedding_client.clone(),
+                    recall_config.clone(),
+                ))
             } else {
                 None
             };
-        if let (Some(recall), Some(er)) = (memory_recall_inner.as_mut(), episode_repo.as_ref()) {
-            recall.set_episode_repo(er.clone());
-        }
         // Wire trait-routed episode_store (Phase E6c). Picks
         // surreal_bundle.episode in Surreal mode, falls back to
         // wrapping the SQLite EpisodeRepository.
@@ -533,15 +520,8 @@ impl AppState {
             }
         }
 
-        // Wire recall log for tracking recalled facts per session (enables predictive recall).
-        // RecallLogRepository is over db_manager (conversation DB), not knowledge_db,
-        // so it's safe to build in either mode.
-        let recall_log = Arc::new(RecallLogRepository::new(db_manager.clone()));
-        if let Some(recall) = memory_recall_inner.as_mut() {
-            recall.set_recall_log(recall_log);
-        }
-
-        // Wire ward wiki repository for wiki-first recall — SQLite-only.
+        // Ward wiki repository (still concrete; consumed by SessionDistiller
+        // and the trait-store wrapper below).
         let wiki_repo: Option<Arc<WardWikiRepository>> = knowledge_db.as_ref().map(|kdb| {
             let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
                 SqliteVecIndex::new(kdb.clone(), "wiki_articles_index", "article_id")
@@ -549,9 +529,6 @@ impl AppState {
             );
             Arc::new(WardWikiRepository::new(kdb.clone(), wiki_vec))
         });
-        if let (Some(recall), Some(wr)) = (memory_recall_inner.as_mut(), wiki_repo.as_ref()) {
-            recall.set_wiki_repo(wr.clone());
-        }
         // Wire trait-routed wiki_store (Phase E6c).
         if let Some(recall) = memory_recall_inner.as_mut() {
             #[cfg(feature = "surreal-backend")]
@@ -630,9 +607,6 @@ impl AppState {
             );
             Arc::new(ProcedureRepository::new(kdb.clone(), procedure_vec))
         });
-        if let (Some(recall), Some(pr)) = (memory_recall_inner.as_mut(), procedure_repo.as_ref()) {
-            recall.set_procedure_repo(pr.clone());
-        }
         let procedure_store_for_state: Option<Arc<dyn zero_stores_traits::ProcedureStore>> = {
             #[cfg(feature = "surreal-backend")]
             {
@@ -726,6 +700,36 @@ impl AppState {
             recall.set_memory_store(mem.clone());
         }
 
+        // Build the trait-routed kg_store early enough to wire it on
+        // MemoryRecall before that struct is moved into Arc::new below.
+        // Picks the surreal_bundle's impl when present, else wraps the
+        // SQLite GraphStorage (Phase E6c).
+        let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> = {
+            #[cfg(feature = "surreal-backend")]
+            {
+                surreal_bundle.as_ref().map(|b| b.kg.clone()).or_else(|| {
+                    graph_storage.as_ref().map(|gs| {
+                        let embedder = embedding_client
+                            .clone()
+                            .expect("embedding_client wired above for distillation/recall");
+                        persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
+                    })
+                })
+            }
+            #[cfg(not(feature = "surreal-backend"))]
+            {
+                graph_storage.as_ref().map(|gs| {
+                    let embedder = embedding_client
+                        .clone()
+                        .expect("embedding_client wired above for distillation/recall");
+                    persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
+                })
+            }
+        };
+        if let (Some(recall), Some(ks)) = (memory_recall_inner.as_mut(), kg_store.as_ref()) {
+            recall.set_kg_store(ks.clone());
+        }
+
         let memory_recall: Option<Arc<MemoryRecall>> = memory_recall_inner.map(Arc::new);
 
         // Clone embedding client before it's moved into distiller — the runner
@@ -747,35 +751,10 @@ impl AppState {
         // `graph_service`; once `graph_service` retires, callers migrate
         // to `build_kg_store(knowledge_db, …)`.
         //
-        // The wired client is the `LiveEmbeddingClient` constructed above,
-        // so it follows ArcSwap backend changes — same client the
-        // gateway-side wrapper at
-        // `gateway-execution::sleep::embedding_reindex` already uses.
-        // Reuse the memory_store built earlier (before MemoryRecall +
-        // SessionDistiller wiring). Build the kg_store now using the same
-        // surreal bundle if present, else SQLite-backed.
-        let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> = {
-            #[cfg(feature = "surreal-backend")]
-            {
-                surreal_bundle.as_ref().map(|b| b.kg.clone()).or_else(|| {
-                    runner_graph_storage.as_ref().map(|gs| {
-                        let embedder = embedding_client
-                            .clone()
-                            .expect("embedding_client wired above for distillation/recall");
-                        persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
-                    })
-                })
-            }
-            #[cfg(not(feature = "surreal-backend"))]
-            {
-                runner_graph_storage.as_ref().map(|gs| {
-                    let embedder = embedding_client
-                        .clone()
-                        .expect("embedding_client wired above for distillation/recall");
-                    persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
-                })
-            }
-        };
+        // kg_store was built earlier (before memory_recall_inner moved
+        // into Arc::new) so it could be wired on MemoryRecall. The
+        // duplicate definition here is intentionally absent — both the
+        // distiller and AppState fields below reuse the earlier binding.
         let memory_store = early_memory_store;
 
         let episode_repo_ref = episode_repo.clone();

@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 // Domain types live in `zero-stores-domain`; re-export here so the
 // trait surface keeps working for callers that import from this crate.
-pub use zero_stores_domain::{StrategyFactInsert, StrategyFactMatch};
+pub use zero_stores_domain::{MemoryFact, StrategyFactInsert, StrategyFactMatch};
 
 /// Aggregate counts across the memory subsystem. Returned by
 /// `MemoryFactStore::aggregate_stats` for the `GET /api/memory/stats`
@@ -361,5 +361,30 @@ pub trait MemoryFactStore: Send + Sync {
     /// (which lives in `zero-stores-sqlite`). Default: no-op error.
     async fn insert_strategy_fact(&self, _req: StrategyFactInsert) -> Result<String, String> {
         Err("insert_strategy_fact not implemented for this store".to_string())
+    }
+
+    /// Get facts in a specific category for an agent, ordered by
+    /// most-recently-mentioned. Used by the recall path for
+    /// category-weighted augmentation (corrections, strategies, etc.)
+    /// Default: empty.
+    async fn get_facts_by_category(
+        &self,
+        _agent_id: &str,
+        _category: &str,
+        _limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Get all facts above a confidence threshold. Used by the recall
+    /// path to surface "always relevant" durable knowledge regardless
+    /// of query similarity. Default: empty.
+    async fn get_high_confidence_facts(
+        &self,
+        _agent_id: Option<&str>,
+        _threshold: f64,
+        _limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        Ok(Vec::new())
     }
 }

@@ -26,7 +26,8 @@ pub mod wiki;
 
 pub use goal::Goal;
 pub use kg_ops::{
-    DecayCandidate, DuplicateCandidate, GraphView, RelationshipContext, StrategyCandidate,
+    DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit, GraphView, RelationshipContext,
+    StrategyCandidate,
 };
 pub use memory_fact::{MemoryFact, ScoredFact, StrategyFactInsert, StrategyFactMatch};
 pub use procedure::{PatternProcedureInsert, Procedure, ProcedureSummary};

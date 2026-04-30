@@ -13,8 +13,8 @@ pub mod types;
 pub use error::{StoreError, StoreResult};
 pub use extracted::ExtractedKnowledge;
 pub use knowledge_graph::{
-    DecayCandidate, DuplicateCandidate, GraphView, KnowledgeGraphStore, RelationshipContext,
-    StrategyCandidate,
+    DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit, GraphView, KnowledgeGraphStore,
+    RelationshipContext, StrategyCandidate,
 };
 pub use memory_facts::{
     MemoryAggregateStats, MemoryFactStore, MemoryHealthMetrics, SkillIndexRow, StrategyFactInsert,

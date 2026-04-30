@@ -84,3 +84,13 @@ pub struct DecayCandidate {
     pub entity_type: String,
     pub mention_count: i64,
 }
+
+/// One hit returned by `KnowledgeGraphStore::search_entities_by_name_embedding`.
+/// `distance` is L2-squared on normalized vectors — convert to cosine
+/// similarity at the caller via `1 - distance / 2`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityNameEmbeddingHit {
+    pub name: String,
+    pub entity_type: String,
+    pub distance: f32,
+}

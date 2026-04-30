@@ -793,6 +793,26 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         })
     }
 
+    async fn get_facts_by_category(
+        &self,
+        agent_id: &str,
+        category: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        self.memory_repo
+            .get_facts_by_category(agent_id, category, limit)
+    }
+
+    async fn get_high_confidence_facts(
+        &self,
+        agent_id: Option<&str>,
+        threshold: f64,
+        limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        self.memory_repo
+            .get_high_confidence_facts(agent_id, threshold, limit)
+    }
+
     async fn insert_strategy_fact(&self, req: StrategyFactInsert) -> Result<String, String> {
         let id = format!("fact-{}", uuid::Uuid::new_v4());
         let now = chrono::Utc::now().to_rfc3339();
