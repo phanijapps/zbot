@@ -209,10 +209,10 @@ pub async fn memory_search(
     State(state): State<AppState>,
     Json(req): Json<SearchBody>,
 ) -> Result<Json<UnifiedResponse>, HandlerError> {
-    let memory_repo = state
-        .memory_repo
+    let memory_store = state
+        .memory_store
         .as_ref()
-        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "memory repo unavailable"))?
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "memory store unavailable"))?
         .clone();
     let wiki_store = state
         .wiki_store
@@ -279,7 +279,7 @@ pub async fn memory_search(
     let agent_owned = agent.clone();
 
     let facts_fut = {
-        let memory_repo = memory_repo.clone();
+        let memory_store = memory_store.clone();
         let query = query.clone();
         let mode = mode.clone();
         let emb = embedding.clone();
@@ -291,14 +291,15 @@ pub async fn memory_search(
             }
             let t0 = Instant::now();
             let hits = run_facts(
-                &memory_repo,
+                memory_store.as_ref(),
                 &query,
                 &mode,
                 emb.as_deref(),
                 agent.as_deref(),
                 ward.as_deref(),
                 limit,
-            );
+            )
+            .await;
             TypeBlock {
                 hits,
                 latency_ms: t0.elapsed().as_millis() as u64,
@@ -433,15 +434,15 @@ pub async fn memory_search(
     }))
 }
 
-/// Route a fact search through the memory repo according to mode. Returns
+/// Route a fact search through the memory store according to mode. Returns
 /// JSON-ready hits.
 ///
-/// `agent_id` is threaded straight into the repo methods — `Some(a)` yields
+/// `agent_id` is threaded straight into the trait method — `Some(a)` yields
 /// scope-aware results (agent's private + global), `None` returns the
 /// unfiltered pool (admin/debug).
 #[allow(clippy::too_many_arguments)]
-fn run_facts(
-    memory_repo: &zero_stores_sqlite::MemoryRepository,
+async fn run_facts(
+    memory_store: &dyn zero_stores_traits::MemoryFactStore,
     query: &str,
     mode: &str,
     embedding: Option<&[f32]>,
@@ -449,36 +450,14 @@ fn run_facts(
     ward: Option<&str>,
     limit: usize,
 ) -> Vec<Value> {
-    match mode {
-        "fts" => memory_repo
-            .search_memory_facts_fts(query, agent_id, limit, ward)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|sf| fact_to_value(sf.fact, "fts", Some(sf.score)))
-            .collect(),
-        "semantic" => {
-            let Some(emb) = embedding else {
-                return Vec::new();
-            };
-            memory_repo
-                .search_similar_facts(emb, agent_id, 0.0, limit, ward)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|sf| fact_to_value(sf.fact, "vec", Some(sf.score)))
-                .collect()
-        }
-        _ => {
-            let (rows, sources) = memory_repo
-                .search_memory_facts_hybrid(query, embedding, agent_id, limit, 0.7, 0.3, ward)
-                .unwrap_or_default();
-            let src_map: std::collections::HashMap<String, &'static str> =
-                sources.into_iter().collect();
-            rows.into_iter()
-                .map(|sf| {
-                    let src = src_map.get(&sf.fact.id).copied().unwrap_or("fts");
-                    fact_to_value(sf.fact, src, Some(sf.score))
-                })
-                .collect()
-        }
+    if mode == "semantic" && embedding.is_none() {
+        return Vec::new();
     }
+    memory_store
+        .search_memory_facts_hybrid_typed(agent_id, query, mode, limit, ward, embedding)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(fact, score, src)| fact_to_value(fact, &src, Some(score)))
+        .collect()
 }

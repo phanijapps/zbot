@@ -340,6 +340,41 @@ pub trait MemoryFactStore: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Typed variant of `search_memory_facts_hybrid` returning
+    /// `(MemoryFact, score, match_source)` tuples directly. Default
+    /// deserialises the Value-based result so backends only need to
+    /// implement `search_memory_facts_hybrid` (with `score` and
+    /// `match_source` populated alongside the fact fields).
+    async fn search_memory_facts_hybrid_typed(
+        &self,
+        agent_id: Option<&str>,
+        query: &str,
+        mode: &str,
+        limit: usize,
+        ward_id: Option<&str>,
+        query_embedding: Option<&[f32]>,
+    ) -> Result<Vec<(MemoryFact, f64, String)>, String> {
+        let rows = self
+            .search_memory_facts_hybrid(agent_id, query, mode, limit, ward_id, query_embedding)
+            .await?;
+        rows.into_iter()
+            .map(|mut v| {
+                let score = v
+                    .get("score")
+                    .and_then(|s| s.as_f64())
+                    .unwrap_or(0.0);
+                let match_source = v
+                    .as_object_mut()
+                    .and_then(|o| o.remove("match_source"))
+                    .and_then(|s| s.as_str().map(String::from))
+                    .unwrap_or_else(|| "fts".to_string());
+                let fact: MemoryFact = serde_json::from_value(v)
+                    .map_err(|e| format!("decode MemoryFact: {e}"))?;
+                Ok((fact, score, match_source))
+            })
+            .collect()
+    }
+
     // ---- Sleep-time synthesis (Phase D4) -------------------------------
     //
     // Reads/writes needed by the `Synthesizer` to dedup against

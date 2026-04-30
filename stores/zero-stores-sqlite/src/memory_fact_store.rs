@@ -703,6 +703,38 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         ward_id: Option<&str>,
         query_embedding: Option<&[f32]>,
     ) -> Result<Vec<Value>, String> {
+        let typed = self
+            .search_memory_facts_hybrid_typed(
+                agent_id,
+                query,
+                mode,
+                limit,
+                ward_id,
+                query_embedding,
+            )
+            .await?;
+        typed
+            .into_iter()
+            .map(|(fact, score, src)| {
+                let mut v = serde_json::to_value(fact).map_err(|e| e.to_string())?;
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("score".to_string(), serde_json::json!(score));
+                    obj.insert("match_source".to_string(), Value::String(src));
+                }
+                Ok(v)
+            })
+            .collect()
+    }
+
+    async fn search_memory_facts_hybrid_typed(
+        &self,
+        agent_id: Option<&str>,
+        query: &str,
+        mode: &str,
+        limit: usize,
+        ward_id: Option<&str>,
+        query_embedding: Option<&[f32]>,
+    ) -> Result<Vec<(MemoryFact, f64, String)>, String> {
         let scored: Vec<(crate::memory_repository::ScoredFact, &'static str)> = match mode {
             "fts" => {
                 let rows = self
@@ -710,10 +742,19 @@ impl MemoryFactStore for GatewayMemoryFactStore {
                     .search_memory_facts_fts(query, agent_id, limit, ward_id)?;
                 rows.into_iter().map(|sf| (sf, "fts")).collect()
             }
+            "semantic" => {
+                let Some(emb) = query_embedding else {
+                    return Ok(Vec::new());
+                };
+                let rows =
+                    self.memory_repo
+                        .search_similar_facts(emb, agent_id, 0.0, limit, ward_id)?;
+                rows.into_iter().map(|sf| (sf, "vec")).collect()
+            }
             _ => {
-                // semantic + hybrid both fuse FTS + vector via the existing
-                // RRF hybrid path. Standard 0.5/0.5 weights.
-                let (rows, _sources) = self.memory_repo.search_memory_facts_hybrid(
+                // hybrid path fuses FTS + vector via the existing RRF method,
+                // using the per-id source map to label each row's origin.
+                let (rows, sources) = self.memory_repo.search_memory_facts_hybrid(
                     query,
                     query_embedding,
                     agent_id,
@@ -722,20 +763,20 @@ impl MemoryFactStore for GatewayMemoryFactStore {
                     0.5,
                     ward_id,
                 )?;
-                let src = if mode == "semantic" { "vec" } else { "hybrid" };
-                rows.into_iter().map(|sf| (sf, src)).collect()
+                let src_map: std::collections::HashMap<String, &'static str> =
+                    sources.into_iter().collect();
+                rows.into_iter()
+                    .map(|sf| {
+                        let src = src_map.get(&sf.fact.id).copied().unwrap_or("hybrid");
+                        (sf, src)
+                    })
+                    .collect()
             }
         };
-        scored
+        Ok(scored
             .into_iter()
-            .map(|(sf, src)| {
-                let mut v = serde_json::to_value(sf.fact).map_err(|e| e.to_string())?;
-                if let Some(obj) = v.as_object_mut() {
-                    obj.insert("match_source".to_string(), Value::String(src.to_string()));
-                }
-                Ok(v)
-            })
-            .collect()
+            .map(|(sf, src)| (sf.fact, sf.score, src.to_string()))
+            .collect())
     }
 
     // ---- Sleep-time synthesis (Phase D4) -------------------------------
