@@ -27,10 +27,7 @@ use agent_runtime::types::ChatMessage;
 use gateway_services::{ProviderService, SettingsService, VaultPaths};
 use knowledge_graph::{Entity, EntityType, Relationship, RelationshipType};
 use serde::{Deserialize, Serialize};
-use zero_stores_sqlite::{
-    ConversationRepository, DistillationRepository, DistillationRun, EpisodeRepository, MemoryFact,
-    ProcedureRepository, SessionEpisode, WardWikiRepository,
-};
+use zero_stores_sqlite::{ConversationRepository, MemoryFact, SessionEpisode};
 
 /// Distills completed sessions into structured memory facts.
 ///
@@ -56,25 +53,17 @@ pub struct SessionDistiller {
     conversation_repo: Arc<ConversationRepository>,
     memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
-    distillation_repo: Option<Arc<DistillationRepository>>,
-    /// Trait-routed distillation store (Phase E6c). When set,
-    /// run-tracking writes route through this handle. Coexists with
-    /// `distillation_repo` until E6c-4 drops the concrete field.
+    /// Trait-routed distillation store. Run-tracking writes flow
+    /// through this handle.
     distillation_store: Option<Arc<dyn zero_stores_traits::DistillationStore>>,
-    episode_repo: Option<Arc<EpisodeRepository>>,
-    /// Trait-routed episode store. Phase E6a — preferred over
-    /// `episode_repo`; wired in both backends so episode storage,
-    /// strategy emergence, and failure clustering work on Surreal.
+    /// Trait-routed episode store for episode storage, strategy
+    /// emergence, and failure clustering.
     episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>>,
     paths: Arc<VaultPaths>,
     settings_service: Option<Arc<SettingsService>>,
-    pub wiki_repo: Option<Arc<WardWikiRepository>>,
-    pub procedure_repo: Option<Arc<ProcedureRepository>>,
-    /// Trait-routed wiki store. Phase E6b — preferred over `wiki_repo`
-    /// for ward-wiki compilation; wired in both backends.
+    /// Trait-routed wiki store for ward-wiki compilation.
     pub wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>>,
-    /// Trait-routed procedure store. Phase E6b — preferred over
-    /// `procedure_repo` for procedure upsert; wired in both backends.
+    /// Trait-routed procedure store for procedure upsert.
     pub procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
 }
 
@@ -227,13 +216,10 @@ impl SessionDistiller {
     /// The distiller resolves the default provider and creates a lightweight
     /// LLM client on-demand in `distill()`, avoiding the need for a concrete
     /// LLM client at construction time.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider_service: Arc<ProviderService>,
         embedding_client: Option<Arc<dyn EmbeddingClient>>,
         conversation_repo: Arc<ConversationRepository>,
-        distillation_repo: Option<Arc<DistillationRepository>>,
-        episode_repo: Option<Arc<EpisodeRepository>>,
         paths: Arc<VaultPaths>,
         settings_service: Option<Arc<SettingsService>>,
     ) -> Self {
@@ -243,14 +229,10 @@ impl SessionDistiller {
             conversation_repo,
             memory_store: None,
             kg_store: None,
-            distillation_repo,
             distillation_store: None,
-            episode_repo,
             episode_store: None,
             paths,
             settings_service,
-            wiki_repo: None,
-            procedure_repo: None,
             wiki_store: None,
             procedure_store: None,
         }
@@ -297,16 +279,6 @@ impl SessionDistiller {
     /// upserts during distillation flow through this when set.
     pub fn set_procedure_store(&mut self, store: Arc<dyn zero_stores_traits::ProcedureStore>) {
         self.procedure_store = Some(store);
-    }
-
-    /// Set the ward wiki repository for post-distillation wiki compilation.
-    pub fn set_wiki_repo(&mut self, repo: Arc<WardWikiRepository>) {
-        self.wiki_repo = Some(repo);
-    }
-
-    /// Set the procedure repository for storing extracted procedures.
-    pub fn set_procedure_repo(&mut self, repo: Arc<ProcedureRepository>) {
-        self.procedure_repo = Some(repo);
     }
 
     /// Resolve the target provider ID and model for distillation.
@@ -739,7 +711,7 @@ impl SessionDistiller {
         // 6b. Store extracted procedure (if any). Phase E6b: trait first,
         // SQLite repo as fallback so Surreal mode persists procedures too.
         if let Some(ref procedure) = response.procedure {
-            if self.procedure_store.is_some() || self.procedure_repo.is_some() {
+            if self.procedure_store.is_some() {
                 let ward_id = self
                     .conversation_repo
                     .get_session_ward_id(session_id)
@@ -770,15 +742,12 @@ impl SessionDistiller {
                     updated_at: chrono::Utc::now().to_rfc3339(),
                 };
 
-                let upsert_res = if let Some(store) = &self.procedure_store {
-                    match serde_json::to_value(&proc) {
+                let upsert_res = match &self.procedure_store {
+                    Some(store) => match serde_json::to_value(&proc) {
                         Ok(v) => store.upsert_procedure(v, None).await,
                         Err(e) => Err(format!("encode procedure: {e}")),
-                    }
-                } else if let Some(repo) = &self.procedure_repo {
-                    repo.upsert_procedure(&proc).map(|_| ())
-                } else {
-                    Err("no procedure store wired".to_string())
+                    },
+                    None => Err("no procedure store wired".to_string()),
                 };
 
                 match upsert_res {
@@ -821,7 +790,7 @@ impl SessionDistiller {
             .unwrap_or(None);
 
         // 9. Compile ward wiki from extracted facts (best-effort)
-        if let (Some(wiki_repo), Some(ref wid)) = (&self.wiki_repo, &ward_id) {
+        if let (Some(wiki_store), Some(ref wid)) = (&self.wiki_store, &ward_id) {
             if wid != "__global__" && wid != "scratch" {
                 let fact_summaries: Vec<crate::ward_wiki::FactSummary> = response
                     .facts
@@ -841,7 +810,7 @@ impl SessionDistiller {
                                 wid,
                                 agent_id,
                                 &fact_summaries,
-                                wiki_repo,
+                                wiki_store.as_ref(),
                                 &*client,
                                 emb,
                             )
@@ -873,26 +842,12 @@ impl SessionDistiller {
     // =========================================================================
 
     /// Insert a pending/failed distillation run (optimistic failure).
-    /// Prefers trait-routed `distillation_store`; falls back to the
-    /// concrete `distillation_repo` until E6c-4 drops the concrete field.
     async fn record_pending(&self, session_id: &str) {
         if let Some(store) = &self.distillation_store {
             if let Err(e) = store
                 .record_distillation_pending(session_id, "failed", Some("Distillation in progress"))
                 .await
             {
-                tracing::warn!(session_id = %session_id, error = %e, "Failed to insert distillation run record");
-            }
-        } else if let Some(repo) = &self.distillation_repo {
-            let run = DistillationRun {
-                id: format!("dr-{}", uuid::Uuid::new_v4()),
-                session_id: session_id.to_string(),
-                status: "failed".to_string(),
-                error: Some("Distillation in progress".to_string()),
-                created_at: chrono::Utc::now().to_rfc3339(),
-                ..Default::default()
-            };
-            if let Err(e) = repo.insert(&run) {
                 tracing::warn!(session_id = %session_id, error = %e, "Failed to insert distillation run record");
             }
         }
@@ -905,17 +860,6 @@ impl SessionDistiller {
                 .record_distillation_pending(session_id, "skipped", None)
                 .await
             {
-                tracing::warn!(session_id = %session_id, error = %e, "Failed to record skipped distillation");
-            }
-        } else if let Some(repo) = &self.distillation_repo {
-            let run = DistillationRun {
-                id: format!("dr-{}", uuid::Uuid::new_v4()),
-                session_id: session_id.to_string(),
-                status: "skipped".to_string(),
-                created_at: chrono::Utc::now().to_rfc3339(),
-                ..Default::default()
-            };
-            if let Err(e) = repo.insert(&run) {
                 tracing::warn!(session_id = %session_id, error = %e, "Failed to record skipped distillation");
             }
         }
@@ -945,17 +889,6 @@ impl SessionDistiller {
             {
                 tracing::warn!(session_id = %session_id, error = %e, "Failed to record distillation success");
             }
-        } else if let Some(repo) = &self.distillation_repo {
-            if let Err(e) = repo.update_success(
-                session_id,
-                facts,
-                entities,
-                rels,
-                episode_created,
-                duration_ms,
-            ) {
-                tracing::warn!(session_id = %session_id, error = %e, "Failed to record distillation success");
-            }
         }
     }
 
@@ -966,10 +899,6 @@ impl SessionDistiller {
                 .record_distillation_failure(session_id, "failed", 0, Some(error))
                 .await
             {
-                tracing::warn!(session_id = %session_id, error = %e, "Failed to record distillation error");
-            }
-        } else if let Some(repo) = &self.distillation_repo {
-            if let Err(e) = repo.update_retry(session_id, "failed", 0, Some(error)) {
                 tracing::warn!(session_id = %session_id, error = %e, "Failed to record distillation error");
             }
         }
@@ -1216,7 +1145,7 @@ impl SessionDistiller {
         // store OR the SQLite repo is wired. Surreal mode has the trait
         // store via surreal_bundle.episode; SQLite has the repo (and
         // also gets the trait wrapper).
-        if self.episode_store.is_none() && self.episode_repo.is_none() {
+        if self.episode_store.is_none() {
             return Ok(false);
         }
 
@@ -1289,7 +1218,7 @@ impl SessionDistiller {
         embedding: Option<&[f32]>,
         now: &str,
     ) -> Result<(), String> {
-        if self.episode_store.is_none() && self.episode_repo.is_none() {
+        if self.episode_store.is_none() {
             return Ok(());
         }
 
@@ -1427,7 +1356,7 @@ impl SessionDistiller {
         episode: &SessionEpisode,
         ward_id: &str,
     ) -> Result<(), String> {
-        if self.episode_store.is_none() && self.episode_repo.is_none() {
+        if self.episode_store.is_none() {
             return Ok(());
         }
 
@@ -1580,8 +1509,6 @@ impl SessionDistiller {
             let v = serde_json::to_value(episode).map_err(|e| format!("encode episode: {e}"))?;
             let emb = episode.embedding.clone();
             store.insert_episode(v, emb).await.map(|_| ())
-        } else if let Some(repo) = &self.episode_repo {
-            repo.insert(episode).map(|_| ())
         } else {
             Err("no episode store wired".to_string())
         }
@@ -1597,26 +1524,24 @@ impl SessionDistiller {
         threshold: f64,
         limit: usize,
     ) -> Result<Vec<(SessionEpisode, f64)>, String> {
-        if let Some(store) = &self.episode_store {
-            let raw = store
-                .search_episodes_by_similarity(agent_id, embedding, threshold as f32, limit)
-                .await?;
-            // Trait emits Value with shape `{ "episode": <SessionEpisode>, "score": <f64> }`.
-            let pairs: Vec<(SessionEpisode, f64)> = raw
-                .into_iter()
-                .filter_map(|v| {
-                    let score = v.get("score").and_then(|s| s.as_f64())?;
-                    let ep_v = v.get("episode").cloned()?;
-                    let ep = serde_json::from_value::<SessionEpisode>(ep_v).ok()?;
-                    Some((ep, score))
-                })
-                .collect();
-            Ok(pairs)
-        } else if let Some(repo) = &self.episode_repo {
-            repo.search_by_similarity(agent_id, embedding, threshold, limit)
-        } else {
-            Ok(Vec::new())
-        }
+        let store = match &self.episode_store {
+            Some(s) => s,
+            None => return Ok(Vec::new()),
+        };
+        let raw = store
+            .search_episodes_by_similarity(agent_id, embedding, threshold as f32, limit)
+            .await?;
+        // Trait emits Value with shape `{ "episode": <SessionEpisode>, "score": <f64> }`.
+        let pairs: Vec<(SessionEpisode, f64)> = raw
+            .into_iter()
+            .filter_map(|v| {
+                let score = v.get("score").and_then(|s| s.as_f64())?;
+                let ep_v = v.get("episode").cloned()?;
+                let ep = serde_json::from_value::<SessionEpisode>(ep_v).ok()?;
+                Some((ep, score))
+            })
+            .collect();
+        Ok(pairs)
     }
 
     // =========================================================================
@@ -2482,12 +2407,12 @@ mod tests {
     mod resolve_endpoint {
         use super::*;
         use gateway_services::VaultPaths;
-        use knowledge_graph::{Entity, EntityType, types::ExtractedKnowledge};
+        use knowledge_graph::{types::ExtractedKnowledge, Entity, EntityType};
         use std::collections::HashMap;
         use std::sync::Arc;
         use tempfile::tempdir;
-        use zero_stores_sqlite::KnowledgeDatabase;
         use zero_stores_sqlite::kg::storage::GraphStorage;
+        use zero_stores_sqlite::KnowledgeDatabase;
 
         fn fresh_graph() -> GraphStorage {
             let dir = tempdir().unwrap();

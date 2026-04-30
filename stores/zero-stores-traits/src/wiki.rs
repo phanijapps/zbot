@@ -72,4 +72,14 @@ pub trait WikiStore: Send + Sync {
     ) -> Result<Vec<(WikiArticle, f64)>, String> {
         Ok(Vec::new())
     }
+
+    /// Typed variant of `list_articles` returning `Vec<WikiArticle>`
+    /// directly. Default deserialises the Value-based result for
+    /// backends that haven't overridden.
+    async fn list_articles_typed(&self, ward_id: &str) -> Result<Vec<WikiArticle>, String> {
+        let rows = self.list_articles(ward_id).await?;
+        rows.into_iter()
+            .map(|v| serde_json::from_value(v).map_err(|e| format!("decode WikiArticle: {e}")))
+            .collect()
+    }
 }

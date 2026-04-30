@@ -9,8 +9,8 @@ use crate::cron::CronScheduler;
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
 use crate::execution::{
-    DelegationRegistry, MemoryRecall, SessionArchiver, SessionDistiller, WorkspaceCache,
-    new_workspace_cache,
+    new_workspace_cache, DelegationRegistry, MemoryRecall, SessionArchiver, SessionDistiller,
+    WorkspaceCache,
 };
 use crate::hooks::HookRegistry;
 use crate::services::{
@@ -777,17 +777,9 @@ impl AppState {
                     provider_service.clone(),
                     embedding_client.clone(),
                     conversation_repo.clone(),
-                    distillation_repo.clone(),
-                    episode_repo.clone(),
                     paths.clone(),
                     Some(settings.clone()),
                 );
-                if let Some(wr) = wiki_repo.as_ref() {
-                    distiller_inner.set_wiki_repo(wr.clone());
-                }
-                if let Some(pr) = procedure_repo.as_ref() {
-                    distiller_inner.set_procedure_repo(pr.clone());
-                }
                 if let Some(mem) = memory_store.as_ref() {
                     distiller_inner.set_memory_store(mem.clone());
                 }
@@ -1858,7 +1850,11 @@ impl AppState {
                         .iter()
                         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.value.clone())))
                         .collect();
-                    if map.is_empty() { None } else { Some(map) }
+                    if map.is_empty() {
+                        None
+                    } else {
+                        Some(map)
+                    }
                 }
                 Err(_) => None,
             },
