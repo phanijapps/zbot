@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use zero_stores_sqlite::kg::storage::GraphStorage;
 use zero_stores_sqlite::{
     ConversationRepository, DistillationRepository, DistillationRun, EpisodeRepository, MemoryFact,
-    MemoryRepository, ProcedureRepository, SessionEpisode, WardWikiRepository,
+    ProcedureRepository, SessionEpisode, WardWikiRepository,
 };
 
 /// Distills completed sessions into structured memory facts.
@@ -55,7 +55,6 @@ pub struct SessionDistiller {
     provider_service: Arc<ProviderService>,
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
     conversation_repo: Arc<ConversationRepository>,
-    memory_repo: Option<Arc<MemoryRepository>>,
     memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     graph_storage: Option<Arc<GraphStorage>>,
     kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
@@ -235,7 +234,6 @@ impl SessionDistiller {
         provider_service: Arc<ProviderService>,
         embedding_client: Option<Arc<dyn EmbeddingClient>>,
         conversation_repo: Arc<ConversationRepository>,
-        memory_repo: Option<Arc<MemoryRepository>>,
         graph_storage: Option<Arc<GraphStorage>>,
         distillation_repo: Option<Arc<DistillationRepository>>,
         episode_repo: Option<Arc<EpisodeRepository>>,
@@ -246,7 +244,6 @@ impl SessionDistiller {
             provider_service,
             embedding_client,
             conversation_repo,
-            memory_repo,
             memory_store: None,
             graph_storage,
             kg_store: None,
@@ -462,19 +459,19 @@ impl SessionDistiller {
 
         // Load existing facts for content-similarity dedup. SQLite-only —
         // the trait surface uses different listing semantics (paginated by
-        // (agent, category, scope)). On Surreal we skip the dedup layer;
-        // distillation falls back to key-equality dedup at upsert time.
-        let existing_contents: Vec<(String, String)> = self
-            .memory_repo
-            .as_ref()
-            .map(|repo| {
-                repo.get_memory_facts(agent_id, None, 500)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|f| (f.key, f.content))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // Trait-routed (Phase E6c). Backends without get_memory_facts
+        // return empty, in which case distillation falls back to
+        // key-equality dedup at upsert time.
+        let existing_contents: Vec<(String, String)> = match self.memory_store.as_ref() {
+            Some(store) => store
+                .get_memory_facts(agent_id, None, 500)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|f| (f.key, f.content))
+                .collect(),
+            None => Vec::new(),
+        };
 
         // Reserved key prefixes — only created via UI, never by distillation
         const RESERVED_PREFIXES: &[&str] = &["policy.", "instruction.", "user.profile"];
@@ -552,15 +549,17 @@ impl SessionDistiller {
 
             // Check if an active fact with the same key exists and has
             // different content. SQLite-only key-lookup; on Surreal the
-            // trait does not expose `get_fact_by_key` — supersede is a
-            // best-effort optimization and skipping it on Surreal just
-            // means the upsert-by-id below creates a fresh row instead
-            // of marking the prior one superseded.
-            let existing_fact = self.memory_repo.as_ref().and_then(|repo| {
-                repo.get_fact_by_key(agent_id, scope, ward_id, &ef.key)
+            // Phase E6c: trait-routed. Defaults to None on backends
+            // that don't implement the method — supersede then becomes
+            // a no-op and the upsert below creates a fresh row.
+            let existing_fact = match self.memory_store.as_ref() {
+                Some(store) => store
+                    .get_fact_by_key(agent_id, scope, ward_id, &ef.key)
+                    .await
                     .ok()
-                    .flatten()
-            });
+                    .flatten(),
+                None => None,
+            };
 
             let fact = MemoryFact {
                 id: fact_id.clone(),
@@ -594,12 +593,9 @@ impl SessionDistiller {
             // Supersede the old fact if content differs
             if let Some(ref existing) = existing_fact {
                 if existing.content != ef.content && !existing.pinned {
-                    let supersede_res = match (&self.memory_store, &self.memory_repo) {
-                        (Some(store), _) => store.supersede_fact(&existing.id, &fact_id).await,
-                        (None, Some(repo)) => repo.supersede_fact(&existing.id, &fact_id),
-                        (None, None) => {
-                            Err("no memory store wired (neither trait nor SQLite repo)".to_string())
-                        }
+                    let supersede_res = match self.memory_store.as_ref() {
+                        Some(store) => store.supersede_fact(&existing.id, &fact_id).await,
+                        None => Err("no memory store wired".to_string()),
                     };
                     if let Err(e) = supersede_res {
                         tracing::warn!(
@@ -619,15 +615,12 @@ impl SessionDistiller {
                 }
             }
 
-            let upsert_res = match (&self.memory_store, &self.memory_repo) {
-                (Some(store), _) => match serde_json::to_value(&fact) {
+            let upsert_res = match self.memory_store.as_ref() {
+                Some(store) => match serde_json::to_value(&fact) {
                     Ok(v) => store.upsert_typed_fact(v, fact.embedding.clone()).await,
                     Err(e) => Err(format!("encode fact: {e}")),
                 },
-                (None, Some(repo)) => repo.upsert_memory_fact(&fact),
-                (None, None) => {
-                    Err("no memory store wired (neither trait nor SQLite repo)".to_string())
-                }
+                None => Err("no memory store wired".to_string()),
             };
             if let Err(e) = upsert_res {
                 tracing::warn!(
@@ -1353,15 +1346,16 @@ impl SessionDistiller {
         // Upsert the strategy as a memory fact
         let strategy_fact_id = format!("fact-{}", uuid::Uuid::new_v4());
 
-        // Check for existing strategy fact to supersede. Skipped in
-        // SurrealDB mode (memory_repo is None) — strategy emergence
-        // already requires episode_repo (also SQLite-only) so this
-        // branch is unreachable on Surreal anyway.
-        let existing_strategy = self.memory_repo.as_ref().and_then(|repo| {
-            repo.get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
+        // Check for existing strategy fact to supersede via the
+        // trait-routed memory store (Phase E6c).
+        let existing_strategy = match self.memory_store.as_ref() {
+            Some(store) => store
+                .get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
+                .await
                 .ok()
-                .flatten()
-        });
+                .flatten(),
+            None => None,
+        };
 
         let fact = MemoryFact {
             id: strategy_fact_id.clone(),
@@ -1396,10 +1390,9 @@ impl SessionDistiller {
         // Supersede old strategy if content differs
         if let Some(ref existing) = existing_strategy {
             if existing.content != strategy_description && !existing.pinned {
-                let supersede_res = match (&self.memory_store, &self.memory_repo) {
-                    (Some(store), _) => store.supersede_fact(&existing.id, &strategy_fact_id).await,
-                    (None, Some(repo)) => repo.supersede_fact(&existing.id, &strategy_fact_id),
-                    (None, None) => Err("no memory store wired".to_string()),
+                let supersede_res = match self.memory_store.as_ref() {
+                    Some(store) => store.supersede_fact(&existing.id, &strategy_fact_id).await,
+                    None => Err("no memory store wired".to_string()),
                 };
                 if let Err(e) = supersede_res {
                     tracing::warn!(
@@ -1418,13 +1411,12 @@ impl SessionDistiller {
             }
         }
 
-        match (&self.memory_store, &self.memory_repo) {
-            (Some(store), _) => {
+        match self.memory_store.as_ref() {
+            Some(store) => {
                 let v = serde_json::to_value(&fact).map_err(|e| format!("encode fact: {e}"))?;
                 store.upsert_typed_fact(v, fact.embedding.clone()).await?;
             }
-            (None, Some(repo)) => repo.upsert_memory_fact(&fact)?,
-            (None, None) => return Err("no memory store wired".to_string()),
+            None => return Err("no memory store wired".to_string()),
         }
 
         Ok(())
@@ -1505,14 +1497,16 @@ impl SessionDistiller {
             cluster_size, latest_key_learning
         );
 
-        // Check for existing correction fact to supersede. Surreal mode
-        // never reaches this path (episode_repo is None and clustering
-        // returns early upstream) so the lookup is SQLite-only.
-        let existing_correction = self.memory_repo.as_ref().and_then(|repo| {
-            repo.get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
+        // Check for existing correction fact to supersede via the
+        // trait-routed memory store (Phase E6c).
+        let existing_correction = match self.memory_store.as_ref() {
+            Some(store) => store
+                .get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
+                .await
                 .ok()
-                .flatten()
-        });
+                .flatten(),
+            None => None,
+        };
 
         let fact = MemoryFact {
             id: correction_fact_id.clone(),
@@ -1543,14 +1537,13 @@ impl SessionDistiller {
         // Supersede old correction if content differs
         if let Some(ref existing) = existing_correction {
             if existing.content != correction_content && !existing.pinned {
-                let supersede_res = match (&self.memory_store, &self.memory_repo) {
-                    (Some(store), _) => {
+                let supersede_res = match self.memory_store.as_ref() {
+                    Some(store) => {
                         store
                             .supersede_fact(&existing.id, &correction_fact_id)
                             .await
                     }
-                    (None, Some(repo)) => repo.supersede_fact(&existing.id, &correction_fact_id),
-                    (None, None) => Err("no memory store wired".to_string()),
+                    None => Err("no memory store wired".to_string()),
                 };
                 if let Err(e) = supersede_res {
                     tracing::warn!(
@@ -1569,13 +1562,12 @@ impl SessionDistiller {
             }
         }
 
-        match (&self.memory_store, &self.memory_repo) {
-            (Some(store), _) => {
+        match self.memory_store.as_ref() {
+            Some(store) => {
                 let v = serde_json::to_value(&fact).map_err(|e| format!("encode fact: {e}"))?;
                 store.upsert_typed_fact(v, fact.embedding.clone()).await?;
             }
-            (None, Some(repo)) => repo.upsert_memory_fact(&fact)?,
-            (None, None) => return Err("no memory store wired".to_string()),
+            None => return Err("no memory store wired".to_string()),
         }
 
         Ok(())
@@ -1790,9 +1782,9 @@ impl SessionDistiller {
         let model_name = client.model_name().to_string();
         let hash = agent_runtime::content_hash(text);
 
-        // Cache lookup (SQLite-only).
-        if let Some(repo) = self.memory_repo.as_ref() {
-            if let Ok(Some(cached)) = repo.get_cached_embedding(&hash, &model_name) {
+        // Cache lookup via the trait store (Phase E6c).
+        if let Some(store) = self.memory_store.as_ref() {
+            if let Ok(Some(cached)) = store.get_cached_embedding(&hash, &model_name).await {
                 return Some(cached);
             }
         }
@@ -1801,9 +1793,9 @@ impl SessionDistiller {
         match client.embed(&[text]).await {
             Ok(mut embeddings) if !embeddings.is_empty() => {
                 let emb = embeddings.remove(0);
-                // Best-effort cache write (SQLite-only — silently no-op on Surreal).
-                if let Some(repo) = self.memory_repo.as_ref() {
-                    let _ = repo.cache_embedding(&hash, &model_name, &emb);
+                // Best-effort cache write — backends without a cache table no-op.
+                if let Some(store) = self.memory_store.as_ref() {
+                    let _ = store.cache_embedding(&hash, &model_name, &emb).await;
                 }
                 Some(emb)
             }

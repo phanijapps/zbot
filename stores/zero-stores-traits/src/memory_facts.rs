@@ -387,4 +387,55 @@ pub trait MemoryFactStore: Send + Sync {
     ) -> Result<Vec<MemoryFact>, String> {
         Ok(Vec::new())
     }
+
+    /// Get a fact by its `(agent_id, scope, ward_id, key)` natural
+    /// key. Used by the distillation pipeline to detect content
+    /// changes and supersede prior facts. Default: None — backends
+    /// without this lookup degrade to "always insert new" semantics.
+    async fn get_fact_by_key(
+        &self,
+        _agent_id: &str,
+        _scope: &str,
+        _ward_id: &str,
+        _key: &str,
+    ) -> Result<Option<MemoryFact>, String> {
+        Ok(None)
+    }
+
+    // ---- Embedding cache (best-effort optimization) ---------------------
+
+    /// Read a cached embedding for `(content_hash, model_name)`.
+    /// Backends may persist these to avoid re-embedding identical text.
+    /// Default: None — caller falls back to live embedding generation.
+    async fn get_cached_embedding(
+        &self,
+        _content_hash: &str,
+        _model_name: &str,
+    ) -> Result<Option<Vec<f32>>, String> {
+        Ok(None)
+    }
+
+    /// Persist an embedding under `(content_hash, model_name)` for
+    /// future lookup. Best-effort; default no-op so backends without
+    /// a cache table still build cleanly.
+    async fn cache_embedding(
+        &self,
+        _content_hash: &str,
+        _model_name: &str,
+        _embedding: &[f32],
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// List memory facts for an agent, optionally filtered by scope.
+    /// Used by the distillation pipeline to dedup against existing
+    /// facts before upserting. Default: empty.
+    async fn get_memory_facts(
+        &self,
+        _agent_id: &str,
+        _scope: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        Ok(Vec::new())
+    }
 }

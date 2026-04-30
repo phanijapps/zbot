@@ -803,6 +803,45 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             .get_facts_by_category(agent_id, category, limit)
     }
 
+    async fn get_fact_by_key(
+        &self,
+        agent_id: &str,
+        scope: &str,
+        ward_id: &str,
+        key: &str,
+    ) -> Result<Option<MemoryFact>, String> {
+        self.memory_repo
+            .get_fact_by_key(agent_id, scope, ward_id, key)
+    }
+
+    async fn get_cached_embedding(
+        &self,
+        content_hash: &str,
+        model_name: &str,
+    ) -> Result<Option<Vec<f32>>, String> {
+        self.memory_repo
+            .get_cached_embedding(content_hash, model_name)
+    }
+
+    async fn cache_embedding(
+        &self,
+        content_hash: &str,
+        model_name: &str,
+        embedding: &[f32],
+    ) -> Result<(), String> {
+        self.memory_repo
+            .cache_embedding(content_hash, model_name, embedding)
+    }
+
+    async fn get_memory_facts(
+        &self,
+        agent_id: &str,
+        scope: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        self.memory_repo.get_memory_facts(agent_id, scope, limit)
+    }
+
     async fn get_high_confidence_facts(
         &self,
         agent_id: Option<&str>,

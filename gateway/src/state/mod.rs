@@ -777,7 +777,6 @@ impl AppState {
                     provider_service.clone(),
                     embedding_client.clone(),
                     conversation_repo.clone(),
-                    memory_repo.clone(),
                     graph_storage.clone(),
                     distillation_repo.clone(),
                     episode_repo.clone(),
