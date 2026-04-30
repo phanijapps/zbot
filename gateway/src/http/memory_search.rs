@@ -45,8 +45,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use zero_stores_domain::SessionEpisode;
 use zero_stores_sqlite::{
-    vector_index::VectorIndex, EpisodeRepository, ProcedureRepository, SqliteVecIndex,
-    WardWikiRepository,
+    vector_index::VectorIndex, EpisodeRepository, SqliteVecIndex, WardWikiRepository,
 };
 
 /// Request body for unified search.
@@ -135,14 +134,6 @@ fn build_wiki_repo(state: &AppState) -> Result<Arc<WardWikiRepository>, HandlerE
     Ok(Arc::new(WardWikiRepository::new(knowledge_db.clone(), vec)))
 }
 
-fn build_procedure_repo(state: &AppState) -> Result<Arc<ProcedureRepository>, HandlerError> {
-    let knowledge_db = state.knowledge_db.as_ref().ok_or_else(surreal_unavailable)?;
-    let idx = SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("proc vec: {e}")))?;
-    let vec: Arc<dyn VectorIndex> = Arc::new(idx);
-    Ok(Arc::new(ProcedureRepository::new(knowledge_db.clone(), vec)))
-}
-
 fn build_episode_repo(state: &AppState) -> Result<Arc<EpisodeRepository>, HandlerError> {
     let knowledge_db = state.knowledge_db.as_ref().ok_or_else(surreal_unavailable)?;
     let idx = SqliteVecIndex::new(
@@ -174,7 +165,7 @@ fn wiki_article_to_value(hit: zero_stores_sqlite::WikiHit) -> Value {
     })
 }
 
-fn procedure_to_value(proc: zero_stores_sqlite::Procedure, score: f64) -> Value {
+fn procedure_to_value(proc: zero_stores_domain::Procedure, score: f64) -> Value {
     json!({
         "id": proc.id,
         "agent_id": proc.agent_id,
@@ -254,7 +245,11 @@ pub async fn memory_search(
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "memory repo unavailable"))?
         .clone();
     let wiki_repo = build_wiki_repo(&state)?;
-    let proc_repo = build_procedure_repo(&state)?;
+    let proc_store = state
+        .procedure_store
+        .as_ref()
+        .ok_or_else(surreal_unavailable)?
+        .clone();
     let episode_repo = build_episode_repo(&state)?;
 
     let ward: Option<String> = req.ward_ids.first().cloned();
@@ -366,7 +361,7 @@ pub async fn memory_search(
     };
 
     let proc_fut = {
-        let proc_repo = proc_repo.clone();
+        let proc_store = proc_store.clone();
         let mode = mode.clone();
         let emb = embedding.clone();
         let ward = ward_owned.clone();
@@ -380,8 +375,14 @@ pub async fn memory_search(
             let hits: Vec<Value> = match (mode.as_str(), emb.as_ref()) {
                 // No FTS table for procedures: fts mode returns empty.
                 ("fts", _) => Vec::new(),
-                (_, Some(emb)) => proc_repo
-                    .search_by_similarity(emb, scope_agent, ward.as_deref(), limit)
+                (_, Some(emb)) => proc_store
+                    .search_procedures_by_similarity_typed(
+                        emb,
+                        scope_agent,
+                        ward.as_deref(),
+                        limit,
+                    )
+                    .await
                     .unwrap_or_default()
                     .into_iter()
                     .map(|(p, s)| procedure_to_value(p, s))
