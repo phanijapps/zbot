@@ -53,6 +53,14 @@ impl GoalStore for GatewayGoalStore {
     async fn update_goal_state(&self, goal_id: &str, new_state: &str) -> Result<(), String> {
         self.repo.update_state(goal_id, new_state)
     }
+
+    async fn update_goal_filled_slots(
+        &self,
+        goal_id: &str,
+        filled_slots_json: &str,
+    ) -> Result<(), String> {
+        self.repo.update_filled_slots(goal_id, filled_slots_json)
+    }
 }
 
 // ----------------------------------------------------------------------------

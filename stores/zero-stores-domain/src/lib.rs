@@ -25,7 +25,9 @@ pub mod session_episode;
 pub mod wiki;
 
 pub use goal::Goal;
-pub use kg_ops::{DecayCandidate, DuplicateCandidate, RelationshipContext, StrategyCandidate};
+pub use kg_ops::{
+    DecayCandidate, DuplicateCandidate, GraphView, RelationshipContext, StrategyCandidate,
+};
 pub use memory_fact::{MemoryFact, ScoredFact, StrategyFactInsert, StrategyFactMatch};
 pub use procedure::{PatternProcedureInsert, Procedure, ProcedureSummary};
 pub use session_episode::{ScoredEpisode, SessionEpisode, SuccessfulEpisode};

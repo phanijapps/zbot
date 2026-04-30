@@ -172,7 +172,7 @@ impl EpisodeStore for SurrealEpisodeStore {
         &self,
         ward_id: &str,
         limit: usize,
-    ) -> Result<Vec<Value>, String> {
+    ) -> Result<Vec<SessionEpisode>, String> {
         // 14-day window matches the SQLite repo's literal cutoff.
         let cutoff = (chrono::Utc::now() - chrono::Duration::days(14)).to_rfc3339();
         let q = format!(
@@ -192,7 +192,13 @@ impl EpisodeStore for SurrealEpisodeStore {
         let rows: Vec<Value> = resp
             .take(0)
             .map_err(|e| format!("fetch_recent_successful_by_ward take: {e}"))?;
-        Ok(rows.into_iter().map(row_to_episode_value).collect())
+        rows.into_iter()
+            .map(|row| {
+                let flat = row_to_episode_value(row);
+                serde_json::from_value::<SessionEpisode>(flat)
+                    .map_err(|e| format!("decode SessionEpisode: {e}"))
+            })
+            .collect()
     }
 
     async fn episode_stats(&self) -> Result<EpisodeStats, String> {

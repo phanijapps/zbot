@@ -76,12 +76,8 @@ impl EpisodeStore for GatewayEpisodeStore {
         &self,
         ward_id: &str,
         limit: usize,
-    ) -> Result<Vec<Value>, String> {
-        let episodes = self.repo.fetch_recent_successful_by_ward(ward_id, limit)?;
-        episodes
-            .into_iter()
-            .map(|e| serde_json::to_value(e).map_err(|err| err.to_string()))
-            .collect()
+    ) -> Result<Vec<SessionEpisode>, String> {
+        self.repo.fetch_recent_successful_by_ward(ward_id, limit)
     }
 
     async fn episode_stats(&self) -> Result<EpisodeStats, String> {

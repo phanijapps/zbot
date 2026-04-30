@@ -21,7 +21,7 @@ pub mod wiki;
 pub use auxiliary::{DistillationStore, GoalStore, RecallLogStore};
 pub use compaction::{CompactionRunSummary, CompactionStore};
 pub use conversation::ConversationStore;
-pub use episodes::{EpisodeStats, EpisodeStore, SuccessfulEpisode};
+pub use episodes::{EpisodeStats, EpisodeStore, SessionEpisode, SuccessfulEpisode};
 pub use kg_episodes::{KgEpisodeStatusCounts, KgEpisodeStore};
 pub use memory_facts::{
     MemoryAggregateStats, MemoryFactStore, MemoryHealthMetrics, SkillIndexRow, StrategyFactInsert,

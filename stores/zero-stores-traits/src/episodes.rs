@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 // Domain types live in `zero-stores-domain`; re-export here so the
 // trait surface keeps working for callers that import from this crate.
-pub use zero_stores_domain::SuccessfulEpisode;
+pub use zero_stores_domain::{SessionEpisode, SuccessfulEpisode};
 
 /// Aggregate health metrics returned alongside episode reads.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -57,11 +57,13 @@ pub trait EpisodeStore: Send + Sync {
 
     /// Recent successful episodes for a ward. Used by the previous-episodes
     /// recall path to seed agent context with what worked last time.
+    /// Returns typed [`SessionEpisode`] (via `zero-stores-domain`) so
+    /// callers don't pay the round-trip-through-Value tax.
     async fn fetch_recent_successful_by_ward(
         &self,
         _ward_id: &str,
         _limit: usize,
-    ) -> Result<Vec<Value>, String> {
+    ) -> Result<Vec<SessionEpisode>, String> {
         Ok(Vec::new())
     }
 

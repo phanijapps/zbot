@@ -552,9 +552,11 @@ mod tests {
         let wm = WorkingMemory::new(5000);
         let result = r#"Here is your DataFrame analysis for PandaFrame"#;
         let triggers = detect_triggers("respond", result, None, &wm);
-        assert!(!triggers
-            .iter()
-            .any(|t| matches!(t, MicroRecallTrigger::EntityMention { .. })));
+        assert!(
+            !triggers
+                .iter()
+                .any(|t| matches!(t, MicroRecallTrigger::EntityMention { .. }))
+        );
     }
 
     // ---- execute_micro_recall tests ----

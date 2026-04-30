@@ -1,22 +1,29 @@
 //! # Goal Adapter
 //!
-//! Bridges [`zero_stores_sqlite::GoalRepository`] to [`agent_tools::GoalAccess`]
-//! so the `goal` tool can create/update/list agent goals.
+//! Bridges [`GoalStore`] to [`agent_tools::GoalAccess`] so the `goal`
+//! tool can create/update/list agent goals on either backend
+//! (SQLite via `GatewayGoalStore`, SurrealDB via `SurrealGoalStore`).
+//!
+//! Phase E6c: takes `Arc<dyn GoalStore>` instead of the concrete
+//! SQLite repo.
 
 use async_trait::async_trait;
+use serde_json::Value;
 use std::sync::Arc;
 
 use agent_tools::{GoalAccess, GoalSummary};
-use zero_stores_sqlite::{Goal, GoalRepository};
+// Goal lives in zero-stores-domain; zero-stores-sqlite re-exports it.
+use zero_stores_sqlite::Goal;
+use zero_stores_traits::GoalStore;
 
-/// Adapter that implements [`GoalAccess`] by delegating to a [`GoalRepository`].
+/// Adapter that implements [`GoalAccess`] by delegating to a [`GoalStore`].
 pub struct GoalAdapter {
-    repo: Arc<GoalRepository>,
+    store: Arc<dyn GoalStore>,
 }
 
 impl GoalAdapter {
-    pub fn new(repo: Arc<GoalRepository>) -> Self {
-        Self { repo }
+    pub fn new(store: Arc<dyn GoalStore>) -> Self {
+        Self { store }
     }
 }
 
@@ -29,6 +36,11 @@ fn to_summary(g: Goal) -> GoalSummary {
         slots: g.slots,
         filled_slots: g.filled_slots,
     }
+}
+
+fn value_to_summary(v: Value) -> Result<GoalSummary, String> {
+    let goal: Goal = serde_json::from_value(v).map_err(|e| format!("decode Goal: {e}"))?;
+    Ok(to_summary(goal))
 }
 
 #[async_trait]
@@ -55,7 +67,8 @@ impl GoalAccess for GoalAdapter {
             updated_at: now,
             completed_at: None,
         };
-        self.repo.create(&goal)?;
+        let payload = serde_json::to_value(&goal).map_err(|e| format!("encode Goal: {e}"))?;
+        self.store.create_goal(payload).await?;
         Ok(to_summary(goal))
     }
 
@@ -64,7 +77,7 @@ impl GoalAccess for GoalAdapter {
         goal_id: &str,
         new_state: &str,
     ) -> std::result::Result<(), String> {
-        self.repo.update_state(goal_id, new_state)
+        self.store.update_goal_state(goal_id, new_state).await
     }
 
     async fn update_filled_slots(
@@ -72,19 +85,20 @@ impl GoalAccess for GoalAdapter {
         goal_id: &str,
         filled_slots_json: &str,
     ) -> std::result::Result<(), String> {
-        self.repo.update_filled_slots(goal_id, filled_slots_json)
+        self.store
+            .update_goal_filled_slots(goal_id, filled_slots_json)
+            .await
     }
 
     async fn list_active(&self, agent_id: &str) -> std::result::Result<Vec<GoalSummary>, String> {
-        Ok(self
-            .repo
-            .list_active(agent_id)?
-            .into_iter()
-            .map(to_summary)
-            .collect())
+        let rows = self.store.list_active_goals(agent_id).await?;
+        rows.into_iter().map(value_to_summary).collect()
     }
 
     async fn get(&self, goal_id: &str) -> std::result::Result<Option<GoalSummary>, String> {
-        Ok(self.repo.get(goal_id)?.map(to_summary))
+        match self.store.get_goal(goal_id).await? {
+            Some(v) => Ok(Some(value_to_summary(v)?)),
+            None => Ok(None),
+        }
     }
 }

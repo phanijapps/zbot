@@ -41,7 +41,6 @@ use std::sync::Arc;
 use zero_core::{ConnectorResourceProvider, FileSystemContext};
 use zero_stores::MemoryFactStore;
 
-use super::graph_adapter::GraphStorageAdapter;
 use crate::config::GatewayFileSystem;
 use zero_stores_sqlite::kg::storage::GraphStorage;
 
@@ -512,15 +511,15 @@ impl ExecutorBuilder {
                 |tool_name, _args, result, succeeded| {
                     if !succeeded && tool_name == "shell" {
                         Some(format!(
-                        "{}\n\n[SYSTEM: Command failed. Read the error. Fix the ROOT CAUSE in your code, \
+                            "{}\n\n[SYSTEM: Command failed. Read the error. Fix the ROOT CAUSE in your code, \
                          not the symptom. Do not retry the same command — fix the file first with edit_file.]",
-                        result
-                    ))
+                            result
+                        ))
                     } else if !succeeded {
                         Some(format!(
-                        "{}\n\n[SYSTEM: Tool failed. Read the error carefully before retrying.]",
-                        result
-                    ))
+                            "{}\n\n[SYSTEM: Tool failed. Read the error carefully before retrying.]",
+                            result
+                        ))
                     } else {
                         None // Pass through unchanged
                     }
@@ -579,14 +578,11 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(RespondTool::new()));
             tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
 
-            // Knowledge graph query (Phase E5b): prefer trait-routed
-            // kg_store (wired in both backends) over the legacy concrete
-            // GraphStorage so subagents on SurrealDB also get the tool.
+            // Knowledge graph query — fully trait-routed (Phase E6c):
+            // KgStoreAdapter wraps `Arc<dyn KnowledgeGraphStore>` so the
+            // tool runs identically on SQLite or SurrealDB.
             if let Some(ref ks) = self.kg_store {
                 let adapter = Arc::new(super::kg_store_adapter::KgStoreAdapter::new(ks.clone()));
-                tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
-            } else if let Some(ref gs) = self.graph_storage {
-                let adapter = Arc::new(GraphStorageAdapter::new(gs.clone()));
                 tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
             }
 
@@ -623,14 +619,11 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(DelegateTool::new()));
             tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
 
-            // Knowledge graph query (Phase E5b): prefer trait-routed
-            // kg_store (wired in both backends) over the legacy concrete
-            // GraphStorage so subagents on SurrealDB also get the tool.
+            // Knowledge graph query — fully trait-routed (Phase E6c):
+            // KgStoreAdapter wraps `Arc<dyn KnowledgeGraphStore>` so the
+            // tool runs identically on SQLite or SurrealDB.
             if let Some(ref ks) = self.kg_store {
                 let adapter = Arc::new(super::kg_store_adapter::KgStoreAdapter::new(ks.clone()));
-                tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
-            } else if let Some(ref gs) = self.graph_storage {
-                let adapter = Arc::new(GraphStorageAdapter::new(gs.clone()));
                 tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
             }
 

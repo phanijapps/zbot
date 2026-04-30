@@ -230,6 +230,32 @@ impl KnowledgeGraphStore for SqliteKgStore {
         .await
     }
 
+    async fn get_entity_by_name(&self, agent_id: &str, name: &str) -> StoreResult<Option<Entity>> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        let name = name.to_string();
+        block(move || {
+            storage
+                .get_entity_by_name(&agent_id, &name)
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
+    async fn search_entities_view(
+        &self,
+        agent_id: &str,
+        query: &str,
+        view: zero_stores::GraphView,
+        limit: usize,
+    ) -> StoreResult<Vec<Entity>> {
+        let service = crate::kg::service::GraphService::new(self.storage.clone());
+        service
+            .search_entities_view(agent_id, query, view, limit)
+            .await
+            .map_err(map_graph_err)
+    }
+
     async fn reindex_embeddings(&self, new_dim: usize) -> StoreResult<ReindexReport> {
         // The trait contract is "rebuild embedding indexes for new dim and
         // return a final report" — there is intentionally no progress

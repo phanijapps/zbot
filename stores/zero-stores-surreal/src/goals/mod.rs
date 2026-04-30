@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
 use zero_stores_domain::Goal;
 use zero_stores_traits::GoalStore;
 
@@ -115,12 +115,32 @@ impl GoalStore for SurrealGoalStore {
         }
         Ok(())
     }
+
+    async fn update_goal_filled_slots(
+        &self,
+        goal_id: &str,
+        filled_slots_json: &str,
+    ) -> Result<(), String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let thing = surrealdb::types::RecordId::new(
+            "goal",
+            surrealdb::types::RecordIdKey::String(goal_id.to_string()),
+        );
+        self.db
+            .query("UPDATE $id SET filled_slots = $fs, updated_at = $u")
+            .bind(("id", thing))
+            .bind(("fs", filled_slots_json.to_string()))
+            .bind(("u", now))
+            .await
+            .map_err(|e| format!("update_goal_filled_slots: {e}"))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{connect, schema::apply_schema, SurrealConfig};
+    use crate::{SurrealConfig, connect, schema::apply_schema};
 
     async fn fresh_store() -> SurrealGoalStore {
         let cfg = SurrealConfig {

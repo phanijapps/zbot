@@ -59,6 +59,63 @@ pub async fn search_entities_by_name(
     Ok(rows.into_iter().map(|r| r.into_entity()).collect())
 }
 
+/// Exact-name lookup. Returns the first entity matching `name` for
+/// `agent_id`, or `None` if absent. Mirrors the SQLite
+/// `GraphStorage::get_entity_by_name` semantics.
+pub async fn get_entity_by_name(
+    db: &Arc<Surreal<Any>>,
+    agent_id: &str,
+    name: &str,
+) -> StoreResult<Option<Entity>> {
+    let mut resp = db
+        .query("SELECT * FROM entity WHERE agent_id = $a AND name = $n LIMIT 1")
+        .bind(("a", agent_id.to_string()))
+        .bind(("n", name.to_string()))
+        .await
+        .map_err(map_surreal_error)?;
+    let rows: Vec<EntitySearchRow> = resp.take(0).map_err(map_surreal_error)?;
+    Ok(rows.into_iter().next().map(|r| r.into_entity()))
+}
+
+/// Search entities through a [`zero_stores::GraphView`] lens.
+/// `Semantic` orders by `mention_count DESC` (matches SQLite).
+/// `Temporal` orders by `last_seen_at DESC`. `Entity` and `Hybrid`
+/// degrade to `Semantic` with a tracing warn — surfacing connection
+/// counts and RRF ranking on Surreal is a follow-up.
+pub async fn search_entities_view(
+    db: &Arc<Surreal<Any>>,
+    agent_id: &str,
+    query: &str,
+    view: zero_stores::GraphView,
+    limit: usize,
+) -> StoreResult<Vec<Entity>> {
+    use zero_stores::GraphView;
+    let order = match view {
+        GraphView::Semantic => "mention_count DESC",
+        GraphView::Temporal => "last_seen_at DESC",
+        GraphView::Entity | GraphView::Hybrid => {
+            tracing::warn!(
+                view = ?view,
+                "search_entities_view: Surreal degrades non-Semantic/Temporal views to Semantic"
+            );
+            "mention_count DESC"
+        }
+    };
+    let q = format!(
+        "SELECT * FROM entity \
+         WHERE agent_id = $a AND name @@ $q \
+         ORDER BY {order} LIMIT {limit}"
+    );
+    let mut resp = db
+        .query(q)
+        .bind(("a", agent_id.to_string()))
+        .bind(("q", query.to_string()))
+        .await
+        .map_err(map_surreal_error)?;
+    let rows: Vec<EntitySearchRow> = resp.take(0).map_err(map_surreal_error)?;
+    Ok(rows.into_iter().map(|r| r.into_entity()).collect())
+}
+
 #[derive(SurrealValue)]
 #[surreal(crate = "surrealdb::types")]
 struct KnnRow {

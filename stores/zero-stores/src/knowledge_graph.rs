@@ -8,9 +8,9 @@ use knowledge_graph::types::{
 // Port request/response shapes live in `zero-stores-domain`; re-export
 // at this crate's surface so existing imports of
 // `zero_stores::{DuplicateCandidate, DecayCandidate, StrategyCandidate,
-// RelationshipContext}` keep compiling.
+// RelationshipContext, GraphView}` keep compiling.
 pub use zero_stores_domain::{
-    DecayCandidate, DuplicateCandidate, RelationshipContext, StrategyCandidate,
+    DecayCandidate, DuplicateCandidate, GraphView, RelationshipContext, StrategyCandidate,
 };
 
 /// Backend-agnostic persistence for the knowledge graph subsystem.
@@ -68,6 +68,30 @@ pub trait KnowledgeGraphStore: Send + Sync {
         query: &str,
         limit: usize,
     ) -> StoreResult<Vec<Entity>>;
+
+    /// Exact-name lookup for an entity. Used by tools that resolve a
+    /// human-typed name to an entity id before traversing neighbours.
+    /// Default falls back to filtering `search_entities_by_name` so
+    /// backends without an indexed lookup still work.
+    async fn get_entity_by_name(&self, agent_id: &str, name: &str) -> StoreResult<Option<Entity>> {
+        let matches = self.search_entities_by_name(agent_id, name, 16).await?;
+        Ok(matches.into_iter().find(|e| e.name == name))
+    }
+
+    /// Search entities through a specific [`GraphView`] lens. Backends
+    /// implement at least `Semantic` (mention_count DESC); other views
+    /// may degrade to `Semantic` with a tracing warn. Default routes
+    /// to `search_entities_by_name` so backends without view support
+    /// still return ranked results.
+    async fn search_entities_view(
+        &self,
+        agent_id: &str,
+        query: &str,
+        _view: GraphView,
+        limit: usize,
+    ) -> StoreResult<Vec<Entity>> {
+        self.search_entities_by_name(agent_id, query, limit).await
+    }
 
     // ---- Maintenance -----------------------------------------------------
     async fn reindex_embeddings(&self, new_dim: usize) -> StoreResult<ReindexReport>;

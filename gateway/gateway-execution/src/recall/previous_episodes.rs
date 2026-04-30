@@ -5,28 +5,23 @@
 //! unified recall pool so the agent can continue the chain of work rather than
 //! starting cold. This is the Memory v2 Phase 6 "episode chain" wiring.
 //!
-//! The adapter is a thin wrapper around
-//! [`EpisodeRepository::fetch_recent_successful_by_ward`]: it maps each
-//! returned [`SessionEpisode`] to a [`ScoredItem`] with `kind = Episode`,
-//! content formatted as `[{outcome}, {created_at}] {task_summary}` plus an
-//! optional `Learnings:` line, and a rank-reciprocal score (`1 / (rank + 1)`)
-//! so the freshest episode leads and RRF fusion can re-rank it against the
-//! other pools.
+//! Phase E6c: backend-agnostic — takes `Arc<dyn EpisodeStore>` so the
+//! same recall path works on SQLite or Surreal.
 
 use crate::recall::scored_item::{ItemKind, Provenance, ScoredItem};
 use std::sync::Arc;
-use zero_stores_sqlite::{EpisodeRepository, SessionEpisode};
+use zero_stores_traits::{EpisodeStore, SessionEpisode};
 
 /// Adapter that projects a ward's recent successful/partial episodes into
 /// [`ScoredItem`]s suitable for [`rrf_merge`](crate::recall::rrf_merge).
 pub struct PreviousEpisodesAdapter {
-    repo: Arc<EpisodeRepository>,
+    store: Arc<dyn EpisodeStore>,
 }
 
 impl PreviousEpisodesAdapter {
-    /// Create a new adapter wired to the given episode repository.
-    pub fn new(repo: Arc<EpisodeRepository>) -> Self {
-        Self { repo }
+    /// Create a new adapter wired to the given episode store.
+    pub fn new(store: Arc<dyn EpisodeStore>) -> Self {
+        Self { store }
     }
 
     /// Fetch up to 3 prior episodes for `ward_id` (most recent first) and
@@ -34,8 +29,11 @@ impl PreviousEpisodesAdapter {
     ///
     /// The per-item score is `1.0 / (rank + 1)` — i.e. `1.0, 0.5, 0.333…`
     /// for 3 results. RRF later re-ranks these against the other pools.
-    pub fn fetch(&self, ward_id: &str) -> Result<Vec<ScoredItem>, String> {
-        let episodes = self.repo.fetch_recent_successful_by_ward(ward_id, 3)?;
+    pub async fn fetch(&self, ward_id: &str) -> Result<Vec<ScoredItem>, String> {
+        let episodes = self
+            .store
+            .fetch_recent_successful_by_ward(ward_id, 3)
+            .await?;
         Ok(episodes
             .iter()
             .enumerate()
@@ -74,9 +72,15 @@ mod tests {
     use super::*;
     use crate::recall::scored_item::ItemKind;
     use gateway_services::VaultPaths;
-    use zero_stores_sqlite::{KnowledgeDatabase, SqliteVecIndex};
+    use zero_stores_sqlite::{
+        EpisodeRepository, GatewayEpisodeStore, KnowledgeDatabase, SqliteVecIndex,
+    };
 
-    fn setup() -> (tempfile::TempDir, Arc<EpisodeRepository>) {
+    fn setup() -> (
+        tempfile::TempDir,
+        Arc<EpisodeRepository>,
+        Arc<dyn EpisodeStore>,
+    ) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
         let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
@@ -85,7 +89,8 @@ mod tests {
                 .expect("vec index init"),
         );
         let repo = Arc::new(EpisodeRepository::new(db, vec_index));
-        (tmp, repo)
+        let store: Arc<dyn EpisodeStore> = Arc::new(GatewayEpisodeStore::new(repo.clone()));
+        (tmp, repo, store)
     }
 
     fn insert_ep(repo: &EpisodeRepository, id: &str, ward: &str, outcome: &str, created_at: &str) {
@@ -136,9 +141,9 @@ mod tests {
         assert_eq!(item.provenance.session_id.as_deref(), Some("s-x"));
     }
 
-    #[test]
-    fn fetch_returns_top3_newest_first_filtered_by_ward_and_window() {
-        let (_tmp, repo) = setup();
+    #[tokio::test]
+    async fn fetch_returns_top3_newest_first_filtered_by_ward_and_window() {
+        let (_tmp, repo, store) = setup();
         // 3 successful in ward, created oldest → newest.
         insert_ep(&repo, "ep-old", "finance", "success", &now_offset_days(10));
         insert_ep(&repo, "ep-mid", "finance", "partial", &now_offset_days(5));
@@ -156,8 +161,8 @@ mod tests {
         // 1 failed — excluded.
         insert_ep(&repo, "ep-fail", "finance", "failed", &now_offset_days(1));
 
-        let adapter = PreviousEpisodesAdapter::new(repo);
-        let items = adapter.fetch("finance").expect("fetch");
+        let adapter = PreviousEpisodesAdapter::new(store);
+        let items = adapter.fetch("finance").await.expect("fetch");
 
         assert_eq!(items.len(), 3, "exactly 3 in-window finance ep/partial");
         assert_eq!(items[0].id, "ep-new", "newest first");
@@ -173,11 +178,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn fetch_empty_when_ward_has_no_episodes() {
-        let (_tmp, repo) = setup();
-        let adapter = PreviousEpisodesAdapter::new(repo);
-        let items = adapter.fetch("ghost-ward").expect("fetch");
+    #[tokio::test]
+    async fn fetch_empty_when_ward_has_no_episodes() {
+        let (_tmp, _repo, store) = setup();
+        let adapter = PreviousEpisodesAdapter::new(store);
+        let items = adapter.fetch("ghost-ward").await.expect("fetch");
         assert!(items.is_empty());
     }
 }

@@ -382,7 +382,7 @@ mod tests {
         // max_len lands mid em-dash
         let s = "hello — world";
         let _ = truncate(s, 7); // byte 7 is inside '—'
-                                // No panic = pass
+        // No panic = pass
     }
 
     #[test]

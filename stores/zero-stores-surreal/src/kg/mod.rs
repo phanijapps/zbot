@@ -144,6 +144,20 @@ impl KnowledgeGraphStore for SurrealKgStore {
         search::search_entities_by_name(self.db(), agent_id, query, limit).await
     }
 
+    async fn get_entity_by_name(&self, agent_id: &str, name: &str) -> StoreResult<Option<Entity>> {
+        search::get_entity_by_name(self.db(), agent_id, name).await
+    }
+
+    async fn search_entities_view(
+        &self,
+        agent_id: &str,
+        query: &str,
+        view: zero_stores::GraphView,
+        limit: usize,
+    ) -> StoreResult<Vec<Entity>> {
+        search::search_entities_view(self.db(), agent_id, query, view, limit).await
+    }
+
     // === reindex (Task 10) ===
     async fn reindex_embeddings(&self, new_dim: usize) -> StoreResult<ReindexReport> {
         reindex::reindex_embeddings(self.db(), new_dim).await

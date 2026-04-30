@@ -8,28 +8,27 @@
 mod batch_writer;
 mod executor;
 pub mod goal_adapter;
-pub mod graph_adapter;
-pub mod kg_store_adapter;
 pub mod ingest_adapter;
+pub mod kg_store_adapter;
 pub mod micro_recall;
 pub mod setup;
 pub mod stream;
 pub mod working_memory;
 pub mod working_memory_middleware;
 
-pub use batch_writer::{spawn_batch_writer, spawn_batch_writer_with_repo, BatchWriterHandle};
+pub use batch_writer::{BatchWriterHandle, spawn_batch_writer, spawn_batch_writer_with_repo};
 pub use executor::{
-    collect_agents_summary, collect_skills_summary, new_workspace_cache, resolve_thinking_flag,
-    ExecutorBuilder, WorkspaceCache,
+    ExecutorBuilder, WorkspaceCache, collect_agents_summary, collect_skills_summary,
+    new_workspace_cache, resolve_thinking_flag,
 };
 pub use micro_recall::{
-    detect_triggers, execute_micro_recall, extract_new_entities, MicroRecallContext,
-    MicroRecallTrigger,
+    MicroRecallContext, MicroRecallTrigger, detect_triggers, execute_micro_recall,
+    extract_new_entities,
 };
 pub use setup::{
-    append_system_context, detect_subagent_role, subagent_rules, AgentLoader, SubagentRole,
+    AgentLoader, SubagentRole, append_system_context, detect_subagent_role, subagent_rules,
 };
 pub use stream::{
-    broadcast_event, process_stream_event, ResponseAccumulator, StreamContext, ToolCallAccumulator,
+    ResponseAccumulator, StreamContext, ToolCallAccumulator, broadcast_event, process_stream_event,
 };
 pub use working_memory::WorkingMemory;

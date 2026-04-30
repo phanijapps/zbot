@@ -20,15 +20,15 @@
 pub mod adapters;
 pub mod previous_episodes;
 pub mod scored_item;
-pub use scored_item::{intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, ScoredItem};
+pub use scored_item::{GoalLite, ItemKind, Provenance, ScoredItem, intent_boost, rrf_merge};
 
 use std::sync::Arc;
 
 use agent_runtime::llm::embedding::EmbeddingClient;
 use gateway_services::RecallConfig;
-use zero_stores_sqlite::kg::service::GraphService;
 #[cfg(test)]
 use zero_stores_sqlite::MemoryFact;
+use zero_stores_sqlite::kg::service::GraphService;
 use zero_stores_sqlite::{
     EpisodeRepository, MemoryRepository, Procedure, ProcedureRepository, RecallLogRepository,
     ScoredFact, WardWikiRepository,
@@ -50,6 +50,10 @@ pub struct MemoryRecall {
     graph_service: Option<Arc<GraphService>>,
     config: Arc<RecallConfig>,
     episode_repo: Option<Arc<EpisodeRepository>>,
+    /// Trait-routed companion (Phase E6c). When set, episodic recall
+    /// goes through this handle so the path runs on Surreal too.
+    /// Coexists with `episode_repo` until E6c-3 drops the concrete field.
+    episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>>,
     recall_log: Option<Arc<RecallLogRepository>>,
     wiki_repo: Option<Arc<WardWikiRepository>>,
     procedure_repo: Option<Arc<ProcedureRepository>>,
@@ -69,6 +73,7 @@ impl MemoryRecall {
             graph_service: None,
             config,
             episode_repo: None,
+            episode_store: None,
             recall_log: None,
             wiki_repo: None,
             procedure_repo: None,
@@ -100,6 +105,7 @@ impl MemoryRecall {
             graph_service: Some(graph_service),
             config,
             episode_repo: None,
+            episode_store: None,
             recall_log: None,
             wiki_repo: None,
             procedure_repo: None,
@@ -109,6 +115,12 @@ impl MemoryRecall {
     /// Set the episode repository for episodic recall.
     pub fn set_episode_repo(&mut self, repo: Arc<EpisodeRepository>) {
         self.episode_repo = Some(repo);
+    }
+
+    /// Wire the trait-routed episode store. When set, episodic recall
+    /// routes through this handle so SurrealDB is honored when opted-in.
+    pub fn set_episode_store(&mut self, store: Arc<dyn zero_stores_traits::EpisodeStore>) {
+        self.episode_store = Some(store);
     }
 
     /// Set the graph service for enriched recall.
@@ -447,12 +459,21 @@ impl MemoryRecall {
         };
 
         // 5a. Previous episodes in this ward (chain continuity).
-        let episode_items: Vec<ScoredItem> = match (self.episode_repo.as_ref(), ward_id) {
-            (Some(ep_repo), Some(wid)) => {
-                previous_episodes::PreviousEpisodesAdapter::new(ep_repo.clone())
-                    .fetch(wid)
-                    .unwrap_or_default()
-            }
+        // Prefer the trait-routed episode_store (works on both backends);
+        // fall back to wrapping episode_repo for callers that haven't
+        // wired the trait yet.
+        let episode_store_view: Option<Arc<dyn zero_stores_traits::EpisodeStore>> =
+            self.episode_store.clone().or_else(|| {
+                self.episode_repo.as_ref().map(|r| {
+                    Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(r.clone()))
+                        as Arc<dyn zero_stores_traits::EpisodeStore>
+                })
+            });
+        let episode_items: Vec<ScoredItem> = match (episode_store_view, ward_id) {
+            (Some(store), Some(wid)) => previous_episodes::PreviousEpisodesAdapter::new(store)
+                .fetch(wid)
+                .await
+                .unwrap_or_default(),
             _ => Vec::new(),
         };
 

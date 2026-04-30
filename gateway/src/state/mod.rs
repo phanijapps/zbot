@@ -847,12 +847,32 @@ impl AppState {
                 as Arc<dyn agent_tools::IngestionAccess>),
             _ => None,
         };
-        // Goal adapter requires goal_repo which is None in SurrealDB mode.
-        let goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>> = goal_repo.as_ref().map(|gr| {
-            Arc::new(gateway_execution::invoke::goal_adapter::GoalAdapter::new(
-                gr.clone(),
-            )) as Arc<dyn agent_tools::GoalAccess>
-        });
+        // Goal adapter — backend-agnostic. Picks Surreal store when on
+        // surreal-backend, falls back to wrapping the SQLite GoalRepository.
+        let goal_store_for_adapter: Option<Arc<dyn zero_stores_traits::GoalStore>> = {
+            #[cfg(feature = "surreal-backend")]
+            {
+                surreal_bundle.as_ref().map(|b| b.goal.clone()).or_else(|| {
+                    goal_repo.as_ref().map(|gr| {
+                        Arc::new(zero_stores_sqlite::GatewayGoalStore::new(gr.clone()))
+                            as Arc<dyn zero_stores_traits::GoalStore>
+                    })
+                })
+            }
+            #[cfg(not(feature = "surreal-backend"))]
+            {
+                goal_repo.as_ref().map(|gr| {
+                    Arc::new(zero_stores_sqlite::GatewayGoalStore::new(gr.clone()))
+                        as Arc<dyn zero_stores_traits::GoalStore>
+                })
+            }
+        };
+        let goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>> =
+            goal_store_for_adapter.map(|store| {
+                Arc::new(gateway_execution::invoke::goal_adapter::GoalAdapter::new(
+                    store,
+                )) as Arc<dyn agent_tools::GoalAccess>
+            });
 
         // Create runtime with execution runner and connector registry
         let runtime = Arc::new(RuntimeService::with_runner_and_connectors(

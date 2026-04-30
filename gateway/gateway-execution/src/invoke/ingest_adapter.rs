@@ -21,8 +21,8 @@ use zero_stores::KnowledgeGraphStore;
 use zero_stores_traits::KgEpisodeStore;
 
 use crate::ingest::{
-    chunker::{chunk_text, ChunkOptions},
     IngestionQueue,
+    chunker::{ChunkOptions, chunk_text},
 };
 
 /// Adapter that implements [`IngestionAccess`] for both text and structured
@@ -66,7 +66,13 @@ impl IngestionAccess for IngestionAdapter {
             let content_hash = format!("{:x}", hasher.finalize());
             let episode_id = self
                 .episode_store
-                .upsert_pending(source_type, &source_ref, &content_hash, session_id, agent_id)
+                .upsert_pending(
+                    source_type,
+                    &source_ref,
+                    &content_hash,
+                    session_id,
+                    agent_id,
+                )
                 .await?;
             self.episode_store
                 .set_payload(&episode_id, &chunk.text)
@@ -198,8 +204,7 @@ mod tests {
         let episode_store: Arc<dyn KgEpisodeStore> =
             Arc::new(GatewayKgEpisodeStore::new(episode_repo.clone()));
         let graph = Arc::new(GraphStorage::new(db).expect("graph"));
-        let kg_store: Arc<dyn KnowledgeGraphStore> =
-            Arc::new(SqliteKgStore::new(graph.clone()));
+        let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(graph.clone()));
         // 0 workers — spawns the dispatcher only. notify() is a no-op,
         // no workers try to claim-and-process anything we enqueue. Keeps
         // tests deterministic: the rows we insert stay in `pending`.

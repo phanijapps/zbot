@@ -33,6 +33,18 @@ pub trait GoalStore: Send + Sync {
     async fn update_goal_state(&self, _goal_id: &str, _new_state: &str) -> Result<(), String> {
         Ok(())
     }
+
+    /// Update the JSON-serialised `filled_slots` payload on a goal.
+    /// Used by the agent runtime to record progress against the goal's
+    /// declared slots. Default: no-op so backends without slot tracking
+    /// degrade gracefully.
+    async fn update_goal_filled_slots(
+        &self,
+        _goal_id: &str,
+        _filled_slots_json: &str,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 // ============================================================================

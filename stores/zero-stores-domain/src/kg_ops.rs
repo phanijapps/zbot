@@ -9,6 +9,40 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Ranking strategy for entity searches. MAGMA-style multi-view
+/// queries: different question types are best served by different
+/// ranking strategies. Backends that can't natively distinguish a
+/// view (e.g. don't have a `mention_count` index) may degrade to
+/// `Semantic` with a tracing warn — the caller still gets results,
+/// they're just ordered by the backend's default heuristic.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GraphView {
+    /// Order by `mention_count DESC` (default).
+    #[default]
+    Semantic,
+    /// Order by `last_seen_at DESC` (most recent first).
+    Temporal,
+    /// Order by relationship count (most-connected first).
+    Entity,
+    /// Reciprocal-rank-fusion merge of the other three views.
+    Hybrid,
+}
+
+impl GraphView {
+    /// Parse a view name string. Unknown values default to
+    /// [`GraphView::Semantic`]. Infallible — using `std::str::FromStr`
+    /// would require an error type the call sites don't need.
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "temporal" => Self::Temporal,
+            "entity" => Self::Entity,
+            "hybrid" => Self::Hybrid,
+            _ => Self::Semantic,
+        }
+    }
+}
+
 /// One row returned by `KnowledgeGraphStore::list_strategy_candidates`.
 /// Captures just the fields the Synthesizer needs to seed an LLM call —
 /// no embeddings, no full Entity payload.

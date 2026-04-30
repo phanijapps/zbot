@@ -10,35 +10,11 @@ use knowledge_graph::types::{
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Query view selecting how results are ranked.
-///
-/// Inspired by MAGMA-style multi-view queries: different question types
-/// are best served by different ranking strategies.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum GraphView {
-    /// Order by mention_count DESC (default).
-    #[default]
-    Semantic,
-    /// Order by last_seen_at DESC (most recent first).
-    Temporal,
-    /// Order by relationship count (most-connected first).
-    Entity,
-    /// Reciprocal-rank-fusion merge of the other three views.
-    Hybrid,
-}
-
-impl GraphView {
-    /// Parse a view name string. Unknown values default to [`GraphView::Semantic`].
-    #[allow(clippy::should_implement_trait)] // infallible parser; std::str::FromStr requires an error type.
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "temporal" => Self::Temporal,
-            "entity" => Self::Entity,
-            "hybrid" => Self::Hybrid,
-            _ => Self::Semantic,
-        }
-    }
-}
+// `GraphView` lives in `zero-stores-domain` (Phase E6c) so the trait
+// surface and Surreal adapter can name it without going through this
+// SQLite-coupled crate. Re-exported here so existing
+// `zero_stores_sqlite::kg::service::GraphView` imports keep compiling.
+pub use zero_stores_domain::GraphView;
 
 /// Graph service providing high-level operations
 pub struct GraphService {
