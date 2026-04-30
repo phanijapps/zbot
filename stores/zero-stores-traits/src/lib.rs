@@ -9,6 +9,7 @@
 //! `zero_stores::*` import paths.
 
 pub mod auxiliary;
+pub mod compaction;
 pub mod conversation;
 pub mod episodes;
 pub mod kg_episodes;
@@ -18,6 +19,7 @@ pub mod procedures;
 pub mod wiki;
 
 pub use auxiliary::{DistillationStore, GoalStore, RecallLogStore};
+pub use compaction::{CompactionRunSummary, CompactionStore};
 pub use conversation::ConversationStore;
 pub use episodes::{EpisodeStats, EpisodeStore};
 pub use kg_episodes::{KgEpisodeStatusCounts, KgEpisodeStore};

@@ -20,6 +20,7 @@ pub mod reindex;
 pub mod age_bucket;
 pub mod auxiliary_stores;
 pub mod compaction_repository;
+pub mod compaction_store;
 mod connection;
 pub mod distillation_repository;
 pub mod episode_repository;
@@ -48,6 +49,7 @@ pub use knowledge_graph::SqliteKgStore;
 pub use age_bucket::age_bucket;
 pub use auxiliary_stores::{GatewayDistillationStore, GatewayGoalStore, GatewayRecallLogStore};
 pub use compaction_repository::{Compaction, CompactionRepository, RunSummary};
+pub use compaction_store::GatewayCompactionStore;
 pub use connection::DatabaseManager;
 pub use distillation_repository::{
     DistillationRepository, DistillationRun, DistillationStats, UndistilledSession,

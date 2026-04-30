@@ -253,6 +253,7 @@ pub struct SurrealStoreBundle {
     pub recall_log: Arc<dyn zero_stores_traits::RecallLogStore>,
     pub distillation: Arc<dyn zero_stores_traits::DistillationStore>,
     pub kg_episode: Arc<dyn zero_stores_traits::KgEpisodeStore>,
+    pub compaction: Arc<dyn zero_stores_traits::CompactionStore>,
 }
 
 /// Build the full SurrealDB-backed store bundle (KG, Memory, Episode,
@@ -287,7 +288,8 @@ pub async fn build_surreal_full(cfg: &SurrealBackendConfig) -> Result<SurrealSto
         goal: Arc::new(zero_stores_surreal::SurrealGoalStore::new(db.clone())),
         recall_log: Arc::new(zero_stores_surreal::SurrealRecallLogStore::new(db.clone())),
         distillation: Arc::new(zero_stores_surreal::SurrealDistillationStore::new(db.clone())),
-        kg_episode: Arc::new(zero_stores_surreal::SurrealKgEpisodeStore::new(db)),
+        kg_episode: Arc::new(zero_stores_surreal::SurrealKgEpisodeStore::new(db.clone())),
+        compaction: Arc::new(zero_stores_surreal::SurrealCompactionStore::new(db)),
     })
 }
 

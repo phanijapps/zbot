@@ -136,6 +136,15 @@ DEFINE FIELD IF NOT EXISTS status     ON distillation_run TYPE string;
 DEFINE INDEX IF NOT EXISTS distillation_session
     ON distillation_run FIELDS session_id UNIQUE;
 
+-- --- kg_compaction_run -------------------------------------------------
+-- Audit log for the sleep-time maintenance worker. One row per
+-- merge / prune / synthesis / pattern / archival event. SCHEMALESS so
+-- we can extend the row shape without a migration.
+DEFINE TABLE IF NOT EXISTS kg_compaction_run SCHEMALESS;
+DEFINE FIELD IF NOT EXISTS run_id    ON kg_compaction_run TYPE string;
+DEFINE FIELD IF NOT EXISTS operation ON kg_compaction_run TYPE string;
+DEFINE INDEX IF NOT EXISTS kg_compaction_run_id ON kg_compaction_run FIELDS run_id;
+
 -- --- kg_ingestion_episode ----------------------------------------------
 -- One row per chunk staged for KG extraction. The background queue
 -- claims pending rows, runs LLM extraction, and marks them done/failed.

@@ -176,6 +176,13 @@ pub struct AppState {
     /// Set by server.start() in Phase 4 Task 10; `None` until then.
     pub compaction_repo: Option<Arc<zero_stores_sqlite::CompactionRepository>>,
 
+    /// Trait-routed compaction audit store (Phase D1). Wired in both
+    /// SQLite and SurrealDB modes — the maintenance worker writes
+    /// merge/prune/synthesis events here for Observatory display.
+    /// Backend-agnostic: the trait has default no-op impls so any
+    /// backend that doesn't care can inherit them.
+    pub compaction_store: Option<Arc<dyn zero_stores_traits::CompactionStore>>,
+
     /// Model capabilities registry (bundled + local overrides).
     pub model_registry: Arc<ModelRegistry>,
 
@@ -851,6 +858,33 @@ impl AppState {
             .as_ref()
             .map(|kdb| Arc::new(zero_stores_sqlite::CompactionRepository::new(kdb.clone())));
 
+        // Phase D1: trait-routed compaction audit store. Wired in BOTH
+        // backends so the maintenance worker can record merges/prunes
+        // regardless of backend. Surreal uses its own
+        // `kg_compaction_run` table; SQLite delegates to the existing
+        // `CompactionRepository`. Default no-op impls cover edge cases.
+        let compaction_store: Option<Arc<dyn zero_stores_traits::CompactionStore>> = {
+            #[cfg(feature = "surreal-backend")]
+            {
+                surreal_bundle
+                    .as_ref()
+                    .map(|b| b.compaction.clone())
+                    .or_else(|| {
+                        compaction_repo.as_ref().map(|r| {
+                            Arc::new(zero_stores_sqlite::GatewayCompactionStore::new(r.clone()))
+                                as Arc<dyn zero_stores_traits::CompactionStore>
+                        })
+                    })
+            }
+            #[cfg(not(feature = "surreal-backend"))]
+            {
+                compaction_repo.as_ref().map(|r| {
+                    Arc::new(zero_stores_sqlite::GatewayCompactionStore::new(r.clone()))
+                        as Arc<dyn zero_stores_traits::CompactionStore>
+                })
+            }
+        };
+
         // One-shot backfill: populate legacy kg_entities / kg_relationships
         // rows with the richer metadata introduced in commits b816702,
         // 1bc21f6, 5bf3013. Marker row in kg_compactions gates this so
@@ -987,6 +1021,7 @@ impl AppState {
             session_archiver: Some(session_archiver),
             sleep_time_worker,
             compaction_repo,
+            compaction_store,
             plugin_manager,
             model_registry,
             embedding_service,
@@ -1101,6 +1136,7 @@ impl AppState {
             session_archiver: None,
             sleep_time_worker: None,
             compaction_repo: None,
+            compaction_store: None,
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
             embedding_service: Arc::new(
                 EmbeddingService::with_config(paths.clone(), Default::default())
@@ -1199,6 +1235,7 @@ impl AppState {
             session_archiver: None,
             sleep_time_worker: None,
             compaction_repo: None,
+            compaction_store: None,
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
             embedding_service: Arc::new(
                 EmbeddingService::with_config(paths.clone(), Default::default())

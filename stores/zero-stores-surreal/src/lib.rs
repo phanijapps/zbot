@@ -8,6 +8,7 @@
 //!
 //! See `AGENTS.md` for the locked design decisions.
 
+pub mod compaction;
 pub mod config;
 pub mod connection;
 pub mod distillation;
@@ -25,6 +26,7 @@ pub mod similarity;
 pub mod types;
 pub mod wiki;
 
+pub use compaction::SurrealCompactionStore;
 pub use config::{SurrealConfig, SurrealCredentials};
 pub use connection::connect;
 pub use distillation::SurrealDistillationStore;
