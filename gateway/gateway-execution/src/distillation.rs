@@ -27,7 +27,6 @@ use agent_runtime::types::ChatMessage;
 use gateway_services::{ProviderService, SettingsService, VaultPaths};
 use knowledge_graph::{Entity, EntityType, Relationship, RelationshipType};
 use serde::{Deserialize, Serialize};
-use zero_stores_sqlite::kg::storage::GraphStorage;
 use zero_stores_sqlite::{
     ConversationRepository, DistillationRepository, DistillationRun, EpisodeRepository, MemoryFact,
     ProcedureRepository, SessionEpisode, WardWikiRepository,
@@ -56,7 +55,6 @@ pub struct SessionDistiller {
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
     conversation_repo: Arc<ConversationRepository>,
     memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
-    graph_storage: Option<Arc<GraphStorage>>,
     kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     distillation_repo: Option<Arc<DistillationRepository>>,
     /// Trait-routed distillation store (Phase E6c). When set,
@@ -234,7 +232,6 @@ impl SessionDistiller {
         provider_service: Arc<ProviderService>,
         embedding_client: Option<Arc<dyn EmbeddingClient>>,
         conversation_repo: Arc<ConversationRepository>,
-        graph_storage: Option<Arc<GraphStorage>>,
         distillation_repo: Option<Arc<DistillationRepository>>,
         episode_repo: Option<Arc<EpisodeRepository>>,
         paths: Arc<VaultPaths>,
@@ -245,7 +242,6 @@ impl SessionDistiller {
             embedding_client,
             conversation_repo,
             memory_store: None,
-            graph_storage,
             kg_store: None,
             distillation_repo,
             distillation_store: None,
@@ -635,11 +631,10 @@ impl SessionDistiller {
 
         // 5. Store entities and relationships in knowledge graph.
         //
-        // Phase E4: prefer `kg_store` (trait — wired in both backends) over
-        // the legacy concrete `graph_storage`. When kg_store is set, writes
-        // route through it so SurrealDB is honored. When neither is wired
-        // (defensive), the block is a no-op.
-        if self.kg_store.is_some() || self.graph_storage.is_some() {
+        // Phase E6c: trait-routed. Block is a no-op when kg_store
+        // isn't wired (defensive — production composition always
+        // wires it).
+        if self.kg_store.is_some() {
             // Build entity map for relationship resolution
             let mut entity_map: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
@@ -1633,93 +1628,67 @@ impl SessionDistiller {
     /// and falls back to the legacy concrete `graph_storage` if only
     /// that is wired.
     async fn find_entity_by_name(&self, agent_id: &str, name: &str) -> Option<String> {
-        if let Some(store) = &self.kg_store {
-            if let Ok(hits) = store.search_entities_by_name(agent_id, name, 1).await {
-                let needle = name.to_lowercase();
-                if let Some(hit) = hits.into_iter().find(|e| e.name.to_lowercase() == needle) {
-                    return Some(hit.id);
-                }
-            }
-            return None;
-        }
-        if let Some(graph) = &self.graph_storage {
-            return graph.find_entity_by_name(agent_id, name).ok().flatten();
-        }
-        None
+        let store = self.kg_store.as_ref()?;
+        store
+            .get_entity_by_name(agent_id, name)
+            .await
+            .ok()
+            .flatten()
+            .map(|e| e.id)
     }
 
-    /// Bump an entity's mention counter. Trait-routed when available.
+    /// Bump an entity's mention counter via the trait.
     async fn bump_entity_mention(&self, id: &str) -> Result<(), String> {
-        if let Some(store) = &self.kg_store {
-            return store
-                .bump_entity_mention(&zero_stores::EntityId::from(id.to_string()))
-                .await
-                .map_err(|e| e.to_string());
-        }
-        if let Some(graph) = &self.graph_storage {
-            return graph.bump_entity_mention(id).map_err(|e| e.to_string());
-        }
-        Err("no kg store wired".to_string())
+        let store = self
+            .kg_store
+            .as_ref()
+            .ok_or_else(|| "no kg store wired".to_string())?;
+        store
+            .bump_entity_mention(&zero_stores::EntityId::from(id.to_string()))
+            .await
+            .map_err(|e| e.to_string())
     }
 
-    /// Persist a single new entity. Trait-routed when available.
+    /// Persist a single new entity via the trait.
     async fn store_knowledge_one_entity(
         &self,
         agent_id: &str,
         entity: Entity,
     ) -> Result<(), String> {
-        if let Some(store) = &self.kg_store {
-            let knowledge = zero_stores::ExtractedKnowledge {
-                entities: vec![entity],
-                relationships: vec![],
-            };
-            return store
-                .store_knowledge(agent_id, knowledge)
-                .await
-                .map(|_| ())
-                .map_err(|e| e.to_string());
-        }
-        if let Some(graph) = &self.graph_storage {
-            let knowledge = knowledge_graph::types::ExtractedKnowledge {
-                entities: vec![entity],
-                relationships: vec![],
-            };
-            return graph
-                .store_knowledge(agent_id, knowledge)
-                .map(|_| ())
-                .map_err(|e| e.to_string());
-        }
-        Err("no kg store wired".to_string())
+        let store = self
+            .kg_store
+            .as_ref()
+            .ok_or_else(|| "no kg store wired".to_string())?;
+        let knowledge = zero_stores::ExtractedKnowledge {
+            entities: vec![entity],
+            relationships: vec![],
+        };
+        store
+            .store_knowledge(agent_id, knowledge)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
-    /// Persist a single new relationship. Trait-routed when available.
+    /// Persist a single new relationship via the trait.
     async fn store_knowledge_one_relationship(
         &self,
         agent_id: &str,
         rel: Relationship,
     ) -> Result<(), String> {
-        if let Some(store) = &self.kg_store {
-            let knowledge = zero_stores::ExtractedKnowledge {
-                entities: vec![],
-                relationships: vec![rel],
-            };
-            return store
-                .store_knowledge(agent_id, knowledge)
-                .await
-                .map(|_| ())
-                .map_err(|e| e.to_string());
-        }
-        if let Some(graph) = &self.graph_storage {
-            let knowledge = knowledge_graph::types::ExtractedKnowledge {
-                entities: vec![],
-                relationships: vec![rel],
-            };
-            return graph
-                .store_knowledge(agent_id, knowledge)
-                .map(|_| ())
-                .map_err(|e| e.to_string());
-        }
-        Err("no kg store wired".to_string())
+        let store = self
+            .kg_store
+            .as_ref()
+            .ok_or_else(|| "no kg store wired".to_string())?;
+        let knowledge = zero_stores::ExtractedKnowledge {
+            entities: vec![],
+            relationships: vec![rel],
+        };
+        store
+            .store_knowledge(agent_id, knowledge)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     /// Resolve a relationship endpoint (source/target name) to a real
@@ -1816,7 +1785,7 @@ impl SessionDistiller {
 /// conversation repo + paths + settings + embedding client).
 #[cfg(test)]
 fn resolve_relationship_endpoint(
-    graph: &GraphStorage,
+    graph: &zero_stores_sqlite::kg::storage::GraphStorage,
     agent_id: &str,
     name: &str,
     entity_map: &mut std::collections::HashMap<String, String>,
