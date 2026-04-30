@@ -263,6 +263,25 @@ pub trait MemoryFactStore: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Typed variant of `list_memory_facts` returning `Vec<MemoryFact>`
+    /// directly. Default deserialises the Value-based result so backends
+    /// only need to implement `list_memory_facts`.
+    async fn list_memory_facts_typed(
+        &self,
+        agent_id: Option<&str>,
+        category: Option<&str>,
+        scope: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        let rows = self
+            .list_memory_facts(agent_id, category, scope, limit, offset)
+            .await?;
+        rows.into_iter()
+            .map(|v| serde_json::from_value(v).map_err(|e| format!("decode MemoryFact: {e}")))
+            .collect()
+    }
+
     /// Fetch a single memory fact by id. Returns `None` if the row is
     /// absent. The shape mirrors the same JSON layout that
     /// `list_memory_facts` emits per row.

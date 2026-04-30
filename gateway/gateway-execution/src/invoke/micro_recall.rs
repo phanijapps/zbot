@@ -9,8 +9,9 @@ use regex::Regex;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use tracing::debug;
-use zero_stores_sqlite::kg::storage::GraphStorage;
-use zero_stores_sqlite::{MemoryFact, MemoryRepository};
+use zero_stores::KnowledgeGraphStore;
+use zero_stores_traits::MemoryFact;
+use zero_stores_traits::MemoryFactStore;
 
 /// Regex for extracting entity candidates from text (same pattern as working_memory_middleware).
 /// Matches: "quoted strings", PascalCase words, ALLCAPS (3+ chars).
@@ -47,10 +48,10 @@ pub enum MicroRecallTrigger {
 // ---------------------------------------------------------------------------
 
 /// Shared context for micro-recall handlers. All fields are optional so
-/// micro-recall degrades gracefully when repos aren't available.
+/// micro-recall degrades gracefully when stores aren't available.
 pub struct MicroRecallContext {
-    pub memory_repo: Option<Arc<MemoryRepository>>,
-    pub graph_storage: Option<Arc<GraphStorage>>,
+    pub memory_store: Option<Arc<dyn MemoryFactStore>>,
+    pub kg_store: Option<Arc<dyn KnowledgeGraphStore>>,
     pub agent_id: String,
 }
 
@@ -182,16 +183,18 @@ async fn handle_pre_delegation(
     ctx: &MicroRecallContext,
     iteration: u32,
 ) {
-    if let Some(repo) = &ctx.memory_repo {
+    if let Some(store) = &ctx.memory_store {
         push_corrections(
             wm,
-            repo.get_facts_by_category(agent_id, "correction", 5),
+            store.get_facts_by_category(agent_id, "correction", 5).await,
             None,
             "pre-delegation correction",
         );
         push_corrections(
             wm,
-            repo.get_facts_by_category(&ctx.agent_id, "correction", 10),
+            store
+                .get_facts_by_category(&ctx.agent_id, "correction", 10)
+                .await,
             Some(agent_id),
             "pre-delegation self-correction",
         );
@@ -216,9 +219,12 @@ async fn handle_tool_error(
     ctx: &MicroRecallContext,
     iteration: u32,
 ) {
-    if let Some(repo) = &ctx.memory_repo {
+    if let Some(store) = &ctx.memory_store {
         // Search for corrections related to this tool
-        match repo.get_facts_by_category(&ctx.agent_id, "correction", 10) {
+        match store
+            .get_facts_by_category(&ctx.agent_id, "correction", 10)
+            .await
+        {
             Ok(facts) => {
                 for fact in facts {
                     if fact.content.contains(tool_name) || fact.key.contains(tool_name) {
@@ -259,8 +265,8 @@ async fn handle_ward_entry(
     iteration: u32,
 ) {
     // Try to find the ward entity in the knowledge graph
-    if let Some(graph) = &ctx.graph_storage {
-        match graph.get_entity_by_name(&ctx.agent_id, ward_id) {
+    if let Some(kg) = &ctx.kg_store {
+        match kg.get_entity_by_name(&ctx.agent_id, ward_id).await {
             Ok(Some(entity)) => {
                 let summary = entity
                     .properties
@@ -284,8 +290,11 @@ async fn handle_ward_entry(
     }
 
     // Load ward-scoped memory facts
-    if let Some(repo) = &ctx.memory_repo {
-        match repo.list_memory_facts(&ctx.agent_id, None, Some(ward_id), 5, 0) {
+    if let Some(store) = &ctx.memory_store {
+        match store
+            .list_memory_facts_typed(Some(&ctx.agent_id), None, Some(ward_id), 5, 0)
+            .await
+        {
             Ok(facts) => {
                 for fact in facts {
                     wm.add_entity(
@@ -314,8 +323,8 @@ async fn handle_entity_mention(
     ctx: &MicroRecallContext,
     iteration: u32,
 ) {
-    if let Some(graph) = &ctx.graph_storage {
-        match graph.get_entity_by_name(&ctx.agent_id, entity_name) {
+    if let Some(kg) = &ctx.kg_store {
+        match kg.get_entity_by_name(&ctx.agent_id, entity_name).await {
             Ok(Some(entity)) => {
                 let summary = entity
                     .properties
@@ -565,8 +574,8 @@ mod tests {
     async fn test_execute_tool_error_adds_discovery() {
         let mut wm = WorkingMemory::new(5000);
         let ctx = MicroRecallContext {
-            memory_repo: None,
-            graph_storage: None,
+            memory_store: None,
+            kg_store: None,
             agent_id: "root".to_string(),
         };
         let trigger = MicroRecallTrigger::ToolError {
@@ -580,11 +589,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_ward_entry_no_repos() {
-        // When repos are None, handler should not panic — just return gracefully
+        // When stores are None, handler should not panic — just return gracefully
         let mut wm = WorkingMemory::new(5000);
         let ctx = MicroRecallContext {
-            memory_repo: None,
-            graph_storage: None,
+            memory_store: None,
+            kg_store: None,
             agent_id: "root".to_string(),
         };
         let trigger = MicroRecallTrigger::WardEntry {
