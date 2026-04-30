@@ -387,7 +387,6 @@ mod tests {
             zero_stores_sqlite::GatewayCompactionStore::new(h.compaction_repo.clone()),
         );
         let archiver = Arc::new(crate::sleep::OrphanArchiver::new(
-            h.db.clone(),
             archiver_kg_store,
             archiver_compaction_store,
         ));

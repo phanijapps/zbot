@@ -610,6 +610,64 @@ impl AppState {
                 })
             }
         };
+
+        // Trait-routed episode store for downstream consumers (distiller +
+        // sleep worker + AppState). Built once here so the sleep worker
+        // construction below doesn't have to re-derive from
+        // backend-specific repos. SurrealDB mode picks `surreal_bundle.episode`;
+        // SQLite mode wraps `EpisodeRepository` (built lazily from
+        // `knowledge_db` since the original repo is composed elsewhere).
+        let episode_store_for_state: Option<Arc<dyn zero_stores_traits::EpisodeStore>> = {
+            #[cfg(feature = "surreal-backend")]
+            {
+                if let Some(b) = surreal_bundle.as_ref() {
+                    Some(b.episode.clone())
+                } else {
+                    knowledge_db.as_ref().and_then(|kdb| {
+                        zero_stores_sqlite::vector_index::SqliteVecIndex::new(
+                            kdb.clone(),
+                            "session_episodes_index",
+                            "episode_id",
+                        )
+                        .ok()
+                        .map(|vec_index| {
+                            let repo = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
+                                kdb.clone(),
+                                Arc::new(vec_index),
+                            ));
+                            Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(repo))
+                                as Arc<dyn zero_stores_traits::EpisodeStore>
+                        })
+                    })
+                }
+            }
+            #[cfg(not(feature = "surreal-backend"))]
+            {
+                knowledge_db.as_ref().and_then(|kdb| {
+                    zero_stores_sqlite::vector_index::SqliteVecIndex::new(
+                        kdb.clone(),
+                        "session_episodes_index",
+                        "episode_id",
+                    )
+                    .ok()
+                    .map(|vec_index| {
+                        let repo = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
+                            kdb.clone(),
+                            Arc::new(vec_index),
+                        ));
+                        Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(repo))
+                            as Arc<dyn zero_stores_traits::EpisodeStore>
+                    })
+                })
+            }
+        };
+
+        // Conversation store is always SQLite-backed (per the design doc:
+        // conversations.db never moves to Surreal). The sleep worker's
+        // PatternExtractor needs it on both backends.
+        let conversation_store_for_state: Arc<dyn zero_stores_traits::ConversationStore> = Arc::new(
+            zero_stores_sqlite::ConversationRepository::new(db_manager.clone()),
+        );
         if let (Some(recall), Some(mem)) =
             (memory_recall_inner.as_mut(), early_memory_store.as_ref())
         {
@@ -682,71 +740,49 @@ impl AppState {
         // Surreal mode means the corresponding side-effects (KG ingestion,
         // run-tracking, episode storage, wiki compilation, procedure
         // upsert) skip gracefully. Fact distillation itself runs.
-        let distiller: Option<Arc<SessionDistiller>> = if memory_store.is_some()
-            || memory_repo.is_some()
-        {
-            let mut distiller_inner = SessionDistiller::new(
-                provider_service.clone(),
-                embedding_client.clone(),
-                conversation_repo.clone(),
-                memory_repo.clone(),
-                graph_storage.clone(),
-                distillation_repo.clone(),
-                episode_repo.clone(),
-                paths.clone(),
-                Some(settings.clone()),
-            );
-            if let Some(wr) = wiki_repo.as_ref() {
-                distiller_inner.set_wiki_repo(wr.clone());
-            }
-            if let Some(pr) = procedure_repo.as_ref() {
-                distiller_inner.set_procedure_repo(pr.clone());
-            }
-            if let Some(mem) = memory_store.as_ref() {
-                distiller_inner.set_memory_store(mem.clone());
-            }
-            if let Some(kgs) = kg_store.as_ref() {
-                distiller_inner.set_kg_store(kgs.clone());
-            }
-            // Phase E6a/E6b: episode/wiki/procedure trait stores reuse the
-            // same Arc<dyn ...> values we built above for the AppState
-            // fields (`episode_store`, `wiki_store_for_state`,
-            // `procedure_store_for_state`) so the distiller and the HTTP
-            // handlers see the same backing store.
-            let episode_store_for_distiller: Option<Arc<dyn zero_stores_traits::EpisodeStore>> = {
-                #[cfg(feature = "surreal-backend")]
-                {
-                    surreal_bundle
-                        .as_ref()
-                        .map(|b| b.episode.clone())
-                        .or_else(|| {
-                            episode_repo_ref.as_ref().map(|er| {
-                                Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(er.clone()))
-                                    as Arc<dyn zero_stores_traits::EpisodeStore>
-                            })
-                        })
+        let distiller: Option<Arc<SessionDistiller>> =
+            if memory_store.is_some() || memory_repo.is_some() {
+                let mut distiller_inner = SessionDistiller::new(
+                    provider_service.clone(),
+                    embedding_client.clone(),
+                    conversation_repo.clone(),
+                    memory_repo.clone(),
+                    graph_storage.clone(),
+                    distillation_repo.clone(),
+                    episode_repo.clone(),
+                    paths.clone(),
+                    Some(settings.clone()),
+                );
+                if let Some(wr) = wiki_repo.as_ref() {
+                    distiller_inner.set_wiki_repo(wr.clone());
                 }
-                #[cfg(not(feature = "surreal-backend"))]
-                {
-                    episode_repo_ref.as_ref().map(|er| {
-                        Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(er.clone()))
-                            as Arc<dyn zero_stores_traits::EpisodeStore>
-                    })
+                if let Some(pr) = procedure_repo.as_ref() {
+                    distiller_inner.set_procedure_repo(pr.clone());
                 }
+                if let Some(mem) = memory_store.as_ref() {
+                    distiller_inner.set_memory_store(mem.clone());
+                }
+                if let Some(kgs) = kg_store.as_ref() {
+                    distiller_inner.set_kg_store(kgs.clone());
+                }
+                // Phase E6a/E6b: episode/wiki/procedure trait stores reuse the
+                // same Arc<dyn ...> values we built above for the AppState
+                // fields (`episode_store`, `wiki_store_for_state`,
+                // `procedure_store_for_state`) so the distiller and the HTTP
+                // handlers see the same backing store.
+                if let Some(es) = episode_store_for_state.as_ref() {
+                    distiller_inner.set_episode_store(es.clone());
+                }
+                if let Some(ws) = wiki_store_for_state.as_ref() {
+                    distiller_inner.set_wiki_store(ws.clone());
+                }
+                if let Some(ps) = procedure_store_for_state.as_ref() {
+                    distiller_inner.set_procedure_store(ps.clone());
+                }
+                Some(Arc::new(distiller_inner))
+            } else {
+                None
             };
-            if let Some(es) = episode_store_for_distiller {
-                distiller_inner.set_episode_store(es);
-            }
-            if let Some(ws) = wiki_store_for_state.as_ref() {
-                distiller_inner.set_wiki_store(ws.clone());
-            }
-            if let Some(ps) = procedure_store_for_state.as_ref() {
-                distiller_inner.set_procedure_store(ps.clone());
-            }
-            Some(Arc::new(distiller_inner))
-        } else {
-            None
-        };
 
         // Keep a handle for on-demand distillation (backfill, trigger).
         // None when SurrealDB mode skipped distiller construction.
@@ -914,15 +950,19 @@ impl AppState {
         // trait objects (`kg_store`, `compaction_store`) so they run on
         // both backends; synthesizer / pattern_extractor are still
         // SQLite-tied via `compaction_repo` (migrated in Phase D4).
+        // Sleep-time worker — fully trait-routed (Phase D5). Gates only on
+        // the trait stores; on SurrealDB mode they come from
+        // `surreal_bundle`, on SQLite mode from the repo wrappers.
+        // Conversation store is always SQLite-backed (per design) and
+        // built unconditionally above.
         let sleep_time_worker = match (
-            compaction_repo.as_ref(),
-            knowledge_db.as_ref(),
-            memory_repo.as_ref(),
-            procedure_repo.as_ref(),
             kg_store.as_ref(),
+            episode_store_for_state.as_ref(),
+            memory_store.as_ref(),
+            procedure_store_for_state.as_ref(),
             compaction_store.as_ref(),
         ) {
-            (Some(_comp), Some(kdb), Some(mr), Some(pr), Some(kgs), Some(compstore)) => {
+            (Some(kgs), Some(eps), Some(mems), Some(prs), Some(compstore)) => {
                 let verifier: Option<
                     Arc<dyn gateway_execution::sleep::compactor::PairwiseVerifier>,
                 > = Some(Arc::new(
@@ -944,35 +984,10 @@ impl AppState {
                 let synth_llm = Arc::new(gateway_execution::sleep::LlmSynthesizer::new(
                     provider_service.clone(),
                 ));
-                // Synthesizer is fully trait-routed (Phase D4): pass the
-                // KG store, an EpisodeStore + MemoryFactStore wrapper for
-                // SQLite (Surreal mode plugs in the SurrealDB
-                // implementations), and the trait-routed compaction store.
-                let synth_episode_vec: Arc<dyn zero_stores_sqlite::vector_index::VectorIndex> =
-                    Arc::new(
-                        zero_stores_sqlite::vector_index::SqliteVecIndex::new(
-                            kdb.clone(),
-                            "session_episodes_index",
-                            "episode_id",
-                        )
-                        .expect("session_episodes_index"),
-                    );
-                let synth_episode_repo = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
-                    kdb.clone(),
-                    synth_episode_vec,
-                ));
-                let synth_episode_store: Arc<dyn zero_stores_traits::EpisodeStore> = Arc::new(
-                    zero_stores_sqlite::GatewayEpisodeStore::new(synth_episode_repo),
-                );
-                let synth_memory_store: Arc<dyn zero_stores::MemoryFactStore> =
-                    Arc::new(zero_stores_sqlite::GatewayMemoryFactStore::new(
-                        mr.clone(),
-                        embedding_client.clone(),
-                    ));
                 let synthesizer = Arc::new(gateway_execution::sleep::Synthesizer::new(
                     kgs.clone(),
-                    synth_episode_store,
-                    synth_memory_store,
+                    eps.clone(),
+                    mems.clone(),
                     compstore.clone(),
                     synth_llm,
                     embedding_client.clone(),
@@ -980,42 +995,14 @@ impl AppState {
                 let pattern_llm = Arc::new(gateway_execution::sleep::LlmPatternExtractor::new(
                     provider_service.clone(),
                 ));
-                // PatternExtractor is fully trait-routed (Phase D4): episode
-                // reads + procedure writes + audit go through stores; the
-                // conversation store stays SQLite-backed (per design,
-                // conversations.db never moves to Surreal).
-                let pe_episode_vec: Arc<dyn zero_stores_sqlite::vector_index::VectorIndex> =
-                    Arc::new(
-                        zero_stores_sqlite::vector_index::SqliteVecIndex::new(
-                            kdb.clone(),
-                            "session_episodes_index",
-                            "episode_id",
-                        )
-                        .expect("session_episodes_index"),
-                    );
-                let pe_episode_repo = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
-                    kdb.clone(),
-                    pe_episode_vec,
-                ));
-                let pe_episode_store: Arc<dyn zero_stores_traits::EpisodeStore> = Arc::new(
-                    zero_stores_sqlite::GatewayEpisodeStore::new(pe_episode_repo),
-                );
-                let pe_conv_repo = Arc::new(zero_stores_sqlite::ConversationRepository::new(
-                    db_manager.clone(),
-                ));
-                let pe_conversation_store: Arc<dyn zero_stores_traits::ConversationStore> =
-                    pe_conv_repo;
-                let pe_procedure_store: Arc<dyn zero_stores_traits::ProcedureStore> =
-                    Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(pr.clone()));
                 let pattern_extractor = Arc::new(gateway_execution::sleep::PatternExtractor::new(
-                    pe_episode_store,
-                    pe_conversation_store,
-                    pe_procedure_store,
+                    eps.clone(),
+                    conversation_store_for_state.clone(),
+                    prs.clone(),
                     compstore.clone(),
                     pattern_llm,
                 ));
                 let orphan_archiver = Arc::new(gateway_execution::sleep::OrphanArchiver::new(
-                    kdb.clone(),
                     kgs.clone(),
                     compstore.clone(),
                 ));
@@ -1086,27 +1073,7 @@ impl AppState {
             goal_repo,
             distillation_repo,
             distiller: distiller_ref,
-            episode_store: {
-                #[cfg(feature = "surreal-backend")]
-                {
-                    surreal_bundle
-                        .as_ref()
-                        .map(|b| b.episode.clone())
-                        .or_else(|| {
-                            episode_repo_ref.as_ref().map(|er| {
-                                Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(er.clone()))
-                                    as Arc<dyn zero_stores_traits::EpisodeStore>
-                            })
-                        })
-                }
-                #[cfg(not(feature = "surreal-backend"))]
-                {
-                    episode_repo_ref.as_ref().map(|er| {
-                        Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(er.clone()))
-                            as Arc<dyn zero_stores_traits::EpisodeStore>
-                    })
-                }
-            },
+            episode_store: episode_store_for_state,
             wiki_store: wiki_store_for_state,
             procedure_store: procedure_store_for_state,
             episode_repo: episode_repo_ref,
