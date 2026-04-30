@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use zero_stores::{Direction as StoreDirection, KnowledgeGraphStore};
-use zero_stores_sqlite::{DistillationStats, UndistilledSession};
+use zero_stores_domain::{DistillationStats, UndistilledSession};
 
 // ============================================================================
 // REQUEST/RESPONSE TYPES

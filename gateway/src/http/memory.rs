@@ -34,7 +34,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use zero_stores_sqlite::MemoryFact;
+use zero_stores_domain::MemoryFact;
 
 // ============================================================================
 // REQUEST/RESPONSE TYPES
