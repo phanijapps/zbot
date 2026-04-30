@@ -72,6 +72,28 @@ impl EpisodeStore for GatewayEpisodeStore {
             .collect()
     }
 
+    async fn search_episodes_by_similarity_typed(
+        &self,
+        agent_id: &str,
+        embedding: &[f32],
+        threshold: f32,
+        limit: usize,
+    ) -> Result<Vec<(SessionEpisode, f64)>, String> {
+        // Skip the JSON round-trip — the repo already returns the typed
+        // shape we want.
+        self.repo
+            .search_by_similarity(agent_id, embedding, threshold as f64, limit)
+    }
+
+    async fn keyword_search_episodes(
+        &self,
+        query: &str,
+        ward_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SessionEpisode>, String> {
+        self.repo.keyword_search(query, ward_id, limit)
+    }
+
     async fn fetch_recent_successful_by_ward(
         &self,
         ward_id: &str,

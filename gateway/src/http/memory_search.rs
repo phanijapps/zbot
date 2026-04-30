@@ -41,10 +41,8 @@ use crate::state::AppState;
 use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::Arc;
 use std::time::Instant;
 use zero_stores_domain::{SessionEpisode, WikiHit};
-use zero_stores_sqlite::{vector_index::VectorIndex, EpisodeRepository, SqliteVecIndex};
 
 /// Request body for unified search.
 #[derive(Debug, Deserialize)]
@@ -124,24 +122,6 @@ fn surreal_unavailable() -> HandlerError {
     )
 }
 
-fn build_episode_repo(state: &AppState) -> Result<Arc<EpisodeRepository>, HandlerError> {
-    let knowledge_db = state.knowledge_db.as_ref().ok_or_else(surreal_unavailable)?;
-    let idx = SqliteVecIndex::new(
-        knowledge_db.clone(),
-        "session_episodes_index",
-        "episode_id",
-    )
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("ep vec: {e}")))?;
-    let vec: Arc<dyn VectorIndex> = Arc::new(idx);
-    Ok(Arc::new(EpisodeRepository::new(knowledge_db.clone(), vec)))
-}
-
-// `episodes_like_search` was relocated into
-// `EpisodeRepository::keyword_search` so this handler no longer reaches
-// into `state.knowledge_db` to run raw LIKE SQL. The repo method
-// preserves the historical sanitization (`%`/`_` stripped) and the
-// ward-scoped vs. unscoped variants.
-
 fn wiki_hit_to_value(hit: WikiHit) -> Value {
     let snippet: String = hit.article.content.chars().take(240).collect();
     json!({
@@ -192,7 +172,7 @@ fn episode_to_value(ep: SessionEpisode, score: Option<f64>, source: &str) -> Val
     v
 }
 
-fn fact_to_value(fact: zero_stores_sqlite::MemoryFact, source: &str, score: Option<f64>) -> Value {
+fn fact_to_value(fact: zero_stores_domain::MemoryFact, source: &str, score: Option<f64>) -> Value {
     let mut v = json!({
         "id": fact.id,
         "session_id": fact.session_id,
@@ -244,7 +224,11 @@ pub async fn memory_search(
         .as_ref()
         .ok_or_else(surreal_unavailable)?
         .clone();
-    let episode_repo = build_episode_repo(&state)?;
+    let episode_store = state
+        .episode_store
+        .as_ref()
+        .ok_or_else(surreal_unavailable)?
+        .clone();
 
     let ward: Option<String> = req.ward_ids.first().cloned();
     let ward_ref: Option<&str> = ward.as_deref();
@@ -392,7 +376,7 @@ pub async fn memory_search(
     };
 
     let eps_fut = {
-        let episode_repo = episode_repo.clone();
+        let episode_store = episode_store.clone();
         let query = query.clone();
         let mode = mode.clone();
         let emb = embedding.clone();
@@ -406,23 +390,26 @@ pub async fn memory_search(
             let scope_agent = agent.as_deref().unwrap_or(FALLBACK_AGENT);
             let hits: Vec<Value> = match (mode.as_str(), emb.as_ref()) {
                 // Pure FTS path → LIKE fallback (no FTS5 partner table for episodes).
-                ("fts", _) => episode_repo
-                    .keyword_search(&query, ward.as_deref(), limit)
+                ("fts", _) => episode_store
+                    .keyword_search_episodes(&query, ward.as_deref(), limit)
+                    .await
                     .unwrap_or_default()
                     .into_iter()
                     .map(|ep| episode_to_value(ep, None, "fts"))
                     .collect(),
-                (_, Some(emb)) => episode_repo
-                    .search_by_similarity(scope_agent, emb, 0.0, limit)
+                (_, Some(emb)) => episode_store
+                    .search_episodes_by_similarity_typed(scope_agent, emb, 0.0, limit)
+                    .await
                     .unwrap_or_default()
                     .into_iter()
-                    // Ward-scope filter in Rust since repo search_by_similarity
-                    // does not filter by ward.
+                    // Ward-scope filter in Rust since the trait method does
+                    // not filter by ward.
                     .filter(|(ep, _)| ward.as_deref().is_none_or(|w| ep.ward_id == w))
                     .map(|(ep, s)| episode_to_value(ep, Some(s), "vec"))
                     .collect(),
-                (_, None) => episode_repo
-                    .keyword_search(&query, ward.as_deref(), limit)
+                (_, None) => episode_store
+                    .keyword_search_episodes(&query, ward.as_deref(), limit)
+                    .await
                     .unwrap_or_default()
                     .into_iter()
                     .map(|ep| episode_to_value(ep, None, "fts"))

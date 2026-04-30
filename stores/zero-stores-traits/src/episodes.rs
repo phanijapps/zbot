@@ -55,6 +55,47 @@ pub trait EpisodeStore: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Typed variant of `search_episodes_by_similarity` returning
+    /// `(SessionEpisode, score)` pairs directly. Default deserialises
+    /// the Value-based result so backends only need to implement the
+    /// Value-returning variant.
+    async fn search_episodes_by_similarity_typed(
+        &self,
+        agent_id: &str,
+        embedding: &[f32],
+        threshold: f32,
+        limit: usize,
+    ) -> Result<Vec<(SessionEpisode, f64)>, String> {
+        let rows = self
+            .search_episodes_by_similarity(agent_id, embedding, threshold, limit)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                let ep_v = row
+                    .get("episode")
+                    .cloned()
+                    .ok_or_else(|| "missing episode field".to_string())?;
+                let score = row.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let ep: SessionEpisode = serde_json::from_value(ep_v)
+                    .map_err(|e| format!("decode SessionEpisode: {e}"))?;
+                Ok((ep, score))
+            })
+            .collect()
+    }
+
+    /// Plain LIKE-style keyword search across `task_summary` /
+    /// `key_learnings`. Used by the unified-search FTS fallback when no
+    /// FTS5 partner table exists for episodes. Default returns empty so
+    /// backends without a keyword path degrade gracefully.
+    async fn keyword_search_episodes(
+        &self,
+        _query: &str,
+        _ward_id: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<SessionEpisode>, String> {
+        Ok(Vec::new())
+    }
+
     /// Recent successful episodes for a ward. Used by the previous-episodes
     /// recall path to seed agent context with what worked last time.
     /// Returns typed [`SessionEpisode`] (via `zero-stores-domain`) so
