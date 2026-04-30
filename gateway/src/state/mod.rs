@@ -67,14 +67,8 @@ pub struct AppState {
 
     /// Knowledge database — memory facts, graph, vec0 indexes.
     ///
-    /// `None` when the user has opted into the SurrealDB backend
-    /// (`execution.featureFlags.surreal_backend = true` in settings.json).
-    /// In that mode the daemon never opens `knowledge.db` — all reads /
-    /// writes go through the trait-routed stores
-    /// (`memory_store`, `kg_store`, `episode_store`, `wiki_store`,
-    /// `procedure_store`). HTTP handlers that haven't migrated to the
-    /// trait surface return `503 Service Unavailable` in this mode
-    /// rather than reach for a SQLite handle that doesn't exist.
+    /// Wrapped in `Option` so test fixtures can build a minimal AppState
+    /// without one. Production always carries `Some(...)`.
     pub knowledge_db: Option<Arc<KnowledgeDatabase>>,
 
     /// Settings service for application configuration.
@@ -130,11 +124,9 @@ pub struct AppState {
     /// Knowledge graph episode repository (Phase 6a+).
     pub kg_episode_repo: Option<Arc<KgEpisodeRepository>>,
 
-    /// Trait-routed kg-ingestion-episode store (Phase B). Wired in both
-    /// SQLite (wraps kg_episode_repo) and SurrealDB modes (via
-    /// surreal_bundle.kg_episode). Backend-agnostic — adding a new
-    /// datastore means implementing the trait and adding a build branch
-    /// in persistence_factory.rs; consumers don't change.
+    /// Trait-routed kg-ingestion-episode store (Phase B). Wraps the
+    /// SQLite kg_episode_repo. Backend-agnostic — a new backend
+    /// implements the trait without consumers changing.
     pub kg_episode_store: Option<Arc<dyn zero_stores_traits::KgEpisodeStore>>,
 
     /// Graph service for knowledge graph operations.
@@ -292,9 +284,6 @@ impl AppState {
 
         // Initialize memory evolution services — repositories that need vector
         // similarity get a SqliteVecIndex over their vec0 partner table.
-        // Phase E2: when SurrealDB is on, knowledge_db is None and every
-        // SQLite-tied repo below is None too. Trait-routed stores cover
-        // the same surface via `surreal_bundle` further down.
         let memory_repo: Option<Arc<MemoryRepository>> = knowledge_db.as_ref().map(|kdb| {
             let memory_vec: Arc<dyn VectorIndex> = Arc::new(
                 SqliteVecIndex::new(kdb.clone(), "memory_facts_index", "fact_id")
@@ -412,26 +401,14 @@ impl AppState {
         let session_archiver = Arc::new(SessionArchiver::new(db_manager.clone(), archive_path));
 
         // Build the trait-routed memory_store eagerly (before MemoryRecall +
-        // SessionDistiller construction, so they can be wired with it). The
-        // KG override branch lives later because it depends on
-        // runner_graph_storage which isn't available yet — we re-derive
-        // surreal_override there with the cached bundle below.
-        //
-        // When the user has opted into Surreal, the *full* store bundle is
-        // built here so the trait-routed `episode_store`, `wiki_store` and
-        // `procedure_store` fields below can route to Surreal too — without
-        // the bundle they'd silently fall through to SQLite-backed
-        // counterparts (or, for episodes built later, the wrong DB) and
-        // the UI would show zeroes.
-        // The trait-routed memory store wraps the SQLite memory_repo.
+        // SessionDistiller construction, so they can be wired with it).
         let early_memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
             memory_repo.as_ref().map(|mr| {
                 persistence_factory::build_memory_store(mr.clone(), embedding_client.clone())
             });
 
-        // Create memory recall. Phase E8: builds whenever EITHER
-        // memory_store (trait) OR memory_repo (concrete) is wired —
-        // recall now runs on Surreal too. Graph enrichment via
+        // Create memory recall. Builds whenever memory_store is wired,
+        // which is always whenever memory_repo is. Graph enrichment via
         // GraphService still requires the concrete graph_storage; on
         // Surreal it's None and recall falls back to non-enriched
         // hybrid (still finds facts, just no KG-traversal boost).
@@ -444,9 +421,7 @@ impl AppState {
             } else {
                 None
             };
-        // Wire trait-routed episode_store (Phase E6c). Picks
-        // surreal_bundle.episode in Surreal mode, falls back to
-        // wrapping the SQLite EpisodeRepository.
+        // Wire trait-routed episode_store wrapping the SQLite EpisodeRepository.
         if let Some(recall) = memory_recall_inner.as_mut() {
             let store_opt: Option<Arc<dyn zero_stores_traits::EpisodeStore>> =
                 episode_repo.as_ref().map(|r| {
@@ -478,12 +453,10 @@ impl AppState {
                 recall.set_wiki_store(store);
             }
         }
-        // Phase B: trait-routed kg ingestion store. Prefer the surreal
-        // bundle's impl (wired when the user opts in); fall back to a
-        // GatewayKgEpisodeStore wrapping the SQLite kg_episode_repo.
-        // Backend-agnostic — handlers + queue + adapter all consume the
-        // trait, so a third backend (Postgres / etc.) plugs in by
-        // implementing the trait and adding a build branch above.
+        // Trait-routed kg ingestion store. GatewayKgEpisodeStore wraps
+        // the SQLite kg_episode_repo. Handlers + queue + adapter all
+        // consume the trait, so a future backend plugs in by
+        // implementing the trait without touching consumers.
         let kg_episode_store: Option<Arc<dyn zero_stores_traits::KgEpisodeStore>> =
             kg_episode_repo.as_ref().map(|r| {
                 Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
@@ -523,10 +496,8 @@ impl AppState {
 
         // Trait-routed episode store for downstream consumers (distiller +
         // sleep worker + AppState). Built once here so the sleep worker
-        // construction below doesn't have to re-derive from
-        // backend-specific repos. SurrealDB mode picks `surreal_bundle.episode`;
-        // SQLite mode wraps `EpisodeRepository` (built lazily from
-        // `knowledge_db` since the original repo is composed elsewhere).
+        // construction below doesn't have to re-derive from the underlying
+        // repo. Wraps `EpisodeRepository` over the same KnowledgeDatabase.
         let episode_store_for_state: Option<Arc<dyn zero_stores_traits::EpisodeStore>> =
             knowledge_db.as_ref().and_then(|kdb| {
                 zero_stores_sqlite::vector_index::SqliteVecIndex::new(
@@ -559,8 +530,7 @@ impl AppState {
 
         // Build the trait-routed kg_store early enough to wire it on
         // MemoryRecall before that struct is moved into Arc::new below.
-        // Picks the surreal_bundle's impl when present, else wraps the
-        // SQLite GraphStorage (Phase E6c).
+        // Wraps the SQLite GraphStorage.
         let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
             graph_storage.as_ref().map(|gs| {
                 let embedder = embedding_client
@@ -663,13 +633,8 @@ impl AppState {
         // Create streaming ingestion queue + backpressure BEFORE the runtime so the
         // runner can be wired with an IngestionAdapter.
         //
-        // Phase B2: trait-routed. Queue + backpressure now consume
-        // Arc<dyn KgEpisodeStore> + Arc<dyn KnowledgeGraphStore>. Both
-        // are wired in BOTH backends (kg_episode_store from
-        // surreal_bundle.kg_episode or GatewayKgEpisodeStore wrap;
-        // kg_store from surreal_bundle.kg or sqlite kg_store builder).
-        // So the queue runs on Surreal too — pending ingestion episodes
-        // get processed instead of accumulating forever.
+        // Trait-routed: queue + backpressure consume
+        // Arc<dyn KgEpisodeStore> + Arc<dyn KnowledgeGraphStore>.
         let (ingestion_queue, ingestion_backpressure) =
             match (kg_episode_store.as_ref(), kg_store.as_ref()) {
                 (Some(eps), Some(kgs)) => {
@@ -802,12 +767,9 @@ impl AppState {
         // Build only when ALL of (compaction_repo, memory_repo, knowledge_db,
         // procedure_repo, kg_store, compaction_store) are present. The
         // maintenance ops (compactor/decay/pruner/orphan_archiver) take
-        // trait objects (`kg_store`, `compaction_store`) so they run on
-        // both backends; synthesizer / pattern_extractor are still
-        // SQLite-tied via `compaction_repo` (migrated in Phase D4).
-        // Sleep-time worker — fully trait-routed (Phase D5). Gates only on
-        // the trait stores; on SurrealDB mode they come from
-        // `surreal_bundle`, on SQLite mode from the repo wrappers.
+        // Sleep-time worker — trait-routed. Gates on the trait stores
+        // (kg_store, episode_store, memory_store, procedure_store,
+        // compaction_store) all wired above from the SQLite repos.
         // Conversation store is always SQLite-backed (per design) and
         // built unconditionally above.
         let sleep_time_worker = match (
@@ -1237,20 +1199,12 @@ impl AppState {
         self.embedding_service.preflight().await;
 
         // 2. Reindex if the marker dim disagrees with the live dim.
-        // The reindex pipeline targets SQLite vec0 tables — when the user
-        // is on the SurrealDB backend (`knowledge_db is None`), there is
-        // nothing for this path to operate on; the Surreal backend keeps
-        // its own embeddings inline. Mark the marker as in sync and bail.
         if self.embedding_service.needs_reindex() {
             let current_dim = self.embedding_service.dimensions();
             let Some(knowledge_db) = self.knowledge_db.as_ref() else {
-                tracing::info!(
-                    dim = current_dim,
-                    "Embedding marker mismatch but SQLite knowledge DB is disabled (SurrealDB backend) — marking indexed without reindex"
+                tracing::warn!(
+                    "Embedding marker mismatch but knowledge DB unavailable — skipping reindex"
                 );
-                if let Err(e) = self.embedding_service.mark_indexed(current_dim) {
-                    tracing::warn!("mark_indexed failed in surreal mode: {e}");
-                }
                 self.embedding_service
                     .publish_health(gateway_services::Health::Ready);
                 let _handle = self.embedding_service.clone().start_health_loop();

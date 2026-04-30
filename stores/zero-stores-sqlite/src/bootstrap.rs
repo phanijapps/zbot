@@ -1,20 +1,13 @@
 //! Schema bootstrap for the SQLite KG impl.
 //!
-//! This module is the canonical place where schema-evolution code lives
-//! for the SQLite backend. Today it delegates to `gateway-database`'s
-//! [`KnowledgeDatabase::new`] (which runs `initialize_knowledge_database`)
-//! — those routines own the full schema DDL plus the historical inline
-//! migrations (v1-v22) and the `migrations/v23, v24.sql` files.
+//! Delegates to [`KnowledgeDatabase::new`] which runs
+//! `initialize_knowledge_database` — that owns the full schema DDL plus
+//! the historical inline migrations (v1-v22) and the
+//! `migrations/v23, v24.sql` files.
 //!
-//! Future: the schema DDL can be moved here verbatim; for now we keep
-//! it in `gateway-database` to avoid churn. The function below exists
-//! so the bootstrap pattern is symmetric across impls — when SurrealDB
-//! arrives, its bootstrap goes in `stores/zero-stores-surreal/src/
-//! bootstrap.rs`, called from its impl crate's constructor analogously.
-//!
-//! TD-032 progress: pattern established; full schema relocation deferred
-//! until proven necessary (e.g. when the schema needs to differ between
-//! impls in shape, not just storage layer).
+//! The function below is kept as the canonical hook point for the
+//! SQLite backend's bootstrap so a future alternate backend's
+//! `bootstrap.rs` follows the same shape.
 
 pub use crate::knowledge_db::KnowledgeDatabase;
 

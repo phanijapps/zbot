@@ -32,22 +32,9 @@ use zero_stores_sqlite::ConversationRepository;
 
 /// Distills completed sessions into structured memory facts.
 ///
-/// Persistence routing: when `memory_store` is set (always after the
-/// `set_memory_store` wiring in AppState::new), fact upsert + supersede
-/// go through the trait so SurrealDB is honored when opted-in.
-///
-/// Phase E3: `memory_repo` is `Option` — `None` in SurrealDB mode
-/// (knowledge.db never opens). The distiller still builds in that mode
-/// and writes facts via `memory_store`. SQLite-cache concerns
-/// (cached_embedding) and the strategy / failure-cluster paths that
-/// rely on `episode_repo` (also SQLite-only) skip gracefully when
-/// `memory_repo` is `None`.
-///
-/// Phase E4: `kg_store` (the trait surface) is preferred over
-/// `graph_storage` (concrete SQLite) for entity / relationship writes.
-/// In SurrealDB mode `graph_storage` is `None` and `kg_store` is the
-/// only path; on SQLite both are wired and we still prefer the trait
-/// so the implementation has a single canonical path.
+/// Persistence routing: every store dependency is an `Arc<dyn ...>`
+/// trait companion. AppState wires the SQLite-backed implementations
+/// at construction time; consumers here only see the abstract surface.
 pub struct SessionDistiller {
     provider_service: Arc<ProviderService>,
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
@@ -239,22 +226,20 @@ impl SessionDistiller {
         }
     }
 
-    /// Wire the trait-routed memory store. When set, upsert + supersede go
-    /// through this handle so SurrealDB is honored when opted-in.
+    /// Wire the trait-routed memory store. Upsert + supersede route
+    /// through this handle.
     pub fn set_memory_store(&mut self, store: Arc<dyn zero_stores::MemoryFactStore>) {
         self.memory_store = Some(store);
     }
 
-    /// Wire the trait-routed knowledge-graph store. When set, entity /
-    /// relationship writes go through this handle (Phase E4) so SurrealDB
-    /// is honored. Falls back to `graph_storage` when `kg_store` is None.
+    /// Wire the trait-routed knowledge-graph store. Entity / relationship
+    /// writes route through this handle.
     pub fn set_kg_store(&mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) {
         self.kg_store = Some(store);
     }
 
-    /// Wire the trait-routed episode store. When set, episode insert and
-    /// similarity-search route through this handle (Phase E6a) so
-    /// SurrealDB is honored. Falls back to `episode_repo` when None.
+    /// Wire the trait-routed episode store. Episode insert and
+    /// similarity-search route through this handle.
     pub fn set_episode_store(&mut self, store: Arc<dyn zero_stores_traits::EpisodeStore>) {
         self.episode_store = Some(store);
     }
@@ -517,10 +502,9 @@ impl SessionDistiller {
             let ward_id = "__global__";
 
             // Check if an active fact with the same key exists and has
-            // different content. SQLite-only key-lookup; on Surreal the
-            // Phase E6c: trait-routed. Defaults to None on backends
-            // that don't implement the method — supersede then becomes
-            // a no-op and the upsert below creates a fresh row.
+            // different content. Trait-routed via `get_fact_by_key`;
+            // backends without an impl return None and supersede
+            // becomes a no-op (fresh upsert below).
             let existing_fact = match self.memory_store.as_ref() {
                 Some(store) => store
                     .get_fact_by_key(agent_id, scope, ward_id, &ef.key)
@@ -709,8 +693,7 @@ impl SessionDistiller {
             }
         }
 
-        // 6b. Store extracted procedure (if any). Phase E6b: trait first,
-        // SQLite repo as fallback so Surreal mode persists procedures too.
+        // 6b. Store extracted procedure (if any) through the trait surface.
         if let Some(ref procedure) = response.procedure {
             if self.procedure_store.is_some() {
                 let ward_id = self
@@ -1142,10 +1125,7 @@ impl SessionDistiller {
         extracted: &ExtractedEpisode,
         now: &str,
     ) -> Result<bool, String> {
-        // Phase E6a: episode storage available when EITHER the trait
-        // store OR the SQLite repo is wired. Surreal mode has the trait
-        // store via surreal_bundle.episode; SQLite has the repo (and
-        // also gets the trait wrapper).
+        // Episode storage runs through the trait surface.
         if self.episode_store.is_none() {
             return Ok(false);
         }
@@ -1666,12 +1646,7 @@ impl SessionDistiller {
     // Embedding
     // =========================================================================
 
-    /// Embed a single text, with caching.
-    ///
-    /// The embedding cache is a SQLite-only optimization (rows live on the
-    /// knowledge.db `embedding_cache` table). When `memory_repo` is `None`
-    /// — i.e. SurrealDB mode — every embed re-computes; the trait surface
-    /// does not yet expose a cache contract.
+    /// Embed a single text, with caching via the trait surface.
     async fn embed_text(&self, text: &str) -> Option<Vec<f32>> {
         let client = self.embedding_client.as_ref()?;
         let model_name = client.model_name().to_string();
