@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
 use zero_stores_domain::WikiArticle;
 use zero_stores_traits::{WikiStats, WikiStore};
 
@@ -167,6 +167,42 @@ impl WikiStore for SurrealWikiStore {
             .and_then(|n| n.as_i64())
             .unwrap_or(0);
         Ok(WikiStats { total })
+    }
+
+    async fn search_wiki_by_similarity_typed(
+        &self,
+        ward_id: &str,
+        embedding: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(WikiArticle, f64)>, String> {
+        // Fetch ward articles + score by cosine in Rust. Mirrors the
+        // SQLite path which over-fetches and post-filters by ward.
+        let mut resp = self
+            .db
+            .query("SELECT * FROM wiki_doc WHERE ward_id = $w")
+            .bind(("w", ward_id.to_string()))
+            .await
+            .map_err(|e| format!("search_wiki_by_similarity_typed: {e}"))?;
+        let rows: Vec<Value> = resp
+            .take(0)
+            .map_err(|e| format!("search_wiki_by_similarity_typed take: {e}"))?;
+        let mut scored: Vec<(WikiArticle, f64)> = rows
+            .into_iter()
+            .filter_map(|r| {
+                let emb_arr = r.get("embedding")?.as_array()?;
+                let row_emb: Vec<f32> = emb_arr
+                    .iter()
+                    .filter_map(|x| x.as_f64().map(|f| f as f32))
+                    .collect();
+                let score = crate::similarity::cosine(embedding, &row_emb)?;
+                let flat = crate::row_value::flatten_record_id(r);
+                let article: WikiArticle = serde_json::from_value(flat).ok()?;
+                Some((article, score))
+            })
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+        Ok(scored)
     }
 }
 
@@ -329,7 +365,7 @@ fn build_wiki_payload(a: &WikiArticle) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{connect, schema::apply_schema, SurrealConfig};
+    use crate::{SurrealConfig, connect, schema::apply_schema};
 
     async fn fresh_store() -> SurrealWikiStore {
         let cfg = SurrealConfig {
@@ -433,11 +469,22 @@ mod tests {
     async fn search_wiki_hybrid_fts_finds_match() {
         let store = fresh_store().await;
         store
-            .upsert_article(sample_article("a1", "wardA", "coffee brewing", "How to brew pour-over coffee"), None)
+            .upsert_article(
+                sample_article(
+                    "a1",
+                    "wardA",
+                    "coffee brewing",
+                    "How to brew pour-over coffee",
+                ),
+                None,
+            )
             .await
             .unwrap();
         store
-            .upsert_article(sample_article("a2", "wardA", "tea guide", "Herbal tea at night"), None)
+            .upsert_article(
+                sample_article("a2", "wardA", "tea guide", "Herbal tea at night"),
+                None,
+            )
             .await
             .unwrap();
         let results = store
@@ -445,7 +492,10 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            results.iter().any(|r| r["article"]["title"].as_str().unwrap_or("").contains("coffee")),
+            results.iter().any(|r| r["article"]["title"]
+                .as_str()
+                .unwrap_or("")
+                .contains("coffee")),
             "FTS should find the coffee article"
         );
     }
@@ -468,10 +518,10 @@ mod tests {
     async fn search_wiki_hybrid_with_embedding() {
         let store = fresh_store().await;
         let mut article = sample_article("a1", "wardA", "embedded topic", "content with vector");
-        article.as_object_mut().unwrap().insert(
-            "embedding".to_string(),
-            serde_json::json!([1.0, 0.0, 0.0]),
-        );
+        article
+            .as_object_mut()
+            .unwrap()
+            .insert("embedding".to_string(), serde_json::json!([1.0, 0.0, 0.0]));
         store.upsert_article(article, None).await.unwrap();
         let query_emb: Vec<f32> = vec![1.0, 0.0, 0.0];
         let results = store
@@ -488,7 +538,10 @@ mod tests {
     async fn search_wiki_hybrid_no_ward_filter() {
         let store = fresh_store().await;
         store
-            .upsert_article(sample_article("a1", "wardA", "global topic", "shared content"), None)
+            .upsert_article(
+                sample_article("a1", "wardA", "global topic", "shared content"),
+                None,
+            )
             .await
             .unwrap();
         let results = store

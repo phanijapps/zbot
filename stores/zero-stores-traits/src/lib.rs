@@ -28,5 +28,7 @@ pub use memory_facts::{
     StrategyFactMatch,
 };
 pub use outbox::OutboxStore;
-pub use procedures::{PatternProcedureInsert, ProcedureStats, ProcedureStore, ProcedureSummary};
+pub use procedures::{
+    PatternProcedureInsert, Procedure, ProcedureStats, ProcedureStore, ProcedureSummary,
+};
 pub use wiki::{WikiStats, WikiStore};

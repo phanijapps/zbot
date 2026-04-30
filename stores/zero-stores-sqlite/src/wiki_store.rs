@@ -86,4 +86,13 @@ impl WikiStore for GatewayWikiStore {
         // snapshot"). Backends that track this differently can override.
         Ok(WikiStats::default())
     }
+
+    async fn search_wiki_by_similarity_typed(
+        &self,
+        ward_id: &str,
+        embedding: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(WikiArticle, f64)>, String> {
+        self.repo.search_by_similarity(ward_id, embedding, limit)
+    }
 }

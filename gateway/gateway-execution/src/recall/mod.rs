@@ -56,7 +56,13 @@ pub struct MemoryRecall {
     episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>>,
     recall_log: Option<Arc<RecallLogRepository>>,
     wiki_repo: Option<Arc<WardWikiRepository>>,
+    /// Trait-routed companion (Phase E6c). When set, wiki recall goes
+    /// through this handle so the path runs on Surreal too.
+    wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>>,
     procedure_repo: Option<Arc<ProcedureRepository>>,
+    /// Trait-routed companion (Phase E6c). When set, procedure recall
+    /// goes through this handle so the path runs on Surreal too.
+    procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
 }
 
 impl MemoryRecall {
@@ -76,7 +82,9 @@ impl MemoryRecall {
             episode_store: None,
             recall_log: None,
             wiki_repo: None,
+            wiki_store: None,
             procedure_repo: None,
+            procedure_store: None,
         }
     }
 
@@ -108,7 +116,9 @@ impl MemoryRecall {
             episode_store: None,
             recall_log: None,
             wiki_repo: None,
+            wiki_store: None,
             procedure_repo: None,
+            procedure_store: None,
         }
     }
 
@@ -138,9 +148,21 @@ impl MemoryRecall {
         self.wiki_repo = Some(repo);
     }
 
+    /// Wire the trait-routed wiki store. When set, wiki recall routes
+    /// through this handle so SurrealDB is honored when opted-in.
+    pub fn set_wiki_store(&mut self, store: Arc<dyn zero_stores_traits::WikiStore>) {
+        self.wiki_store = Some(store);
+    }
+
     /// Set the procedure repository for procedure recall.
     pub fn set_procedure_repo(&mut self, repo: Arc<ProcedureRepository>) {
         self.procedure_repo = Some(repo);
+    }
+
+    /// Wire the trait-routed procedure store. When set, procedure recall
+    /// routes through this handle so SurrealDB is honored when opted-in.
+    pub fn set_procedure_store(&mut self, store: Arc<dyn zero_stores_traits::ProcedureStore>) {
+        self.procedure_store = Some(store);
     }
 
     /// Search for proven procedures similar to a query.
@@ -154,17 +176,28 @@ impl MemoryRecall {
         ward_id: Option<&str>,
         limit: usize,
     ) -> Result<Vec<(Procedure, f64)>, String> {
-        let procedure_repo = match &self.procedure_repo {
-            Some(r) => r,
-            None => return Ok(Vec::new()),
-        };
-
         let embedding = match self.embed_query(query).await {
             Some(emb) => emb,
             None => return Ok(Vec::new()),
         };
 
-        procedure_repo.search_by_similarity(&embedding, agent_id, ward_id, limit)
+        // Prefer trait-routed procedure_store; fall back to wrapping
+        // procedure_repo for callers that haven't wired the trait yet.
+        let store_view: Option<Arc<dyn zero_stores_traits::ProcedureStore>> =
+            self.procedure_store.clone().or_else(|| {
+                self.procedure_repo.as_ref().map(|r| {
+                    Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(r.clone()))
+                        as Arc<dyn zero_stores_traits::ProcedureStore>
+                })
+            });
+
+        let store = match store_view {
+            Some(s) => s,
+            None => return Ok(Vec::new()),
+        };
+        store
+            .search_procedures_by_similarity_typed(&embedding, agent_id, ward_id, limit)
+            .await
     }
 
     /// Recall relevant facts for a given agent and user message.
@@ -424,29 +457,46 @@ impl MemoryRecall {
             Vec::new()
         };
 
-        // 2. Wiki articles (ward-scoped).
-        let wiki_items: Vec<ScoredItem> =
-            match (self.wiki_repo.as_ref(), query_emb.as_ref(), ward_id) {
-                (Some(wiki_repo), Some(emb), Some(wid)) => wiki_repo
-                    .search_by_similarity(wid, emb, 5)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|(a, s)| adapters::wiki_to_item(&a, s))
-                    .collect(),
-                _ => Vec::new(),
-            };
+        // 2. Wiki articles (ward-scoped). Prefer trait-routed wiki_store;
+        //    fall back to wrapping wiki_repo for callers that haven't
+        //    wired the trait yet.
+        let wiki_store_view: Option<Arc<dyn zero_stores_traits::WikiStore>> =
+            self.wiki_store.clone().or_else(|| {
+                self.wiki_repo.as_ref().map(|r| {
+                    Arc::new(zero_stores_sqlite::GatewayWikiStore::new(r.clone()))
+                        as Arc<dyn zero_stores_traits::WikiStore>
+                })
+            });
+        let wiki_items: Vec<ScoredItem> = match (wiki_store_view, query_emb.as_ref(), ward_id) {
+            (Some(store), Some(emb), Some(wid)) => store
+                .search_wiki_by_similarity_typed(wid, emb, 5)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(a, s)| adapters::wiki_to_item(&a, s))
+                .collect(),
+            _ => Vec::new(),
+        };
 
-        // 3. Procedures.
-        let procedure_items: Vec<ScoredItem> =
-            match (self.procedure_repo.as_ref(), query_emb.as_ref()) {
-                (Some(proc_repo), Some(emb)) => proc_repo
-                    .search_by_similarity(emb, agent_id, ward_id, 5)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|(p, s)| adapters::procedure_to_item(&p, s))
-                    .collect(),
-                _ => Vec::new(),
-            };
+        // 3. Procedures. Prefer trait-routed procedure_store; fall back
+        //    to wrapping procedure_repo.
+        let procedure_store_view: Option<Arc<dyn zero_stores_traits::ProcedureStore>> =
+            self.procedure_store.clone().or_else(|| {
+                self.procedure_repo.as_ref().map(|r| {
+                    Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(r.clone()))
+                        as Arc<dyn zero_stores_traits::ProcedureStore>
+                })
+            });
+        let procedure_items: Vec<ScoredItem> = match (procedure_store_view, query_emb.as_ref()) {
+            (Some(store), Some(emb)) => store
+                .search_procedures_by_similarity_typed(emb, agent_id, ward_id, 5)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(p, s)| adapters::procedure_to_item(&p, s))
+                .collect(),
+            _ => Vec::new(),
+        };
 
         // 4. Graph ANN over `kg_name_index`.
         let graph_items: Vec<ScoredItem> = match (self.graph_service.as_ref(), query_emb.as_ref()) {

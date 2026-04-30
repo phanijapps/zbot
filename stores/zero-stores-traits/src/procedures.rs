@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 // Domain types live in `zero-stores-domain`; re-export here so the
 // trait surface keeps working for callers that import from this crate.
-pub use zero_stores_domain::{PatternProcedureInsert, ProcedureSummary};
+pub use zero_stores_domain::{PatternProcedureInsert, Procedure, ProcedureSummary};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProcedureStats {
@@ -38,6 +38,33 @@ pub trait ProcedureStore: Send + Sync {
         _limit: usize,
     ) -> Result<Vec<Value>, String> {
         Ok(Vec::new())
+    }
+
+    /// Typed variant of `search_procedures_by_similarity` returning
+    /// `(Procedure, score)` pairs directly. Default deserialises the
+    /// Value-based result for backends that haven't overridden.
+    async fn search_procedures_by_similarity_typed(
+        &self,
+        embedding: &[f32],
+        agent_id: &str,
+        ward_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(Procedure, f64)>, String> {
+        let rows = self
+            .search_procedures_by_similarity(embedding, agent_id, ward_id, limit)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                let proc_v = row
+                    .get("procedure")
+                    .cloned()
+                    .ok_or_else(|| "missing procedure field".to_string())?;
+                let score = row.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let p: Procedure =
+                    serde_json::from_value(proc_v).map_err(|e| format!("decode Procedure: {e}"))?;
+                Ok((p, score))
+            })
+            .collect()
     }
 
     /// Bump success/failure counts after a run. No-op default.

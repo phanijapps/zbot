@@ -508,6 +508,30 @@ impl AppState {
         if let (Some(recall), Some(er)) = (memory_recall_inner.as_mut(), episode_repo.as_ref()) {
             recall.set_episode_repo(er.clone());
         }
+        // Wire trait-routed episode_store (Phase E6c). Picks
+        // surreal_bundle.episode in Surreal mode, falls back to
+        // wrapping the SQLite EpisodeRepository.
+        if let Some(recall) = memory_recall_inner.as_mut() {
+            #[cfg(feature = "surreal-backend")]
+            let store_opt: Option<Arc<dyn zero_stores_traits::EpisodeStore>> = surreal_bundle
+                .as_ref()
+                .map(|b| b.episode.clone())
+                .or_else(|| {
+                    episode_repo.as_ref().map(|r| {
+                        Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(r.clone()))
+                            as Arc<dyn zero_stores_traits::EpisodeStore>
+                    })
+                });
+            #[cfg(not(feature = "surreal-backend"))]
+            let store_opt: Option<Arc<dyn zero_stores_traits::EpisodeStore>> =
+                episode_repo.as_ref().map(|r| {
+                    Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(r.clone()))
+                        as Arc<dyn zero_stores_traits::EpisodeStore>
+                });
+            if let Some(store) = store_opt {
+                recall.set_episode_store(store);
+            }
+        }
 
         // Wire recall log for tracking recalled facts per session (enables predictive recall).
         // RecallLogRepository is over db_manager (conversation DB), not knowledge_db,
@@ -527,6 +551,26 @@ impl AppState {
         });
         if let (Some(recall), Some(wr)) = (memory_recall_inner.as_mut(), wiki_repo.as_ref()) {
             recall.set_wiki_repo(wr.clone());
+        }
+        // Wire trait-routed wiki_store (Phase E6c).
+        if let Some(recall) = memory_recall_inner.as_mut() {
+            #[cfg(feature = "surreal-backend")]
+            let store_opt: Option<Arc<dyn zero_stores_traits::WikiStore>> =
+                surreal_bundle.as_ref().map(|b| b.wiki.clone()).or_else(|| {
+                    wiki_repo.as_ref().map(|r| {
+                        Arc::new(zero_stores_sqlite::GatewayWikiStore::new(r.clone()))
+                            as Arc<dyn zero_stores_traits::WikiStore>
+                    })
+                });
+            #[cfg(not(feature = "surreal-backend"))]
+            let store_opt: Option<Arc<dyn zero_stores_traits::WikiStore>> =
+                wiki_repo.as_ref().map(|r| {
+                    Arc::new(zero_stores_sqlite::GatewayWikiStore::new(r.clone()))
+                        as Arc<dyn zero_stores_traits::WikiStore>
+                });
+            if let Some(store) = store_opt {
+                recall.set_wiki_store(store);
+            }
         }
         // Phase B: trait-routed kg ingestion store. Prefer the surreal
         // bundle's impl (wired when the user opts in); fall back to a
@@ -610,6 +654,14 @@ impl AppState {
                 })
             }
         };
+        // Wire the trait-routed procedure_store on MemoryRecall so
+        // procedure recall runs on Surreal too (Phase E6c).
+        if let (Some(recall), Some(ps)) = (
+            memory_recall_inner.as_mut(),
+            procedure_store_for_state.as_ref(),
+        ) {
+            recall.set_procedure_store(ps.clone());
+        }
 
         // Trait-routed episode store for downstream consumers (distiller +
         // sleep worker + AppState). Built once here so the sleep worker

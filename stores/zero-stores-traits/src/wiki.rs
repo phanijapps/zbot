@@ -2,6 +2,9 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
+// `WikiArticle` lives in `zero-stores-domain`; re-export here so the
+// trait surface keeps working for callers that import from this crate.
+pub use zero_stores_domain::WikiArticle;
 
 /// Aggregate stats for the wiki subsystem.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -55,5 +58,18 @@ pub trait WikiStore: Send + Sync {
 
     async fn wiki_stats(&self) -> Result<WikiStats, String> {
         Ok(WikiStats::default())
+    }
+
+    /// Pure vector-similarity search scoped to a ward, returning typed
+    /// `(WikiArticle, score)` pairs directly. Used by recall paths that
+    /// want richer ranking than the hybrid endpoint. Default returns
+    /// empty so backends without a dedicated vector index can opt out.
+    async fn search_wiki_by_similarity_typed(
+        &self,
+        _ward_id: &str,
+        _embedding: &[f32],
+        _limit: usize,
+    ) -> Result<Vec<(WikiArticle, f64)>, String> {
+        Ok(Vec::new())
     }
 }
