@@ -83,9 +83,6 @@ test-stubs = []
 tempfile = "3"
 tokio-test = "0.4"
 filetime = "0.2"
-# Used by the Surreal-side sleep worker integration test
-# (gated under cfg(feature = "surreal-backend") in tests/sleep_worker_surreal.rs).
-zero-stores-surreal = { path = "../../stores/zero-stores-surreal" }
 
 [lints]
 workspace = true

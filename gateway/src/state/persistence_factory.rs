@@ -2,16 +2,11 @@
 //!
 //! Centralized construction of persistence-layer trait objects.
 //!
-//! Today only the SQLite backend exists. When SurrealDB lands, this is
-//! where the config-driven branch goes — `match config.knowledge_backend
-//! { Sqlite => SqliteKgStore::with_embedding_client(…), Surreal => …}`.
-//! The HTTP handlers and sleep jobs that consume `Arc<dyn KnowledgeGraphStore>`
-//! don't need to know which backend they got.
-//!
-//! TD-023 progress: factory pattern established. Retirement of the
-//! parallel `graph_service: Option<Arc<GraphService>>` field on AppState
-//! is deferred to a follow-up multi-PR workstream — that affects dozens
-//! of consumer sites and warrants its own phasing.
+//! AppState consumes `Arc<dyn KnowledgeGraphStore>` and `Arc<dyn
+//! MemoryFactStore>` rather than the concrete SQLite repos so HTTP
+//! handlers and sleep jobs don't need to know which backend they got.
+//! The trait surfaces in `zero-stores-traits` keep the door open for
+//! future backends; today there is one impl, SQLite.
 
 use std::sync::Arc;
 
@@ -22,9 +17,6 @@ use zero_stores_sqlite::{KnowledgeDatabase, MemoryRepository};
 use zero_stores_sqlite::{SqliteKgStore, SqliteMemoryStore};
 
 /// Build the `Arc<dyn KnowledgeGraphStore>` used by `AppState`.
-///
-/// Today this always returns a `SqliteKgStore`. When SurrealDB support
-/// lands, this function branches on a `PersistenceConfig` enum.
 ///
 /// Constructs a fresh `GraphStorage` over the supplied `KnowledgeDatabase`.
 /// Callers that already hold an `Arc<GraphStorage>` (e.g. for sharing with
@@ -67,11 +59,6 @@ pub fn build_kg_store_from_storage(
 
 /// Build the `Arc<dyn MemoryFactStore>` used by `AppState`.
 ///
-/// Today this always returns a `SqliteMemoryStore` (a re-export of
-/// `zero_stores_sqlite::GatewayMemoryFactStore`). When SurrealDB support
-/// lands, this is the branch point — `match config.knowledge_backend
-/// { Sqlite => SqliteMemoryStore::new(…), Surreal => SurrealMemoryStore::new(…) }`.
-///
 /// AppState shares one `Arc<MemoryRepository>` between this factory and
 /// the legacy `memory_repo` field that many existing consumers still
 /// hold by concrete type. Until those consumers migrate to the trait
@@ -84,243 +71,4 @@ pub fn build_memory_store(
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
 ) -> Arc<dyn MemoryFactStore> {
     Arc::new(SqliteMemoryStore::new(memory_repo, embedding_client))
-}
-
-/// Read `execution.featureFlags.surreal_backend` from `settings.json`
-/// and return `true` when the user has opted in.
-///
-/// Works regardless of whether the `surreal-backend` Cargo feature is
-/// compiled in — used by `AppState::new` to gate SQLite-knowledge
-/// initialization. When the feature is OFF, callers honor the flag
-/// only as far as "skip SQLite knowledge.db init"; the trait-routed
-/// stores still need the feature to actually run.
-///
-/// Failing closed (treating parse / missing-file errors as `false`)
-/// keeps SQLite as the safe default.
-pub fn is_surreal_backend_opt_in(paths: &gateway_services::paths::VaultPaths) -> bool {
-    let raw = match std::fs::read_to_string(paths.settings()) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    let value: serde_json::Value = match serde_json::from_str(&raw) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-    value
-        .get("execution")
-        .and_then(|e| e.get("featureFlags"))
-        .and_then(|f| f.get("surreal_backend"))
-        .and_then(|b| b.as_bool())
-        .unwrap_or(false)
-}
-
-// ============================================================================
-// SurrealDB backend dispatch (Cargo feature `surreal-backend`).
-//
-// These functions construct an `Arc<dyn KnowledgeGraphStore>` /
-// `Arc<dyn MemoryFactStore>` backed by a shared `Surreal<Any>` handle.
-// Wiring into `AppState::new` is a follow-up — for now, callers can
-// invoke these helpers directly when constructing a SurrealDB-backed
-// daemon. The feature gate keeps the SurrealDB SDK out of default
-// builds.
-// ============================================================================
-
-/// Configuration parameters for the SurrealDB backend.
-///
-/// Mirrors the `[persistence.surreal]` section of `settings.json`.
-/// `vault_root` is used to expand the `$VAULT` placeholder in the URL.
-#[cfg(feature = "surreal-backend")]
-#[derive(Clone, Debug)]
-pub struct SurrealBackendConfig {
-    pub url: String,
-    pub namespace: String,
-    pub database: String,
-    pub credentials: Option<(String, String)>,
-    pub vault_root: std::path::PathBuf,
-}
-
-/// Read `config/settings.json` and return `Some(config)` if the user has
-/// opted into SurrealDB via the UI dropdown. The opt-in lives in
-/// `execution.featureFlags.surreal_backend` (the free-form feature_flags
-/// bag that backs the Settings UI experimental toggles).
-///
-/// Optional override knobs (advanced — edit settings.json directly):
-/// `persistence.surreal.{url,namespace,database}` override the defaults.
-///
-/// Returns `None` for any other state — missing file, flag absent or
-/// false, parse error. Failing closed keeps SQLite as the safe default.
-#[cfg(feature = "surreal-backend")]
-fn read_surreal_opt_in(
-    paths: &gateway_services::paths::VaultPaths,
-) -> Option<SurrealBackendConfig> {
-    let raw = std::fs::read_to_string(paths.settings()).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let opted_in = value
-        .get("execution")
-        .and_then(|e| e.get("featureFlags"))
-        .and_then(|f| f.get("surreal_backend"))
-        .and_then(|b| b.as_bool())
-        .unwrap_or(false);
-    if !opted_in {
-        return None;
-    }
-    let surreal_obj = value.get("persistence").and_then(|p| p.get("surreal"));
-    let url = surreal_obj
-        .and_then(|s| s.get("url"))
-        .and_then(|u| u.as_str())
-        .map(String::from)
-        .unwrap_or_else(|| "rocksdb://$VAULT/data/knowledge.surreal".to_string());
-    let namespace = surreal_obj
-        .and_then(|s| s.get("namespace"))
-        .and_then(|n| n.as_str())
-        .map(String::from)
-        .unwrap_or_else(|| "memory_kg".to_string());
-    let database = surreal_obj
-        .and_then(|s| s.get("database"))
-        .and_then(|d| d.as_str())
-        .map(String::from)
-        .unwrap_or_else(|| "main".to_string());
-    Some(SurrealBackendConfig {
-        url,
-        namespace,
-        database,
-        credentials: None,
-        vault_root: paths.vault_dir().clone(),
-    })
-}
-
-/// Construct the SurrealDB-backed store pair when the user has opted in
-/// via settings.json, otherwise return `None`. Failures are fatal: a
-/// configured-but-broken Surreal connection means the daemon refuses to
-/// start (logged + panicked) — falling back to SQLite would silently
-/// hide the problem.
-#[cfg(feature = "surreal-backend")]
-pub fn maybe_build_surreal_pair(
-    paths: &gateway_services::paths::VaultPaths,
-) -> Option<(Arc<dyn KnowledgeGraphStore>, Arc<dyn MemoryFactStore>)> {
-    let cfg = read_surreal_opt_in(paths)?;
-    tracing::info!(
-        url = %cfg.url,
-        namespace = %cfg.namespace,
-        database = %cfg.database,
-        "SurrealDB backend enabled via settings.json"
-    );
-    // Bridge to async via the ambient tokio runtime — AppState::new is
-    // called from a tokio context (daemon main).
-    let result = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(build_surreal_pair(&cfg))
-    });
-    match result {
-        Ok(pair) => Some(pair),
-        Err(e) => {
-            tracing::error!(error = %e, "SurrealDB init failed — daemon refusing to start");
-            panic!(
-                "SurrealDB persistence init failed: {e}. \
-                 If the database appears corrupted, run the recovery CLI \
-                 backed by zero-stores-surreal-recovery."
-            );
-        }
-    }
-}
-
-/// Build both SurrealDB-backed stores sharing one connection handle.
-/// Schema is applied idempotently as part of construction. Returns the
-/// (KG, Memory) pair. Errors fail fast — the daemon is expected to
-/// refuse to start on persistence init failure.
-#[cfg(feature = "surreal-backend")]
-pub async fn build_surreal_pair(
-    cfg: &SurrealBackendConfig,
-) -> Result<(Arc<dyn KnowledgeGraphStore>, Arc<dyn MemoryFactStore>), String> {
-    let bundle = build_surreal_full(cfg).await?;
-    Ok((bundle.kg, bundle.memory))
-}
-
-/// Bundle of SurrealDB-backed trait objects, all sharing one
-/// `Arc<Surreal<Any>>` connection.
-///
-/// The two-step approach (build pair then full bundle) lets AppState wire
-/// the auxiliary stores in the same code path as the KG/Memory pair —
-/// every Option<Arc<dyn …>> field gets populated together when the user
-/// opts into Surreal.
-#[cfg(feature = "surreal-backend")]
-pub struct SurrealStoreBundle {
-    pub kg: Arc<dyn KnowledgeGraphStore>,
-    pub memory: Arc<dyn MemoryFactStore>,
-    pub episode: Arc<dyn zero_stores_traits::EpisodeStore>,
-    pub wiki: Arc<dyn zero_stores_traits::WikiStore>,
-    pub procedure: Arc<dyn zero_stores_traits::ProcedureStore>,
-    pub goal: Arc<dyn zero_stores_traits::GoalStore>,
-    pub recall_log: Arc<dyn zero_stores_traits::RecallLogStore>,
-    pub distillation: Arc<dyn zero_stores_traits::DistillationStore>,
-    pub kg_episode: Arc<dyn zero_stores_traits::KgEpisodeStore>,
-    pub compaction: Arc<dyn zero_stores_traits::CompactionStore>,
-}
-
-/// Build the full SurrealDB-backed store bundle (KG, Memory, Episode,
-/// Wiki, Procedure, Goal, RecallLog, Distillation) sharing one
-/// connection handle. Schema is applied idempotently as part of
-/// construction. Errors fail fast.
-#[cfg(feature = "surreal-backend")]
-pub async fn build_surreal_full(cfg: &SurrealBackendConfig) -> Result<SurrealStoreBundle, String> {
-    let surreal_cfg = zero_stores_surreal::SurrealConfig {
-        url: cfg.url.clone(),
-        namespace: cfg.namespace.clone(),
-        database: cfg.database.clone(),
-        credentials: cfg.credentials.as_ref().map(|(u, p)| {
-            zero_stores_surreal::SurrealCredentials {
-                username: u.clone(),
-                password: p.clone(),
-            }
-        }),
-    };
-    let db = zero_stores_surreal::connect(&surreal_cfg, Some(&cfg.vault_root))
-        .await
-        .map_err(|e| format!("surreal connect: {e}"))?;
-    zero_stores_surreal::schema::apply_schema(&db)
-        .await
-        .map_err(|e| format!("surreal schema: {e}"))?;
-    Ok(SurrealStoreBundle {
-        kg: Arc::new(zero_stores_surreal::SurrealKgStore::new(db.clone())),
-        memory: Arc::new(zero_stores_surreal::SurrealMemoryStore::new(db.clone())),
-        episode: Arc::new(zero_stores_surreal::SurrealEpisodeStore::new(db.clone())),
-        wiki: Arc::new(zero_stores_surreal::SurrealWikiStore::new(db.clone())),
-        procedure: Arc::new(zero_stores_surreal::SurrealProcedureStore::new(db.clone())),
-        goal: Arc::new(zero_stores_surreal::SurrealGoalStore::new(db.clone())),
-        recall_log: Arc::new(zero_stores_surreal::SurrealRecallLogStore::new(db.clone())),
-        distillation: Arc::new(zero_stores_surreal::SurrealDistillationStore::new(
-            db.clone(),
-        )),
-        kg_episode: Arc::new(zero_stores_surreal::SurrealKgEpisodeStore::new(db.clone())),
-        compaction: Arc::new(zero_stores_surreal::SurrealCompactionStore::new(db)),
-    })
-}
-
-/// Construct the SurrealDB-backed full bundle when the user has opted in
-/// via settings.json, otherwise return `None`. Failures are fatal — same
-/// policy as `maybe_build_surreal_pair`.
-#[cfg(feature = "surreal-backend")]
-pub fn maybe_build_surreal_full(
-    paths: &gateway_services::paths::VaultPaths,
-) -> Option<SurrealStoreBundle> {
-    let cfg = read_surreal_opt_in(paths)?;
-    tracing::info!(
-        url = %cfg.url,
-        namespace = %cfg.namespace,
-        database = %cfg.database,
-        "SurrealDB backend (full bundle) enabled via settings.json"
-    );
-    let result = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(build_surreal_full(&cfg))
-    });
-    match result {
-        Ok(bundle) => Some(bundle),
-        Err(e) => {
-            tracing::error!(error = %e, "SurrealDB init failed — daemon refusing to start");
-            panic!(
-                "SurrealDB persistence init failed: {e}. \
-                 If the database appears corrupted, run the recovery CLI \
-                 backed by zero-stores-surreal-recovery."
-            );
-        }
-    }
 }

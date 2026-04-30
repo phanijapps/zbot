@@ -266,32 +266,12 @@ impl AppState {
         );
         let conversation_repo = Arc::new(ConversationRepository::new(db_manager.clone()));
 
-        // Phase E2: detect SurrealDB opt-in BEFORE touching SQLite knowledge.
-        // When the user has selected Surreal (settings.json:
-        // `execution.featureFlags.surreal_backend = true`) we never open
-        // `knowledge.db` and skip the entire SQLite-knowledge cluster
-        // (KnowledgeDatabase + memory_repo + episode_repo + goal_repo +
-        // kg_episode_repo + graph_storage/service + vec indexes +
-        // wiki_repo + procedure_repo + sleep_time_worker). All those
-        // become `None`; the runtime is wired with trait-routed stores
-        // via `surreal_bundle` instead.
-        let use_surreal_for_knowledge = persistence_factory::is_surreal_backend_opt_in(&paths);
-        if use_surreal_for_knowledge {
-            tracing::info!(
-                "SurrealDB backend opted in — skipping SQLite knowledge.db / memory_repo / graph_storage / sleep_time_worker"
-            );
-        }
-
         // Initialize knowledge database (memory facts, graph, vec0 indexes).
-        // `None` when Surreal is on — handlers route through trait stores.
-        let knowledge_db: Option<Arc<KnowledgeDatabase>> = if use_surreal_for_knowledge {
-            None
-        } else {
-            Some(Arc::new(
-                KnowledgeDatabase::new(paths.clone())
-                    .expect("Failed to initialize knowledge database"),
-            ))
-        };
+        // SQLite is the only backend; the Option-wrapping is retained so
+        // downstream `.as_ref().map(...)` chains stay typecheck-stable.
+        let knowledge_db: Option<Arc<KnowledgeDatabase>> = Some(Arc::new(
+            KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
+        ));
 
         // Create log service for execution tracing
         let log_service = Arc::new(LogService::new(db_manager.clone()));
@@ -443,36 +423,11 @@ impl AppState {
         // the bundle they'd silently fall through to SQLite-backed
         // counterparts (or, for episodes built later, the wrong DB) and
         // the UI would show zeroes.
-        #[cfg(feature = "surreal-backend")]
-        let surreal_bundle: Option<persistence_factory::SurrealStoreBundle> =
-            persistence_factory::maybe_build_surreal_full(&paths);
-        #[cfg(not(feature = "surreal-backend"))]
-        let _surreal_bundle: Option<()> = None;
-        // The trait-routed memory store: Surreal when opted in, SQLite-wrapper
-        // when memory_repo is Some, None otherwise (Surreal feature off + flag on
-        // — defensive, not reachable in normal builds).
-        let early_memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = {
-            #[cfg(feature = "surreal-backend")]
-            {
-                surreal_bundle
-                    .as_ref()
-                    .map(|b| b.memory.clone())
-                    .or_else(|| {
-                        memory_repo.as_ref().map(|mr| {
-                            persistence_factory::build_memory_store(
-                                mr.clone(),
-                                embedding_client.clone(),
-                            )
-                        })
-                    })
-            }
-            #[cfg(not(feature = "surreal-backend"))]
-            {
-                memory_repo.as_ref().map(|mr| {
-                    persistence_factory::build_memory_store(mr.clone(), embedding_client.clone())
-                })
-            }
-        };
+        // The trait-routed memory store wraps the SQLite memory_repo.
+        let early_memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
+            memory_repo.as_ref().map(|mr| {
+                persistence_factory::build_memory_store(mr.clone(), embedding_client.clone())
+            });
 
         // Create memory recall. Phase E8: builds whenever EITHER
         // memory_store (trait) OR memory_repo (concrete) is wired —
@@ -493,17 +448,6 @@ impl AppState {
         // surreal_bundle.episode in Surreal mode, falls back to
         // wrapping the SQLite EpisodeRepository.
         if let Some(recall) = memory_recall_inner.as_mut() {
-            #[cfg(feature = "surreal-backend")]
-            let store_opt: Option<Arc<dyn zero_stores_traits::EpisodeStore>> = surreal_bundle
-                .as_ref()
-                .map(|b| b.episode.clone())
-                .or_else(|| {
-                    episode_repo.as_ref().map(|r| {
-                        Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(r.clone()))
-                            as Arc<dyn zero_stores_traits::EpisodeStore>
-                    })
-                });
-            #[cfg(not(feature = "surreal-backend"))]
             let store_opt: Option<Arc<dyn zero_stores_traits::EpisodeStore>> =
                 episode_repo.as_ref().map(|r| {
                     Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(r.clone()))
@@ -525,15 +469,6 @@ impl AppState {
         });
         // Wire trait-routed wiki_store (Phase E6c).
         if let Some(recall) = memory_recall_inner.as_mut() {
-            #[cfg(feature = "surreal-backend")]
-            let store_opt: Option<Arc<dyn zero_stores_traits::WikiStore>> =
-                surreal_bundle.as_ref().map(|b| b.wiki.clone()).or_else(|| {
-                    wiki_repo.as_ref().map(|r| {
-                        Arc::new(zero_stores_sqlite::GatewayWikiStore::new(r.clone()))
-                            as Arc<dyn zero_stores_traits::WikiStore>
-                    })
-                });
-            #[cfg(not(feature = "surreal-backend"))]
             let store_opt: Option<Arc<dyn zero_stores_traits::WikiStore>> =
                 wiki_repo.as_ref().map(|r| {
                     Arc::new(zero_stores_sqlite::GatewayWikiStore::new(r.clone()))
@@ -549,48 +484,19 @@ impl AppState {
         // Backend-agnostic — handlers + queue + adapter all consume the
         // trait, so a third backend (Postgres / etc.) plugs in by
         // implementing the trait and adding a build branch above.
-        let kg_episode_store: Option<Arc<dyn zero_stores_traits::KgEpisodeStore>> = {
-            #[cfg(feature = "surreal-backend")]
-            {
-                surreal_bundle
-                    .as_ref()
-                    .map(|b| b.kg_episode.clone())
-                    .or_else(|| {
-                        kg_episode_repo.as_ref().map(|r| {
-                            Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
-                                as Arc<dyn zero_stores_traits::KgEpisodeStore>
-                        })
-                    })
-            }
-            #[cfg(not(feature = "surreal-backend"))]
-            {
-                kg_episode_repo.as_ref().map(|r| {
-                    Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
-                        as Arc<dyn zero_stores_traits::KgEpisodeStore>
-                })
-            }
-        };
+        let kg_episode_store: Option<Arc<dyn zero_stores_traits::KgEpisodeStore>> =
+            kg_episode_repo.as_ref().map(|r| {
+                Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
+                    as Arc<dyn zero_stores_traits::KgEpisodeStore>
+            });
 
         // Trait-routed wiki store — Surreal when opted in, else SQLite wrapper
         // (when wiki_repo exists), else None.
-        let wiki_store_for_state: Option<Arc<dyn zero_stores_traits::WikiStore>> = {
-            #[cfg(feature = "surreal-backend")]
-            {
-                surreal_bundle.as_ref().map(|b| b.wiki.clone()).or_else(|| {
-                    wiki_repo.as_ref().map(|wr| {
-                        Arc::new(zero_stores_sqlite::GatewayWikiStore::new(wr.clone()))
-                            as Arc<dyn zero_stores_traits::WikiStore>
-                    })
-                })
-            }
-            #[cfg(not(feature = "surreal-backend"))]
-            {
-                wiki_repo.as_ref().map(|wr| {
-                    Arc::new(zero_stores_sqlite::GatewayWikiStore::new(wr.clone()))
-                        as Arc<dyn zero_stores_traits::WikiStore>
-                })
-            }
-        };
+        let wiki_store_for_state: Option<Arc<dyn zero_stores_traits::WikiStore>> =
+            wiki_repo.as_ref().map(|wr| {
+                Arc::new(zero_stores_sqlite::GatewayWikiStore::new(wr.clone()))
+                    as Arc<dyn zero_stores_traits::WikiStore>
+            });
 
         // Wire procedure repository for procedure recall during intent analysis.
         // SQLite-only — None when knowledge_db is None.
@@ -601,27 +507,11 @@ impl AppState {
             );
             Arc::new(ProcedureRepository::new(kdb.clone(), procedure_vec))
         });
-        let procedure_store_for_state: Option<Arc<dyn zero_stores_traits::ProcedureStore>> = {
-            #[cfg(feature = "surreal-backend")]
-            {
-                surreal_bundle
-                    .as_ref()
-                    .map(|b| b.procedure.clone())
-                    .or_else(|| {
-                        procedure_repo.as_ref().map(|pr| {
-                            Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(pr.clone()))
-                                as Arc<dyn zero_stores_traits::ProcedureStore>
-                        })
-                    })
-            }
-            #[cfg(not(feature = "surreal-backend"))]
-            {
-                procedure_repo.as_ref().map(|pr| {
-                    Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(pr.clone()))
-                        as Arc<dyn zero_stores_traits::ProcedureStore>
-                })
-            }
-        };
+        let procedure_store_for_state: Option<Arc<dyn zero_stores_traits::ProcedureStore>> =
+            procedure_repo.as_ref().map(|pr| {
+                Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(pr.clone()))
+                    as Arc<dyn zero_stores_traits::ProcedureStore>
+            });
         // Wire the trait-routed procedure_store on MemoryRecall so
         // procedure recall runs on Surreal too (Phase E6c).
         if let (Some(recall), Some(ps)) = (
@@ -637,50 +527,23 @@ impl AppState {
         // backend-specific repos. SurrealDB mode picks `surreal_bundle.episode`;
         // SQLite mode wraps `EpisodeRepository` (built lazily from
         // `knowledge_db` since the original repo is composed elsewhere).
-        let episode_store_for_state: Option<Arc<dyn zero_stores_traits::EpisodeStore>> = {
-            #[cfg(feature = "surreal-backend")]
-            {
-                if let Some(b) = surreal_bundle.as_ref() {
-                    Some(b.episode.clone())
-                } else {
-                    knowledge_db.as_ref().and_then(|kdb| {
-                        zero_stores_sqlite::vector_index::SqliteVecIndex::new(
-                            kdb.clone(),
-                            "session_episodes_index",
-                            "episode_id",
-                        )
-                        .ok()
-                        .map(|vec_index| {
-                            let repo = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
-                                kdb.clone(),
-                                Arc::new(vec_index),
-                            ));
-                            Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(repo))
-                                as Arc<dyn zero_stores_traits::EpisodeStore>
-                        })
-                    })
-                }
-            }
-            #[cfg(not(feature = "surreal-backend"))]
-            {
-                knowledge_db.as_ref().and_then(|kdb| {
-                    zero_stores_sqlite::vector_index::SqliteVecIndex::new(
+        let episode_store_for_state: Option<Arc<dyn zero_stores_traits::EpisodeStore>> =
+            knowledge_db.as_ref().and_then(|kdb| {
+                zero_stores_sqlite::vector_index::SqliteVecIndex::new(
+                    kdb.clone(),
+                    "session_episodes_index",
+                    "episode_id",
+                )
+                .ok()
+                .map(|vec_index| {
+                    let repo = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
                         kdb.clone(),
-                        "session_episodes_index",
-                        "episode_id",
-                    )
-                    .ok()
-                    .map(|vec_index| {
-                        let repo = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
-                            kdb.clone(),
-                            Arc::new(vec_index),
-                        ));
-                        Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(repo))
-                            as Arc<dyn zero_stores_traits::EpisodeStore>
-                    })
+                        Arc::new(vec_index),
+                    ));
+                    Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(repo))
+                        as Arc<dyn zero_stores_traits::EpisodeStore>
                 })
-            }
-        };
+            });
 
         // Conversation store is always SQLite-backed (per the design doc:
         // conversations.db never moves to Surreal). The sleep worker's
@@ -698,28 +561,13 @@ impl AppState {
         // MemoryRecall before that struct is moved into Arc::new below.
         // Picks the surreal_bundle's impl when present, else wraps the
         // SQLite GraphStorage (Phase E6c).
-        let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> = {
-            #[cfg(feature = "surreal-backend")]
-            {
-                surreal_bundle.as_ref().map(|b| b.kg.clone()).or_else(|| {
-                    graph_storage.as_ref().map(|gs| {
-                        let embedder = embedding_client
-                            .clone()
-                            .expect("embedding_client wired above for distillation/recall");
-                        persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
-                    })
-                })
-            }
-            #[cfg(not(feature = "surreal-backend"))]
-            {
-                graph_storage.as_ref().map(|gs| {
-                    let embedder = embedding_client
-                        .clone()
-                        .expect("embedding_client wired above for distillation/recall");
-                    persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
-                })
-            }
-        };
+        let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
+            graph_storage.as_ref().map(|gs| {
+                let embedder = embedding_client
+                    .clone()
+                    .expect("embedding_client wired above for distillation/recall");
+                persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
+            });
         if let (Some(recall), Some(ks)) = (memory_recall_inner.as_mut(), kg_store.as_ref()) {
             recall.set_kg_store(ks.clone());
         }
@@ -866,26 +714,12 @@ impl AppState {
                 as Arc<dyn agent_tools::IngestionAccess>),
             _ => None,
         };
-        // Goal adapter — backend-agnostic. Picks Surreal store when on
-        // surreal-backend, falls back to wrapping the SQLite GoalRepository.
-        let goal_store_for_adapter: Option<Arc<dyn zero_stores_traits::GoalStore>> = {
-            #[cfg(feature = "surreal-backend")]
-            {
-                surreal_bundle.as_ref().map(|b| b.goal.clone()).or_else(|| {
-                    goal_repo.as_ref().map(|gr| {
-                        Arc::new(zero_stores_sqlite::GatewayGoalStore::new(gr.clone()))
-                            as Arc<dyn zero_stores_traits::GoalStore>
-                    })
-                })
-            }
-            #[cfg(not(feature = "surreal-backend"))]
-            {
-                goal_repo.as_ref().map(|gr| {
-                    Arc::new(zero_stores_sqlite::GatewayGoalStore::new(gr.clone()))
-                        as Arc<dyn zero_stores_traits::GoalStore>
-                })
-            }
-        };
+        // Goal adapter wraps the SQLite GoalRepository.
+        let goal_store_for_adapter: Option<Arc<dyn zero_stores_traits::GoalStore>> =
+            goal_repo.as_ref().map(|gr| {
+                Arc::new(zero_stores_sqlite::GatewayGoalStore::new(gr.clone()))
+                    as Arc<dyn zero_stores_traits::GoalStore>
+            });
         let goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>> =
             goal_store_for_adapter.map(|store| {
                 Arc::new(gateway_execution::invoke::goal_adapter::GoalAdapter::new(
@@ -931,27 +765,11 @@ impl AppState {
         // regardless of backend. Surreal uses its own
         // `kg_compaction_run` table; SQLite delegates to the existing
         // `CompactionRepository`. Default no-op impls cover edge cases.
-        let compaction_store: Option<Arc<dyn zero_stores_traits::CompactionStore>> = {
-            #[cfg(feature = "surreal-backend")]
-            {
-                surreal_bundle
-                    .as_ref()
-                    .map(|b| b.compaction.clone())
-                    .or_else(|| {
-                        compaction_repo.as_ref().map(|r| {
-                            Arc::new(zero_stores_sqlite::GatewayCompactionStore::new(r.clone()))
-                                as Arc<dyn zero_stores_traits::CompactionStore>
-                        })
-                    })
-            }
-            #[cfg(not(feature = "surreal-backend"))]
-            {
-                compaction_repo.as_ref().map(|r| {
-                    Arc::new(zero_stores_sqlite::GatewayCompactionStore::new(r.clone()))
-                        as Arc<dyn zero_stores_traits::CompactionStore>
-                })
-            }
-        };
+        let compaction_store: Option<Arc<dyn zero_stores_traits::CompactionStore>> =
+            compaction_repo.as_ref().map(|r| {
+                Arc::new(zero_stores_sqlite::GatewayCompactionStore::new(r.clone()))
+                    as Arc<dyn zero_stores_traits::CompactionStore>
+            });
 
         // One-shot backfill: populate legacy kg_entities / kg_relationships
         // rows with the richer metadata introduced in commits b816702,

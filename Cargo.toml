@@ -21,8 +21,6 @@ members = [
     "stores/zero-stores-conformance",
     "stores/zero-stores-domain",
     "stores/zero-stores-sqlite",
-    "stores/zero-stores-surreal",
-    "stores/zero-stores-surreal-recovery",
     "stores/zero-stores-traits",
 
     # Runtime - Execution engine
@@ -96,9 +94,6 @@ indexmap = "2"
 
 # Tokenization (real tokenizer for middleware token counting)
 tiktoken-rs = "0.11"
-
-# SurrealDB
-surrealdb = { version = "3.0", default-features = false, features = ["kv-rocksdb", "kv-mem"] }
 
 [workspace.lints.clippy]
 missing_docs_in_private_items = "allow"
