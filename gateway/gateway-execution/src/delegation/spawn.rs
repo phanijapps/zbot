@@ -60,6 +60,7 @@ pub async fn spawn_delegated_agent(
     workspace_cache: WorkspaceCache,
     delegation_permit: Option<OwnedSemaphorePermit>,
     memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+    distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     memory_recall: Option<Arc<MemoryRecall>>,
     rate_limiters: Arc<
         std::sync::RwLock<
@@ -408,6 +409,7 @@ pub async fn spawn_delegated_agent(
         initial_history,
         fact_store_for_ctx,
         memory_store_for_snapshot,
+        distiller,
     });
 
     tracing::info!(
@@ -494,6 +496,9 @@ struct SpawnContext {
     // --- Optional memory wiring (Phase 4b + 7 ward_snapshot preamble) ---
     fact_store_for_ctx: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     memory_store_for_snapshot: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+    /// Distiller for the subagent's child session — fired after
+    /// `complete_session(child_session_id)`.
+    distiller: Option<Arc<crate::distillation::SessionDistiller>>,
 }
 
 /// Spawn the async execution task for the delegated agent.
@@ -517,6 +522,7 @@ fn spawn_execution_task(ctx: SpawnContext) {
         paths,
         fact_store_for_ctx,
         memory_store_for_snapshot,
+        distiller,
     } = ctx;
 
     let agent_id = request.child_agent_id.clone();
@@ -773,6 +779,27 @@ fn spawn_execution_task(ctx: SpawnContext) {
         // Mark child session as completed (prevents orphaned "running" sessions)
         if let Err(e) = state_service.complete_session(&child_session_id) {
             tracing::warn!(child_session_id = %child_session_id, "Failed to complete child session: {}", e);
+        }
+
+        // Fire-and-forget subagent distillation. The subagent's transcript
+        // is the only place where the substantive tool results (web_fetch
+        // article content, shell stdout, etc.) live — root distillation
+        // sees only the admin chatter (delegate_to_agent + callbacks), so
+        // without this the KG misses everything subagents discover.
+        if let Some(distiller) = distiller.as_ref() {
+            let distiller = distiller.clone();
+            let sid = child_session_id.clone();
+            let aid = agent_id.clone();
+            tokio::spawn(async move {
+                if let Err(e) = distiller.distill(&sid, &aid).await {
+                    tracing::warn!(
+                        child_session_id = %sid,
+                        agent_id = %aid,
+                        error = %e,
+                        "Subagent distillation failed"
+                    );
+                }
+            });
         }
     });
 }
