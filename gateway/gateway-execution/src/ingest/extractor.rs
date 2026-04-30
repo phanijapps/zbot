@@ -61,7 +61,7 @@ pub struct RelationshipTriple {
 /// Errors propagate to the worker which marks the episode failed.
 ///
 /// Phase B2: takes the trait-routed `kg_store` instead of the concrete
-/// `Arc<GraphStorage>` so writes work on both SQLite and SurrealDB.
+/// `Arc<GraphStorage>` so writes work on both SQLite (and any future alternate backend).
 /// Episode metadata is passed by id only (the extractor needs only the
 /// id for provenance — agent_id lives on the extractor itself).
 #[async_trait]

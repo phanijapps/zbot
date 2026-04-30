@@ -50,7 +50,7 @@ const DEFAULT_TYPES: &[EntityType] = &[
 /// Threshold-based duplicate merger.
 ///
 /// Phase D3: trait-routed. Both `kg_store` and `compaction_store` are
-/// Arc<dyn ...> so the compactor runs on both SQLite and SurrealDB —
+/// Arc<dyn ...> so the compactor runs on both SQLite (and any future alternate backend) —
 /// each backend implements the underlying queries with its own
 /// primitives (SQL transactions on SQLite, RELATE delete+recreate on
 /// Surreal).

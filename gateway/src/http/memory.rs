@@ -1,31 +1,9 @@
 //! # Memory Endpoints
 //!
-//! CRUD and search operations for agent memory facts.
-//!
-//! ## Migration status (TD-023)
-//!
-//! Handlers in this file split into two groups:
-//!
-//! 1. **Migrated** to trait stores: `stats`, `health`. Both pull
-//!    aggregate counts through `state.memory_store` (and
-//!    `state.kg_store` for the entity/relationship part of `stats`).
-//!    The SQL that was previously inlined in this file now lives
-//!    behind `MemoryFactStore::aggregate_stats` /
-//!    `MemoryFactStore::health_metrics`.
-//!
-//! 2. **Not migrated** (deliberate, tracked under TD-023's
-//!    HTTP-handler retirement follow-up): every handler that
-//!    returns or accepts a typed `MemoryFact` row —
-//!    `list_memory_facts`, `search_memory_facts`, `get_memory_fact`,
-//!    `delete_memory_fact`, `create_memory_fact`,
-//!    `search_all_memory_facts`, `list_all_memory_facts`. The
-//!    `MemoryFactStore` trait surface returns `serde_json::Value`
-//!    payloads (the design choice keeps the trait portable to
-//!    SurrealDB without dragging `MemoryFact` into the `zero-stores`
-//!    types crate). Migrating these handlers requires hoisting
-//!    `MemoryFact` from `gateway-database` up to `zero-stores`,
-//!    which has a large blast radius (11 import sites) and is
-//!    intentionally a separate workstream.
+//! CRUD and search operations for agent memory facts. All handlers
+//! route through `state.memory_store` (and `state.kg_store` for the
+//! entity/relationship part of `stats`) so the underlying backend is
+//! abstracted from the HTTP surface.
 
 use crate::state::AppState;
 use axum::{
@@ -147,7 +125,7 @@ pub async fn list_memory_facts(
     Path(agent_id): Path<String>,
     Query(query): Query<MemoryListQuery>,
 ) -> Result<Json<MemoryListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Trait-routed so SurrealDB is honored when opted-in.
+    // Routed through the trait surface.
     let memory_store = match &state.memory_store {
         Some(s) => s,
         None => {
@@ -525,7 +503,7 @@ pub async fn search_all_memory_facts(
     State(state): State<AppState>,
     Query(query): Query<GlobalMemorySearchQuery>,
 ) -> Result<Json<MemoryListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Routed through the trait surface so the SurrealDB backend is
+    // Routed through the trait surface so the underlying backend is
     // honored when opted in. Defaults to the FTS arm — the historical
     // handler was FTS-only and the trait's `mode = "fts"` matches.
     // The trait method does not accept a category filter; for now we
@@ -579,7 +557,7 @@ pub async fn list_all_memory_facts(
     Query(query): Query<AllMemoryListQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<MemoryListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Route through the trait surface so the SurrealDB backend is honored
+    // Route through the trait surface so the underlying backend is abstracted
     // when the user has opted in via Settings → Persistence. The legacy
     // concrete `state.memory_repo` is no longer the source of truth here.
     let memory_store = match &state.memory_store {
@@ -619,13 +597,9 @@ pub async fn list_all_memory_facts(
         .map(|n| n as usize)
         .unwrap_or(0);
 
-    // Each row is a serde_json::Value; deserialize into MemoryFactResponse.
+    // Each row is a serde_json::Value matching the MemoryFactResponse shape.
     // Rows that fail to deserialize are skipped with a warning rather than
-    // failing the whole request — backend impls may emit slightly different
-    // shapes (e.g. Surreal's RecordId-derived `id` vs SQLite's UUID string).
-    // Each row is a serde_json::Value matching the MemoryFactResponse shape
-    // (both backends emit it). Rows that fail to deserialize are skipped
-    // with a warning rather than failing the whole request.
+    // failing the whole request.
     let facts: Vec<MemoryFactResponse> = raw_facts
         .into_iter()
         .filter_map(|v| match serde_json::from_value::<MemoryFactResponse>(v) {

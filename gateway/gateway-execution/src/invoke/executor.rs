@@ -86,8 +86,7 @@ pub struct ExecutorBuilder {
     model_registry: Option<Arc<ModelRegistry>>,
     is_delegated: bool,
     subagent_non_streaming: bool,
-    /// Trait-routed kg store for the `graph_query` tool — wired in both
-    /// SQLite and SurrealDB modes via `state.kg_store`.
+    /// Trait-routed kg store for the `graph_query` tool.
     kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
@@ -161,8 +160,7 @@ impl ExecutorBuilder {
         self
     }
 
-    /// Set the trait-routed kg store for the `graph_query` tool. Wired
-    /// in both SQLite and SurrealDB modes via `state.kg_store`.
+    /// Set the trait-routed kg store for the `graph_query` tool.
     pub fn with_kg_store(mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) -> Self {
         self.kg_store = Some(store);
         self
@@ -570,7 +568,7 @@ impl ExecutorBuilder {
 
             // Knowledge graph query — fully trait-routed (Phase E6c):
             // KgStoreAdapter wraps `Arc<dyn KnowledgeGraphStore>` so the
-            // tool runs identically on SQLite or SurrealDB.
+            // tool runs identically on the configured backend.
             if let Some(ref ks) = self.kg_store {
                 let adapter = Arc::new(super::kg_store_adapter::KgStoreAdapter::new(ks.clone()));
                 tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
@@ -611,7 +609,7 @@ impl ExecutorBuilder {
 
             // Knowledge graph query — fully trait-routed (Phase E6c):
             // KgStoreAdapter wraps `Arc<dyn KnowledgeGraphStore>` so the
-            // tool runs identically on SQLite or SurrealDB.
+            // tool runs identically on the configured backend.
             if let Some(ref ks) = self.kg_store {
                 let adapter = Arc::new(super::kg_store_adapter::KgStoreAdapter::new(ks.clone()));
                 tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));

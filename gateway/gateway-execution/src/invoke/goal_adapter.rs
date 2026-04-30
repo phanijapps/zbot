@@ -1,11 +1,7 @@
 //! # Goal Adapter
 //!
 //! Bridges [`GoalStore`] to [`agent_tools::GoalAccess`] so the `goal`
-//! tool can create/update/list agent goals on either backend
-//! (SQLite via `GatewayGoalStore`, SurrealDB via `SurrealGoalStore`).
-//!
-//! Phase E6c: takes `Arc<dyn GoalStore>` instead of the concrete
-//! SQLite repo.
+//! tool can create/update/list agent goals through the trait surface.
 
 use async_trait::async_trait;
 use serde_json::Value;

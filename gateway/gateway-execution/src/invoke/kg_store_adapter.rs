@@ -2,13 +2,13 @@
 //!
 //! Bridges `Arc<dyn zero_stores::KnowledgeGraphStore>` to
 //! `agent_tools::GraphStorageAccess` so the `GraphQueryTool` can query
-//! the knowledge graph regardless of backend (SQLite or SurrealDB).
+//! the knowledge graph regardless of backend (the configured backend).
 //!
 //! The earlier [`super::graph_adapter::GraphStorageAdapter`] only knew
-//! about the concrete `GraphStorage` (SQLite). In SurrealDB-backend mode
+//! about the concrete `GraphStorage` (SQLite).
 //! `state.graph_storage` is `None`, so that adapter could not be wired
 //! and subagents lost the `graph_query` tool entirely. This adapter
-//! consumes the trait-routed `state.kg_store` (wired in both backends)
+//! consumes the trait-routed `state.kg_store` (wired by AppState)
 //! so the tool registers regardless of which DB is selected.
 
 use std::sync::Arc;
@@ -58,7 +58,7 @@ fn neighbor_to_info(
 }
 
 /// Adapter that implements [`GraphStorageAccess`] by delegating to a
-/// trait-object [`KnowledgeGraphStore`]. Both SQLite and SurrealDB
+/// trait-object [`KnowledgeGraphStore`]. Both SQLite (and any future alternate backend)
 /// backends are addressed uniformly.
 pub struct KgStoreAdapter {
     store: Arc<dyn KnowledgeGraphStore>,

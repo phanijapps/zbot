@@ -7,7 +7,7 @@
 //! Violations return Err; the HTTP layer converts those to 429.
 //!
 //! Phase B2: backend-agnostic — uses the `KgEpisodeStore` trait so
-//! Surreal mode shares the same gating logic as SQLite.
+//! the configured backend shares the same gating logic as SQLite.
 
 use std::sync::Arc;
 

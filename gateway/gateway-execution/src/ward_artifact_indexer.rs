@@ -9,7 +9,7 @@
 //! Phase C: backend-agnostic via the trait surface. Both
 //! `KgEpisodeStore` (for the dedup probe + episode insert) and
 //! `KnowledgeGraphStore` (for the entity/relationship store) work on
-//! SQLite and SurrealDB. Adding a new datastore plugs in with zero
+//! SQLite (and any future alternate backend). Adding a new datastore plugs in with zero
 //! changes to this module.
 
 use crate::indexer::relationship_rules;

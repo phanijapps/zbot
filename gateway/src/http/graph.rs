@@ -472,12 +472,9 @@ pub struct AggregateGraphStats {
 /// GET /api/distillation/status
 /// Get aggregate distillation statistics.
 ///
-/// On the SurrealDB backend the SQLite-only `distillation_repo` is `None`
-/// (no `distillation_runs` table on Surreal yet — the trait surface is
-/// wired but doesn't expose `get_stats` / `get_undistilled_sessions`).
-/// Return zeroed stats instead of 503 so the Observatory health bar
-/// renders cleanly. Migrating these to a `DistillationStore` trait
-/// extension is a follow-up.
+/// Returns zeroed stats when `distillation_repo` is unavailable
+/// (stripped-down test fixtures) so the Observatory health bar
+/// renders cleanly.
 pub async fn distillation_status(
     State(state): State<AppState>,
 ) -> Result<Json<DistillationStats>, (StatusCode, Json<ErrorResponse>)> {
@@ -500,8 +497,7 @@ pub async fn distillation_status(
 /// GET /api/distillation/undistilled
 /// Returns undistilled sessions (session_id + agent_id pairs).
 ///
-/// On the SurrealDB backend returns an empty list (same rationale as
-/// `distillation_status` — SQLite-only repo, trait extension TBD).
+/// Returns an empty list when `distillation_repo` is unavailable.
 pub async fn undistilled_sessions(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<UndistilledSession>>, (StatusCode, Json<ErrorResponse>)> {
@@ -620,8 +616,7 @@ pub async fn graph_stats(
         None => 0,
     };
 
-    // Episode count: prefer the trait surface (wired in both backends)
-    // so Surreal mode reports the real count; fall back to the SQLite
+    // Episode count: prefer the trait surface; fall back to the SQLite
     // repo when only that is available (legacy / minimal AppStates).
     let episodes = match (&state.episode_store, &state.episode_repo) {
         (Some(store), _) => store
@@ -701,10 +696,9 @@ pub struct ReindexResponse {
 /// POST /api/graph/reindex — force re-indexing of every ward on disk.
 /// Idempotent: relationships upsert via UNIQUE(source, target, type).
 ///
-/// Phase C: trait-routed via `state.kg_episode_store` +
-/// `state.kg_store`. Works on both SQLite and SurrealDB. Returns 503
-/// only when neither trait is wired (defensive — production always
-/// has both).
+/// Trait-routed via `state.kg_episode_store` + `state.kg_store`.
+/// Returns 503 only when neither trait is wired (defensive —
+/// production always has both).
 pub async fn reindex_all_wards(
     State(state): State<AppState>,
 ) -> Result<Json<ReindexResponse>, StatusCode> {

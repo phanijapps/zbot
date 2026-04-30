@@ -52,8 +52,7 @@ pub(super) struct InvokeBootstrap {
     pub(super) log_service: Arc<LogService<DatabaseManager>>,
     pub(super) conversation_repo: Arc<ConversationRepository>,
     pub(super) paths: SharedVaultPaths,
-    /// Trait-routed memory store used to build the executor's fact_store;
-    /// wired in both SQLite and SurrealDB modes.
+    /// Trait-routed memory store used to build the executor's fact_store.
     pub(super) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub(super) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub(super) model_registry: Arc<ArcSwapOption<ModelRegistry>>,
@@ -419,9 +418,8 @@ impl InvokeBootstrap {
             .as_ref()
             .and_then(|ctx| serde_json::to_value(ctx).ok());
 
-        // Trait-routed fact store — wired in both SQLite and SurrealDB
-        // modes via AppState. None only in stripped-down test fixtures
-        // that don't drive save_fact / recall paths.
+        // Trait-routed fact store wired by AppState. None only in
+        // stripped-down test fixtures that don't drive save_fact / recall paths.
         let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = self.memory_store.clone();
         // Clone for resource indexing (before fact_store is moved into builder)
         let fact_store_for_indexing = fact_store.clone();

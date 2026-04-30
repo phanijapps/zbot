@@ -7,7 +7,7 @@
 //! (b) bulk-upsert structured entities and relationships synchronously.
 //!
 //! Phase B2: backend-agnostic. Both paths now go through trait surfaces
-//! so SurrealDB and SQLite share one code path.
+//! so all backends share one code path.
 
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};

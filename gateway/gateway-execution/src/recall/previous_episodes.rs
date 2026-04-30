@@ -6,7 +6,7 @@
 //! starting cold. This is the Memory v2 Phase 6 "episode chain" wiring.
 //!
 //! Phase E6c: backend-agnostic — takes `Arc<dyn EpisodeStore>` so the
-//! same recall path works on SQLite or Surreal.
+//! same recall path works on the configured backend.
 
 use crate::recall::scored_item::{ItemKind, Provenance, ScoredItem};
 use std::sync::Arc;

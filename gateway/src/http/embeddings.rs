@@ -207,13 +207,6 @@ pub async fn configure(
     // portable). This handler streams progress over SSE, so it stays
     // on the concrete database handle. Migrating would require a
     // progress-callback variant on the trait, deferred.
-    //
-    // Phase E: when the user has opted into the SurrealDB backend the
-    // SQLite knowledge DB is not initialised at all. The Surreal
-    // embedding indices are maintained inline by the Surreal stores —
-    // there is no per-table progress surface to stream — so this
-    // handler skips the reindex orchestration step in that mode and
-    // emits a single `ready` event after persisting settings.
     let knowledge_db = state.knowledge_db.clone();
     // Persist the intent first so a daemon restart will honor the selection.
     svc.persist_settings(&new)
@@ -235,9 +228,6 @@ pub async fn configure(
         }
 
         // Phase 2: reindex if required (dim or model changed).
-        // Skipped entirely when the SQLite knowledge DB is disabled
-        // (SurrealDB backend) — Surreal stores maintain their own
-        // embedding indices inline.
         if svc_clone.needs_reindex() {
             let current_dim = svc_clone.dimensions();
             match knowledge_db.as_ref() {
@@ -276,9 +266,9 @@ pub async fn configure(
                     }
                 }
                 None => {
-                    // SurrealDB backend: nothing to reindex on the SQLite side.
+                    // No knowledge DB wired (test fixture path) — nothing to reindex.
                     if let Err(e) = svc_clone.mark_indexed(current_dim) {
-                        tracing::warn!("mark_indexed failed in surreal mode: {e}");
+                        tracing::warn!("mark_indexed failed: {e}");
                     }
                 }
             }

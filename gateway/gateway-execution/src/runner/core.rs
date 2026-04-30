@@ -84,7 +84,7 @@ pub struct ExecutionRunner {
     bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
     /// Cached workspace context (avoids reading workspace.json per execution)
     workspace_cache: WorkspaceCache,
-    /// Trait-routed memory store — wired in both SQLite and SurrealDB modes.
+    /// Trait-routed memory store.
     memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     /// Session distiller for automatic fact extraction after sessions
     distiller: Option<Arc<crate::distillation::SessionDistiller>>,
@@ -111,9 +111,7 @@ pub struct ExecutionRunner {
             std::collections::HashMap<String, std::sync::Arc<agent_runtime::ProviderRateLimiter>>,
         >,
     >,
-    /// Knowledge graph storage for the graph_query tool.
-    /// Trait-routed kg store. Phase E5b — preferred over the legacy
-    /// for the graph_query tool wiring; wired in both backends.
+    /// Trait-routed kg store for the `graph_query` tool — wired by AppState.
     kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     /// KG episode repository for ward artifact indexing after distillation.
     kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
@@ -154,7 +152,7 @@ pub struct ExecutionRunnerConfig {
     // --- Optional integrations ---
     pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     pub workspace_cache: WorkspaceCache,
-    /// Trait-routed memory store — wired in both SQLite and SurrealDB modes.
+    /// Trait-routed memory store — wired.
     pub memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
@@ -497,8 +495,8 @@ impl ExecutionRunner {
 
     /// Late-wired setter for the trait-routed kg store. Mirrored to the
     /// bootstrap so `InvokeBootstrap::finish_setup` reads its own clone
-    /// at session-setup time. Phase E5b — wired in both backends so the
-    /// `graph_query` tool registers regardless of SQLite vs SurrealDB.
+    /// at session-setup time. Phase E5b — wired by AppState so the
+    /// `graph_query` tool registers regardless of backend.
     pub fn set_kg_store(&mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) {
         self.bootstrap.kg_store = Some(store.clone());
         self.kg_store = Some(store);
@@ -1141,7 +1139,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
     }
 
     // Trait-routed fact store used for save_fact and ctx writes during
-    // continuation. Wired in both SQLite and SurrealDB modes via AppState.
+    // continuation. Wired via AppState.
     let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = memory_store.clone();
     // Clone for session-ctx plan_snapshot below — the builder moves the
     // primary Arc, so we keep a separate handle to write plan text to

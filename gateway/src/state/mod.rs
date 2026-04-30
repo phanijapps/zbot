@@ -93,7 +93,7 @@ pub struct AppState {
     pub bridge_bus: Option<Arc<dyn gateway_bus::GatewayBus>>,
 
     /// Trait-routed memory-fact store. The single read/write surface for
-    /// memory facts on both SQLite and SurrealDB backends.
+    /// memory facts.
     pub memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
 
     /// Goal repository — active goals used for intent boost in unified recall.
@@ -297,7 +297,7 @@ impl AppState {
         // Phase E6c: distillation_run rows live on the conversation DB
         // (DatabaseManager), not knowledge.db. Wire unconditionally —
         // both backends have the conversation DB. This makes
-        // /api/distillation/status report real numbers on Surreal mode
+        // /api/distillation/status report real numbers
         // too, and the distiller's run-tracking (insert/retry/success)
         // actually persists.
         let distillation_repo: Option<Arc<DistillationRepository>> =
@@ -314,7 +314,7 @@ impl AppState {
             .map(|kdb| Arc::new(KgEpisodeRepository::new(kdb.clone())));
 
         // Initialize knowledge graph service and storage. Skipped entirely
-        // when SurrealDB is on (knowledge_db is None).
+        // when knowledge_db is None.
         let (graph_service, graph_storage): (Option<Arc<GraphService>>, Option<Arc<GraphStorage>>) =
             match knowledge_db.as_ref() {
                 Some(kdb) => match GraphStorage::new(kdb.clone()) {
@@ -463,7 +463,7 @@ impl AppState {
                     as Arc<dyn zero_stores_traits::KgEpisodeStore>
             });
 
-        // Trait-routed wiki store — Surreal when opted in, else SQLite wrapper
+        // Trait-routed wiki store — wraps the SQLite repository
         // (when wiki_repo exists), else None.
         let wiki_store_for_state: Option<Arc<dyn zero_stores_traits::WikiStore>> =
             wiki_repo.as_ref().map(|wr| {
@@ -486,7 +486,7 @@ impl AppState {
                     as Arc<dyn zero_stores_traits::ProcedureStore>
             });
         // Wire the trait-routed procedure_store on MemoryRecall so
-        // procedure recall runs on Surreal too (Phase E6c).
+        // procedure recall runs (Phase E6c).
         if let (Some(recall), Some(ps)) = (
             memory_recall_inner.as_mut(),
             procedure_store_for_state.as_ref(),
@@ -517,7 +517,7 @@ impl AppState {
             });
 
         // Conversation store is always SQLite-backed (per the design doc:
-        // conversations.db never moves to Surreal). The sleep worker's
+        // conversations.db is SQLite-only). The sleep worker's
         // PatternExtractor needs it on both backends.
         let conversation_store_for_state: Arc<dyn zero_stores_traits::ConversationStore> = Arc::new(
             zero_stores_sqlite::ConversationRepository::new(db_manager.clone()),
@@ -552,7 +552,7 @@ impl AppState {
         // Coexists with graph_service/graph_storage until Phase 5 retirement.
         //
         // Construction is centralized in `persistence_factory` (TD-023):
-        // when SurrealDB support lands, the config-driven branch goes
+        // when alternate-backend support lands, the config-driven branch goes
         // there, and this callsite stays the same. We use the
         // `_from_storage` helper because AppState shares one
         // `Arc<GraphStorage>` between `kg_store` and the legacy
@@ -576,7 +576,7 @@ impl AppState {
         // (concrete) must be wired so fact upsert has a destination.
         // SQLite-only deps (graph_storage, distillation_repo, episode_repo,
         // wiki_repo, procedure_repo) flow through as Optional — None in
-        // Surreal mode means the corresponding side-effects (KG ingestion,
+        // missing means the corresponding side-effects (KG ingestion,
         // run-tracking, episode storage, wiki compilation, procedure
         // upsert) skip gracefully. Fact distillation itself runs.
         let distiller: Option<Arc<SessionDistiller>> =
@@ -622,7 +622,7 @@ impl AppState {
             };
 
         // Keep a handle for on-demand distillation (backfill, trigger).
-        // None when SurrealDB mode skipped distiller construction.
+        // None when the distiller wasn't constructed.
         let distiller_ref: Option<Arc<SessionDistiller>> = distiller.clone();
         let max_parallel_agents = settings
             .get_execution_settings()
@@ -663,7 +663,7 @@ impl AppState {
 
         // Build agent-tool adapters so runner can register `ingest` + `goal` tools.
         // Phase B2: also trait-routed. The IngestionAdapter is migrated
-        // alongside the queue so subagent ingestion works on Surreal.
+        // alongside the queue so subagent ingestion works.
         let ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>> = match (
             ingestion_queue.as_ref(),
             kg_store.as_ref(),
@@ -720,7 +720,7 @@ impl AppState {
 
         // Phase 4: CompactionRepository + SleepTimeWorker (background maintenance).
         // CompactionRepository is SQLite-tied (kg_compactions table on
-        // knowledge.db). None in SurrealDB mode.
+        // knowledge.db). None when knowledge_db is unwired.
         let compaction_repo: Option<Arc<zero_stores_sqlite::CompactionRepository>> = knowledge_db
             .as_ref()
             .map(|kdb| Arc::new(zero_stores_sqlite::CompactionRepository::new(kdb.clone())));
@@ -741,7 +741,7 @@ impl AppState {
         // 1bc21f6, 5bf3013. Marker row in kg_compactions gates this so
         // subsequent daemon starts are a no-op. Non-fatal on failure —
         // a backfill bug must never prevent the daemon from booting.
-        // Skip entirely when knowledge_db is None (SurrealDB mode).
+        // Skip entirely when knowledge_db is None.
         if let Some(ref kdb) = knowledge_db {
             let backfiller = gateway_execution::sleep::KgBackfiller::new(kdb.clone());
             match backfiller.run_once_blocking() {
@@ -1398,15 +1398,15 @@ impl AppState {
 
     /// Seed default policies from bundled template if no policies/corrections exist.
     async fn seed_default_policies(&self) {
-        // Route through the trait surface so both SQLite and SurrealDB
+        // Route through the trait surface so the configured backend
         // backends seed identically. `memory_store` is wired in both
-        // modes (SQLite-wrapper or SurrealMemoryStore via the bundle).
+        // modes (SQLite-wrapper or ).
         let memory_store = match &self.memory_store {
             Some(s) => s,
             None => {
                 tracing::warn!(
                     "seed_default_policies: memory_store is None — refusing to seed. \
-                     This means neither SQLite memory_repo nor a SurrealDB bundle was \
+                     This means neither SQLite memory_repo  \
                      wired into AppState; check persistence_factory output."
                 );
                 return;

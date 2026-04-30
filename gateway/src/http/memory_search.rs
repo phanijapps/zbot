@@ -13,29 +13,10 @@
 //! The `filters` field is accepted but ignored in v1. `limit` applies
 //! per-type, not globally.
 //!
-//! ## Migration status (TD-023)
-//!
-//! - The episode FTS-fallback path used to inline raw LIKE SQL via
-//!   `state.knowledge_db.with_connection`. It now calls
-//!   `EpisodeRepository::keyword_search`, so the handler no longer
-//!   touches the connection pool directly for that path.
-//! - Wiki / procedure / episode repos are built on demand from
-//!   `state.knowledge_db`. That's still a typed-repo construction
-//!   (not a raw SQL reach-in) — `WardWikiRepository`,
-//!   `ProcedureRepository`, and `EpisodeRepository` haven't been
-//!   migrated to `zero-stores` traits yet. Tracked under TD-023's
-//!   HTTP-handler retirement follow-up.
-//! - Memory-fact search continues to call `MemoryRepository`
-//!   directly because the `MemoryFactStore` trait surface is JSON-
-//!   oriented; converting these handlers requires hoisting `MemoryFact`
-//!   to `zero-stores`, which is a separate workstream.
-//!
-//! Phase E: when the user has opted into the SurrealDB backend,
-//! `state.knowledge_db` is `None` and this handler returns
-//! `503 Service Unavailable` rather than reach for a SQLite handle
-//! that wasn't initialized. Migrating the unified search to trait
-//! stores is the natural follow-up — every type already has a
-//! `*Store` trait method covering the per-type query.
+//! All four search paths route through the trait stores
+//! (`memory_store`, `wiki_store`, `procedure_store`, `episode_store`)
+//! on `AppState`. Returns `503 Service Unavailable` when a store isn't
+//! wired (stripped-down test fixtures).
 
 use crate::state::AppState;
 use axum::{extract::State, http::StatusCode, Json};
@@ -111,15 +92,10 @@ fn err(status: StatusCode, msg: impl Into<String>) -> HandlerError {
     (status, Json(ErrorBody { error: msg.into() }))
 }
 
-/// Error helper: this handler is not yet migrated to trait stores;
-/// when SurrealDB-backend mode disables the SQLite knowledge DB the
-/// caller gets a clear 503 instead of a silent SQL reach-in attempt.
-fn surreal_unavailable() -> HandlerError {
-    err(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "unified search not yet migrated to trait stores; \
-         toggle SurrealDB off in Settings to use the SQLite path",
-    )
+/// Error helper: returns 503 when a trait store isn't wired (e.g.
+/// stripped-down test fixtures).
+fn store_unavailable() -> HandlerError {
+    err(StatusCode::SERVICE_UNAVAILABLE, "store unavailable")
 }
 
 fn wiki_hit_to_value(hit: WikiHit) -> Value {
@@ -217,17 +193,17 @@ pub async fn memory_search(
     let wiki_store = state
         .wiki_store
         .as_ref()
-        .ok_or_else(surreal_unavailable)?
+        .ok_or_else(store_unavailable)?
         .clone();
     let proc_store = state
         .procedure_store
         .as_ref()
-        .ok_or_else(surreal_unavailable)?
+        .ok_or_else(store_unavailable)?
         .clone();
     let episode_store = state
         .episode_store
         .as_ref()
-        .ok_or_else(surreal_unavailable)?
+        .ok_or_else(store_unavailable)?
         .clone();
 
     let ward: Option<String> = req.ward_ids.first().cloned();

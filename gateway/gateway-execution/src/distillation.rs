@@ -1529,10 +1529,8 @@ impl SessionDistiller {
     // Knowledge graph helpers (trait-routed)
     // =========================================================================
 
-    /// Find an entity by exact name. Prefers the trait `kg_store`
-    /// (case-insensitive name match via `search_entities_by_name`)
-    /// and falls back to the legacy concrete `graph_storage` if only
-    /// that is wired.
+    /// Find an entity by exact name via the trait `kg_store`
+    /// (case-insensitive name match via `search_entities_by_name`).
     async fn find_entity_by_name(&self, agent_id: &str, name: &str) -> Option<String> {
         let store = self.kg_store.as_ref()?;
         store

@@ -134,7 +134,7 @@ impl MemoryRecall {
         let query_embedding = self.embed_query(user_message).await;
 
         // 2. Run hybrid search (FTS5 + vector). Trait-routed when
-        //    memory_store is wired so SurrealDB is honored when opted-in.
+        //    memory_store is wired .
         let hybrid_results: Vec<ScoredFact> = if let Some(store) = &self.memory_store {
             let raw = store
                 .search_memory_facts_hybrid(
@@ -314,7 +314,7 @@ impl MemoryRecall {
         let query_emb = self.embed_query(query).await;
 
         // 1. Facts via hybrid search. Phase E8: prefer the trait
-        // `memory_store` (wired in both backends), fall back to the
+        // `memory_store` (wired by AppState), fall back to the
         // SQLite repo. On Surreal, scores aren't yet preserved by the
         // trait surface — we synthesize 0.5 so facts still rank into
         // the fused pool but don't dominate it.

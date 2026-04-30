@@ -7,13 +7,9 @@
 //! so the UI doesn't need to reimplement recency classification.
 //!
 //! Limits: facts, wiki and procedures are capped at 100 rows; episodes at 50.
-//! The episode/wiki/procedure paths are trait-routed (`state.episode_store`,
-//! `state.wiki_store`, `state.procedure_store`) so the SurrealDB backend
-//! is honored when opted in.
 //!
 //! All four content types are read through trait stores
-//! (`memory_store`, `episode_store`, `wiki_store`, `procedure_store`)
-//! so SurrealDB and SQLite both go through the same code path.
+//! (`memory_store`, `episode_store`, `wiki_store`, `procedure_store`).
 //! Requests that arrive before stores are wired return `503 Service
 //! Unavailable`.
 

@@ -23,7 +23,7 @@ pub struct PruneStats {
 /// Soft-deletes the candidates produced by `DecayEngine`.
 ///
 /// Phase D3: trait-routed. Both `kg_store` and `compaction_store`
-/// abstract over the backend so the prune cycle runs on Surreal too.
+/// abstract over the backend so the prune cycle runs.
 pub struct Pruner {
     kg_store: Arc<dyn KnowledgeGraphStore>,
     compaction_store: Arc<dyn CompactionStore>,

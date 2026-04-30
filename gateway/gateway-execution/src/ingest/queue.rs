@@ -3,7 +3,7 @@
 //! the DB so worker restarts recover in-flight pending episodes.
 //!
 //! Phase B2: backend-agnostic. `episode_store` is the trait surface,
-//! `kg_store` is the trait surface. SQLite and SurrealDB both work.
+//! `kg_store` is the trait surface. SQLite (and any future alternate backend) both work.
 
 use std::sync::Arc;
 use std::time::Duration;

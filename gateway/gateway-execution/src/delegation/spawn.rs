@@ -289,7 +289,7 @@ pub async fn spawn_delegated_agent(
     // Build fact store for subagent (so save_fact uses DB, not file
     // fallback). Trait-routed memory_store is wired in both SQLite and
     // SurrealDB modes; this is what makes `memory.get_fact` /
-    // `memory.save_fact` work for subagents on SurrealDB.
+    // `memory.save_fact` work for subagents through the configured backend.
     if let Some(fs) = memory_store.clone() {
         builder = builder.with_fact_store(fs);
     }

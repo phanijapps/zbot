@@ -8,7 +8,7 @@
 //!
 //! Phase D4: trait-routed. The kg / episode / memory reads + writes go
 //! through `Arc<dyn ...>` so the synthesis cycle runs against either
-//! SQLite or SurrealDB. No SQL bodies live here anymore — each backend
+//! the configured backend. No SQL bodies live here anymore — each backend
 //! implements the underlying operations natively.
 
 use std::sync::Arc;
