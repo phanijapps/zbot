@@ -602,7 +602,6 @@ impl ExecutionRunner {
             workspace_cache: self.workspace_cache.clone(),
             memory_repo: self.memory_repo.clone(),
             memory_store: self.memory_store.clone(),
-            embedding_client: self.embedding_client.clone(),
             memory_recall: self.memory_recall.clone(),
             rate_limiters: self.rate_limiters.clone(),
             graph_storage: self.graph_storage.clone(),
@@ -884,7 +883,6 @@ impl ExecutionRunner {
             None, // No delegation permit needed for resume
             self.memory_repo.clone(),
             self.memory_store.clone(),
-            self.embedding_client.clone(),
             self.memory_recall.clone(),
             self.rate_limiters.clone(),
             self.graph_storage.clone(),

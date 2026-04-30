@@ -221,7 +221,6 @@ pub(crate) struct RunnerDelegationInvoker {
     pub(crate) workspace_cache: WorkspaceCache,
     pub(crate) memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
     pub(crate) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
-    pub(crate) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     pub(crate) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub(crate) rate_limiters: Arc<
         std::sync::RwLock<
@@ -259,7 +258,6 @@ impl DelegationSpawner for RunnerDelegationInvoker {
             permit,
             self.memory_repo.clone(),
             self.memory_store.clone(),
-            self.embedding_client.clone(),
             self.memory_recall.clone(),
             self.rate_limiters.clone(),
             self.graph_storage.clone(),

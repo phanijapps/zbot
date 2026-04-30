@@ -61,7 +61,6 @@ pub async fn spawn_delegated_agent(
     delegation_permit: Option<OwnedSemaphorePermit>,
     memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
     memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
-    embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     memory_recall: Option<Arc<MemoryRecall>>,
     rate_limiters: Arc<
         std::sync::RwLock<
@@ -289,22 +288,11 @@ pub async fn spawn_delegated_agent(
         builder = builder.with_rate_limiter(limiter);
     }
 
-    // Build fact store for subagent (so save_fact uses DB, not file fallback).
-    // Phase E5: prefer trait-routed `memory_store` (wired in both backends)
-    // over re-wrapping the SQLite-only `memory_repo`. This is what makes
-    // `memory.get_fact` / `memory.save_fact` for ctx-namespace keys
-    // (intent / prompt / plan / state.<exec>) work for subagents on
-    // SurrealDB — the legacy path silently 503'd at the tool layer.
-    let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
-        memory_store.clone().or_else(|| {
-            memory_repo.as_ref().map(|repo| {
-                Arc::new(zero_stores_sqlite::GatewayMemoryFactStore::new(
-                    repo.clone(),
-                    embedding_client.clone(),
-                )) as Arc<dyn zero_stores::MemoryFactStore>
-            })
-        });
-    if let Some(fs) = fact_store {
+    // Build fact store for subagent (so save_fact uses DB, not file
+    // fallback). Trait-routed memory_store is wired in both SQLite and
+    // SurrealDB modes; this is what makes `memory.get_fact` /
+    // `memory.save_fact` work for subagents on SurrealDB.
+    if let Some(fs) = memory_store.clone() {
         builder = builder.with_fact_store(fs);
     }
     let graph_storage_for_recall = graph_storage.clone();
@@ -395,16 +383,10 @@ pub async fn spawn_delegated_agent(
         handles_guard.insert(child_conversation_id.clone(), handle.clone());
     }
 
-    // Build a fact_store handle for the post-execution state_handoff hook.
-    // Kept separate from the executor's fact_store (already moved into the
-    // builder) — this one only drives session_ctx writes, not the executor.
-    let fact_store_for_ctx: Option<Arc<dyn zero_stores::MemoryFactStore>> =
-        memory_repo.as_ref().map(|repo| {
-            Arc::new(zero_stores_sqlite::GatewayMemoryFactStore::new(
-                repo.clone(),
-                embedding_client.clone(),
-            )) as Arc<dyn zero_stores::MemoryFactStore>
-        });
+    // The post-execution state_handoff hook reuses the same trait store
+    // the executor was wired with. Cloning is cheap (Arc) and lets the
+    // handoff fire after the executor has consumed its own copy.
+    let fact_store_for_ctx: Option<Arc<dyn zero_stores::MemoryFactStore>> = memory_store.clone();
 
     // Phase 7: pass a MemoryRepository handle through so spawn_execution_task
     // can query ctx.state.* rows when building the ward_snapshot preamble.
