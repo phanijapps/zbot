@@ -60,6 +60,10 @@ pub struct SessionDistiller {
     graph_storage: Option<Arc<GraphStorage>>,
     kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     distillation_repo: Option<Arc<DistillationRepository>>,
+    /// Trait-routed distillation store (Phase E6c). When set,
+    /// run-tracking writes route through this handle. Coexists with
+    /// `distillation_repo` until E6c-4 drops the concrete field.
+    distillation_store: Option<Arc<dyn zero_stores_traits::DistillationStore>>,
     episode_repo: Option<Arc<EpisodeRepository>>,
     /// Trait-routed episode store. Phase E6a — preferred over
     /// `episode_repo`; wired in both backends so episode storage,
@@ -247,6 +251,7 @@ impl SessionDistiller {
             graph_storage,
             kg_store: None,
             distillation_repo,
+            distillation_store: None,
             episode_repo,
             episode_store: None,
             paths,
@@ -282,6 +287,17 @@ impl SessionDistiller {
     /// compilation routes through this handle. Falls back to `wiki_repo`.
     pub fn set_wiki_store(&mut self, store: Arc<dyn zero_stores_traits::WikiStore>) {
         self.wiki_store = Some(store);
+    }
+
+    /// Wire the trait-routed distillation store (Phase E6c). Run-tracking
+    /// writes (pending/skipped/success/error) flow through this when set;
+    /// falls back to `distillation_repo` until E6c-4 drops the concrete
+    /// field.
+    pub fn set_distillation_store(
+        &mut self,
+        store: Arc<dyn zero_stores_traits::DistillationStore>,
+    ) {
+        self.distillation_store = Some(store);
     }
 
     /// Wire the trait-routed procedure store (Phase E6b). Procedure
@@ -393,12 +409,12 @@ impl SessionDistiller {
                 "Skipping distillation — too few messages"
             );
             // Record as skipped
-            self.record_skipped(session_id);
+            self.record_skipped(session_id).await;
             return Ok(0);
         }
 
         // Insert optimistic-failure record before attempting distillation
-        self.record_pending(session_id);
+        self.record_pending(session_id).await;
 
         // Collect tool outputs from transcript for fact verification
         let tool_outputs: Vec<String> = messages
@@ -415,7 +431,7 @@ impl SessionDistiller {
             Ok(resp) => resp,
             Err(e) => {
                 // The initial 'failed' record stays — update with error message
-                self.record_error(session_id, &e);
+                self.record_error(session_id, &e).await;
                 return Err(e);
             }
         };
@@ -426,7 +442,8 @@ impl SessionDistiller {
                 "Distillation found nothing worth remembering"
             );
             let duration_ms = started.elapsed().as_millis() as i64;
-            self.record_success(session_id, 0, 0, 0, false, duration_ms);
+            self.record_success(session_id, 0, 0, 0, false, duration_ms)
+                .await;
             return Ok(0);
         }
 
@@ -580,9 +597,9 @@ impl SessionDistiller {
                     let supersede_res = match (&self.memory_store, &self.memory_repo) {
                         (Some(store), _) => store.supersede_fact(&existing.id, &fact_id).await,
                         (None, Some(repo)) => repo.supersede_fact(&existing.id, &fact_id),
-                        (None, None) => Err(
-                            "no memory store wired (neither trait nor SQLite repo)".to_string(),
-                        ),
+                        (None, None) => {
+                            Err("no memory store wired (neither trait nor SQLite repo)".to_string())
+                        }
                     };
                     if let Err(e) = supersede_res {
                         tracing::warn!(
@@ -655,10 +672,7 @@ impl SessionDistiller {
                         entity.properties = ee.properties.clone();
                         entity_map.insert(ee.name.clone(), entity.id.clone());
 
-                        if let Err(e) = self
-                            .store_knowledge_one_entity(agent_id, entity)
-                            .await
-                        {
+                        if let Err(e) = self.store_knowledge_one_entity(agent_id, entity).await {
                             tracing::warn!(entity = %ee.name, error = %e, "Failed to store entity");
                         }
                     }
@@ -800,7 +814,8 @@ impl SessionDistiller {
             response.relationships.len() as i32,
             episode_created,
             duration_ms,
-        );
+        )
+        .await;
 
         tracing::info!(
             session_id = %session_id,
@@ -870,8 +885,17 @@ impl SessionDistiller {
     // =========================================================================
 
     /// Insert a pending/failed distillation run (optimistic failure).
-    fn record_pending(&self, session_id: &str) {
-        if let Some(repo) = &self.distillation_repo {
+    /// Prefers trait-routed `distillation_store`; falls back to the
+    /// concrete `distillation_repo` until E6c-4 drops the concrete field.
+    async fn record_pending(&self, session_id: &str) {
+        if let Some(store) = &self.distillation_store {
+            if let Err(e) = store
+                .record_distillation_pending(session_id, "failed", Some("Distillation in progress"))
+                .await
+            {
+                tracing::warn!(session_id = %session_id, error = %e, "Failed to insert distillation run record");
+            }
+        } else if let Some(repo) = &self.distillation_repo {
             let run = DistillationRun {
                 id: format!("dr-{}", uuid::Uuid::new_v4()),
                 session_id: session_id.to_string(),
@@ -887,8 +911,15 @@ impl SessionDistiller {
     }
 
     /// Record a skipped distillation (too few messages).
-    fn record_skipped(&self, session_id: &str) {
-        if let Some(repo) = &self.distillation_repo {
+    async fn record_skipped(&self, session_id: &str) {
+        if let Some(store) = &self.distillation_store {
+            if let Err(e) = store
+                .record_distillation_pending(session_id, "skipped", None)
+                .await
+            {
+                tracing::warn!(session_id = %session_id, error = %e, "Failed to record skipped distillation");
+            }
+        } else if let Some(repo) = &self.distillation_repo {
             let run = DistillationRun {
                 id: format!("dr-{}", uuid::Uuid::new_v4()),
                 session_id: session_id.to_string(),
@@ -903,7 +934,7 @@ impl SessionDistiller {
     }
 
     /// Update an existing distillation run to success.
-    fn record_success(
+    async fn record_success(
         &self,
         session_id: &str,
         facts: i32,
@@ -912,7 +943,21 @@ impl SessionDistiller {
         episode_created: bool,
         duration_ms: i64,
     ) {
-        if let Some(repo) = &self.distillation_repo {
+        if let Some(store) = &self.distillation_store {
+            if let Err(e) = store
+                .record_distillation_success(
+                    session_id,
+                    facts,
+                    entities,
+                    rels,
+                    episode_created,
+                    duration_ms,
+                )
+                .await
+            {
+                tracing::warn!(session_id = %session_id, error = %e, "Failed to record distillation success");
+            }
+        } else if let Some(repo) = &self.distillation_repo {
             if let Err(e) = repo.update_success(
                 session_id,
                 facts,
@@ -927,8 +972,15 @@ impl SessionDistiller {
     }
 
     /// Update an existing distillation run with an error message.
-    fn record_error(&self, session_id: &str, error: &str) {
-        if let Some(repo) = &self.distillation_repo {
+    async fn record_error(&self, session_id: &str, error: &str) {
+        if let Some(store) = &self.distillation_store {
+            if let Err(e) = store
+                .record_distillation_failure(session_id, "failed", 0, Some(error))
+                .await
+            {
+                tracing::warn!(session_id = %session_id, error = %e, "Failed to record distillation error");
+            }
+        } else if let Some(repo) = &self.distillation_repo {
             if let Err(e) = repo.update_retry(session_id, "failed", 0, Some(error)) {
                 tracing::warn!(session_id = %session_id, error = %e, "Failed to record distillation error");
             }
@@ -999,10 +1051,7 @@ impl SessionDistiller {
         let metrics = compute_session_metrics(transcript);
         let user = format!(
             "## Session Metrics\n\n- Delegations: {}\n- Tool actions: {}\n- Distinct agents involved: {}\n\nProcedure extraction is REQUIRED if delegations >= 2 OR tool actions >= 3.\n\n## Session Transcript\n\n{}\n\n---\nExtract durable facts, entities, relationships, an episode assessment, AND a reusable procedure. Respond with ONLY the JSON object, nothing else.",
-            metrics.delegations,
-            metrics.tool_actions,
-            metrics.distinct_agents,
-            transcript
+            metrics.delegations, metrics.tool_actions, metrics.distinct_agents, transcript
         );
 
         // Resolve distillation provider/model from settings chain:
@@ -1308,14 +1357,11 @@ impl SessionDistiller {
         // SurrealDB mode (memory_repo is None) — strategy emergence
         // already requires episode_repo (also SQLite-only) so this
         // branch is unreachable on Surreal anyway.
-        let existing_strategy = self
-            .memory_repo
-            .as_ref()
-            .and_then(|repo| {
-                repo.get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
-                    .ok()
-                    .flatten()
-            });
+        let existing_strategy = self.memory_repo.as_ref().and_then(|repo| {
+            repo.get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
+                .ok()
+                .flatten()
+        });
 
         let fact = MemoryFact {
             id: strategy_fact_id.clone(),
@@ -1351,9 +1397,7 @@ impl SessionDistiller {
         if let Some(ref existing) = existing_strategy {
             if existing.content != strategy_description && !existing.pinned {
                 let supersede_res = match (&self.memory_store, &self.memory_repo) {
-                    (Some(store), _) => {
-                        store.supersede_fact(&existing.id, &strategy_fact_id).await
-                    }
+                    (Some(store), _) => store.supersede_fact(&existing.id, &strategy_fact_id).await,
                     (None, Some(repo)) => repo.supersede_fact(&existing.id, &strategy_fact_id),
                     (None, None) => Err("no memory store wired".to_string()),
                 };
@@ -1464,14 +1508,11 @@ impl SessionDistiller {
         // Check for existing correction fact to supersede. Surreal mode
         // never reaches this path (episode_repo is None and clustering
         // returns early upstream) so the lookup is SQLite-only.
-        let existing_correction = self
-            .memory_repo
-            .as_ref()
-            .and_then(|repo| {
-                repo.get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
-                    .ok()
-                    .flatten()
-            });
+        let existing_correction = self.memory_repo.as_ref().and_then(|repo| {
+            repo.get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
+                .ok()
+                .flatten()
+        });
 
         let fact = MemoryFact {
             id: correction_fact_id.clone(),
@@ -1508,9 +1549,7 @@ impl SessionDistiller {
                             .supersede_fact(&existing.id, &correction_fact_id)
                             .await
                     }
-                    (None, Some(repo)) => {
-                        repo.supersede_fact(&existing.id, &correction_fact_id)
-                    }
+                    (None, Some(repo)) => repo.supersede_fact(&existing.id, &correction_fact_id),
                     (None, None) => Err("no memory store wired".to_string()),
                 };
                 if let Err(e) = supersede_res {
@@ -2482,12 +2521,12 @@ mod tests {
     mod resolve_endpoint {
         use super::*;
         use gateway_services::VaultPaths;
-        use knowledge_graph::{types::ExtractedKnowledge, Entity, EntityType};
+        use knowledge_graph::{Entity, EntityType, types::ExtractedKnowledge};
         use std::collections::HashMap;
         use std::sync::Arc;
         use tempfile::tempdir;
-        use zero_stores_sqlite::kg::storage::GraphStorage;
         use zero_stores_sqlite::KnowledgeDatabase;
+        use zero_stores_sqlite::kg::storage::GraphStorage;
 
         fn fresh_graph() -> GraphStorage {
             let dir = tempdir().unwrap();
@@ -2695,7 +2734,9 @@ mod tests {
     #[test]
     fn test_sanitize_task_type_long_summary() {
         assert_eq!(
-            sanitize_task_type("User asked the agent to analyze their entire stock portfolio and generate a report"),
+            sanitize_task_type(
+                "User asked the agent to analyze their entire stock portfolio and generate a report"
+            ),
             "user_asked_the_agent"
         );
     }

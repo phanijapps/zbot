@@ -32,7 +32,7 @@ use zero_stores_sqlite::kg::storage::GraphStorage;
 use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
 use zero_stores_sqlite::{
     DistillationRepository, EpisodeRepository, KgEpisodeRepository, KnowledgeDatabase,
-    MemoryRepository, ProcedureRepository, RecallLogRepository, WardWikiRepository,
+    MemoryRepository, ProcedureRepository, WardWikiRepository,
 };
 
 /// Shared application state for the gateway.
@@ -809,6 +809,14 @@ impl AppState {
                 }
                 if let Some(ps) = procedure_store_for_state.as_ref() {
                     distiller_inner.set_procedure_store(ps.clone());
+                }
+                // Phase E6c: trait-routed distillation store. Wraps the
+                // SQLite DistillationRepository for run-tracking writes.
+                if let Some(dr) = distillation_repo.as_ref() {
+                    let store: Arc<dyn zero_stores_traits::DistillationStore> = Arc::new(
+                        zero_stores_sqlite::GatewayDistillationStore::new(dr.clone()),
+                    );
+                    distiller_inner.set_distillation_store(store);
                 }
                 Some(Arc::new(distiller_inner))
             } else {

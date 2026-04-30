@@ -146,4 +146,51 @@ impl DistillationStore for GatewayDistillationStore {
         // and trait-aware executors that don't track these.
         self.repo.update_success(session_id, 0, 0, 0, false, 0)
     }
+
+    async fn record_distillation_pending(
+        &self,
+        session_id: &str,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<(), String> {
+        let run = DistillationRun {
+            id: format!("dr-{}", uuid::Uuid::new_v4()),
+            session_id: session_id.to_string(),
+            status: status.to_string(),
+            error: error.map(|s| s.to_string()),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            ..Default::default()
+        };
+        self.repo.insert(&run)
+    }
+
+    async fn record_distillation_success(
+        &self,
+        session_id: &str,
+        facts: i32,
+        entities: i32,
+        relationships: i32,
+        episode_created: bool,
+        duration_ms: i64,
+    ) -> Result<(), String> {
+        self.repo.update_success(
+            session_id,
+            facts,
+            entities,
+            relationships,
+            episode_created,
+            duration_ms,
+        )
+    }
+
+    async fn record_distillation_failure(
+        &self,
+        session_id: &str,
+        status: &str,
+        retry_count: i32,
+        error: Option<&str>,
+    ) -> Result<(), String> {
+        self.repo
+            .update_retry(session_id, status, retry_count, error)
+    }
 }

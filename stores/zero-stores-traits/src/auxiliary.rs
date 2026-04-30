@@ -99,4 +99,55 @@ pub trait DistillationStore: Send + Sync {
     ) -> Result<(), String> {
         Ok(())
     }
+
+    // ---- Richer lifecycle methods used by SessionDistiller --------------
+    //
+    // The Value-based methods above predate Phase E6c; they're kept for
+    // legacy callers. The methods below carry the typed counts +
+    // duration that the live SessionDistiller actually wants, matching
+    // the SQLite `DistillationRepository` signatures one-for-one. New
+    // callers should prefer these.
+
+    /// Record a pending/skipped/failed run insertion. `status` is the
+    /// terminal label ("pending", "skipped", "failed"); `error` is an
+    /// optional human-readable note. Idempotent on `session_id` —
+    /// backends with a unique index ON CONFLICT update; backends
+    /// without one may produce duplicate rows (acceptable; later
+    /// success update collapses).
+    async fn record_distillation_pending(
+        &self,
+        _session_id: &str,
+        _status: &str,
+        _error: Option<&str>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Mark a session's run successful with extraction counts.
+    /// `episode_created` is `true` when the distiller emitted a
+    /// session_episode row alongside the fact upserts.
+    async fn record_distillation_success(
+        &self,
+        _session_id: &str,
+        _facts: i32,
+        _entities: i32,
+        _relationships: i32,
+        _episode_created: bool,
+        _duration_ms: i64,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Mark a session's run failed/retry. `retry_count` is the
+    /// post-update value (0 on first failure). `error` is the
+    /// human-readable message.
+    async fn record_distillation_failure(
+        &self,
+        _session_id: &str,
+        _status: &str,
+        _retry_count: i32,
+        _error: Option<&str>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
