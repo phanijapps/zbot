@@ -1319,7 +1319,9 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                             let result_cl = result.clone();
                             let session_id_cl = session_id_inner.clone();
                             let agent_id_cl = agent_id_inner.clone();
-                            let ep_repo_cl = ep_repo.clone();
+                            let ep_store: Arc<dyn zero_stores_traits::KgEpisodeStore> = Arc::new(
+                                zero_stores_sqlite::GatewayKgEpisodeStore::new(ep_repo.clone()),
+                            );
                             let kg_cl = kg.clone();
                             tokio::spawn(async move {
                                 crate::tool_result_extractor::extract_and_persist(
@@ -1328,7 +1330,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                                     &result_cl,
                                     &session_id_cl,
                                     &agent_id_cl,
-                                    ep_repo_cl.as_ref(),
+                                    ep_store.as_ref(),
                                     kg_cl.as_ref(),
                                 )
                                 .await;

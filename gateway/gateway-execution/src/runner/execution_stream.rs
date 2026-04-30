@@ -183,7 +183,9 @@ fn handle_tool_result(
         let result_cl = result.to_string();
         let session_id_cl = deps.session_id.to_string();
         let agent_id_cl = deps.agent_id.to_string();
-        let ep_repo_cl = ep_repo.clone();
+        let ep_store: Arc<dyn zero_stores_traits::KgEpisodeStore> = Arc::new(
+            zero_stores_sqlite::GatewayKgEpisodeStore::new(ep_repo.clone()),
+        );
         let kg_cl = kg.clone();
         tokio::spawn(async move {
             crate::tool_result_extractor::extract_and_persist(
@@ -192,7 +194,7 @@ fn handle_tool_result(
                 &result_cl,
                 &session_id_cl,
                 &agent_id_cl,
-                ep_repo_cl.as_ref(),
+                ep_store.as_ref(),
                 kg_cl.as_ref(),
             )
             .await;
