@@ -17,7 +17,6 @@ use crate::services::{AgentService, McpService, ProviderService, SharedVaultPath
 use api_logs::LogService;
 use execution_state::StateService;
 use std::sync::Arc;
-use zero_stores_sqlite::MemoryRepository;
 
 /// Execution state for a conversation.
 #[derive(Debug, Clone)]
@@ -77,7 +76,6 @@ impl RuntimeService {
             state_service,
             None,
             new_workspace_cache(),
-            None, // memory_repo
             None, // memory_store
             None, // distiller
             None, // memory_recall
@@ -107,7 +105,6 @@ impl RuntimeService {
         state_service: Arc<StateService<DatabaseManager>>,
         connector_registry: Option<Arc<ConnectorRegistry>>,
         workspace_cache: WorkspaceCache,
-        memory_repo: Option<Arc<MemoryRepository>>,
         memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
         distiller: Option<Arc<SessionDistiller>>,
         memory_recall: Option<Arc<MemoryRecall>>,
@@ -133,7 +130,6 @@ impl RuntimeService {
             state_service,
             connector_registry,
             workspace_cache,
-            memory_repo,
             memory_store,
             distiller,
             memory_recall,

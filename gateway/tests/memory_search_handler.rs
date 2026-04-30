@@ -14,7 +14,7 @@ use gateway::{http::create_http_router, websocket::WebSocketHandler, GatewayConf
 use serde_json::Value;
 use std::sync::Arc;
 use tempfile::TempDir;
-use zero_stores_sqlite::MemoryFact;
+use zero_stores_domain::MemoryFact;
 
 /// Build a minimal `TestServer` + seed one memory fact whose content contains
 /// the keyword `tickers`.
@@ -47,12 +47,15 @@ fn setup_with_seeded_fact(agent_id: &str) -> (TestServer, TempDir) {
         source_episode_id: None,
         source_ref: None,
     };
-    state
-        .memory_repo
-        .as_ref()
-        .expect("memory_repo")
-        .upsert_memory_fact(&fact)
-        .expect("upsert fact");
+    let fact_v = serde_json::to_value(&fact).expect("encode MemoryFact");
+    futures::executor::block_on(
+        state
+            .memory_store
+            .as_ref()
+            .expect("memory_store")
+            .upsert_typed_fact(fact_v, None),
+    )
+    .expect("upsert fact");
 
     let ws_handler = Arc::new(WebSocketHandler::new(
         state.event_bus.clone(),

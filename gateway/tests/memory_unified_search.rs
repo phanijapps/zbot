@@ -10,7 +10,7 @@ mod common;
 use common::{make_episode_repo, make_procedure_repo, make_wiki_repo, now_iso, setup};
 use gateway::AppState;
 use serde_json::{json, Value};
-use zero_stores_sqlite::{MemoryFact, Procedure, SessionEpisode, WikiArticle};
+use zero_stores_domain::{MemoryFact, Procedure, SessionEpisode, WikiArticle};
 
 const TEST_WARD: &str = "maritime-vessel-tracking";
 
@@ -42,12 +42,15 @@ fn seed_all_four_types(state: &AppState) {
         source_episode_id: None,
         source_ref: None,
     };
-    state
-        .memory_repo
-        .as_ref()
-        .expect("memory_repo")
-        .upsert_memory_fact(&fact)
-        .expect("upsert fact");
+    let fact_v = serde_json::to_value(&fact).expect("encode MemoryFact");
+    futures::executor::block_on(
+        state
+            .memory_store
+            .as_ref()
+            .expect("memory_store")
+            .upsert_typed_fact(fact_v, None),
+    )
+    .expect("upsert fact");
 
     let wiki = make_wiki_repo(state);
     let article = WikiArticle {

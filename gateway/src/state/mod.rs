@@ -98,14 +98,8 @@ pub struct AppState {
     /// Gateway bus for bridge inbound message routing (set during server start).
     pub bridge_bus: Option<Arc<dyn gateway_bus::GatewayBus>>,
 
-    /// Memory repository for accessing agent memory facts.
-    pub memory_repo: Option<Arc<MemoryRepository>>,
-
-    /// Trait-based memory-fact store (relocation of `MemoryFactStore` from
-    /// `zero-core` to `zero-stores`). Coexists with `memory_repo` —
-    /// consumers are migrated incrementally in a follow-up workstream
-    /// (mirrors the `kg_store` / `graph_service` pattern). `None` when
-    /// `memory_repo` itself is `None`.
+    /// Trait-routed memory-fact store. The single read/write surface for
+    /// memory facts on both SQLite and SurrealDB backends.
     pub memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
 
     /// Goal repository — active goals used for intent boost in unified recall.
@@ -487,7 +481,7 @@ impl AppState {
         // Surreal it's None and recall falls back to non-enriched
         // hybrid (still finds facts, just no KG-traversal boost).
         let mut memory_recall_inner: Option<MemoryRecall> =
-            if early_memory_store.is_some() || memory_repo.is_some() {
+            if early_memory_store.is_some() {
                 Some(MemoryRecall::new(
                     embedding_client.clone(),
                     recall_config.clone(),
@@ -772,7 +766,7 @@ impl AppState {
         // run-tracking, episode storage, wiki compilation, procedure
         // upsert) skip gracefully. Fact distillation itself runs.
         let distiller: Option<Arc<SessionDistiller>> =
-            if memory_store.is_some() || memory_repo.is_some() {
+            if memory_store.is_some() {
                 let mut distiller_inner = SessionDistiller::new(
                     provider_service.clone(),
                     embedding_client.clone(),
@@ -916,7 +910,6 @@ impl AppState {
             state_service.clone(),
             Some(connector_registry.clone()),
             workspace_cache.clone(),
-            memory_repo.clone(),
             memory_store.clone(),
             distiller,
             memory_recall,
@@ -1117,7 +1110,6 @@ impl AppState {
             workspace_cache,
             paths,
             config_dir,
-            memory_repo,
             memory_store,
             goal_repo,
             distillation_repo,
@@ -1254,7 +1246,6 @@ impl AppState {
             workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
-            memory_repo: Some(memory_repo),
             memory_store,
             goal_repo: None,
             distillation_repo: None,
@@ -1391,7 +1382,6 @@ impl AppState {
             workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
-            memory_repo: Some(memory_repo),
             memory_store,
             goal_repo: None,
             distillation_repo: None,
