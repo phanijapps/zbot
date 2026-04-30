@@ -12,8 +12,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 use agent_tools::{GoalAccess, GoalSummary};
-// Goal lives in zero-stores-domain; zero-stores-sqlite re-exports it.
-use zero_stores_sqlite::Goal;
+use zero_stores_domain::Goal;
 use zero_stores_traits::GoalStore;
 
 /// Adapter that implements [`GoalAccess`] by delegating to a [`GoalStore`].

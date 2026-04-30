@@ -27,7 +27,8 @@ use agent_runtime::types::ChatMessage;
 use gateway_services::{ProviderService, SettingsService, VaultPaths};
 use knowledge_graph::{Entity, EntityType, Relationship, RelationshipType};
 use serde::{Deserialize, Serialize};
-use zero_stores_sqlite::{ConversationRepository, MemoryFact, SessionEpisode};
+use zero_stores_domain::{MemoryFact, SessionEpisode};
+use zero_stores_sqlite::ConversationRepository;
 
 /// Distills completed sessions into structured memory facts.
 ///

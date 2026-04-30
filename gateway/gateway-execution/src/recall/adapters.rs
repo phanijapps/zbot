@@ -6,7 +6,7 @@
 //! consumed by `rrf_merge`.
 
 use crate::recall::scored_item::{ItemKind, Provenance, ScoredItem};
-use zero_stores_sqlite::{MemoryFact, Procedure, WikiArticle};
+use zero_stores_domain::{MemoryFact, Procedure, WikiArticle};
 
 /// Project a [`MemoryFact`] into a [`ScoredItem`].
 ///

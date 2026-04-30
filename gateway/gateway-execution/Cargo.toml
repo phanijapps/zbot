@@ -25,6 +25,7 @@ gateway-templates = { path = "../gateway-templates" }
 gateway-bridge = { path = "../gateway-bridge" }
 knowledge-graph = { path = "../../services/knowledge-graph" }
 zero-stores = { path = "../../stores/zero-stores" }
+zero-stores-domain = { path = "../../stores/zero-stores-domain" }
 zero-stores-sqlite = { path = "../../stores/zero-stores-sqlite" }
 zero-stores-traits = { path = "../../stores/zero-stores-traits" }
 

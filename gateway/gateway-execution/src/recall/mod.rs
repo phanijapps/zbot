@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use agent_runtime::llm::embedding::EmbeddingClient;
 use gateway_services::RecallConfig;
-use zero_stores_sqlite::{MemoryFact, Procedure, ScoredFact};
+use zero_stores_domain::{MemoryFact, Procedure, ScoredFact};
 
 /// Retrieves relevant memory facts for injection at session start.
 ///
