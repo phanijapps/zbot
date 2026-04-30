@@ -730,11 +730,7 @@ impl AppState {
         // also needs it so the memory fact store can generate embeddings.
         let runner_embedding_client = embedding_client.clone();
 
-        // Clone graph_storage before it's moved into the distiller — the runner
-        // also needs it for the graph_query tool.
-        let runner_graph_storage = graph_storage.clone();
-
-        // Build the trait-object KG store from runner_graph_storage.
+        // Build the trait-object KG store from graph_storage.
         // Coexists with graph_service/graph_storage until Phase 5 retirement.
         //
         // Construction is centralized in `persistence_factory` (TD-023):
@@ -917,7 +913,6 @@ impl AppState {
             Some(bridge_outbox.clone()),
             runner_embedding_client,
             max_parallel_agents,
-            runner_graph_storage.clone(),
             kg_store.clone(),
             kg_episode_repo.clone(),
             ingestion_adapter,

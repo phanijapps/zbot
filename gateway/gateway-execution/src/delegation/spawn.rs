@@ -66,7 +66,6 @@ pub async fn spawn_delegated_agent(
             std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
         >,
     >,
-    graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
     kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
@@ -294,7 +293,6 @@ pub async fn spawn_delegated_agent(
     if let Some(fs) = memory_store.clone() {
         builder = builder.with_fact_store(fs);
     }
-    let graph_storage_for_recall = graph_storage.clone();
     if let Some(ks) = kg_store.clone() {
         builder = builder.with_kg_store(ks);
     }
@@ -330,7 +328,6 @@ pub async fn spawn_delegated_agent(
 
     // Delegation recall: prime the subagent with unified scored recall over
     // facts, wiki, procedures, graph nodes, episodes, and goals.
-    let _ = graph_storage_for_recall; // retained for future wiring
     let initial_history = if let Some(recall) = &memory_recall {
         let ward_id = session_ward_id.as_deref();
         match recall

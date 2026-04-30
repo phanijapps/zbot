@@ -49,8 +49,8 @@ pub struct ExecutionStream {
     pub handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
     pub distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
-    pub graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
     pub paths: SharedVaultPaths,
+    pub kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     pub memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     pub bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
@@ -98,7 +98,7 @@ struct EventHandlerDeps<'a> {
     agent_id: &'a str,
     handle: &'a ExecutionHandle,
     kg_episode_repo: Option<&'a Arc<zero_stores_sqlite::KgEpisodeRepository>>,
-    graph_storage: Option<&'a Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
+    kg_store: Option<&'a Arc<dyn zero_stores::KnowledgeGraphStore>>,
 }
 
 /// Handle a `StreamEvent::ToolCallStart` — record the call, update the
@@ -177,14 +177,14 @@ fn handle_tool_result(
     // Phase 6d: real-time graph extraction from tool output.
     // Non-blocking — fires in a background task so the execution
     // loop never waits.
-    if let (Some(ep_repo), Some(graph)) = (deps.kg_episode_repo, deps.graph_storage) {
+    if let (Some(ep_repo), Some(kg)) = (deps.kg_episode_repo, deps.kg_store) {
         let tool_name_cl = acc.current_tool_name.clone();
         let tool_id_cl = tool_id.to_string();
         let result_cl = result.to_string();
         let session_id_cl = deps.session_id.to_string();
         let agent_id_cl = deps.agent_id.to_string();
         let ep_repo_cl = ep_repo.clone();
-        let graph_cl = graph.clone();
+        let kg_cl = kg.clone();
         tokio::spawn(async move {
             crate::tool_result_extractor::extract_and_persist(
                 &tool_name_cl,
@@ -193,7 +193,7 @@ fn handle_tool_result(
                 &session_id_cl,
                 &agent_id_cl,
                 ep_repo_cl.as_ref(),
-                &graph_cl,
+                kg_cl.as_ref(),
             )
             .await;
         });
@@ -302,7 +302,7 @@ impl ExecutionStream {
         let agent_id_inner = agent_id.clone();
         let batch_writer_inner = batch_writer.clone();
         let kg_episode_repo_inner = self.kg_episode_repo.clone();
-        let graph_storage_inner = self.graph_storage.clone();
+        let kg_store_inner = self.kg_store.clone();
 
         // Execute with streaming — closure dispatches into free-fn
         // handlers defined at module scope (handle_tool_call_start,
@@ -322,7 +322,7 @@ impl ExecutionStream {
                     agent_id: &agent_id_inner,
                     handle: &handle,
                     kg_episode_repo: kg_episode_repo_inner.as_ref(),
-                    graph_storage: graph_storage_inner.as_ref(),
+                    kg_store: kg_store_inner.as_ref(),
                 };
 
                 // Stream messages to session as they happen
@@ -362,17 +362,9 @@ impl ExecutionStream {
 
         // Execute micro-recall triggers collected during the stream
         if !acc.pending_recall_triggers.is_empty() {
-            // graph_storage still lives directly on the stream — wrap it
-            // behind the trait ad-hoc until the indexer/event-handler
-            // paths are migrated. memory_store is already trait-routed.
-            let kg_store_for_recall: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
-                self.graph_storage.as_ref().map(|gs| {
-                    Arc::new(zero_stores_sqlite::SqliteKgStore::new(gs.clone()))
-                        as Arc<dyn zero_stores::KnowledgeGraphStore>
-                });
             let recall_ctx = MicroRecallContext {
                 memory_store: self.memory_store.clone(),
-                kg_store: kg_store_for_recall,
+                kg_store: self.kg_store.clone(),
                 agent_id: agent_id.clone(),
             };
             for (trigger, iter) in &acc.pending_recall_triggers {
@@ -498,10 +490,7 @@ impl ExecutionStream {
                                 as Arc<dyn zero_stores_traits::KgEpisodeStore>
                         });
                     let kg_store_for_indexer: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
-                        self.graph_storage.as_ref().map(|gs| {
-                            Arc::new(zero_stores_sqlite::SqliteKgStore::new(gs.clone()))
-                                as Arc<dyn zero_stores::KnowledgeGraphStore>
-                        });
+                        self.kg_store.clone();
                     let paths_for_indexer = self.paths.clone();
                     tokio::spawn(async move {
                         if let Err(e) = distiller.distill(&sid, &aid).await {
@@ -652,8 +641,8 @@ mod tests {
             handles,
             distiller: None,
             kg_episode_repo: None,
-            graph_storage: None,
             paths,
+            kg_store: None,
             memory_store: None,
             connector_registry: None,
             bridge_registry: None,

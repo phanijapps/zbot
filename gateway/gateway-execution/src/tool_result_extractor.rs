@@ -8,11 +8,10 @@
 //! and `source_ref = tool_call_id`, enabling drill-down from graph to
 //! the exact tool invocation that produced it.
 
-use knowledge_graph::{Entity, EntityType, ExtractedKnowledge};
+use knowledge_graph::{Entity, EntityType};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
-use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores::{ExtractedKnowledge, KnowledgeGraphStore};
 use zero_stores_sqlite::{EpisodeSource, KgEpisode, KgEpisodeRepository};
 
 /// Extract entities from a tool result and persist them with episode provenance.
@@ -29,7 +28,7 @@ pub async fn extract_and_persist(
     session_id: &str,
     agent_id: &str,
     episode_repo: &KgEpisodeRepository,
-    graph: &Arc<GraphStorage>,
+    kg: &dyn KnowledgeGraphStore,
 ) {
     let entities = extract_from_tool(tool_name, result_text);
     if entities.is_empty() {
@@ -59,7 +58,7 @@ pub async fn extract_and_persist(
         entities: stamped,
         relationships: Vec::new(),
     };
-    if let Err(e) = graph.store_knowledge(agent_id, knowledge) {
+    if let Err(e) = kg.store_knowledge(agent_id, knowledge).await {
         tracing::warn!(tool = %tool_name, error = %e, "Failed to persist tool-result entities");
     }
 }

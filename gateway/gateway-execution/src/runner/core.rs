@@ -112,8 +112,7 @@ pub struct ExecutionRunner {
         >,
     >,
     /// Knowledge graph storage for the graph_query tool.
-    graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
-    /// Trait-routed kg store. Phase E5b — preferred over `graph_storage`
+    /// Trait-routed kg store. Phase E5b — preferred over the legacy
     /// for the graph_query tool wiring; wired in both backends.
     kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     /// KG episode repository for ward artifact indexing after distillation.
@@ -195,7 +194,6 @@ pub(super) struct ContinuationArgs<'a> {
     pub(super) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub(super) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub(super) model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
-    pub(super) graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
     pub(super) kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     pub(super) kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
@@ -422,7 +420,6 @@ impl ExecutionRunner {
             connector_registry: connector_registry.clone(),
             bridge_registry: bridge_registry.clone(),
             bridge_outbox: bridge_outbox.clone(),
-            graph_storage: None,
             kg_store: None,
             ingestion_adapter: None,
             goal_adapter: None,
@@ -455,7 +452,6 @@ impl ExecutionRunner {
             embedding_client,
             model_registry,
             rate_limiters,
-            graph_storage: None,
             kg_store: None,
             kg_episode_repo: None,
             ingestion_adapter: None,
@@ -492,16 +488,6 @@ impl ExecutionRunner {
     /// what the continuation path does at fire time.
     pub fn set_model_registry(&self, registry: Arc<gateway_services::models::ModelRegistry>) {
         self.model_registry.store(Some(registry));
-    }
-
-    /// Late-wired setter. Mirrored to `self.bootstrap.graph_storage` because
-    /// `InvokeBootstrap::finish_setup` reads its own clone at session-setup time.
-    pub fn set_graph_storage(
-        &mut self,
-        storage: Arc<zero_stores_sqlite::kg::storage::GraphStorage>,
-    ) {
-        self.bootstrap.graph_storage = Some(storage.clone());
-        self.graph_storage = Some(storage);
     }
 
     /// Set the KG episode repository used by post-distillation ward indexing.
@@ -560,7 +546,6 @@ impl ExecutionRunner {
             distiller: self.distiller.clone(),
             memory_recall: self.memory_recall.clone(),
             model_registry: self.model_registry.clone(),
-            graph_storage: self.graph_storage.clone(),
             kg_store: self.kg_store.clone(),
             kg_episode_repo: self.kg_episode_repo.clone(),
             ingestion_adapter: self.ingestion_adapter.clone(),
@@ -593,7 +578,6 @@ impl ExecutionRunner {
             memory_store: self.memory_store.clone(),
             memory_recall: self.memory_recall.clone(),
             rate_limiters: self.rate_limiters.clone(),
-            graph_storage: self.graph_storage.clone(),
             kg_store: self.kg_store.clone(),
             ingestion_adapter: self.ingestion_adapter.clone(),
             goal_adapter: self.goal_adapter.clone(),
@@ -667,8 +651,8 @@ impl ExecutionRunner {
             handles: self.handles.clone(),
             distiller: self.distiller.clone(),
             kg_episode_repo: self.kg_episode_repo.clone(),
-            graph_storage: self.graph_storage.clone(),
             paths: self.paths.clone(),
+            kg_store: self.kg_store.clone(),
             memory_store: self.memory_store.clone(),
             connector_registry: self.connector_registry.clone(),
             bridge_registry: self.bridge_registry.clone(),
@@ -873,7 +857,6 @@ impl ExecutionRunner {
             self.memory_store.clone(),
             self.memory_recall.clone(),
             self.rate_limiters.clone(),
-            self.graph_storage.clone(),
             self.kg_store.clone(),
             self.ingestion_adapter.clone(),
             self.goal_adapter.clone(),
@@ -1053,7 +1036,6 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         distiller,
         memory_recall,
         model_registry,
-        graph_storage,
         kg_store,
         kg_episode_repo,
         ingestion_adapter,
@@ -1168,7 +1150,6 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
     if let Some(fs) = fact_store {
         builder = builder.with_fact_store(fs);
     }
-    let graph_storage_for_indexer = graph_storage.clone();
     if let Some(ks) = kg_store.clone() {
         builder = builder.with_kg_store(ks);
     }
@@ -1255,7 +1236,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
 
         // Phase 6d: clones for real-time tool-result extraction (fire-and-forget).
         let kg_episode_repo_inner = kg_episode_repo.clone();
-        let graph_storage_inner = graph_storage_for_indexer.clone();
+        let kg_store_inner = kg_store.clone();
         let agent_id_inner = agent_id_clone.clone();
         // Track current tool name so the extractor can dispatch by name.
         let mut current_tool_name = String::new();
@@ -1330,8 +1311,8 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                         // Phase 6d: real-time graph extraction from tool output.
                         // Non-blocking — fires in a background task so the
                         // execution loop never waits.
-                        if let (Some(ref ep_repo), Some(ref graph)) =
-                            (&kg_episode_repo_inner, &graph_storage_inner)
+                        if let (Some(ref ep_repo), Some(ref kg)) =
+                            (&kg_episode_repo_inner, &kg_store_inner)
                         {
                             let tool_name_cl = current_tool_name.clone();
                             let tool_id_cl = tool_id.clone();
@@ -1339,7 +1320,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                             let session_id_cl = session_id_inner.clone();
                             let agent_id_cl = agent_id_inner.clone();
                             let ep_repo_cl = ep_repo.clone();
-                            let graph_cl = graph.clone();
+                            let kg_cl = kg.clone();
                             tokio::spawn(async move {
                                 crate::tool_result_extractor::extract_and_persist(
                                     &tool_name_cl,
@@ -1348,7 +1329,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                                     &session_id_cl,
                                     &agent_id_cl,
                                     ep_repo_cl.as_ref(),
-                                    &graph_cl,
+                                    kg_cl.as_ref(),
                                 )
                                 .await;
                             });

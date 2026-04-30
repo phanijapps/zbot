@@ -83,7 +83,6 @@ impl RuntimeService {
             None, // bridge_outbox
             None, // embedding_client
             2,    // default max_parallel_agents
-            None, // graph_storage
             None, // kg_store
             None, // kg_episode_repo
             None, // ingestion_adapter
@@ -112,7 +111,6 @@ impl RuntimeService {
         bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
         embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
         max_parallel_agents: u32,
-        graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
         kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
         kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
         ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
@@ -148,9 +146,6 @@ impl RuntimeService {
             paths.vault_dir(),
         )));
 
-        if let Some(gs) = graph_storage {
-            runner.set_graph_storage(gs);
-        }
 
         if let Some(ks) = kg_store {
             runner.set_kg_store(ks);
