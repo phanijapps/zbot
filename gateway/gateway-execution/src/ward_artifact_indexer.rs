@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use zero_stores::KnowledgeGraphStore;
-use zero_stores_sqlite::EpisodeSource;
+use zero_stores_domain::EpisodeSource;
 use zero_stores_traits::KgEpisodeStore;
 
 /// Options for ward indexing.

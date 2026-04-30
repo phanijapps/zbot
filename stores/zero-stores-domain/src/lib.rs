@@ -19,6 +19,7 @@
 
 pub mod distillation_ops;
 pub mod goal;
+pub mod kg_episode;
 pub mod kg_ops;
 pub mod memory_fact;
 pub mod procedure;
@@ -27,6 +28,7 @@ pub mod wiki;
 
 pub use distillation_ops::{DistillationStats, UndistilledSession};
 pub use goal::Goal;
+pub use kg_episode::{EpisodeSource, KgEpisode};
 pub use kg_ops::{
     DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit, GraphView, RelationshipContext,
     StrategyCandidate,

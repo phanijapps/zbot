@@ -12,7 +12,8 @@ use knowledge_graph::{Entity, EntityType};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use zero_stores::{ExtractedKnowledge, KnowledgeGraphStore};
-use zero_stores_sqlite::{EpisodeSource, KgEpisode, KgEpisodeRepository};
+use zero_stores_domain::{EpisodeSource, KgEpisode};
+use zero_stores_sqlite::KgEpisodeRepository;
 
 /// Extract entities from a tool result and persist them with episode provenance.
 ///
