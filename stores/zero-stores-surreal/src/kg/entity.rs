@@ -6,8 +6,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use knowledge_graph::types::{Entity, EntityType};
 use serde_json::Value;
-use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
 use zero_stores::error::StoreResult;
 use zero_stores::types::EntityId;
 
@@ -157,7 +157,7 @@ impl EntityRow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{connect, schema::apply_schema, SurrealConfig};
+    use crate::{SurrealConfig, connect, schema::apply_schema};
 
     async fn fresh_db() -> Arc<Surreal<Any>> {
         let cfg = SurrealConfig {

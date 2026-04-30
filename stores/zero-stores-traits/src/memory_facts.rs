@@ -317,4 +317,70 @@ pub trait MemoryFactStore: Send + Sync {
     ) -> Result<Vec<Value>, String> {
         Ok(Vec::new())
     }
+
+    // ---- Sleep-time synthesis (Phase D4) -------------------------------
+    //
+    // Reads/writes needed by the `Synthesizer` to dedup against
+    // existing strategy facts and persist new ones. Default impls
+    // return None / Err so backends that haven't implemented yet make
+    // the synthesis cycle a quiet no-op rather than corrupting state.
+
+    /// Find an existing strategy fact whose embedding's cosine
+    /// similarity with `embedding` is at or above `threshold`. Scans
+    /// up to `scan_limit` candidate facts in `category = "strategy"`
+    /// for the agent. Default: no match.
+    async fn find_strategy_fact_by_similarity(
+        &self,
+        _agent_id: &str,
+        _embedding: &[f32],
+        _threshold: f32,
+        _scan_limit: usize,
+    ) -> Result<Option<StrategyFactMatch>, String> {
+        Ok(None)
+    }
+
+    /// Bump an existing strategy fact's `mention_count` and replace
+    /// its `source_episode_id` with `merged_source_episode_id`.
+    /// `now_rfc3339` is the timestamp to record under `updated_at`.
+    /// Default: no-op error so misuse is loud.
+    async fn bump_strategy_fact_episodes(
+        &self,
+        _fact_id: &str,
+        _merged_source_episode_id: &str,
+        _now_rfc3339: &str,
+    ) -> Result<(), String> {
+        Err("bump_strategy_fact_episodes not implemented for this store".to_string())
+    }
+
+    /// Insert a synthesised strategy fact. Returns the fact id used.
+    /// The trait crate stays dep-light by taking a purpose-built
+    /// `StrategyFactInsert` rather than a full `MemoryFact` struct
+    /// (which lives in `zero-stores-sqlite`). Default: no-op error.
+    async fn insert_strategy_fact(&self, _req: StrategyFactInsert) -> Result<String, String> {
+        Err("insert_strategy_fact not implemented for this store".to_string())
+    }
+}
+
+/// Result of `find_strategy_fact_by_similarity`. Captures only what
+/// the Synthesizer needs to decide whether to bump or insert.
+#[derive(Debug, Clone)]
+pub struct StrategyFactMatch {
+    pub fact_id: String,
+    /// Comma-separated csv of episode ids previously attributed to
+    /// this fact, or `None` if the column is null.
+    pub source_episode_id: Option<String>,
+}
+
+/// Request shape for `insert_strategy_fact`. Flat field set chosen so
+/// the trait crate doesn't need to depend on the full `MemoryFact`
+/// type from `zero-stores-sqlite`.
+#[derive(Debug, Clone)]
+pub struct StrategyFactInsert {
+    pub agent_id: String,
+    pub key: String,
+    pub content: String,
+    pub confidence: f64,
+    pub source_summary: Option<String>,
+    pub embedding: Option<Vec<f32>>,
+    pub source_episode_id: Option<String>,
 }

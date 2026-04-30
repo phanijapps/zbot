@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use knowledge_graph::types::{Entity, EntityType, GraphStats, Relationship, RelationshipType};
+use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{RecordId, SurrealValue};
-use surrealdb::Surreal;
 use zero_stores::error::StoreResult;
 use zero_stores::types::{KgStats, VecIndexHealth};
 
@@ -98,11 +98,10 @@ struct EntityListRow {
 impl EntityListRow {
     fn into_entity(self) -> Entity {
         let now = Utc::now();
-        let properties: std::collections::HashMap<String, serde_json::Value> =
-            match self.metadata {
-                Some(serde_json::Value::Object(map)) => map.into_iter().collect(),
-                _ => std::collections::HashMap::new(),
-            };
+        let properties: std::collections::HashMap<String, serde_json::Value> = match self.metadata {
+            Some(serde_json::Value::Object(map)) => map.into_iter().collect(),
+            _ => std::collections::HashMap::new(),
+        };
         Entity {
             id: self.id.to_entity_id().0,
             agent_id: self.agent_id,
@@ -259,7 +258,7 @@ pub async fn vec_index_health(db: &Arc<Surreal<Any>>) -> StoreResult<VecIndexHea
 mod tests {
     use super::*;
     use crate::kg::entity;
-    use crate::{connect, schema::apply_schema, SurrealConfig};
+    use crate::{SurrealConfig, connect, schema::apply_schema};
     use knowledge_graph::types::{Entity, EntityType};
 
     async fn fresh_db() -> Arc<Surreal<Any>> {

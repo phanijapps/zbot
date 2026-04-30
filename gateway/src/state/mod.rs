@@ -922,7 +922,7 @@ impl AppState {
             kg_store.as_ref(),
             compaction_store.as_ref(),
         ) {
-            (Some(comp), Some(kdb), Some(mr), Some(pr), Some(kgs), Some(compstore)) => {
+            (Some(_comp), Some(kdb), Some(mr), Some(pr), Some(kgs), Some(compstore)) => {
                 let verifier: Option<
                     Arc<dyn gateway_execution::sleep::compactor::PairwiseVerifier>,
                 > = Some(Arc::new(
@@ -944,21 +944,74 @@ impl AppState {
                 let synth_llm = Arc::new(gateway_execution::sleep::LlmSynthesizer::new(
                     provider_service.clone(),
                 ));
-                let synthesizer = Arc::new(gateway_execution::sleep::Synthesizer::new(
+                // Synthesizer is fully trait-routed (Phase D4): pass the
+                // KG store, an EpisodeStore + MemoryFactStore wrapper for
+                // SQLite (Surreal mode plugs in the SurrealDB
+                // implementations), and the trait-routed compaction store.
+                let synth_episode_vec: Arc<dyn zero_stores_sqlite::vector_index::VectorIndex> =
+                    Arc::new(
+                        zero_stores_sqlite::vector_index::SqliteVecIndex::new(
+                            kdb.clone(),
+                            "session_episodes_index",
+                            "episode_id",
+                        )
+                        .expect("session_episodes_index"),
+                    );
+                let synth_episode_repo = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
                     kdb.clone(),
-                    mr.clone(),
-                    comp.clone(),
+                    synth_episode_vec,
+                ));
+                let synth_episode_store: Arc<dyn zero_stores_traits::EpisodeStore> = Arc::new(
+                    zero_stores_sqlite::GatewayEpisodeStore::new(synth_episode_repo),
+                );
+                let synth_memory_store: Arc<dyn zero_stores::MemoryFactStore> =
+                    Arc::new(zero_stores_sqlite::GatewayMemoryFactStore::new(
+                        mr.clone(),
+                        embedding_client.clone(),
+                    ));
+                let synthesizer = Arc::new(gateway_execution::sleep::Synthesizer::new(
+                    kgs.clone(),
+                    synth_episode_store,
+                    synth_memory_store,
+                    compstore.clone(),
                     synth_llm,
                     embedding_client.clone(),
                 ));
                 let pattern_llm = Arc::new(gateway_execution::sleep::LlmPatternExtractor::new(
                     provider_service.clone(),
                 ));
-                let pattern_extractor = Arc::new(gateway_execution::sleep::PatternExtractor::new(
+                // PatternExtractor is fully trait-routed (Phase D4): episode
+                // reads + procedure writes + audit go through stores; the
+                // conversation store stays SQLite-backed (per design,
+                // conversations.db never moves to Surreal).
+                let pe_episode_vec: Arc<dyn zero_stores_sqlite::vector_index::VectorIndex> =
+                    Arc::new(
+                        zero_stores_sqlite::vector_index::SqliteVecIndex::new(
+                            kdb.clone(),
+                            "session_episodes_index",
+                            "episode_id",
+                        )
+                        .expect("session_episodes_index"),
+                    );
+                let pe_episode_repo = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
                     kdb.clone(),
+                    pe_episode_vec,
+                ));
+                let pe_episode_store: Arc<dyn zero_stores_traits::EpisodeStore> = Arc::new(
+                    zero_stores_sqlite::GatewayEpisodeStore::new(pe_episode_repo),
+                );
+                let pe_conv_repo = Arc::new(zero_stores_sqlite::ConversationRepository::new(
                     db_manager.clone(),
-                    pr.clone(),
-                    comp.clone(),
+                ));
+                let pe_conversation_store: Arc<dyn zero_stores_traits::ConversationStore> =
+                    pe_conv_repo;
+                let pe_procedure_store: Arc<dyn zero_stores_traits::ProcedureStore> =
+                    Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(pr.clone()));
+                let pattern_extractor = Arc::new(gateway_execution::sleep::PatternExtractor::new(
+                    pe_episode_store,
+                    pe_conversation_store,
+                    pe_procedure_store,
+                    compstore.clone(),
                     pattern_llm,
                 ));
                 let orphan_archiver = Arc::new(gateway_execution::sleep::OrphanArchiver::new(

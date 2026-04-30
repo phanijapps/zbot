@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
-use zero_stores_traits::MemoryFactStore;
+use surrealdb::engine::any::Any;
+use zero_stores_traits::{MemoryFactStore, StrategyFactInsert, StrategyFactMatch};
 
 mod fact;
 
@@ -105,5 +105,32 @@ impl MemoryFactStore for SurrealMemoryStore {
             query_embedding,
         )
         .await
+    }
+
+    // ---- Sleep-time synthesis (Phase D4) ----------------------------
+
+    async fn find_strategy_fact_by_similarity(
+        &self,
+        agent_id: &str,
+        embedding: &[f32],
+        threshold: f32,
+        scan_limit: usize,
+    ) -> Result<Option<StrategyFactMatch>, String> {
+        fact::find_strategy_fact_by_similarity(&self.db, agent_id, embedding, threshold, scan_limit)
+            .await
+    }
+
+    async fn bump_strategy_fact_episodes(
+        &self,
+        fact_id: &str,
+        merged_source_episode_id: &str,
+        now_rfc3339: &str,
+    ) -> Result<(), String> {
+        fact::bump_strategy_fact_episodes(&self.db, fact_id, merged_source_episode_id, now_rfc3339)
+            .await
+    }
+
+    async fn insert_strategy_fact(&self, req: StrategyFactInsert) -> Result<String, String> {
+        fact::insert_strategy_fact(&self.db, req).await
     }
 }

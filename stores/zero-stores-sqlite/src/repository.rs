@@ -362,6 +362,52 @@ impl zero_stores_traits::ConversationStore for ConversationRepository {
     fn get_session_agent_id(&self, session_id: &str) -> Result<Option<String>, String> {
         ConversationRepository::get_session_agent_id(self, session_id)
     }
+
+    fn tool_sequence_for_session(&self, session_id: &str) -> Result<Vec<String>, String> {
+        let session_id = session_id.to_string();
+        let blobs: Vec<String> = self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT tool_calls FROM messages
+                 WHERE session_id = ?1
+                   AND role = 'assistant'
+                   AND tool_calls IS NOT NULL
+                 ORDER BY created_at ASC",
+            )?;
+            let rows: Vec<String> = stmt
+                .query_map(params![session_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })?;
+        let mut seq: Vec<String> = Vec::new();
+        for blob in blobs {
+            extend_tool_names_from_blob(&blob, &mut seq);
+        }
+        Ok(seq)
+    }
+}
+
+/// Pulls assistant tool_calls JSON blobs out of the stored format
+/// `[{"tool_name": "...", ...}, ...]` and appends tool names in order.
+/// Mirrors the helper that previously lived in
+/// `gateway-execution::sleep::pattern_extractor`.
+fn extend_tool_names_from_blob(blob: &str, out: &mut Vec<String>) {
+    let parsed: serde_json::Value = match serde_json::from_str(blob) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let arr = match parsed.as_array() {
+        Some(a) => a,
+        None => return,
+    };
+    for entry in arr {
+        if let Some(name) = entry
+            .get("tool_name")
+            .and_then(|v| v.as_str())
+            .or_else(|| entry.get("name").and_then(|v| v.as_str()))
+        {
+            out.push(name.to_string());
+        }
+    }
 }
 
 #[cfg(test)]

@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use knowledge_graph::types::EntityType;
+use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{RecordId, SurrealValue};
-use surrealdb::Surreal;
 use zero_stores::error::StoreResult;
 use zero_stores::types::{EntityId, ResolveOutcome};
 
@@ -94,7 +94,7 @@ pub async fn resolve_entity(
 mod tests {
     use super::*;
     use crate::kg::entity;
-    use crate::{connect, schema::apply_schema, SurrealConfig};
+    use crate::{SurrealConfig, connect, schema::apply_schema};
     use knowledge_graph::types::Entity;
 
     async fn fresh_db() -> Arc<Surreal<Any>> {

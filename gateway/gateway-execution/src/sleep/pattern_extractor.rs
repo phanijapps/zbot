@@ -6,17 +6,19 @@
 //! generalize each match into a `procedures` row. Conservative: any
 //! per-candidate error is logged and skipped — the cycle never fails hard.
 //!
-//! Not yet wired into `SleepTimeWorker` — that happens in T5.
+//! Phase D4: trait-routed. The episode reads, conversation reads, and
+//! procedure writes flow through `Arc<dyn ...>` so the cycle runs against
+//! either backend; each backend implements the operations natively.
 
 use std::sync::Arc;
 
 use agent_runtime::llm::{ChatMessage, LlmClient, LlmConfig};
 use async_trait::async_trait;
 use gateway_services::ProviderService;
-use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use zero_stores_sqlite::{
-    CompactionRepository, DatabaseManager, KnowledgeDatabase, Procedure, ProcedureRepository,
+use zero_stores_traits::{
+    CompactionStore, ConversationStore, EpisodeStore, PatternProcedureInsert, ProcedureStore,
+    SuccessfulEpisode,
 };
 
 use crate::ingest::json_shape::parse_llm_json;
@@ -33,6 +35,8 @@ const MIN_PATTERN_LENGTH: usize = 3;
 /// Existing procedure with `success_count` at or above this is considered
 /// locked-in and will not be overwritten by a new synthesis with the same name.
 const DEDUP_SUCCESS_FLOOR: i32 = 2;
+/// Time window the pattern extractor scans for successful episodes.
+const LOOKBACK_DAYS: i64 = 30;
 
 /// Default ward id for synthesized procedures.
 const PROC_WARD: &str = "__global__";
@@ -88,36 +92,32 @@ pub trait PatternExtractLlm: Send + Sync {
     async fn generalize(&self, input: &PatternInput) -> Result<PatternResponse, String>;
 }
 
-/// Internal representation of a single loaded successful episode.
-struct EpisodeRow {
-    session_id: String,
-    agent_id: String,
-    task_summary: String,
-    embedding: Option<Vec<f32>>,
-}
-
 /// Procedural pattern extractor.
+///
+/// Phase D4: trait-routed. All reads/writes go through trait objects;
+/// each backend implements them natively (SQLite via the existing
+/// repos, Surreal via SurrealDB queries).
 pub struct PatternExtractor {
-    knowledge_db: Arc<KnowledgeDatabase>,
-    conversations_db: Arc<DatabaseManager>,
-    procedure_repo: Arc<ProcedureRepository>,
-    compaction_repo: Arc<CompactionRepository>,
+    episode_store: Arc<dyn EpisodeStore>,
+    conversation_store: Arc<dyn ConversationStore>,
+    procedure_store: Arc<dyn ProcedureStore>,
+    compaction_store: Arc<dyn CompactionStore>,
     llm: Arc<dyn PatternExtractLlm>,
 }
 
 impl PatternExtractor {
     pub fn new(
-        knowledge_db: Arc<KnowledgeDatabase>,
-        conversations_db: Arc<DatabaseManager>,
-        procedure_repo: Arc<ProcedureRepository>,
-        compaction_repo: Arc<CompactionRepository>,
+        episode_store: Arc<dyn EpisodeStore>,
+        conversation_store: Arc<dyn ConversationStore>,
+        procedure_store: Arc<dyn ProcedureStore>,
+        compaction_store: Arc<dyn CompactionStore>,
         llm: Arc<dyn PatternExtractLlm>,
     ) -> Self {
         Self {
-            knowledge_db,
-            conversations_db,
-            procedure_repo,
-            compaction_repo,
+            episode_store,
+            conversation_store,
+            procedure_store,
+            compaction_store,
             llm,
         }
     }
@@ -126,7 +126,10 @@ impl PatternExtractor {
     /// error is logged and skipped — the cycle never fails hard.
     pub async fn run_cycle(&self, run_id: &str) -> Result<PatternStats, String> {
         let mut stats = PatternStats::default();
-        let episodes = self.load_successful_episodes()?;
+        let episodes = self
+            .episode_store
+            .list_successful_episodes_with_embedding(LOOKBACK_DAYS, CANDIDATE_LIMIT)
+            .await?;
         stats.episodes_considered = episodes.len() as u64;
         if episodes.len() < 2 {
             return Ok(stats);
@@ -140,82 +143,20 @@ impl PatternExtractor {
         Ok(stats)
     }
 
-    fn load_successful_episodes(&self) -> Result<Vec<EpisodeRow>, String> {
-        let limit = CANDIDATE_LIMIT as i64;
-        let rows: Vec<(String, String, String)> = self.knowledge_db.with_connection(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, session_id, agent_id, task_summary
-                 FROM session_episodes
-                 WHERE outcome = 'success'
-                   AND task_summary IS NOT NULL
-                   AND created_at > datetime('now', '-30 days')
-                 ORDER BY created_at DESC
-                 LIMIT ?1",
-            )?;
-            let r = stmt
-                .query_map(params![limit], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            // Fetch task_summary separately to keep tuple small; easier to re-read
-            // but we already pulled it — do it in one go:
-            Ok(r)
-        })?;
-
-        let mut out: Vec<EpisodeRow> = Vec::with_capacity(rows.len());
-        for (id, session_id, agent_id) in rows {
-            let task_summary = self.fetch_task_summary(&id)?;
-            let embedding = self.fetch_episode_embedding(&id).unwrap_or(None);
-            out.push(EpisodeRow {
-                session_id,
-                agent_id,
-                task_summary,
-                embedding,
-            });
-        }
-        Ok(out)
-    }
-
-    fn fetch_task_summary(&self, episode_id: &str) -> Result<String, String> {
-        self.knowledge_db.with_connection(|conn| {
-            conn.query_row(
-                "SELECT COALESCE(task_summary, '') FROM session_episodes WHERE id = ?1",
-                params![episode_id],
-                |row| row.get::<_, String>(0),
-            )
-        })
-    }
-
-    fn fetch_episode_embedding(&self, episode_id: &str) -> Result<Option<Vec<f32>>, String> {
-        self.knowledge_db.with_connection(|conn| {
-            let r = conn.query_row(
-                "SELECT embedding FROM session_episodes_index WHERE episode_id = ?1",
-                params![episode_id],
-                |row| row.get::<_, Vec<u8>>(0),
-            );
-            match r {
-                Ok(blob) => Ok(Some(blob_to_f32_vec(&blob))),
-                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-                Err(e) => Err(e),
-            }
-        })
-    }
-
     async fn process_pair(
         &self,
         run_id: &str,
-        episodes: &[EpisodeRow],
+        episodes: &[SuccessfulEpisode],
         pair: MatchedPair,
         stats: &mut PatternStats,
     ) {
         let ep_a = &episodes[pair.idx_a];
         let ep_b = &episodes[pair.idx_b];
 
-        let tools_a = match self.load_tool_sequence(&ep_a.session_id) {
+        let tools_a = match self
+            .conversation_store
+            .tool_sequence_for_session(&ep_a.session_id)
+        {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(session = %ep_a.session_id, error = %e, "pattern: tools_a failed");
@@ -223,7 +164,10 @@ impl PatternExtractor {
                 return;
             }
         };
-        let tools_b = match self.load_tool_sequence(&ep_b.session_id) {
+        let tools_b = match self
+            .conversation_store
+            .tool_sequence_for_session(&ep_b.session_id)
+        {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(session = %ep_b.session_id, error = %e, "pattern: tools_b failed");
@@ -256,10 +200,11 @@ impl PatternExtractor {
             }
         };
 
-        self.commit_pattern(run_id, &ep_a.agent_id, &resp, stats);
+        self.commit_pattern(run_id, &ep_a.agent_id, &resp, stats)
+            .await;
     }
 
-    fn commit_pattern(
+    async fn commit_pattern(
         &self,
         run_id: &str,
         agent_id: &str,
@@ -271,7 +216,11 @@ impl PatternExtractor {
             stats.skipped_llm_or_parse_error += 1;
             return;
         }
-        match self.existing_procedure(agent_id, &name) {
+        match self
+            .procedure_store
+            .get_procedure_summary_by_name(agent_id, &name)
+            .await
+        {
             Ok(Some(existing)) if existing.success_count >= DEDUP_SUCCESS_FLOOR => {
                 stats.skipped_existing += 1;
                 return;
@@ -284,7 +233,7 @@ impl PatternExtractor {
             }
         }
 
-        let procedure = match build_procedure(agent_id, &name, resp) {
+        let req = match build_procedure_insert(agent_id, &name, resp) {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(error = %e, "pattern: build procedure failed");
@@ -292,83 +241,25 @@ impl PatternExtractor {
                 return;
             }
         };
-        let proc_id = procedure.id.clone();
 
-        if let Err(e) = self.procedure_repo.upsert_procedure(&procedure) {
-            tracing::warn!(error = %e, "pattern: upsert_procedure failed");
-            stats.skipped_llm_or_parse_error += 1;
-            return;
-        }
+        let proc_id = match self.procedure_store.insert_pattern_procedure(req).await {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(error = %e, "pattern: insert_pattern_procedure failed");
+                stats.skipped_llm_or_parse_error += 1;
+                return;
+            }
+        };
         stats.procedures_inserted += 1;
 
         let reason = format!("pattern '{}' across 2 sessions", name);
         if let Err(e) = self
-            .compaction_repo
+            .compaction_store
             .record_pattern(run_id, &proc_id, &reason)
+            .await
         {
             tracing::warn!(error = %e, "pattern: record_pattern failed");
         }
-    }
-
-    fn existing_procedure(&self, agent_id: &str, name: &str) -> Result<Option<Procedure>, String> {
-        self.knowledge_db.with_connection(|conn| {
-            let r = conn.query_row(
-                "SELECT id, agent_id, ward_id, name, description, trigger_pattern, steps, \
-                 parameters, success_count, failure_count, avg_duration_ms, avg_token_cost, \
-                 last_used, created_at, updated_at \
-                 FROM procedures WHERE agent_id = ?1 AND name = ?2 LIMIT 1",
-                params![agent_id, name],
-                |row| {
-                    Ok(Procedure {
-                        id: row.get::<_, String>(0)?,
-                        agent_id: row.get::<_, String>(1)?,
-                        ward_id: row.get::<_, Option<String>>(2)?,
-                        name: row.get::<_, String>(3)?,
-                        description: row.get::<_, String>(4)?,
-                        trigger_pattern: row.get::<_, Option<String>>(5)?,
-                        steps: row.get::<_, String>(6)?,
-                        parameters: row.get::<_, Option<String>>(7)?,
-                        success_count: row.get::<_, i32>(8)?,
-                        failure_count: row.get::<_, i32>(9)?,
-                        avg_duration_ms: row.get::<_, Option<i64>>(10)?,
-                        avg_token_cost: row.get::<_, Option<i64>>(11)?,
-                        last_used: row.get::<_, Option<String>>(12)?,
-                        embedding: None,
-                        created_at: row.get::<_, String>(13)?,
-                        updated_at: row.get::<_, String>(14)?,
-                    })
-                },
-            );
-            match r {
-                Ok(p) => Ok(Some(p)),
-                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-                Err(e) => Err(e),
-            }
-        })
-    }
-
-    fn load_tool_sequence(&self, session_id: &str) -> Result<Vec<String>, String> {
-        self.conversations_db
-            .with_connection(|conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT tool_calls FROM messages
-                 WHERE session_id = ?1
-                   AND role = 'assistant'
-                   AND tool_calls IS NOT NULL
-                 ORDER BY created_at ASC",
-                )?;
-                let rows = stmt
-                    .query_map(params![session_id], |row| row.get::<_, String>(0))?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(rows)
-            })
-            .map(|blobs| {
-                let mut seq: Vec<String> = Vec::new();
-                for blob in blobs {
-                    extend_tool_names(&blob, &mut seq);
-                }
-                seq
-            })
     }
 }
 
@@ -383,7 +274,10 @@ struct MatchedPair {
 /// Build candidate pairs by cosine similarity of embeddings. The structural
 /// match check happens later, inside `process_pair`, once tool sequences are
 /// actually loaded (to keep this function cheap).
-fn build_matching_pairs(episodes: &[EpisodeRow], stats: &mut PatternStats) -> Vec<MatchedPair> {
+fn build_matching_pairs(
+    episodes: &[SuccessfulEpisode],
+    stats: &mut PatternStats,
+) -> Vec<MatchedPair> {
     let mut pairs = Vec::new();
     for i in 0..episodes.len() {
         for j in (i + 1)..episodes.len() {
@@ -406,28 +300,6 @@ fn build_matching_pairs(episodes: &[EpisodeRow], stats: &mut PatternStats) -> Ve
     pairs
 }
 
-/// Pulls assistant tool_calls JSON blobs out of the stored format
-/// `[{"tool_name": "...", ...}, ...]` and appends tool names in order.
-fn extend_tool_names(blob: &str, out: &mut Vec<String>) {
-    let parsed: serde_json::Value = match serde_json::from_str(blob) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    let arr = match parsed.as_array() {
-        Some(a) => a,
-        None => return,
-    };
-    for entry in arr {
-        if let Some(name) = entry
-            .get("tool_name")
-            .and_then(|v| v.as_str())
-            .or_else(|| entry.get("name").and_then(|v| v.as_str()))
-        {
-            out.push(name.to_string());
-        }
-    }
-}
-
 /// Returns the longest prefix (in order) common to both sequences.
 fn longest_common_prefix<T: PartialEq + Clone>(a: &[T], b: &[T]) -> Vec<T> {
     let n = a.len().min(b.len());
@@ -442,14 +314,14 @@ fn longest_common_prefix<T: PartialEq + Clone>(a: &[T], b: &[T]) -> Vec<T> {
     out
 }
 
-fn build_procedure(
+fn build_procedure_insert(
     agent_id: &str,
     name: &str,
     resp: &PatternResponse,
-) -> Result<Procedure, String> {
+) -> Result<PatternProcedureInsert, String> {
     let steps_json =
         serde_json::to_string(&resp.steps).map_err(|e| format!("steps serialize: {e}"))?;
-    let params_json = if resp.parameters.is_empty() {
+    let parameters_json = if resp.parameters.is_empty() {
         None
     } else {
         Some(
@@ -457,24 +329,14 @@ fn build_procedure(
                 .map_err(|e| format!("parameters serialize: {e}"))?,
         )
     };
-    let now = chrono::Utc::now().to_rfc3339();
-    Ok(Procedure {
-        id: format!("proc-{}", uuid::Uuid::new_v4()),
+    Ok(PatternProcedureInsert {
         agent_id: agent_id.to_string(),
         ward_id: Some(PROC_WARD.to_string()),
         name: name.to_string(),
         description: resp.description.clone(),
         trigger_pattern: Some(resp.trigger_pattern.clone()),
-        steps: steps_json,
-        parameters: params_json,
-        success_count: 1,
-        failure_count: 0,
-        avg_duration_ms: None,
-        avg_token_cost: None,
-        last_used: None,
-        embedding: None,
-        created_at: now.clone(),
-        updated_at: now,
+        steps_json,
+        parameters_json,
     })
 }
 
@@ -578,12 +440,6 @@ fn sanitize_name(raw: &str) -> String {
     trimmed
 }
 
-fn blob_to_f32_vec(blob: &[u8]) -> Vec<f32> {
-    blob.chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
-}
-
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
@@ -612,8 +468,14 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 mod tests {
     use super::*;
     use gateway_services::VaultPaths;
+    use rusqlite::params;
     use std::sync::Mutex;
     use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+    use zero_stores_sqlite::{
+        CompactionRepository, ConversationRepository, DatabaseManager, EpisodeRepository,
+        GatewayCompactionStore, GatewayEpisodeStore, GatewayProcedureStore, KnowledgeDatabase,
+        Procedure, ProcedureRepository,
+    };
 
     struct MockLlm {
         response: Mutex<PatternResponse>,
@@ -643,6 +505,10 @@ mod tests {
         conversations_db: Arc<DatabaseManager>,
         procedure_repo: Arc<ProcedureRepository>,
         compaction_repo: Arc<CompactionRepository>,
+        episode_store: Arc<dyn EpisodeStore>,
+        conversation_store: Arc<dyn ConversationStore>,
+        procedure_store: Arc<dyn ProcedureStore>,
+        compaction_store: Arc<dyn CompactionStore>,
     }
 
     fn setup() -> Harness {
@@ -657,12 +523,29 @@ mod tests {
         );
         let procedure_repo = Arc::new(ProcedureRepository::new(knowledge_db.clone(), vec_index));
         let compaction_repo = Arc::new(CompactionRepository::new(knowledge_db.clone()));
+
+        let episode_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "session_episodes_index", "episode_id")
+                .expect("episode vec idx"),
+        );
+        let episode_repo = Arc::new(EpisodeRepository::new(knowledge_db.clone(), episode_vec));
+        let episode_store: Arc<dyn EpisodeStore> = Arc::new(GatewayEpisodeStore::new(episode_repo));
+        let conv_repo = Arc::new(ConversationRepository::new(conversations_db.clone()));
+        let conversation_store: Arc<dyn ConversationStore> = conv_repo;
+        let procedure_store: Arc<dyn ProcedureStore> =
+            Arc::new(GatewayProcedureStore::new(procedure_repo.clone()));
+        let compaction_store: Arc<dyn CompactionStore> =
+            Arc::new(GatewayCompactionStore::new(compaction_repo.clone()));
         Harness {
             _tmp: tmp,
             knowledge_db,
             conversations_db,
             procedure_repo,
             compaction_repo,
+            episode_store,
+            conversation_store,
+            procedure_store,
+            compaction_store,
         }
     }
 
@@ -793,10 +676,10 @@ mod tests {
 
         let mock = Arc::new(MockLlm::new(ok_response("investigate_postgres_issue")));
         let ext = PatternExtractor::new(
-            h.knowledge_db.clone(),
-            h.conversations_db.clone(),
-            h.procedure_repo.clone(),
-            h.compaction_repo.clone(),
+            h.episode_store.clone(),
+            h.conversation_store.clone(),
+            h.procedure_store.clone(),
+            h.compaction_store.clone(),
             mock.clone(),
         );
 
@@ -853,10 +736,10 @@ mod tests {
 
         let mock = Arc::new(MockLlm::new(ok_response("investigate_postgres_issue")));
         let ext = PatternExtractor::new(
-            h.knowledge_db.clone(),
-            h.conversations_db.clone(),
-            h.procedure_repo.clone(),
-            h.compaction_repo.clone(),
+            h.episode_store.clone(),
+            h.conversation_store.clone(),
+            h.procedure_store.clone(),
+            h.compaction_store.clone(),
             mock,
         );
         let stats = ext.run_cycle("run-pe-2").await.expect("run_cycle");
@@ -899,15 +782,11 @@ mod tests {
         assert_eq!(sanitize_name("a b c"), "a_b_c");
     }
 
-    #[test]
-    fn extend_tool_names_parses_stored_format() {
-        let blob = serde_json::json!([
-            {"tool_id": "t1", "tool_name": "foo", "args": {}},
-            {"tool_id": "t2", "tool_name": "bar", "args": {}}
-        ])
-        .to_string();
-        let mut out = Vec::new();
-        extend_tool_names(&blob, &mut out);
-        assert_eq!(out, vec!["foo".to_string(), "bar".to_string()]);
-    }
+    // Note: `extend_tool_names_parses_stored_format` previously tested
+    // a helper that lived here. The helper moved to
+    // `zero_stores_sqlite::repository::extend_tool_names_from_blob`
+    // when the conversation read became trait-routed in Phase D4 —
+    // see the SQLite-side `tool_sequence_for_session` impl for the
+    // current behaviour test (covered indirectly via this module's
+    // `extracts_pattern_across_two_sessions`).
 }

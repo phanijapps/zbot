@@ -9,10 +9,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
 use zero_stores_domain::Procedure;
-use zero_stores_traits::{ProcedureStats, ProcedureStore};
+use zero_stores_traits::{
+    PatternProcedureInsert, ProcedureStats, ProcedureStore, ProcedureSummary,
+};
 
 #[derive(Clone)]
 pub struct SurrealProcedureStore {
@@ -226,6 +228,90 @@ impl ProcedureStore for SurrealProcedureStore {
             .unwrap_or(0);
         Ok(ProcedureStats { total })
     }
+
+    // ---- Sleep-time pattern extraction (Phase D4) ----------------------
+
+    async fn get_procedure_summary_by_name(
+        &self,
+        agent_id: &str,
+        name: &str,
+    ) -> Result<Option<ProcedureSummary>, String> {
+        let mut resp = self
+            .db
+            .query(
+                "SELECT id, name, success_count FROM procedure \
+                 WHERE agent_id = $a AND name = $n LIMIT 1",
+            )
+            .bind(("a", agent_id.to_string()))
+            .bind(("n", name.to_string()))
+            .await
+            .map_err(|e| format!("get_procedure_summary_by_name: {e}"))?;
+        let rows: Vec<Value> = resp
+            .take(0)
+            .map_err(|e| format!("get_procedure_summary_by_name take: {e}"))?;
+        Ok(rows.into_iter().next().map(|r| {
+            let id_raw = r
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let id = strip_thing_prefix(&id_raw);
+            ProcedureSummary {
+                id,
+                name: r
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                success_count: r.get("success_count").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            }
+        }))
+    }
+
+    async fn insert_pattern_procedure(
+        &self,
+        req: PatternProcedureInsert,
+    ) -> Result<String, String> {
+        let id = format!("proc-{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().to_rfc3339();
+        let row = serde_json::json!({
+            "agent_id": req.agent_id,
+            "ward_id": req.ward_id,
+            "name": req.name,
+            "description": req.description,
+            "trigger_pattern": req.trigger_pattern,
+            "steps": req.steps_json,
+            "parameters": req.parameters_json,
+            "success_count": 1,
+            "failure_count": 0,
+            "avg_duration_ms": null,
+            "avg_token_cost": null,
+            "last_used": null,
+            "created_at": now,
+            "updated_at": now,
+        });
+        let thing = surrealdb::types::RecordId::new(
+            "procedure",
+            surrealdb::types::RecordIdKey::String(id.clone()),
+        );
+        self.db
+            .query("CREATE $id CONTENT $row")
+            .bind(("id", thing))
+            .bind(("row", row))
+            .await
+            .map_err(|e| format!("insert_pattern_procedure: {e}"))?;
+        Ok(id)
+    }
+}
+
+/// Strip Surreal's `<table>:<id>` wire prefix and any backticks.
+fn strip_thing_prefix(s: &str) -> String {
+    let after = match s.find(':') {
+        Some(idx) => &s[idx + 1..],
+        None => s,
+    };
+    let cleaned = after.strip_prefix('`').unwrap_or(after);
+    cleaned.strip_suffix('`').unwrap_or(cleaned).to_string()
 }
 
 /// Strip the `embedding` field (Procedure marks it `serde(skip)`) and
@@ -261,7 +347,7 @@ fn build_procedure_payload(p: &Procedure) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{connect, schema::apply_schema, SurrealConfig};
+    use crate::{SurrealConfig, connect, schema::apply_schema};
 
     async fn fresh_store() -> SurrealProcedureStore {
         let cfg = SurrealConfig {

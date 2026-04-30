@@ -100,10 +100,7 @@ pub trait KgEpisodeStore: Send + Sync {
 
     /// Pending count scoped to one source — used by backpressure to
     /// enforce a per-source quota.
-    async fn count_pending_for_source(
-        &self,
-        _source_ref_prefix: &str,
-    ) -> Result<u64, String> {
+    async fn count_pending_for_source(&self, _source_ref_prefix: &str) -> Result<u64, String> {
         Ok(0)
     }
 
@@ -143,11 +140,7 @@ pub trait KgEpisodeStore: Send + Sync {
     /// Reset a failed episode back to `pending` if `retry_count` is
     /// below `max_retries`. Returns `true` when the retry was queued,
     /// `false` when the episode is over the retry budget.
-    async fn retry_if_eligible(
-        &self,
-        _id: &str,
-        _max_retries: u32,
-    ) -> Result<bool, String> {
+    async fn retry_if_eligible(&self, _id: &str, _max_retries: u32) -> Result<bool, String> {
         Ok(false)
     }
 

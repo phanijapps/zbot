@@ -6,15 +6,15 @@ use async_trait::async_trait;
 use knowledge_graph::types::{
     Entity, EntityType, GraphStats, NeighborInfo, Relationship, Subgraph,
 };
-use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
+use zero_stores::KnowledgeGraphStore;
 use zero_stores::error::StoreResult;
 use zero_stores::extracted::ExtractedKnowledge;
 use zero_stores::types::{
     ArchivableEntity, Direction, EntityId, KgStats, Neighbor, ReindexReport, RelationshipId,
     ResolveOutcome, StoreOutcome, TraversalHit, VecIndexHealth,
 };
-use zero_stores::KnowledgeGraphStore;
 
 mod alias;
 mod archival;
@@ -229,11 +229,7 @@ impl KnowledgeGraphStore for SurrealKgStore {
             .await
     }
 
-    async fn merge_entity_into(
-        &self,
-        loser: &EntityId,
-        winner: &EntityId,
-    ) -> StoreResult<()> {
+    async fn merge_entity_into(&self, loser: &EntityId, winner: &EntityId) -> StoreResult<()> {
         maintenance::merge_entity_into(self.db(), loser, winner).await
     }
 
@@ -248,5 +244,39 @@ impl KnowledgeGraphStore for SurrealKgStore {
 
     async fn mark_entity_pruned(&self, id: &EntityId) -> StoreResult<()> {
         maintenance::mark_entity_pruned(self.db(), id).await
+    }
+
+    // ---- Sleep-time synthesis (Phase D4) ----------------------------
+
+    async fn list_strategy_candidates(
+        &self,
+        min_sessions: i64,
+        lookback_days: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<zero_stores::StrategyCandidate>> {
+        maintenance::list_strategy_candidates(self.db(), min_sessions, lookback_days, limit).await
+    }
+
+    async fn relationship_context_for_entity(
+        &self,
+        entity_id: &str,
+        lookback_days: i64,
+        edge_limit: usize,
+    ) -> StoreResult<zero_stores::RelationshipContext> {
+        maintenance::relationship_context_for_entity(
+            self.db(),
+            entity_id,
+            lookback_days,
+            edge_limit,
+        )
+        .await
+    }
+
+    async fn episode_ids_for_entity(
+        &self,
+        entity_id: &str,
+        lookback_days: i64,
+    ) -> StoreResult<Vec<String>> {
+        maintenance::episode_ids_for_entity(self.db(), entity_id, lookback_days).await
     }
 }

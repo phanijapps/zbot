@@ -9,9 +9,9 @@ use knowledge_graph::types::{
     Subgraph,
 };
 use serde_json::Value;
+use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{RecordId, RecordIdKey, SurrealValue};
-use surrealdb::Surreal;
 use zero_stores::error::StoreResult;
 use zero_stores::types::{Direction, EntityId, Neighbor, RelationshipId, TraversalHit};
 
@@ -484,7 +484,7 @@ fn parse_dt(value: Option<&Value>) -> Option<DateTime<Utc>> {
 mod tests {
     use super::*;
     use crate::kg::{entity, relationship};
-    use crate::{connect, schema::apply_schema, SurrealConfig};
+    use crate::{SurrealConfig, connect, schema::apply_schema};
     use knowledge_graph::types::{Entity, EntityType, Relationship, RelationshipType};
 
     async fn fresh_db() -> Arc<Surreal<Any>> {
@@ -608,7 +608,10 @@ mod tests {
         let names: HashSet<_> = sub.entities.iter().map(|e| e.name.clone()).collect();
         assert!(names.contains("A"), "center A must be in subgraph");
         assert!(names.contains("B"), "1-hop B must be in subgraph");
-        assert!(!names.contains("C"), "C is 2-hop, must NOT be in 1-hop subgraph");
+        assert!(
+            !names.contains("C"),
+            "C is 2-hop, must NOT be in 1-hop subgraph"
+        );
         assert_eq!(sub.center, a.0);
         assert_eq!(sub.max_hops, 1);
         assert_eq!(sub.relationships.len(), 1);

@@ -14,11 +14,11 @@
 use std::sync::Arc;
 
 use knowledge_graph::types::EntityType;
-use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
 use zero_stores::error::{StoreError, StoreResult};
 use zero_stores::types::EntityId;
-use zero_stores::{DecayCandidate, DuplicateCandidate};
+use zero_stores::{DecayCandidate, DuplicateCandidate, RelationshipContext, StrategyCandidate};
 
 use crate::error::map_surreal_error;
 use crate::types::EntityIdExt;
@@ -56,9 +56,7 @@ pub async fn find_duplicate_candidates(
         .bind(("t", entity_type.as_str().to_string()))
         .await
         .map_err(map_surreal_error)?;
-    let rows: Vec<serde_json::Value> = resp
-        .take(0)
-        .map_err(map_surreal_error)?;
+    let rows: Vec<serde_json::Value> = resp.take(0).map_err(map_surreal_error)?;
 
     // Extract (id, embedding) pairs for the in-memory comparison.
     let mut entities: Vec<(String, Vec<f32>)> = Vec::with_capacity(rows.len());
@@ -302,6 +300,301 @@ pub async fn list_orphan_old_candidates(
         .collect())
 }
 
+/// Surface entities that appear across at least `min_sessions`
+/// distinct sessions whose episodes are within `lookback_days`.
+/// Surreal's `relationship` edges carry `source_episode_ids` (CSV)
+/// when ingested through the parity-preserving extractor — same
+/// contract as the SQLite path. We pull entities + their edges +
+/// referenced episodes and reduce in Rust because Surreal's GROUP BY
+/// COUNT(DISTINCT ...) over a graph traversal isn't ergonomic enough
+/// to express in a single statement.
+pub async fn list_strategy_candidates(
+    db: &Arc<Surreal<Any>>,
+    min_sessions: i64,
+    lookback_days: i64,
+    limit: usize,
+) -> StoreResult<Vec<StrategyCandidate>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    // Pull live entities and the relationships that touch them.
+    let mut resp = db
+        .query(
+            "SELECT id, agent_id, name, entity_type, mention_count \
+             FROM entity \
+             WHERE (epistemic_class IS NONE OR epistemic_class != 'archival') \
+               AND (compressed_into IS NONE)",
+        )
+        .await
+        .map_err(map_surreal_error)?;
+    let entity_rows: Vec<serde_json::Value> = resp.take(0).map_err(map_surreal_error)?;
+
+    // Episodes referenced (within window). We fetch eligible episode
+    // ids once and use Rust filtering rather than per-entity queries.
+    let q_ep = format!(
+        "SELECT id, session_id FROM episode \
+         WHERE session_id IS NOT NONE \
+           AND created_at > (time::now() - {lookback_days}d)"
+    );
+    let mut resp_ep = db.query(q_ep).await.map_err(map_surreal_error)?;
+    let ep_rows: Vec<serde_json::Value> = resp_ep.take(0).map_err(map_surreal_error)?;
+    let mut episode_to_session: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for row in ep_rows {
+        let id = match row.get("id").and_then(|v| v.as_str()) {
+            Some(s) => strip_thing_prefix(s),
+            None => continue,
+        };
+        let sid = row
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !sid.is_empty() {
+            episode_to_session.insert(id, sid);
+        }
+    }
+
+    // Edges → which episode ids they cite.
+    let mut resp_rel = db
+        .query("SELECT `in`, `out`, source_episode_ids FROM relationship")
+        .await
+        .map_err(map_surreal_error)?;
+    let rel_rows: Vec<serde_json::Value> = resp_rel.take(0).map_err(map_surreal_error)?;
+    // (entity_id) -> set of session_ids that touched it via any edge
+    let mut sessions_per_entity: std::collections::HashMap<
+        String,
+        std::collections::HashSet<String>,
+    > = std::collections::HashMap::new();
+    for row in &rel_rows {
+        let in_id = row
+            .get("in")
+            .and_then(|v| v.as_str())
+            .map(strip_thing_prefix)
+            .unwrap_or_default();
+        let out_id = row
+            .get("out")
+            .and_then(|v| v.as_str())
+            .map(strip_thing_prefix)
+            .unwrap_or_default();
+        let csv = row
+            .get("source_episode_ids")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if csv.is_empty() {
+            continue;
+        }
+        let mut sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for ep_id in csv.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if let Some(sid) = episode_to_session.get(ep_id) {
+                sessions.insert(sid.clone());
+            }
+        }
+        for endpoint in [&in_id, &out_id] {
+            if endpoint.is_empty() {
+                continue;
+            }
+            sessions_per_entity
+                .entry(endpoint.clone())
+                .or_default()
+                .extend(sessions.iter().cloned());
+        }
+    }
+
+    // Now zip entity rows with their distinct-session counts.
+    let mut candidates: Vec<(StrategyCandidate, i64)> = Vec::new();
+    for row in entity_rows {
+        let id_raw = match row.get("id").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let id = strip_thing_prefix(&id_raw);
+        let n_sessions = sessions_per_entity
+            .get(&id)
+            .map(|s| s.len() as i64)
+            .unwrap_or(0);
+        if n_sessions < min_sessions {
+            continue;
+        }
+        let agent_id = row
+            .get("agent_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let name = row
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let entity_type = row
+            .get("entity_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("concept")
+            .to_string();
+        let mention_count = row
+            .get("mention_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        candidates.push((
+            StrategyCandidate {
+                entity_id: id,
+                agent_id,
+                name,
+                entity_type,
+                n_sessions,
+            },
+            mention_count,
+        ));
+    }
+    // Sort by n_sessions DESC, mention_count DESC (parity with SQLite).
+    candidates.sort_by(|a, b| b.0.n_sessions.cmp(&a.0.n_sessions).then(b.1.cmp(&a.1)));
+    Ok(candidates.into_iter().take(limit).map(|(c, _)| c).collect())
+}
+
+/// Build (relationship summaries, distinct session ids) for an entity
+/// over the last `lookback_days`. Relationship rows are fetched once;
+/// session-id resolution joins their `source_episode_ids` against the
+/// in-window episode set.
+pub async fn relationship_context_for_entity(
+    db: &Arc<Surreal<Any>>,
+    entity_id: &str,
+    lookback_days: i64,
+    edge_limit: usize,
+) -> StoreResult<RelationshipContext> {
+    let thing_id = format!("entity:`{entity_id}`");
+    let q = format!(
+        "SELECT relationship_type, `in`, `out`, source_episode_ids \
+         FROM relationship \
+         WHERE `in` = {thing_id} OR `out` = {thing_id} \
+         LIMIT {edge_limit}"
+    );
+    let mut resp = db.query(q).await.map_err(map_surreal_error)?;
+    let rows: Vec<serde_json::Value> = resp.take(0).map_err(map_surreal_error)?;
+
+    let summaries: Vec<String> = rows
+        .iter()
+        .map(|r| {
+            let ty = r
+                .get("relationship_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("related_to");
+            let src = r
+                .get("in")
+                .and_then(|v| v.as_str())
+                .map(strip_thing_prefix)
+                .unwrap_or_default();
+            let tgt = r
+                .get("out")
+                .and_then(|v| v.as_str())
+                .map(strip_thing_prefix)
+                .unwrap_or_default();
+            format!("{src} --[{ty}]--> {tgt}")
+        })
+        .collect();
+
+    let mut all_eids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for r in &rows {
+        if let Some(csv) = r.get("source_episode_ids").and_then(|v| v.as_str()) {
+            for ep in csv.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                all_eids.insert(ep.to_string());
+            }
+        }
+    }
+    if all_eids.is_empty() {
+        return Ok(RelationshipContext {
+            summaries,
+            session_ids: Vec::new(),
+        });
+    }
+
+    let eid_vec: Vec<String> = all_eids.into_iter().collect();
+    let q_ep = format!(
+        "SELECT DISTINCT session_id FROM episode \
+         WHERE session_id IS NOT NONE \
+           AND id INSIDE $ids \
+           AND created_at > (time::now() - {lookback_days}d)"
+    );
+    let things: Vec<surrealdb::types::RecordId> = eid_vec
+        .into_iter()
+        .map(|s| {
+            surrealdb::types::RecordId::new("episode", surrealdb::types::RecordIdKey::String(s))
+        })
+        .collect();
+    let mut resp_ep = db
+        .query(q_ep)
+        .bind(("ids", things))
+        .await
+        .map_err(map_surreal_error)?;
+    let ep_rows: Vec<serde_json::Value> = resp_ep.take(0).map_err(map_surreal_error)?;
+    let session_ids: Vec<String> = ep_rows
+        .into_iter()
+        .filter_map(|r| {
+            r.get("session_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect();
+
+    Ok(RelationshipContext {
+        summaries,
+        session_ids,
+    })
+}
+
+/// Distinct, deduped episode ids that touched the entity through any
+/// `source_episode_ids` cited by an edge, filtered to the window.
+pub async fn episode_ids_for_entity(
+    db: &Arc<Surreal<Any>>,
+    entity_id: &str,
+    lookback_days: i64,
+) -> StoreResult<Vec<String>> {
+    let thing_id = format!("entity:`{entity_id}`");
+    let q = format!(
+        "SELECT source_episode_ids FROM relationship \
+         WHERE (`in` = {thing_id} OR `out` = {thing_id}) \
+           AND source_episode_ids IS NOT NONE"
+    );
+    let mut resp = db.query(q).await.map_err(map_surreal_error)?;
+    let rows: Vec<serde_json::Value> = resp.take(0).map_err(map_surreal_error)?;
+    let mut ids: Vec<String> = rows
+        .iter()
+        .filter_map(|r| r.get("source_episode_ids").and_then(|v| v.as_str()))
+        .flat_map(|csv| {
+            csv.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() {
+        return Ok(ids);
+    }
+    let things: Vec<surrealdb::types::RecordId> = ids
+        .into_iter()
+        .map(|s| {
+            surrealdb::types::RecordId::new("episode", surrealdb::types::RecordIdKey::String(s))
+        })
+        .collect();
+    let q_ep = format!(
+        "SELECT id FROM episode \
+         WHERE id INSIDE $ids \
+           AND session_id IS NOT NONE \
+           AND created_at > (time::now() - {lookback_days}d)"
+    );
+    let mut resp_ep = db
+        .query(q_ep)
+        .bind(("ids", things))
+        .await
+        .map_err(map_surreal_error)?;
+    let ep_rows: Vec<serde_json::Value> = resp_ep.take(0).map_err(map_surreal_error)?;
+    Ok(ep_rows
+        .into_iter()
+        .filter_map(|r| r.get("id").and_then(|v| v.as_str()).map(strip_thing_prefix))
+        .collect())
+}
+
 /// Soft-delete an entity by marking it pruned. Sets
 /// `compressed_into = '__pruned__'` (sentinel matches the SQLite
 /// convention) and bumps `epistemic_class`. The row stays referenceable
@@ -331,7 +624,7 @@ mod tests {
     use super::*;
     use crate::kg::entity;
     use crate::kg::relationship;
-    use crate::{connect, schema::apply_schema, SurrealConfig};
+    use crate::{SurrealConfig, connect, schema::apply_schema};
     use knowledge_graph::types::{Entity, EntityType, Relationship, RelationshipType};
 
     async fn fresh_db() -> Arc<Surreal<Any>> {
@@ -350,8 +643,7 @@ mod tests {
     async fn merge_entity_into_repoints_edges_and_archives_loser() {
         let db = fresh_db().await;
         let alice = Entity::new("a1".into(), EntityType::Person, "Alice".into());
-        let alice_dup =
-            Entity::new("a1".into(), EntityType::Person, "Alice (dup)".into());
+        let alice_dup = Entity::new("a1".into(), EntityType::Person, "Alice (dup)".into());
         let bob = Entity::new("a1".into(), EntityType::Person, "Bob".into());
 
         let alice_id = entity::upsert(&db, "a1", alice).await.unwrap();
@@ -374,10 +666,7 @@ mod tests {
             .expect("merge");
 
         // The relationship's `out` should now point at alice (the winner).
-        let mut resp = db
-            .query("SELECT * FROM relationship")
-            .await
-            .expect("query");
+        let mut resp = db.query("SELECT * FROM relationship").await.expect("query");
         let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
         assert_eq!(rows.len(), 1);
         let out_str = rows[0].get("out").and_then(|v| v.as_str()).unwrap();

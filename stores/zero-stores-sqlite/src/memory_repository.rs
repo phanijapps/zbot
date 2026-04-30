@@ -13,8 +13,8 @@ use chrono::Utc;
 use rusqlite::params;
 use std::sync::Arc;
 
-use crate::vector_index::VectorIndex;
 use crate::KnowledgeDatabase;
+use crate::vector_index::VectorIndex;
 
 // ============================================================================
 // FTS5 QUERY SANITIZATION
@@ -96,6 +96,13 @@ impl MemoryRepository {
     #[cfg(test)]
     pub(crate) fn db_for_tests(&self) -> Arc<crate::KnowledgeDatabase> {
         self.db.clone()
+    }
+
+    /// Borrow the underlying knowledge database. Used by trait
+    /// adapters that need to reach into the connection for queries
+    /// not yet covered by named methods.
+    pub fn db(&self) -> &Arc<crate::KnowledgeDatabase> {
+        &self.db
     }
 
     /// Aggregate counts for the memory subsystem stats endpoint.
@@ -1647,10 +1654,11 @@ mod tests {
         let embedding = vec![0.1_f32, 0.2, 0.3, 0.4];
 
         // Cache miss
-        assert!(repo
-            .get_cached_embedding(hash, model)
-            .expect("get miss")
-            .is_none());
+        assert!(
+            repo.get_cached_embedding(hash, model)
+                .expect("get miss")
+                .is_none()
+        );
 
         // Cache write
         repo.cache_embedding(hash, model, &embedding)

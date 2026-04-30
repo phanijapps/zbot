@@ -10,6 +10,19 @@ pub struct EpisodeStats {
     pub total: i64,
 }
 
+/// One row returned by `list_successful_episodes_with_embedding`.
+/// Captures the fields the PatternExtractor needs without serialising
+/// the full SessionEpisode shape.
+#[derive(Debug, Clone)]
+pub struct SuccessfulEpisode {
+    pub id: String,
+    pub session_id: String,
+    pub agent_id: String,
+    pub task_summary: String,
+    /// L2-normalised embedding of `task_summary`, if one is indexed.
+    pub embedding: Option<Vec<f32>>,
+}
+
 /// Backend-agnostic interface for the session-episode subsystem.
 ///
 /// Each row carries the `SessionEpisode` JSON shape from
@@ -66,5 +79,35 @@ pub trait EpisodeStore: Send + Sync {
     /// track this gracefully degrade.
     async fn episode_stats(&self) -> Result<EpisodeStats, String> {
         Ok(EpisodeStats::default())
+    }
+
+    // ---- Sleep-time pattern + synthesis (Phase D4) ----------------------
+    //
+    // Reads needed by the `Synthesizer` and `PatternExtractor` ops.
+    // Default impls return empty so backends that haven't implemented
+    // yet make the synthesis/pattern cycle a quiet no-op rather than
+    // crashing.
+
+    /// Recent successful episodes (within `lookback_days`) with their
+    /// task-summary embedding loaded. Used by `PatternExtractor` to
+    /// surface candidate pairs by semantic similarity. `embedding` is
+    /// `None` for rows that aren't indexed yet. Default: empty.
+    async fn list_successful_episodes_with_embedding(
+        &self,
+        _lookback_days: i64,
+        _limit: usize,
+    ) -> Result<Vec<SuccessfulEpisode>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Task summaries for a set of session ids. Used by `Synthesizer`
+    /// to build per-candidate LLM context. Order is unspecified;
+    /// duplicates per session are allowed if a session has multiple
+    /// episodes. Default: empty.
+    async fn task_summaries_for_sessions(
+        &self,
+        _session_ids: &[String],
+    ) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
     }
 }

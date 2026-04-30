@@ -191,11 +191,7 @@ pub trait KnowledgeGraphStore: Send + Sync {
     /// then mark `loser` as merged. Backend chooses the atomicity
     /// primitive (SQLite transaction, SurrealDB BEGIN/COMMIT block).
     /// Default: no-op error so misuse is loud.
-    async fn merge_entity_into(
-        &self,
-        _loser: &EntityId,
-        _winner: &EntityId,
-    ) -> StoreResult<()> {
+    async fn merge_entity_into(&self, _loser: &EntityId, _winner: &EntityId) -> StoreResult<()> {
         Err(crate::StoreError::Backend(
             "merge_entity_into not implemented for this store".to_string(),
         ))
@@ -223,6 +219,53 @@ pub trait KnowledgeGraphStore: Send + Sync {
             "mark_entity_pruned not implemented for this store".to_string(),
         ))
     }
+
+    // ---- Sleep-time synthesis (Phase D4) ---------------------------------
+    //
+    // Reads needed by `Synthesizer` to surface cross-session strategy
+    // candidates and load their context. Each method captures one
+    // semantic operation; backends implement with whatever primitive
+    // fits (SQLite uses JOINs over kg_entities × kg_relationships ×
+    // kg_episodes, Surreal uses graph traversals over the `relationship`
+    // edge table). Default: empty results so the synthesis cycle is a
+    // no-op on backends that haven't implemented yet.
+
+    /// Entities seen in at least `min_sessions` distinct sessions over
+    /// the last `lookback_days`. Excludes archival/compressed rows.
+    /// Used by the Synthesizer to find cross-session strategy
+    /// candidates. Default: no candidates.
+    async fn list_strategy_candidates(
+        &self,
+        _min_sessions: i64,
+        _lookback_days: i64,
+        _limit: usize,
+    ) -> StoreResult<Vec<StrategyCandidate>> {
+        Ok(Vec::new())
+    }
+
+    /// Relationship summaries (`src --[type]--> tgt` strings) for an
+    /// entity, plus the distinct `session_id`s that referenced any of
+    /// those relationships within the last `lookback_days`. Used by the
+    /// Synthesizer to build per-candidate LLM context. Default: empty.
+    async fn relationship_context_for_entity(
+        &self,
+        _entity_id: &str,
+        _lookback_days: i64,
+        _edge_limit: usize,
+    ) -> StoreResult<RelationshipContext> {
+        Ok(RelationshipContext::default())
+    }
+
+    /// Distinct, deduped episode ids that touched the entity within
+    /// the last `lookback_days`. Used by the Synthesizer to attribute
+    /// a synthesized fact to its contributing episodes. Default: empty.
+    async fn episode_ids_for_entity(
+        &self,
+        _entity_id: &str,
+        _lookback_days: i64,
+    ) -> StoreResult<Vec<String>> {
+        Ok(Vec::new())
+    }
 }
 
 /// One pair returned by `find_duplicate_candidates`.
@@ -240,4 +283,26 @@ pub struct DecayCandidate {
     pub name: String,
     pub entity_type: String,
     pub mention_count: i64,
+}
+
+/// One row returned by `list_strategy_candidates`. Captures just the
+/// fields the Synthesizer needs to seed an LLM call — no embeddings,
+/// no full Entity payload.
+#[derive(Debug, Clone)]
+pub struct StrategyCandidate {
+    pub entity_id: String,
+    pub agent_id: String,
+    pub name: String,
+    pub entity_type: String,
+    pub n_sessions: i64,
+}
+
+/// Result of `relationship_context_for_entity`. `summaries` holds
+/// human-readable relationship strings (e.g. `src --[uses]--> tgt`);
+/// `session_ids` is the set of distinct sessions whose episodes
+/// referenced any of those relationships within the lookback window.
+#[derive(Debug, Clone, Default)]
+pub struct RelationshipContext {
+    pub summaries: Vec<String>,
+    pub session_ids: Vec<String>,
 }

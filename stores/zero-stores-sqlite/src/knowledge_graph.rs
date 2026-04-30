@@ -8,14 +8,14 @@ use knowledge_graph::types::{
 };
 
 use crate::kg::storage::{ArchivableEntityRow, GraphStorage};
+use zero_stores::KnowledgeGraphStore;
+use zero_stores::StoreResult;
 use zero_stores::error::StoreError;
 use zero_stores::extracted::ExtractedKnowledge;
 use zero_stores::types::{
     ArchivableEntity, Direction, EntityId, KgStats, Neighbor, ReindexReport, RelationshipId,
     ResolveOutcome, StoreOutcome, TraversalHit, VecIndexHealth,
 };
-use zero_stores::KnowledgeGraphStore;
-use zero_stores::StoreResult;
 
 use crate::blocking::{block, map_graph_err};
 use crate::reindex;
@@ -475,11 +475,13 @@ impl KnowledgeGraphStore for SqliteKgStore {
                 .map(|pairs| {
                     pairs
                         .into_iter()
-                        .map(|(loser_id, winner_id, score)| zero_stores::DuplicateCandidate {
-                            loser_entity_id: loser_id,
-                            winner_entity_id: winner_id,
-                            cosine_similarity: score,
-                        })
+                        .map(
+                            |(loser_id, winner_id, score)| zero_stores::DuplicateCandidate {
+                                loser_entity_id: loser_id,
+                                winner_entity_id: winner_id,
+                                cosine_similarity: score,
+                            },
+                        )
                         .collect()
                 })
                 .map_err(map_graph_err)
@@ -487,11 +489,7 @@ impl KnowledgeGraphStore for SqliteKgStore {
         .await
     }
 
-    async fn merge_entity_into(
-        &self,
-        loser: &EntityId,
-        winner: &EntityId,
-    ) -> StoreResult<()> {
+    async fn merge_entity_into(&self, loser: &EntityId, winner: &EntityId) -> StoreResult<()> {
         let storage = self.storage.clone();
         let loser_id = loser.0.clone();
         let winner_id = winner.0.clone();
@@ -533,10 +531,170 @@ impl KnowledgeGraphStore for SqliteKgStore {
     async fn mark_entity_pruned(&self, id: &EntityId) -> StoreResult<()> {
         let storage = self.storage.clone();
         let entity_id = id.0.clone();
+        block(move || storage.mark_pruned(&entity_id).map_err(map_graph_err)).await
+    }
+
+    // ---- Sleep-time synthesis (Phase D4) -------------------------------
+
+    async fn list_strategy_candidates(
+        &self,
+        min_sessions: i64,
+        lookback_days: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<zero_stores::StrategyCandidate>> {
+        let db = self.storage.knowledge_db().clone();
+        let limit_i64 = limit as i64;
         block(move || {
-            storage
-                .mark_pruned(&entity_id)
-                .map_err(map_graph_err)
+            db.with_connection(|conn| {
+                // SQLite `datetime()` doesn't take bound days directly, so format
+                // the modifier into the SQL literal. Both `min_sessions` and
+                // `limit` stay parameterised.
+                let date_modifier = format!("-{lookback_days} days");
+                let sql = format!(
+                    "SELECT e.id, e.agent_id, e.name, e.entity_type, COUNT(DISTINCT ep.session_id) AS n_sessions
+                     FROM kg_entities e
+                     JOIN kg_relationships r ON r.source_entity_id = e.id OR r.target_entity_id = e.id
+                     JOIN kg_episodes ep    ON instr(COALESCE(r.source_episode_ids, ''), ep.id) > 0
+                     WHERE e.epistemic_class != 'archival'
+                       AND e.compressed_into IS NULL
+                       AND ep.created_at > datetime('now', '{date_modifier}')
+                       AND ep.session_id IS NOT NULL
+                     GROUP BY e.id
+                     HAVING n_sessions >= ?1
+                     ORDER BY n_sessions DESC, e.mention_count DESC
+                     LIMIT ?2"
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt
+                    .query_map(rusqlite::params![min_sessions, limit_i64], |row| {
+                        Ok(zero_stores::StrategyCandidate {
+                            entity_id: row.get(0)?,
+                            agent_id: row.get(1)?,
+                            name: row.get(2)?,
+                            entity_type: row.get(3)?,
+                            n_sessions: row.get::<_, i64>(4)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .map_err(StoreError::Backend)
+        })
+        .await
+    }
+
+    async fn relationship_context_for_entity(
+        &self,
+        entity_id: &str,
+        lookback_days: i64,
+        edge_limit: usize,
+    ) -> StoreResult<zero_stores::RelationshipContext> {
+        let db = self.storage.knowledge_db().clone();
+        let entity_id = entity_id.to_string();
+        let edge_limit_i64 = edge_limit as i64;
+        block(move || {
+            db.with_connection(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT r.relationship_type, r.source_entity_id, r.target_entity_id,
+                            r.source_episode_ids
+                     FROM kg_relationships r
+                     WHERE r.source_entity_id = ?1 OR r.target_entity_id = ?1
+                     LIMIT ?2",
+                )?;
+                let rows: Vec<(String, String, String, Option<String>)> = stmt
+                    .query_map(rusqlite::params![entity_id, edge_limit_i64], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                        ))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let summaries: Vec<String> = rows
+                    .iter()
+                    .map(|(ty, src, tgt, _)| format!("{src} --[{ty}]--> {tgt}"))
+                    .collect();
+
+                let episode_id_blob: String = rows
+                    .iter()
+                    .filter_map(|(_, _, _, eids)| eids.clone())
+                    .collect::<Vec<_>>()
+                    .join(",");
+
+                let mut session_ids: Vec<String> = Vec::new();
+                if !episode_id_blob.is_empty() {
+                    let date_modifier = format!("-{lookback_days} days");
+                    let sql = format!(
+                        "SELECT DISTINCT session_id FROM kg_episodes
+                         WHERE session_id IS NOT NULL
+                           AND instr(?1, id) > 0
+                           AND created_at > datetime('now', '{date_modifier}')"
+                    );
+                    let mut q = conn.prepare(&sql)?;
+                    session_ids = q
+                        .query_map(rusqlite::params![episode_id_blob], |row| {
+                            row.get::<_, String>(0)
+                        })?
+                        .collect::<Result<Vec<_>, _>>()?;
+                }
+                Ok(zero_stores::RelationshipContext {
+                    summaries,
+                    session_ids,
+                })
+            })
+            .map_err(StoreError::Backend)
+        })
+        .await
+    }
+
+    async fn episode_ids_for_entity(
+        &self,
+        entity_id: &str,
+        lookback_days: i64,
+    ) -> StoreResult<Vec<String>> {
+        let db = self.storage.knowledge_db().clone();
+        let entity_id = entity_id.to_string();
+        block(move || {
+            db.with_connection(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT r.source_episode_ids FROM kg_relationships r
+                     WHERE (r.source_entity_id = ?1 OR r.target_entity_id = ?1)
+                       AND r.source_episode_ids IS NOT NULL",
+                )?;
+                let blobs = stmt
+                    .query_map(rusqlite::params![entity_id], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut ids: Vec<String> = blobs
+                    .iter()
+                    .flat_map(|b| b.split(',').map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                ids.sort();
+                ids.dedup();
+                if ids.is_empty() {
+                    return Ok(ids);
+                }
+                let placeholders = vec!["?"; ids.len()].join(",");
+                let date_modifier = format!("-{lookback_days} days");
+                let sql = format!(
+                    "SELECT id FROM kg_episodes
+                     WHERE id IN ({placeholders})
+                       AND session_id IS NOT NULL
+                       AND created_at > datetime('now', '{date_modifier}')"
+                );
+                let mut q = conn.prepare(&sql)?;
+                let params_vec: Vec<&dyn rusqlite::types::ToSql> = ids
+                    .iter()
+                    .map(|s| s as &dyn rusqlite::types::ToSql)
+                    .collect();
+                let filtered: Vec<String> = q
+                    .query_map(params_vec.as_slice(), |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(filtered)
+            })
+            .map_err(StoreError::Backend)
         })
         .await
     }

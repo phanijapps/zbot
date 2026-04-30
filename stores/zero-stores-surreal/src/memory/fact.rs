@@ -3,9 +3,10 @@
 use std::sync::Arc;
 
 use serde_json::Value;
+use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::SurrealValue;
-use surrealdb::Surreal;
+use zero_stores_traits::{StrategyFactInsert, StrategyFactMatch};
 
 #[derive(SurrealValue)]
 #[surreal(crate = "surrealdb::types")]
@@ -444,10 +445,155 @@ pub async fn count_all_facts(
     Ok(rows.first().map(|r| r.n).unwrap_or(0))
 }
 
+// ============================================================================
+// Sleep-time synthesis (Phase D4)
+// ============================================================================
+
+/// Find an existing strategy fact whose embedding's cosine similarity
+/// with `embedding` is at or above `threshold`. Pulls up to `scan_limit`
+/// candidate facts in `category = "strategy"` for the agent and scores
+/// in Rust — Surreal's HNSW isn't yet wired for `memory_fact` so this
+/// mirrors the conservative scan used elsewhere in this module.
+pub async fn find_strategy_fact_by_similarity(
+    db: &Arc<Surreal<Any>>,
+    agent_id: &str,
+    embedding: &[f32],
+    threshold: f32,
+    scan_limit: usize,
+) -> Result<Option<StrategyFactMatch>, String> {
+    let q = format!(
+        "SELECT id, source_episode_id, embedding FROM memory_fact \
+         WHERE agent_id = $a \
+           AND fact_type = 'strategy' \
+           AND embedding IS NOT NONE \
+           AND (archived = false OR archived IS NONE) \
+         LIMIT {scan_limit}"
+    );
+    let mut resp = db
+        .query(q)
+        .bind(("a", agent_id.to_string()))
+        .await
+        .map_err(|e| format!("find_strategy_fact_by_similarity: {e}"))?;
+    let rows: Vec<Value> = resp
+        .take(0)
+        .map_err(|e| format!("find_strategy_fact_by_similarity take: {e}"))?;
+    for row in rows {
+        let id_raw = match row.get("id").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let stored: Vec<f32> = match row.get("embedding") {
+            Some(Value::Array(arr)) => arr
+                .iter()
+                .filter_map(|x| x.as_f64().map(|f| f as f32))
+                .collect(),
+            _ => continue,
+        };
+        if stored.len() != embedding.len() {
+            continue;
+        }
+        let sim = match crate::similarity::cosine(embedding, &stored) {
+            Some(v) => v,
+            None => continue,
+        };
+        if sim >= threshold as f64 {
+            let fact_id = strip_thing_prefix(&id_raw);
+            let source_episode_id = row
+                .get("source_episode_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            return Ok(Some(StrategyFactMatch {
+                fact_id,
+                source_episode_id,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+/// Bump an existing strategy fact's `mention_count` and replace its
+/// `source_episode_id` CSV. `now_rfc3339` is recorded as `updated_at`.
+pub async fn bump_strategy_fact_episodes(
+    db: &Arc<Surreal<Any>>,
+    fact_id: &str,
+    merged_source_episode_id: &str,
+    now_rfc3339: &str,
+) -> Result<(), String> {
+    let thing = surrealdb::types::RecordId::new(
+        "memory_fact",
+        surrealdb::types::RecordIdKey::String(fact_id.to_string()),
+    );
+    db.query(
+        "UPDATE $id SET \
+         mention_count = (mention_count OR 0) + 1, \
+         updated_at = $u, \
+         last_used_at = $u, \
+         source_episode_id = $eids",
+    )
+    .bind(("id", thing))
+    .bind(("u", now_rfc3339.to_string()))
+    .bind(("eids", merged_source_episode_id.to_string()))
+    .await
+    .map_err(|e| format!("bump_strategy_fact_episodes: {e}"))?;
+    Ok(())
+}
+
+/// Insert a synthesised strategy fact into `memory_fact`. Uses the
+/// same row shape as `upsert_typed_fact` so the existing `recall_facts`
+/// query continues to surface the row.
+pub async fn insert_strategy_fact(
+    db: &Arc<Surreal<Any>>,
+    req: StrategyFactInsert,
+) -> Result<String, String> {
+    let id = format!("fact-{}", uuid::Uuid::new_v4());
+    let now = chrono::Utc::now().to_rfc3339();
+    let row = serde_json::json!({
+        "id": id,
+        "agent_id": req.agent_id,
+        "scope": "agent",
+        "category": "strategy",
+        "fact_type": "strategy",
+        "key": req.key,
+        "content": req.content,
+        "confidence": req.confidence,
+        "mention_count": 1,
+        "source_summary": req.source_summary,
+        "embedding": req.embedding,
+        "ward_id": "__global__",
+        "created_at": now,
+        "updated_at": now,
+        "last_used_at": now,
+        "epistemic_class": "convention",
+        "source_episode_id": req.source_episode_id,
+        "archived": false,
+        "pinned": false,
+    });
+    let thing = surrealdb::types::RecordId::new(
+        "memory_fact",
+        surrealdb::types::RecordIdKey::String(id.clone()),
+    );
+    db.query("CREATE $id CONTENT $row")
+        .bind(("id", thing))
+        .bind(("row", row))
+        .await
+        .map_err(|e| format!("insert_strategy_fact: {e}"))?;
+    Ok(id)
+}
+
+/// Strip Surreal's `<table>:<id>` wire prefix and any backticks.
+fn strip_thing_prefix(s: &str) -> String {
+    let after = match s.find(':') {
+        Some(idx) => &s[idx + 1..],
+        None => s,
+    };
+    let cleaned = after.strip_prefix('`').unwrap_or(after);
+    cleaned.strip_suffix('`').unwrap_or(cleaned).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{connect, schema::apply_schema, SurrealConfig};
+    use crate::{SurrealConfig, connect, schema::apply_schema};
 
     async fn fresh_db() -> Arc<Surreal<Any>> {
         let cfg = SurrealConfig {

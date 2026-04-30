@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use knowledge_graph::types::{Entity, EntityType};
+use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{RecordId, SurrealValue};
-use surrealdb::Surreal;
 use zero_stores::error::StoreResult;
 use zero_stores::types::EntityId;
 
 use crate::error::map_surreal_error;
-use crate::types::{embedding_to_value, ThingExt};
+use crate::types::{ThingExt, embedding_to_value};
 
 #[derive(SurrealValue)]
 #[surreal(crate = "surrealdb::types")]
@@ -93,7 +93,7 @@ pub async fn search_by_embedding(
 mod tests {
     use super::*;
     use crate::kg::entity;
-    use crate::{connect, schema::apply_schema, SurrealConfig};
+    use crate::{SurrealConfig, connect, schema::apply_schema};
 
     async fn fresh_db() -> Arc<Surreal<Any>> {
         let cfg = SurrealConfig {

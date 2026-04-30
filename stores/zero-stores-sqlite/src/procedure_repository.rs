@@ -8,8 +8,8 @@
 //!
 //! To read an embedding back, use [`ProcedureRepository::get_procedure_embedding`].
 
-use crate::vector_index::VectorIndex;
 use crate::KnowledgeDatabase;
+use crate::vector_index::VectorIndex;
 use chrono::Utc;
 use rusqlite::params;
 use std::sync::Arc;
@@ -29,6 +29,13 @@ impl ProcedureRepository {
     /// `vec_index` must wrap the `procedures_index` vec0 table (384-dim).
     pub fn new(db: Arc<KnowledgeDatabase>, vec_index: Arc<dyn VectorIndex>) -> Self {
         Self { db, vec_index }
+    }
+
+    /// Borrow the underlying knowledge database. Used by trait
+    /// adapters that need to reach into the connection for queries
+    /// not yet covered by named methods.
+    pub fn db(&self) -> &Arc<KnowledgeDatabase> {
+        &self.db
     }
 
     /// Insert or replace a procedure.

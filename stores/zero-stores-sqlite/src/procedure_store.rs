@@ -6,9 +6,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use rusqlite::params;
 use serde_json::Value;
 use zero_stores_domain::Procedure;
-use zero_stores_traits::{ProcedureStats, ProcedureStore};
+use zero_stores_traits::{
+    PatternProcedureInsert, ProcedureStats, ProcedureStore, ProcedureSummary,
+};
 
 use crate::procedure_repository::ProcedureRepository;
 
@@ -81,5 +84,65 @@ impl ProcedureStore for GatewayProcedureStore {
     async fn procedure_stats(&self) -> Result<ProcedureStats, String> {
         // ProcedureRepository doesn't expose a global count; defer to default.
         Ok(ProcedureStats::default())
+    }
+
+    // ---- Sleep-time pattern extraction (Phase D4) ----------------------
+
+    async fn get_procedure_summary_by_name(
+        &self,
+        agent_id: &str,
+        name: &str,
+    ) -> Result<Option<ProcedureSummary>, String> {
+        let agent_id = agent_id.to_string();
+        let name = name.to_string();
+        self.repo.db().with_connection(|conn| {
+            let r = conn.query_row(
+                "SELECT id, name, success_count
+                 FROM procedures
+                 WHERE agent_id = ?1 AND name = ?2
+                 LIMIT 1",
+                params![agent_id, name],
+                |row| {
+                    Ok(ProcedureSummary {
+                        id: row.get::<_, String>(0)?,
+                        name: row.get::<_, String>(1)?,
+                        success_count: row.get::<_, i32>(2)?,
+                    })
+                },
+            );
+            match r {
+                Ok(p) => Ok(Some(p)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    async fn insert_pattern_procedure(
+        &self,
+        req: PatternProcedureInsert,
+    ) -> Result<String, String> {
+        let id = format!("proc-{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().to_rfc3339();
+        let procedure = Procedure {
+            id: id.clone(),
+            agent_id: req.agent_id,
+            ward_id: req.ward_id,
+            name: req.name,
+            description: req.description,
+            trigger_pattern: req.trigger_pattern,
+            steps: req.steps_json,
+            parameters: req.parameters_json,
+            success_count: 1,
+            failure_count: 0,
+            avg_duration_ms: None,
+            avg_token_cost: None,
+            last_used: None,
+            embedding: None,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        self.repo.upsert_procedure(&procedure)?;
+        Ok(id)
     }
 }

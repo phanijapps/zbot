@@ -10,10 +10,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
 use zero_stores_domain::SessionEpisode;
-use zero_stores_traits::{EpisodeStats, EpisodeStore};
+use zero_stores_traits::{EpisodeStats, EpisodeStore, SuccessfulEpisode};
 
 #[derive(Clone)]
 pub struct SurrealEpisodeStore {
@@ -211,6 +211,114 @@ impl EpisodeStore for SurrealEpisodeStore {
             .unwrap_or(0);
         Ok(EpisodeStats { total })
     }
+
+    // ---- Sleep-time pattern + synthesis (Phase D4) ----------------------
+
+    async fn list_successful_episodes_with_embedding(
+        &self,
+        lookback_days: i64,
+        limit: usize,
+    ) -> Result<Vec<SuccessfulEpisode>, String> {
+        let q = format!(
+            "SELECT id, session_id, agent_id, task_summary, embedding \
+             FROM episode \
+             WHERE outcome = 'success' \
+               AND task_summary IS NOT NONE \
+               AND created_at > (time::now() - {lookback_days}d) \
+             ORDER BY created_at DESC \
+             LIMIT {limit}"
+        );
+        let mut resp = self
+            .db
+            .query(q)
+            .await
+            .map_err(|e| format!("list_successful_episodes_with_embedding: {e}"))?;
+        let rows: Vec<Value> = resp
+            .take(0)
+            .map_err(|e| format!("list_successful_episodes_with_embedding take: {e}"))?;
+        let mut out: Vec<SuccessfulEpisode> = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id_raw = match row.get("id").and_then(|v| v.as_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            let id = strip_thing_prefix(&id_raw);
+            let session_id = row
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let agent_id = row
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let task_summary = row
+                .get("task_summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let embedding = match row.get("embedding") {
+                Some(Value::Array(arr)) => {
+                    let v: Vec<f32> = arr
+                        .iter()
+                        .filter_map(|x| x.as_f64().map(|f| f as f32))
+                        .collect();
+                    if v.is_empty() { None } else { Some(v) }
+                }
+                _ => None,
+            };
+            out.push(SuccessfulEpisode {
+                id,
+                session_id,
+                agent_id,
+                task_summary,
+                embedding,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn task_summaries_for_sessions(
+        &self,
+        session_ids: &[String],
+    ) -> Result<Vec<String>, String> {
+        if session_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut resp = self
+            .db
+            .query(
+                "SELECT task_summary FROM episode \
+                 WHERE session_id INSIDE $sids \
+                   AND task_summary IS NOT NONE",
+            )
+            .bind(("sids", session_ids.to_vec()))
+            .await
+            .map_err(|e| format!("task_summaries_for_sessions: {e}"))?;
+        let rows: Vec<Value> = resp
+            .take(0)
+            .map_err(|e| format!("task_summaries_for_sessions take: {e}"))?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                r.get("task_summary")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect())
+    }
+}
+
+/// Strip Surreal's `<table>:<id>` wire prefix and any surrounding
+/// backticks, leaving just the bare id.
+fn strip_thing_prefix(s: &str) -> String {
+    let after = match s.find(':') {
+        Some(idx) => &s[idx + 1..],
+        None => s,
+    };
+    let cleaned = after.strip_prefix('`').unwrap_or(after);
+    cleaned.strip_suffix('`').unwrap_or(cleaned).to_string()
 }
 
 /// Strip the `embedding` field (callers don't expect it on read — domain
@@ -241,7 +349,7 @@ fn build_episode_payload(ep: &SessionEpisode) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{connect, schema::apply_schema, SurrealConfig};
+    use crate::{SurrealConfig, connect, schema::apply_schema};
 
     async fn fresh_store() -> SurrealEpisodeStore {
         let cfg = SurrealConfig {

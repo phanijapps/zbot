@@ -7,10 +7,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use agent_runtime::llm::embedding::{content_hash, EmbeddingClient};
-use zero_stores_traits::{MemoryFactStore, SkillIndexRow};
+use agent_runtime::llm::embedding::{EmbeddingClient, content_hash};
+use zero_stores_traits::{MemoryFactStore, SkillIndexRow, StrategyFactInsert, StrategyFactMatch};
 
 use crate::memory_repository::{MemoryFact, MemoryRepository};
 
@@ -737,13 +737,125 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             })
             .collect()
     }
+
+    // ---- Sleep-time synthesis (Phase D4) -------------------------------
+
+    async fn find_strategy_fact_by_similarity(
+        &self,
+        agent_id: &str,
+        embedding: &[f32],
+        threshold: f32,
+        scan_limit: usize,
+    ) -> Result<Option<StrategyFactMatch>, String> {
+        let candidates = self
+            .memory_repo
+            .get_facts_by_category(agent_id, "strategy", scan_limit)
+            .map_err(|e| e.to_string())?;
+        for fact in candidates {
+            let stored = match self
+                .memory_repo
+                .get_fact_embedding(&fact.id)
+                .map_err(|e| e.to_string())?
+            {
+                Some(v) => v,
+                None => continue,
+            };
+            let sim = cosine_similarity_f64(embedding, &stored);
+            if sim >= threshold as f64 {
+                return Ok(Some(StrategyFactMatch {
+                    fact_id: fact.id,
+                    source_episode_id: fact.source_episode_id,
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    async fn bump_strategy_fact_episodes(
+        &self,
+        fact_id: &str,
+        merged_source_episode_id: &str,
+        now_rfc3339: &str,
+    ) -> Result<(), String> {
+        let fact_id = fact_id.to_string();
+        let merged = merged_source_episode_id.to_string();
+        let now = now_rfc3339.to_string();
+        self.memory_repo.db().with_connection(|conn| {
+            conn.execute(
+                "UPDATE memory_facts
+                 SET mention_count = mention_count + 1,
+                     updated_at = ?1,
+                     source_episode_id = ?2
+                 WHERE id = ?3",
+                rusqlite::params![now, merged, fact_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    async fn insert_strategy_fact(&self, req: StrategyFactInsert) -> Result<String, String> {
+        let id = format!("fact-{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().to_rfc3339();
+        let fact = MemoryFact {
+            id: id.clone(),
+            session_id: None,
+            agent_id: req.agent_id,
+            scope: "agent".to_string(),
+            category: "strategy".to_string(),
+            key: req.key,
+            content: req.content,
+            confidence: req.confidence,
+            mention_count: 1,
+            source_summary: req.source_summary,
+            embedding: req.embedding,
+            ward_id: "__global__".to_string(),
+            contradicted_by: None,
+            created_at: now.clone(),
+            updated_at: now,
+            expires_at: None,
+            valid_from: None,
+            valid_until: None,
+            superseded_by: None,
+            pinned: false,
+            epistemic_class: Some("convention".to_string()),
+            source_episode_id: req.source_episode_id,
+            source_ref: None,
+        };
+        self.memory_repo.upsert_memory_fact(&fact)?;
+        Ok(id)
+    }
+}
+
+// ---- Helpers --------------------------------------------------------------
+
+/// Cosine similarity in `f64` precision. Matches the synthesizer's
+/// historical computation; pulled in here so the strategy-similarity
+/// scan stays self-contained.
+fn cosine_similarity_f64(a: &[f32], b: &[f32]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0f64;
+    let mut na = 0f64;
+    let mut nb = 0f64;
+    for (x, y) in a.iter().zip(b.iter()) {
+        let x = *x as f64;
+        let y = *y as f64;
+        dot += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    if na == 0.0 || nb == 0.0 {
+        return 0.0;
+    }
+    dot / (na.sqrt() * nb.sqrt())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vector_index::{SqliteVecIndex, VectorIndex};
     use crate::KnowledgeDatabase;
+    use crate::vector_index::{SqliteVecIndex, VectorIndex};
     use tempfile::TempDir;
 
     fn create_test_store() -> GatewayMemoryFactStore {
