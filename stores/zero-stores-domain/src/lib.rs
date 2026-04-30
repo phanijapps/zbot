@@ -34,4 +34,4 @@ pub use kg_ops::{
 pub use memory_fact::{MemoryFact, ScoredFact, StrategyFactInsert, StrategyFactMatch};
 pub use procedure::{PatternProcedureInsert, Procedure, ProcedureSummary};
 pub use session_episode::{ScoredEpisode, SessionEpisode, SuccessfulEpisode};
-pub use wiki::WikiArticle;
+pub use wiki::{WikiArticle, WikiHit};

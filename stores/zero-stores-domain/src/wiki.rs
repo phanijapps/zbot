@@ -21,3 +21,13 @@ pub struct WikiArticle {
     pub created_at: String,
     pub updated_at: String,
 }
+
+/// A single wiki hit with provenance of why it matched. Returned by
+/// `WikiStore::search_wiki_hybrid_typed`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WikiHit {
+    pub article: WikiArticle,
+    pub score: f64,
+    /// Why this hit matched: `"fts"`, `"vec"`, `"hybrid"`, or `"title"`.
+    pub match_source: String,
+}

@@ -43,10 +43,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Instant;
-use zero_stores_domain::SessionEpisode;
-use zero_stores_sqlite::{
-    vector_index::VectorIndex, EpisodeRepository, SqliteVecIndex, WardWikiRepository,
-};
+use zero_stores_domain::{SessionEpisode, WikiHit};
+use zero_stores_sqlite::{vector_index::VectorIndex, EpisodeRepository, SqliteVecIndex};
 
 /// Request body for unified search.
 #[derive(Debug, Deserialize)]
@@ -126,14 +124,6 @@ fn surreal_unavailable() -> HandlerError {
     )
 }
 
-fn build_wiki_repo(state: &AppState) -> Result<Arc<WardWikiRepository>, HandlerError> {
-    let knowledge_db = state.knowledge_db.as_ref().ok_or_else(surreal_unavailable)?;
-    let idx = SqliteVecIndex::new(knowledge_db.clone(), "wiki_articles_index", "article_id")
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("wiki vec: {e}")))?;
-    let vec: Arc<dyn VectorIndex> = Arc::new(idx);
-    Ok(Arc::new(WardWikiRepository::new(knowledge_db.clone(), vec)))
-}
-
 fn build_episode_repo(state: &AppState) -> Result<Arc<EpisodeRepository>, HandlerError> {
     let knowledge_db = state.knowledge_db.as_ref().ok_or_else(surreal_unavailable)?;
     let idx = SqliteVecIndex::new(
@@ -152,7 +142,7 @@ fn build_episode_repo(state: &AppState) -> Result<Arc<EpisodeRepository>, Handle
 // preserves the historical sanitization (`%`/`_` stripped) and the
 // ward-scoped vs. unscoped variants.
 
-fn wiki_article_to_value(hit: zero_stores_sqlite::WikiHit) -> Value {
+fn wiki_hit_to_value(hit: WikiHit) -> Value {
     let snippet: String = hit.article.content.chars().take(240).collect();
     json!({
         "id": hit.article.id,
@@ -244,7 +234,11 @@ pub async fn memory_search(
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "memory repo unavailable"))?
         .clone();
-    let wiki_repo = build_wiki_repo(&state)?;
+    let wiki_store = state
+        .wiki_store
+        .as_ref()
+        .ok_or_else(surreal_unavailable)?
+        .clone();
     let proc_store = state
         .procedure_store
         .as_ref()
@@ -329,7 +323,7 @@ pub async fn memory_search(
     };
 
     let wiki_fut = {
-        let wiki_repo = wiki_repo.clone();
+        let wiki_store = wiki_store.clone();
         let query = query.clone();
         let mode = mode.clone();
         let emb = embedding.clone();
@@ -347,11 +341,12 @@ pub async fn memory_search(
             } else {
                 query.as_str()
             };
-            let hits = wiki_repo
-                .search_hybrid(pass_query, ward.as_deref(), emb.clone(), limit)
+            let hits = wiki_store
+                .search_wiki_hybrid_typed(ward.as_deref(), pass_query, limit, emb.as_deref())
+                .await
                 .unwrap_or_default()
                 .into_iter()
-                .map(wiki_article_to_value)
+                .map(wiki_hit_to_value)
                 .collect();
             TypeBlock {
                 hits,

@@ -13,18 +13,9 @@ use crate::KnowledgeDatabase;
 use rusqlite::params;
 use std::sync::Arc;
 
-// WikiArticle moved to `zero-stores-domain` (Phase D3) so any backend
-// impl can round-trip it without depending on this SQLite-coupled crate.
-pub use zero_stores_domain::WikiArticle;
-
-/// A single wiki hit with provenance of why it matched.
-#[derive(Debug, Clone)]
-pub struct WikiHit {
-    pub article: WikiArticle,
-    pub score: f32,
-    /// Why this hit matched: `"fts"`, `"vec"`, `"hybrid"`, or `"title"`.
-    pub match_source: &'static str,
-}
+// WikiArticle + WikiHit live in `zero-stores-domain` so any backend
+// impl can round-trip them without depending on this SQLite-coupled crate.
+pub use zero_stores_domain::{WikiArticle, WikiHit};
 
 /// Repository for ward wiki article CRUD and vector search.
 pub struct WardWikiRepository {
@@ -309,8 +300,8 @@ impl WardWikiRepository {
                 if ward_id.is_none_or(|w| article.ward_id == w) {
                     out.push(WikiHit {
                         article,
-                        score,
-                        match_source: src,
+                        score: score as f64,
+                        match_source: src.to_string(),
                     });
                 }
             }

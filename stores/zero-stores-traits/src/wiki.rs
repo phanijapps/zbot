@@ -2,9 +2,10 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
-// `WikiArticle` lives in `zero-stores-domain`; re-export here so the
-// trait surface keeps working for callers that import from this crate.
-pub use zero_stores_domain::WikiArticle;
+// `WikiArticle` and `WikiHit` live in `zero-stores-domain`; re-export
+// here so the trait surface keeps working for callers that import from
+// this crate.
+pub use zero_stores_domain::{WikiArticle, WikiHit};
 
 /// Aggregate stats for the wiki subsystem.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -54,6 +55,24 @@ pub trait WikiStore: Send + Sync {
         _query_embedding: Option<&[f32]>,
     ) -> Result<Vec<Value>, String> {
         Ok(Vec::new())
+    }
+
+    /// Typed variant of `search_wiki_hybrid` returning `Vec<WikiHit>`
+    /// directly. Default deserialises the Value-based result so backends
+    /// only need to implement `search_wiki_hybrid`.
+    async fn search_wiki_hybrid_typed(
+        &self,
+        ward_id: Option<&str>,
+        query: &str,
+        limit: usize,
+        query_embedding: Option<&[f32]>,
+    ) -> Result<Vec<WikiHit>, String> {
+        let rows = self
+            .search_wiki_hybrid(ward_id, query, limit, query_embedding)
+            .await?;
+        rows.into_iter()
+            .map(|v| serde_json::from_value(v).map_err(|e| format!("decode WikiHit: {e}")))
+            .collect()
     }
 
     async fn wiki_stats(&self) -> Result<WikiStats, String> {

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use zero_stores_domain::WikiArticle;
+use zero_stores_domain::{WikiArticle, WikiHit};
 use zero_stores_traits::{WikiStats, WikiStore};
 
 use crate::wiki_repository::WardWikiRepository;
@@ -78,6 +78,19 @@ impl WikiStore for GatewayWikiStore {
                 })
             })
             .collect())
+    }
+
+    async fn search_wiki_hybrid_typed(
+        &self,
+        ward_id: Option<&str>,
+        query: &str,
+        limit: usize,
+        query_embedding: Option<&[f32]>,
+    ) -> Result<Vec<WikiHit>, String> {
+        // Override the trait default to skip the JSON round-trip — the
+        // SQLite repo already returns the typed shape we want.
+        self.repo
+            .search_hybrid(query, ward_id, query_embedding.map(|e| e.to_vec()), limit)
     }
 
     async fn wiki_stats(&self) -> Result<WikiStats, String> {
