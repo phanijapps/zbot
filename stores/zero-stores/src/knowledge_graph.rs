@@ -162,4 +162,82 @@ pub trait KnowledgeGraphStore: Send + Sync {
     /// SurrealDB index counts) but the trait surface stays the same.
     /// Used by `GET /api/embeddings/health`.
     async fn vec_index_health(&self) -> StoreResult<VecIndexHealth>;
+
+    // ---- Sleep-time maintenance (Phase D2) -------------------------------
+    //
+    // Operation-oriented surface for the maintenance worker. Each method
+    // describes WHAT the consumer needs (find dupes, merge, decay-prune)
+    // — backends implement HOW with whatever native primitive fits. Each
+    // has a default returning empty/no-op so backends that haven't
+    // implemented yet degrade gracefully (the sleep cycle just does
+    // less work, doesn't crash).
+
+    /// Find pairs of entities of the same `entity_type` whose name
+    /// embeddings have cosine similarity >= `threshold`. Used by the
+    /// Compactor to surface merge candidates. Returns up to `limit`
+    /// pairs. Default: no candidates.
+    async fn find_duplicate_candidates(
+        &self,
+        _agent_id: &str,
+        _entity_type: &knowledge_graph::EntityType,
+        _threshold: f32,
+        _limit: usize,
+    ) -> StoreResult<Vec<DuplicateCandidate>> {
+        Ok(Vec::new())
+    }
+
+    /// Atomically merge `loser` into `winner`: re-target every
+    /// relationship that pointed to `loser` so it points to `winner`,
+    /// then mark `loser` as merged. Backend chooses the atomicity
+    /// primitive (SQLite transaction, SurrealDB BEGIN/COMMIT block).
+    /// Default: no-op error so misuse is loud.
+    async fn merge_entity_into(
+        &self,
+        _loser: &EntityId,
+        _winner: &EntityId,
+    ) -> StoreResult<()> {
+        Err(crate::StoreError::Backend(
+            "merge_entity_into not implemented for this store".to_string(),
+        ))
+    }
+
+    /// Find entities that are orphans (zero in/out edges) AND old
+    /// (`last_seen_at` older than `min_age_days`). Used by the
+    /// DecayEngine to surface prune candidates. Excludes already-
+    /// archived entities. Default: no candidates.
+    async fn list_orphan_old_candidates(
+        &self,
+        _agent_id: &str,
+        _min_age_days: i64,
+        _limit: usize,
+    ) -> StoreResult<Vec<DecayCandidate>> {
+        Ok(Vec::new())
+    }
+
+    /// Soft-delete an entity by marking it pruned. Distinct sentinel
+    /// from `mark_entity_archival` so operators can tell decay-driven
+    /// prunes apart from orphan archival. Used by the Pruner.
+    /// Default: no-op error.
+    async fn mark_entity_pruned(&self, _id: &EntityId) -> StoreResult<()> {
+        Err(crate::StoreError::Backend(
+            "mark_entity_pruned not implemented for this store".to_string(),
+        ))
+    }
+}
+
+/// One pair returned by `find_duplicate_candidates`.
+#[derive(Debug, Clone)]
+pub struct DuplicateCandidate {
+    pub loser_entity_id: String,
+    pub winner_entity_id: String,
+    pub cosine_similarity: f32,
+}
+
+/// One row returned by `list_orphan_old_candidates`.
+#[derive(Debug, Clone)]
+pub struct DecayCandidate {
+    pub id: String,
+    pub name: String,
+    pub entity_type: String,
+    pub mention_count: i64,
 }

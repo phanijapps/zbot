@@ -12,6 +12,6 @@ pub mod types;
 
 pub use error::{StoreError, StoreResult};
 pub use extracted::ExtractedKnowledge;
-pub use knowledge_graph::KnowledgeGraphStore;
+pub use knowledge_graph::{DecayCandidate, DuplicateCandidate, KnowledgeGraphStore};
 pub use memory_facts::{MemoryAggregateStats, MemoryFactStore, MemoryHealthMetrics, SkillIndexRow};
 pub use types::*;

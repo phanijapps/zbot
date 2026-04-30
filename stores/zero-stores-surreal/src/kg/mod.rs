@@ -19,6 +19,7 @@ use zero_stores::KnowledgeGraphStore;
 mod alias;
 mod archival;
 mod entity;
+mod maintenance;
 mod reindex;
 mod relationship;
 mod search;
@@ -213,5 +214,39 @@ impl KnowledgeGraphStore for SurrealKgStore {
 
     async fn vec_index_health(&self) -> StoreResult<VecIndexHealth> {
         stats::vec_index_health(self.db()).await
+    }
+
+    // ---- Sleep-time maintenance (Phase D2) -------------------------------
+
+    async fn find_duplicate_candidates(
+        &self,
+        agent_id: &str,
+        entity_type: &EntityType,
+        threshold: f32,
+        limit: usize,
+    ) -> StoreResult<Vec<zero_stores::DuplicateCandidate>> {
+        maintenance::find_duplicate_candidates(self.db(), agent_id, entity_type, threshold, limit)
+            .await
+    }
+
+    async fn merge_entity_into(
+        &self,
+        loser: &EntityId,
+        winner: &EntityId,
+    ) -> StoreResult<()> {
+        maintenance::merge_entity_into(self.db(), loser, winner).await
+    }
+
+    async fn list_orphan_old_candidates(
+        &self,
+        agent_id: &str,
+        min_age_days: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<zero_stores::DecayCandidate>> {
+        maintenance::list_orphan_old_candidates(self.db(), agent_id, min_age_days, limit).await
+    }
+
+    async fn mark_entity_pruned(&self, id: &EntityId) -> StoreResult<()> {
+        maintenance::mark_entity_pruned(self.db(), id).await
     }
 }

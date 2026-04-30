@@ -456,6 +456,90 @@ impl KnowledgeGraphStore for SqliteKgStore {
         })
         .await
     }
+
+    // ---- Sleep-time maintenance (Phase D2) -------------------------------
+
+    async fn find_duplicate_candidates(
+        &self,
+        agent_id: &str,
+        entity_type: &knowledge_graph::EntityType,
+        threshold: f32,
+        limit: usize,
+    ) -> StoreResult<Vec<zero_stores::DuplicateCandidate>> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        let type_str = entity_type.as_str().to_string();
+        block(move || {
+            storage
+                .find_duplicate_candidates(&agent_id, &type_str, threshold, limit)
+                .map(|pairs| {
+                    pairs
+                        .into_iter()
+                        .map(|(loser_id, winner_id, score)| zero_stores::DuplicateCandidate {
+                            loser_entity_id: loser_id,
+                            winner_entity_id: winner_id,
+                            cosine_similarity: score,
+                        })
+                        .collect()
+                })
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
+    async fn merge_entity_into(
+        &self,
+        loser: &EntityId,
+        winner: &EntityId,
+    ) -> StoreResult<()> {
+        let storage = self.storage.clone();
+        let loser_id = loser.0.clone();
+        let winner_id = winner.0.clone();
+        block(move || {
+            storage
+                .merge_entity_into(&loser_id, &winner_id)
+                .map(|_| ())
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
+    async fn list_orphan_old_candidates(
+        &self,
+        agent_id: &str,
+        min_age_days: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<zero_stores::DecayCandidate>> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        block(move || {
+            storage
+                .list_orphan_old_candidates(&agent_id, min_age_days, limit)
+                .map(|rows| {
+                    rows.into_iter()
+                        .map(|c| zero_stores::DecayCandidate {
+                            id: c.id,
+                            name: c.name,
+                            entity_type: c.entity_type,
+                            mention_count: c.mention_count,
+                        })
+                        .collect()
+                })
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
+    async fn mark_entity_pruned(&self, id: &EntityId) -> StoreResult<()> {
+        let storage = self.storage.clone();
+        let entity_id = id.0.clone();
+        block(move || {
+            storage
+                .mark_pruned(&entity_id)
+                .map_err(map_graph_err)
+        })
+        .await
+    }
 }
 
 // ============================================================================
