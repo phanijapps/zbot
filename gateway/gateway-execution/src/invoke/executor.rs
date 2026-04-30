@@ -42,7 +42,6 @@ use zero_core::{ConnectorResourceProvider, FileSystemContext};
 use zero_stores::MemoryFactStore;
 
 use crate::config::GatewayFileSystem;
-use zero_stores_sqlite::kg::storage::GraphStorage;
 
 /// Workspace context cache type — same pattern as SkillService/ConnectorRegistry.
 pub type WorkspaceCache = Arc<tokio::sync::RwLock<Option<HashMap<String, serde_json::Value>>>>;
@@ -87,9 +86,8 @@ pub struct ExecutorBuilder {
     model_registry: Option<Arc<ModelRegistry>>,
     is_delegated: bool,
     subagent_non_streaming: bool,
-    graph_storage: Option<Arc<GraphStorage>>,
-    /// Trait-routed kg store. Preferred over `graph_storage` for the
-    /// graph_query tool — wired in both backends.
+    /// Trait-routed kg store for the `graph_query` tool — wired in both
+    /// SQLite and SurrealDB modes via `state.kg_store`.
     kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
@@ -110,7 +108,6 @@ impl ExecutorBuilder {
             model_registry: None,
             is_delegated: false,
             subagent_non_streaming: true,
-            graph_storage: None,
             kg_store: None,
             ingestion_adapter: None,
             goal_adapter: None,
@@ -164,15 +161,8 @@ impl ExecutorBuilder {
         self
     }
 
-    /// Set the knowledge graph storage for the graph_query tool.
-    pub fn with_graph_storage(mut self, storage: Arc<GraphStorage>) -> Self {
-        self.graph_storage = Some(storage);
-        self
-    }
-
-    /// Set the trait-routed kg store for the `graph_query` tool.
-    /// Preferred over `with_graph_storage` — wired in both SQLite and
-    /// SurrealDB modes via `state.kg_store`.
+    /// Set the trait-routed kg store for the `graph_query` tool. Wired
+    /// in both SQLite and SurrealDB modes via `state.kg_store`.
     pub fn with_kg_store(mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) -> Self {
         self.kg_store = Some(store);
         self

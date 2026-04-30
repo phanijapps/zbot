@@ -10,8 +10,6 @@ use knowledge_graph::{Entity, EntityType};
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use zero_stores_sqlite::kg::storage::GraphStorage;
-use zero_stores_sqlite::KgEpisode;
 
 #[derive(Debug, Deserialize)]
 struct EntitiesEnvelope {

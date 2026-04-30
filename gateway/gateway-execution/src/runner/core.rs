@@ -1202,9 +1202,6 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
     if let Some(ks) = kg_store.clone() {
         builder = builder.with_kg_store(ks);
     }
-    if let Some(gs) = graph_storage {
-        builder = builder.with_graph_storage(gs);
-    }
     if let Some(a) = ingestion_adapter {
         builder = builder.with_ingestion_adapter(a);
     }

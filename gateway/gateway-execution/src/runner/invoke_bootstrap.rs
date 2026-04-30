@@ -487,9 +487,6 @@ impl InvokeBootstrap {
         if let Some(ref ks) = self.kg_store {
             builder = builder.with_kg_store(ks.clone());
         }
-        if let Some(ref gs) = self.graph_storage {
-            builder = builder.with_graph_storage(gs.clone());
-        }
         if let Some(ref a) = self.ingestion_adapter {
             builder = builder.with_ingestion_adapter(a.clone());
         }
