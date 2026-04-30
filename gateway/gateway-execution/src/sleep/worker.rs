@@ -165,9 +165,9 @@ async fn run_cycle(
         }
     }
 
-    let candidates = decay_engine.list_prune_candidates(agent_id);
+    let candidates = decay_engine.list_prune_candidates(agent_id).await;
     stats.prune_candidates = candidates.len() as u64;
-    let prune_stats = pruner.prune(&run_id, &candidates);
+    let prune_stats = pruner.prune(&run_id, &candidates).await;
     stats.pruned = prune_stats.pruned;
     stats.pruned_failed = prune_stats.failed;
 
@@ -226,9 +226,9 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::tempdir;
     use zero_stores::KnowledgeGraphStore;
+    use zero_stores_sqlite::SqliteKgStore;
     use zero_stores_sqlite::kg::storage::GraphStorage;
     use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
-    use zero_stores_sqlite::SqliteKgStore;
     use zero_stores_sqlite::{
         CompactionRepository, DatabaseManager, KnowledgeDatabase, MemoryRepository,
         ProcedureRepository,
@@ -275,13 +275,18 @@ mod tests {
 
     fn build_core(h: &Harness) -> (Arc<Compactor>, Arc<DecayEngine>, Arc<Pruner>) {
         use crate::sleep::{DecayConfig, Pruner as Pr};
+        use zero_stores_sqlite::GatewayCompactionStore;
+        use zero_stores_traits::CompactionStore;
+        let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(h.graph.clone()));
+        let compaction_store: Arc<dyn CompactionStore> =
+            Arc::new(GatewayCompactionStore::new(h.compaction_repo.clone()));
         let compactor = Arc::new(Compactor::new(
-            h.graph.clone(),
-            h.compaction_repo.clone(),
+            kg_store.clone(),
+            compaction_store.clone(),
             None,
         ));
-        let decay = Arc::new(DecayEngine::new(h.graph.clone(), DecayConfig::default()));
-        let pruner = Arc::new(Pr::new(h.graph.clone(), h.compaction_repo.clone()));
+        let decay = Arc::new(DecayEngine::new(kg_store.clone(), DecayConfig::default()));
+        let pruner = Arc::new(Pr::new(kg_store, compaction_store));
         (compactor, decay, pruner)
     }
 
@@ -349,10 +354,13 @@ mod tests {
         ));
         let archiver_kg_store: Arc<dyn KnowledgeGraphStore> =
             Arc::new(SqliteKgStore::new(h.graph.clone()));
+        let archiver_compaction_store: Arc<dyn zero_stores_traits::CompactionStore> = Arc::new(
+            zero_stores_sqlite::GatewayCompactionStore::new(h.compaction_repo.clone()),
+        );
         let archiver = Arc::new(crate::sleep::OrphanArchiver::new(
             h.db.clone(),
             archiver_kg_store,
-            h.compaction_repo.clone(),
+            archiver_compaction_store,
         ));
         let ops = SleepOps {
             synthesizer: Some(synth),

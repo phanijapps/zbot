@@ -7,8 +7,9 @@
 
 use std::sync::Arc;
 
-use zero_stores_sqlite::kg::storage::GraphStorage;
-use zero_stores_sqlite::CompactionRepository;
+use zero_stores::KnowledgeGraphStore;
+use zero_stores::types::EntityId;
+use zero_stores_traits::CompactionStore;
 
 use crate::sleep::decay::PruneCandidate;
 
@@ -20,29 +21,37 @@ pub struct PruneStats {
 }
 
 /// Soft-deletes the candidates produced by `DecayEngine`.
+///
+/// Phase D3: trait-routed. Both `kg_store` and `compaction_store`
+/// abstract over the backend so the prune cycle runs on Surreal too.
 pub struct Pruner {
-    graph: Arc<GraphStorage>,
-    compaction_repo: Arc<CompactionRepository>,
+    kg_store: Arc<dyn KnowledgeGraphStore>,
+    compaction_store: Arc<dyn CompactionStore>,
 }
 
 impl Pruner {
-    pub fn new(graph: Arc<GraphStorage>, compaction_repo: Arc<CompactionRepository>) -> Self {
+    pub fn new(
+        kg_store: Arc<dyn KnowledgeGraphStore>,
+        compaction_store: Arc<dyn CompactionStore>,
+    ) -> Self {
         Self {
-            graph,
-            compaction_repo,
+            kg_store,
+            compaction_store,
         }
     }
 
     /// Soft-delete every candidate and log each outcome under `run_id`.
-    pub fn prune(&self, run_id: &str, candidates: &[PruneCandidate]) -> PruneStats {
+    pub async fn prune(&self, run_id: &str, candidates: &[PruneCandidate]) -> PruneStats {
         let mut stats = PruneStats::default();
         for c in candidates {
-            match self.graph.mark_pruned(&c.entity_id) {
+            let eid = EntityId::from(c.entity_id.clone());
+            match self.kg_store.mark_entity_pruned(&eid).await {
                 Ok(()) => {
                     stats.pruned += 1;
-                    if let Err(e) =
-                        self.compaction_repo
-                            .record_prune(run_id, &c.entity_id, &c.reason)
+                    if let Err(e) = self
+                        .compaction_store
+                        .record_prune(run_id, Some(&c.entity_id), None, &c.reason)
+                        .await
                     {
                         tracing::warn!(
                             entity = %c.entity_id,
@@ -53,7 +62,7 @@ impl Pruner {
                 }
                 Err(e) => {
                     stats.failed += 1;
-                    tracing::warn!(entity = %c.entity_id, error = %e, "mark_pruned failed");
+                    tracing::warn!(entity = %c.entity_id, error = %e, "mark_entity_pruned failed");
                 }
             }
         }
@@ -69,7 +78,9 @@ mod tests {
     use knowledge_graph::{Entity, EntityType, ExtractedKnowledge};
     use std::sync::Arc;
     use zero_stores_sqlite::kg::storage::GraphStorage;
-    use zero_stores_sqlite::{CompactionRepository, KnowledgeDatabase};
+    use zero_stores_sqlite::{
+        CompactionRepository, GatewayCompactionStore, KnowledgeDatabase, SqliteKgStore,
+    };
 
     fn setup() -> (
         tempfile::TempDir,
@@ -111,22 +122,26 @@ mod tests {
             )
             .expect("store");
 
+        let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(graph.clone()));
+        let compaction_store: Arc<dyn CompactionStore> =
+            Arc::new(GatewayCompactionStore::new(repo.clone()));
+
         let engine = DecayEngine::new(
-            graph.clone(),
+            kg_store.clone(),
             DecayConfig {
                 min_age_days: 30,
                 limit: 100,
             },
         );
-        let candidates = engine.list_prune_candidates(agent_id);
+        let candidates = engine.list_prune_candidates(agent_id).await;
         assert!(
             !candidates.is_empty(),
             "decay engine must produce a candidate"
         );
 
-        let pruner = Pruner::new(graph.clone(), repo.clone());
+        let pruner = Pruner::new(kg_store, compaction_store);
         let run_id = "run-prune-test";
-        let stats = pruner.prune(run_id, &candidates);
+        let stats = pruner.prune(run_id, &candidates).await;
 
         assert!(stats.pruned >= 1, "expected prunes, got {stats:?}");
         assert_eq!(stats.failed, 0);

@@ -287,7 +287,9 @@ pub async fn build_surreal_full(cfg: &SurrealBackendConfig) -> Result<SurrealSto
         procedure: Arc::new(zero_stores_surreal::SurrealProcedureStore::new(db.clone())),
         goal: Arc::new(zero_stores_surreal::SurrealGoalStore::new(db.clone())),
         recall_log: Arc::new(zero_stores_surreal::SurrealRecallLogStore::new(db.clone())),
-        distillation: Arc::new(zero_stores_surreal::SurrealDistillationStore::new(db.clone())),
+        distillation: Arc::new(zero_stores_surreal::SurrealDistillationStore::new(
+            db.clone(),
+        )),
         kg_episode: Arc::new(zero_stores_surreal::SurrealKgEpisodeStore::new(db.clone())),
         compaction: Arc::new(zero_stores_surreal::SurrealCompactionStore::new(db)),
     })

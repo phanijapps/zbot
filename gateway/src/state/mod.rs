@@ -9,8 +9,8 @@ use crate::cron::CronScheduler;
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
 use crate::execution::{
-    new_workspace_cache, DelegationRegistry, MemoryRecall, SessionArchiver, SessionDistiller,
-    WorkspaceCache,
+    DelegationRegistry, MemoryRecall, SessionArchiver, SessionDistiller, WorkspaceCache,
+    new_workspace_cache,
 };
 use crate::hooks::HookRegistry;
 use crate::services::{
@@ -561,15 +561,12 @@ impl AppState {
         let wiki_store_for_state: Option<Arc<dyn zero_stores_traits::WikiStore>> = {
             #[cfg(feature = "surreal-backend")]
             {
-                surreal_bundle
-                    .as_ref()
-                    .map(|b| b.wiki.clone())
-                    .or_else(|| {
-                        wiki_repo.as_ref().map(|wr| {
-                            Arc::new(zero_stores_sqlite::GatewayWikiStore::new(wr.clone()))
-                                as Arc<dyn zero_stores_traits::WikiStore>
-                        })
+                surreal_bundle.as_ref().map(|b| b.wiki.clone()).or_else(|| {
+                    wiki_repo.as_ref().map(|wr| {
+                        Arc::new(zero_stores_sqlite::GatewayWikiStore::new(wr.clone()))
+                            as Arc<dyn zero_stores_traits::WikiStore>
                     })
+                })
             }
             #[cfg(not(feature = "surreal-backend"))]
             {
@@ -613,7 +610,8 @@ impl AppState {
                 })
             }
         };
-        if let (Some(recall), Some(mem)) = (memory_recall_inner.as_mut(), early_memory_store.as_ref())
+        if let (Some(recall), Some(mem)) =
+            (memory_recall_inner.as_mut(), early_memory_store.as_ref())
         {
             recall.set_memory_store(mem.clone());
         }
@@ -715,9 +713,7 @@ impl AppState {
             // fields (`episode_store`, `wiki_store_for_state`,
             // `procedure_store_for_state`) so the distiller and the HTTP
             // handlers see the same backing store.
-            let episode_store_for_distiller: Option<
-                Arc<dyn zero_stores_traits::EpisodeStore>,
-            > = {
+            let episode_store_for_distiller: Option<Arc<dyn zero_stores_traits::EpisodeStore>> = {
                 #[cfg(feature = "surreal-backend")]
                 {
                     surreal_bundle
@@ -816,12 +812,11 @@ impl AppState {
             _ => None,
         };
         // Goal adapter requires goal_repo which is None in SurrealDB mode.
-        let goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>> =
-            goal_repo.as_ref().map(|gr| {
-                Arc::new(gateway_execution::invoke::goal_adapter::GoalAdapter::new(
-                    gr.clone(),
-                )) as Arc<dyn agent_tools::GoalAccess>
-            });
+        let goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>> = goal_repo.as_ref().map(|gr| {
+            Arc::new(gateway_execution::invoke::goal_adapter::GoalAdapter::new(
+                gr.clone(),
+            )) as Arc<dyn agent_tools::GoalAccess>
+        });
 
         // Create runtime with execution runner and connector registry
         let runtime = Arc::new(RuntimeService::with_runner_and_connectors(
@@ -913,33 +908,39 @@ impl AppState {
         }
 
         // Sleep-time worker requires the entire SQLite knowledge cluster.
-        // Build only when ALL of (graph_storage, compaction_repo,
-        // memory_repo, knowledge_db, procedure_repo, kg_store) are present.
+        // Build only when ALL of (compaction_repo, memory_repo, knowledge_db,
+        // procedure_repo, kg_store, compaction_store) are present. The
+        // maintenance ops (compactor/decay/pruner/orphan_archiver) take
+        // trait objects (`kg_store`, `compaction_store`) so they run on
+        // both backends; synthesizer / pattern_extractor are still
+        // SQLite-tied via `compaction_repo` (migrated in Phase D4).
         let sleep_time_worker = match (
-            runner_graph_storage.as_ref().cloned(),
             compaction_repo.as_ref(),
             knowledge_db.as_ref(),
             memory_repo.as_ref(),
             procedure_repo.as_ref(),
             kg_store.as_ref(),
+            compaction_store.as_ref(),
         ) {
-            (Some(gs), Some(comp), Some(kdb), Some(mr), Some(pr), Some(kgs)) => {
+            (Some(comp), Some(kdb), Some(mr), Some(pr), Some(kgs), Some(compstore)) => {
                 let verifier: Option<
                     Arc<dyn gateway_execution::sleep::compactor::PairwiseVerifier>,
-                > = Some(Arc::new(gateway_execution::sleep::LlmPairwiseVerifier::new(
-                    provider_service.clone(),
-                )));
+                > = Some(Arc::new(
+                    gateway_execution::sleep::LlmPairwiseVerifier::new(provider_service.clone()),
+                ));
                 let compactor = Arc::new(gateway_execution::sleep::Compactor::new(
-                    gs.clone(),
-                    comp.clone(),
+                    kgs.clone(),
+                    compstore.clone(),
                     verifier,
                 ));
                 let decay = Arc::new(gateway_execution::sleep::DecayEngine::new(
-                    gs.clone(),
+                    kgs.clone(),
                     gateway_execution::sleep::DecayConfig::default(),
                 ));
-                let pruner =
-                    Arc::new(gateway_execution::sleep::Pruner::new(gs, comp.clone()));
+                let pruner = Arc::new(gateway_execution::sleep::Pruner::new(
+                    kgs.clone(),
+                    compstore.clone(),
+                ));
                 let synth_llm = Arc::new(gateway_execution::sleep::LlmSynthesizer::new(
                     provider_service.clone(),
                 ));
@@ -953,18 +954,17 @@ impl AppState {
                 let pattern_llm = Arc::new(gateway_execution::sleep::LlmPatternExtractor::new(
                     provider_service.clone(),
                 ));
-                let pattern_extractor =
-                    Arc::new(gateway_execution::sleep::PatternExtractor::new(
-                        kdb.clone(),
-                        db_manager.clone(),
-                        pr.clone(),
-                        comp.clone(),
-                        pattern_llm,
-                    ));
+                let pattern_extractor = Arc::new(gateway_execution::sleep::PatternExtractor::new(
+                    kdb.clone(),
+                    db_manager.clone(),
+                    pr.clone(),
+                    comp.clone(),
+                    pattern_llm,
+                ));
                 let orphan_archiver = Arc::new(gateway_execution::sleep::OrphanArchiver::new(
                     kdb.clone(),
                     kgs.clone(),
-                    comp.clone(),
+                    compstore.clone(),
                 ));
                 let ops = gateway_execution::sleep::SleepOps {
                     synthesizer: Some(synthesizer),
@@ -1547,9 +1547,7 @@ impl AppState {
         let policies: Vec<serde_json::Value> = match serde_json::from_slice(&template) {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!(
-                    "seed_default_policies: failed to parse default_policies.json: {e}"
-                );
+                tracing::warn!("seed_default_policies: failed to parse default_policies.json: {e}");
                 return;
             }
         };
@@ -1783,11 +1781,7 @@ impl AppState {
                         .iter()
                         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.value.clone())))
                         .collect();
-                    if map.is_empty() {
-                        None
-                    } else {
-                        Some(map)
-                    }
+                    if map.is_empty() { None } else { Some(map) }
                 }
                 Err(_) => None,
             },

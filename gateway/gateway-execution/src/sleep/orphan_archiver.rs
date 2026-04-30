@@ -24,9 +24,10 @@
 
 use std::sync::Arc;
 
-use zero_stores::types::EntityId;
 use zero_stores::KnowledgeGraphStore;
-use zero_stores_sqlite::{CompactionRepository, KnowledgeDatabase};
+use zero_stores::types::EntityId;
+use zero_stores_sqlite::KnowledgeDatabase;
+use zero_stores_traits::CompactionStore;
 
 /// Minimum age (in hours) an entity must have before it becomes a candidate
 /// for orphan archival. Matches the `-24 hours` threshold in the original SQL.
@@ -61,19 +62,19 @@ pub struct OrphanArchiver {
     /// Used by both the candidate-load read path and the soft-delete
     /// write path.
     kg_store: Arc<dyn KnowledgeGraphStore>,
-    compaction_repo: Arc<CompactionRepository>,
+    compaction_store: Arc<dyn CompactionStore>,
 }
 
 impl OrphanArchiver {
     pub fn new(
         db: Arc<KnowledgeDatabase>,
         kg_store: Arc<dyn KnowledgeGraphStore>,
-        compaction_repo: Arc<CompactionRepository>,
+        compaction_store: Arc<dyn CompactionStore>,
     ) -> Self {
         Self {
             db,
             kg_store,
-            compaction_repo,
+            compaction_store,
         }
     }
 
@@ -89,9 +90,10 @@ impl OrphanArchiver {
             match self.archive_entity(entity_id).await {
                 Ok(()) => {
                     stats.archived += 1;
-                    if let Err(e) =
-                        self.compaction_repo
-                            .record_prune(run_id, entity_id, ARCHIVE_REASON)
+                    if let Err(e) = self
+                        .compaction_store
+                        .record_prune(run_id, Some(entity_id), None, ARCHIVE_REASON)
+                        .await
                     {
                         tracing::warn!(
                             entity = %entity_id,
@@ -147,14 +149,16 @@ mod tests {
     use gateway_services::VaultPaths;
     use rusqlite::params;
     use tempfile::TempDir;
-    use zero_stores_sqlite::kg::storage::GraphStorage;
+    use zero_stores_sqlite::GatewayCompactionStore;
     use zero_stores_sqlite::SqliteKgStore;
+    use zero_stores_sqlite::kg::storage::GraphStorage;
     use zero_stores_sqlite::{CompactionRepository, KnowledgeDatabase};
 
     struct Harness {
         _tmp: TempDir,
         db: Arc<KnowledgeDatabase>,
         repo: Arc<CompactionRepository>,
+        compaction_store: Arc<dyn CompactionStore>,
         kg_store: Arc<dyn KnowledgeGraphStore>,
     }
 
@@ -164,12 +168,15 @@ mod tests {
         std::fs::create_dir_all(paths.conversations_db().parent().expect("parent")).expect("mkdir");
         let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
         let repo = Arc::new(CompactionRepository::new(db.clone()));
+        let compaction_store: Arc<dyn CompactionStore> =
+            Arc::new(GatewayCompactionStore::new(repo.clone()));
         let storage = Arc::new(GraphStorage::new(db.clone()).expect("graph storage"));
         let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(storage));
         Harness {
             _tmp: tmp,
             db,
             repo,
+            compaction_store,
             kg_store,
         }
     }
@@ -259,7 +266,8 @@ mod tests {
         // e0 has outgoing r-0; e1 has both; e2 has incoming r-1.
         // Only entities with zero in+out qualify. No entity qualifies → 0.
 
-        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
+        let archiver =
+            OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.compaction_store.clone());
         let stats = archiver.run_cycle("run-none").await.expect("run");
         assert_eq!(stats.scanned, 0, "no orphans expected: {stats:?}");
         assert_eq!(stats.archived, 0);
@@ -282,7 +290,8 @@ mod tests {
             None,
         );
 
-        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
+        let archiver =
+            OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.compaction_store.clone());
         let stats = archiver.run_cycle("run-solo").await.expect("run");
         assert_eq!(stats.scanned, 1);
         assert_eq!(stats.archived, 1);
@@ -316,7 +325,8 @@ mod tests {
             "current",
             None,
         );
-        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
+        let archiver =
+            OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.compaction_store.clone());
         let stats = archiver.run_cycle("run-conf").await.expect("run");
         assert_eq!(stats.archived, 0, "high-confidence must survive: {stats:?}");
     }
@@ -335,7 +345,8 @@ mod tests {
             "current",
             None,
         );
-        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
+        let archiver =
+            OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.compaction_store.clone());
         let stats = archiver.run_cycle("run-age").await.expect("run");
         assert_eq!(stats.archived, 0, "fresh entity must survive: {stats:?}");
     }
@@ -369,7 +380,8 @@ mod tests {
         // Incoming edge into "linked" — disqualifies it.
         insert_relationship(&h.db, "r-in", agent, "other", "linked");
 
-        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
+        let archiver =
+            OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.compaction_store.clone());
         let stats = archiver.run_cycle("run-rel").await.expect("run");
         assert_eq!(
             stats.archived, 0,
@@ -394,7 +406,8 @@ mod tests {
                 None,
             );
         }
-        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
+        let archiver =
+            OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.compaction_store.clone());
         let stats = archiver.run_cycle("run-flood").await.expect("run");
         assert_eq!(stats.scanned, 100, "cap must hold: {stats:?}");
         assert_eq!(stats.archived, 100);
@@ -414,7 +427,8 @@ mod tests {
             "current",
             None,
         );
-        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
+        let archiver =
+            OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.compaction_store.clone());
         let run_id = "run-audit";
         let stats = archiver.run_cycle(run_id).await.expect("run");
         assert_eq!(stats.archived, 1);
@@ -439,7 +453,8 @@ mod tests {
             "archival", // already archived
             Some("orphan-archive"),
         );
-        let archiver = OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.repo.clone());
+        let archiver =
+            OrphanArchiver::new(h.db.clone(), h.kg_store.clone(), h.compaction_store.clone());
         let stats = archiver.run_cycle("run-skip").await.expect("run");
         assert_eq!(stats.archived, 0);
     }

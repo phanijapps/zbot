@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use zero_stores_sqlite::kg::storage::{GraphStorage, OrphanCandidate};
+use zero_stores::KnowledgeGraphStore;
 
 /// Tuning knobs for the decay pass.
 #[derive(Debug, Clone)]
@@ -37,27 +37,32 @@ pub struct PruneCandidate {
 }
 
 /// Decay pass over the knowledge graph for a single agent.
+///
+/// Phase D3: trait-routed. Calls `kg_store.list_orphan_old_candidates`
+/// which works on both backends — SQLite uses the orphan-age JOIN
+/// against `kg_relationships`, Surreal uses a subquery against the
+/// `relationship` edge table with server-side date arithmetic.
 pub struct DecayEngine {
-    graph: Arc<GraphStorage>,
+    kg_store: Arc<dyn KnowledgeGraphStore>,
     config: DecayConfig,
 }
 
 impl DecayEngine {
-    pub fn new(graph: Arc<GraphStorage>, config: DecayConfig) -> Self {
-        Self { graph, config }
+    pub fn new(kg_store: Arc<dyn KnowledgeGraphStore>, config: DecayConfig) -> Self {
+        Self { kg_store, config }
     }
 
     /// Return prune candidates for `agent_id`. On query failure, returns an
     /// empty vec (the sleep worker treats decay as best-effort).
-    pub fn list_prune_candidates(&self, agent_id: &str) -> Vec<PruneCandidate> {
-        match self.graph.list_orphan_old_candidates(
-            agent_id,
-            self.config.min_age_days,
-            self.config.limit,
-        ) {
+    pub async fn list_prune_candidates(&self, agent_id: &str) -> Vec<PruneCandidate> {
+        match self
+            .kg_store
+            .list_orphan_old_candidates(agent_id, self.config.min_age_days, self.config.limit)
+            .await
+        {
             Ok(rows) => rows
                 .into_iter()
-                .map(|c: OrphanCandidate| PruneCandidate {
+                .map(|c| PruneCandidate {
                     entity_id: c.id,
                     name: c.name,
                     entity_type: c.entity_type,
@@ -81,7 +86,8 @@ mod tests {
     use gateway_services::VaultPaths;
     use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType};
     use std::sync::Arc;
-    use zero_stores_sqlite::KnowledgeDatabase;
+    use zero_stores_sqlite::kg::storage::GraphStorage;
+    use zero_stores_sqlite::{KnowledgeDatabase, SqliteKgStore};
 
     fn setup() -> (tempfile::TempDir, Arc<GraphStorage>) {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -153,14 +159,15 @@ mod tests {
             )
             .expect("store");
 
+        let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(graph.clone()));
         let engine = DecayEngine::new(
-            graph.clone(),
+            kg_store,
             DecayConfig {
                 min_age_days: 30,
                 limit: 100,
             },
         );
-        let candidates = engine.list_prune_candidates(agent_id);
+        let candidates = engine.list_prune_candidates(agent_id).await;
 
         let names: Vec<&str> = candidates.iter().map(|c| c.name.as_str()).collect();
         assert!(
