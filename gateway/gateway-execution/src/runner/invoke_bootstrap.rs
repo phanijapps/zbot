@@ -52,12 +52,10 @@ pub(super) struct InvokeBootstrap {
     pub(super) log_service: Arc<LogService<DatabaseManager>>,
     pub(super) conversation_repo: Arc<ConversationRepository>,
     pub(super) paths: SharedVaultPaths,
-    pub(super) memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
-    /// Trait-routed memory store. Preferred over `memory_repo` when
-    /// building the executor's fact_store; wired in both backends.
+    /// Trait-routed memory store used to build the executor's fact_store;
+    /// wired in both SQLite and SurrealDB modes.
     pub(super) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub(super) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
-    pub(super) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     pub(super) model_registry: Arc<ArcSwapOption<ModelRegistry>>,
     pub(super) rate_limiters: Arc<
         std::sync::RwLock<
@@ -422,18 +420,10 @@ impl InvokeBootstrap {
             .as_ref()
             .and_then(|ctx| serde_json::to_value(ctx).ok());
 
-        // Build fact store: prefer the trait-routed `memory_store` (wired
-        // in both SQLite and SurrealDB modes), fall back to wrapping the
-        // SQLite-only `memory_repo` for legacy/test paths.
-        let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
-            self.memory_store.clone().or_else(|| {
-                self.memory_repo.as_ref().map(|repo| {
-                    Arc::new(zero_stores_sqlite::GatewayMemoryFactStore::new(
-                        repo.clone(),
-                        self.embedding_client.clone(),
-                    )) as Arc<dyn zero_stores::MemoryFactStore>
-                })
-            });
+        // Trait-routed fact store — wired in both SQLite and SurrealDB
+        // modes via AppState. None only in stripped-down test fixtures
+        // that don't drive save_fact / recall paths.
+        let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = self.memory_store.clone();
         // Clone for resource indexing (before fact_store is moved into builder)
         let fact_store_for_indexing = fact_store.clone();
 
@@ -854,10 +844,8 @@ mod tests {
             log_service: Arc::new(LogService::new(db.clone())),
             conversation_repo: Arc::new(ConversationRepository::new(db)),
             paths,
-            memory_repo: None,
             memory_store: None,
             memory_recall: None,
-            embedding_client: None,
             model_registry: Arc::new(ArcSwapOption::empty()),
             rate_limiters: Arc::new(std::sync::RwLock::new(HashMap::new())),
             connector_registry: None,

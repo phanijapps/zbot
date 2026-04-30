@@ -34,7 +34,6 @@ pub mod ingest;
 pub mod invoke;
 pub mod lifecycle;
 pub mod middleware;
-pub mod pruning;
 pub mod recall;
 pub mod resource_provider;
 pub mod runner;

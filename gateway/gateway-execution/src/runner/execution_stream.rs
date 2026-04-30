@@ -51,7 +51,7 @@ pub struct ExecutionStream {
     pub kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     pub graph_storage: Option<Arc<zero_stores_sqlite::kg::storage::GraphStorage>>,
     pub paths: SharedVaultPaths,
-    pub memory_repo: Option<Arc<zero_stores_sqlite::MemoryRepository>>,
+    pub memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     pub bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
     pub bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
@@ -362,23 +362,16 @@ impl ExecutionStream {
 
         // Execute micro-recall triggers collected during the stream
         if !acc.pending_recall_triggers.is_empty() {
-            // Wrap the SQLite repos behind the store traits ad-hoc; future
-            // backends will wire their own stores at the AppState level and
-            // this construction will move there alongside the Surreal path.
-            let memory_store_for_recall: Option<Arc<dyn zero_stores_traits::MemoryFactStore>> =
-                self.memory_repo.as_ref().map(|r| {
-                    Arc::new(zero_stores_sqlite::GatewayMemoryFactStore::new(
-                        r.clone(),
-                        None,
-                    )) as Arc<dyn zero_stores_traits::MemoryFactStore>
-                });
+            // graph_storage still lives directly on the stream — wrap it
+            // behind the trait ad-hoc until the indexer/event-handler
+            // paths are migrated. memory_store is already trait-routed.
             let kg_store_for_recall: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
                 self.graph_storage.as_ref().map(|gs| {
                     Arc::new(zero_stores_sqlite::SqliteKgStore::new(gs.clone()))
                         as Arc<dyn zero_stores::KnowledgeGraphStore>
                 });
             let recall_ctx = MicroRecallContext {
-                memory_store: memory_store_for_recall,
+                memory_store: self.memory_store.clone(),
                 kg_store: kg_store_for_recall,
                 agent_id: agent_id.clone(),
             };
@@ -661,7 +654,7 @@ mod tests {
             kg_episode_repo: None,
             graph_storage: None,
             paths,
-            memory_repo: None,
+            memory_store: None,
             connector_registry: None,
             bridge_registry: None,
             bridge_outbox: None,
