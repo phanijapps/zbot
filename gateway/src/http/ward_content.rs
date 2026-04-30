@@ -39,9 +39,10 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use zero_stores_domain::{MemoryFact, Procedure, SessionEpisode, WikiArticle};
 use zero_stores_sqlite::{
-    age_bucket, vector_index::VectorIndex, EpisodeRepository, MemoryFact, Procedure,
-    ProcedureRepository, SessionEpisode, SqliteVecIndex, WardWikiRepository, WikiArticle,
+    age_bucket, vector_index::VectorIndex, EpisodeRepository, ProcedureRepository, SqliteVecIndex,
+    WardWikiRepository,
 };
 
 const FACT_LIMIT: usize = 100;

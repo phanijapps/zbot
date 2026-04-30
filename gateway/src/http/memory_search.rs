@@ -43,9 +43,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Instant;
+use zero_stores_domain::SessionEpisode;
 use zero_stores_sqlite::{
-    vector_index::VectorIndex, EpisodeRepository, ProcedureRepository, SessionEpisode,
-    SqliteVecIndex, WardWikiRepository,
+    vector_index::VectorIndex, EpisodeRepository, ProcedureRepository, SqliteVecIndex,
+    WardWikiRepository,
 };
 
 /// Request body for unified search.
