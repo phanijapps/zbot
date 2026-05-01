@@ -505,21 +505,19 @@ impl InvokeBootstrap {
                 .push_str(&out.instructions_injection);
         }
 
-        // Flag if placeholder specs exist — delegate tool uses this to block ad-hoc delegations
+        // Flag if placeholder specs exist — delegate tool uses this to block
+        // ad-hoc delegations. Single source of truth lives in
+        // `agent_tools::tools::guards::specs_dir_has_placeholders` so this
+        // path agrees with the same check used by list_skills / load_skill /
+        // update_plan / introspection.
         if is_root {
             if let Some(wid) = ward_id {
                 let specs_dir = self.paths.vault_dir().join("wards").join(wid).join("specs");
-                if specs_dir.exists() {
-                    let has_placeholders = std::fs::read_dir(&specs_dir)
-                        .ok()
-                        .map(|entries| entries.filter_map(|e| e.ok()).any(|e| e.path().is_dir()))
-                        .unwrap_or(false);
-                    if has_placeholders {
-                        builder = builder.with_initial_state(
-                            "app:has_placeholder_specs",
-                            serde_json::Value::Bool(true),
-                        );
-                    }
+                if agent_tools::guards::specs_dir_has_placeholders(&specs_dir) {
+                    builder = builder.with_initial_state(
+                        "app:has_placeholder_specs",
+                        serde_json::Value::Bool(true),
+                    );
                 }
             }
         }

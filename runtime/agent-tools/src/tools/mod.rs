@@ -8,7 +8,7 @@ mod execution;
 mod file;
 mod goal;
 mod graph_query;
-pub(crate) mod guards;
+pub mod guards;
 mod ingest;
 mod introspection;
 mod memory;
