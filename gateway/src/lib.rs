@@ -32,7 +32,6 @@ pub mod bus;
 pub mod config;
 pub mod connectors;
 pub mod cron;
-pub mod database;
 pub mod error;
 pub mod events;
 pub mod execution;

@@ -15,7 +15,7 @@
 //! abstraction stays portable; the progress-aware variant is exposed here
 //! as a SQLite-impl-specific helper.
 //!
-//! When the SurrealDB impl lands, it will own its own progress-reporting
+//! When the configured impl lands, it will own its own progress-reporting
 //! shape (or rebuild atomically without progress, if that's natural for
 //! the backend); this module stays SQLite-only.
 

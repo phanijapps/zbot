@@ -19,6 +19,7 @@ members = [
     # Stores - Backend-agnostic persistence interfaces
     "stores/zero-stores",
     "stores/zero-stores-conformance",
+    "stores/zero-stores-domain",
     "stores/zero-stores-sqlite",
     "stores/zero-stores-traits",
 
@@ -34,7 +35,6 @@ members = [
 
     # Gateway - Network layer
     "gateway/gateway-events",
-    "gateway/gateway-database",
     "gateway/gateway-templates",
     "gateway/gateway-connectors",
     "gateway/gateway-services",

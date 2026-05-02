@@ -11,7 +11,6 @@
 use agent_runtime::{AgentExecutor, ChatMessage};
 use api_logs::LogService;
 use execution_state::StateService;
-use gateway_database::{ConversationRepository, DatabaseManager};
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths};
 use serde_json::Value;
@@ -20,6 +19,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock, Semaphore};
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 /// Callback invoked after session creation but before any events are emitted.
 /// Receives the session_id so the caller can set up subscriptions before events fire.
@@ -84,8 +84,8 @@ pub struct ExecutionRunner {
     bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
     /// Cached workspace context (avoids reading workspace.json per execution)
     workspace_cache: WorkspaceCache,
-    /// Memory repository for structured fact storage
-    memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    /// Trait-routed memory store.
+    memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     /// Session distiller for automatic fact extraction after sessions
     distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     /// Memory recall for automatic fact retrieval at session start
@@ -111,10 +111,10 @@ pub struct ExecutionRunner {
             std::collections::HashMap<String, std::sync::Arc<agent_runtime::ProviderRateLimiter>>,
         >,
     >,
-    /// Knowledge graph storage for the graph_query tool.
-    graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    /// Trait-routed kg store for the `graph_query` tool — wired by AppState.
+    kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     /// KG episode repository for ward artifact indexing after distillation.
-    kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+    kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     /// Adapter for the `ingest` agent tool. Wired via [`Self::set_ingestion_adapter`].
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     /// Adapter for the `goal` agent tool. Wired via [`Self::set_goal_adapter`].
@@ -133,7 +133,7 @@ pub struct ExecutionRunner {
 /// - Adding a new dependency is one line here + one line at every caller,
 ///   no positional reshuffling.
 /// - Same-type `Option<Arc<...>>` fields (connector_registry vs bridge_registry
-///   vs memory_repo) can't be silently swapped — the field name is checked at
+///   vs memory_store) can't be silently swapped — the field name is checked at
 ///   compile time.
 /// - Callers that only want the minimum can lean on `Default::default()` for
 ///   the optional integrations.
@@ -152,7 +152,8 @@ pub struct ExecutionRunnerConfig {
     // --- Optional integrations ---
     pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     pub workspace_cache: WorkspaceCache,
-    pub memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    /// Trait-routed memory store — wired.
+    pub memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
@@ -165,7 +166,7 @@ pub struct ExecutionRunnerConfig {
 
 /// Inputs for [`invoke_continuation`]. Previously 24 positional arguments,
 /// with eight same-type `Option<Arc<…>>` dependencies in a row
-/// (memory_repo, embedding_client, distiller, memory_recall,
+/// (memory_store, embedding_client, distiller, memory_recall,
 /// model_registry, graph_storage, kg_episode_repo, ingestion_adapter,
 /// goal_adapter) — the densest silent-swap cluster in the file. A
 /// psychopath adding a 25th dependency to the old signature had an even
@@ -186,13 +187,13 @@ pub(super) struct ContinuationArgs<'a> {
     pub(super) log_service: Arc<LogService<DatabaseManager>>,
     pub(super) state_service: Arc<StateService<DatabaseManager>>,
     pub(super) workspace_cache: WorkspaceCache,
-    pub(super) memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    pub(super) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub(super) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     pub(super) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub(super) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub(super) model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
-    pub(super) graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
-    pub(super) kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+    pub(super) kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
+    pub(super) kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 }
@@ -372,7 +373,7 @@ impl ExecutionRunner {
             state_service,
             connector_registry,
             workspace_cache,
-            memory_repo,
+            memory_store,
             distiller,
             memory_recall,
             bridge_registry,
@@ -410,15 +411,14 @@ impl ExecutionRunner {
             log_service: log_service.clone(),
             conversation_repo: conversation_repo.clone(),
             paths: paths.clone(),
-            memory_repo: memory_repo.clone(),
+            memory_store: memory_store.clone(),
             memory_recall: memory_recall.clone(),
-            embedding_client: embedding_client.clone(),
             model_registry: model_registry.clone(),
             rate_limiters: rate_limiters.clone(),
             connector_registry: connector_registry.clone(),
             bridge_registry: bridge_registry.clone(),
             bridge_outbox: bridge_outbox.clone(),
-            graph_storage: None,
+            kg_store: None,
             ingestion_adapter: None,
             goal_adapter: None,
             event_bus: event_bus.clone(),
@@ -443,14 +443,14 @@ impl ExecutionRunner {
             bridge_registry,
             bridge_outbox,
             workspace_cache,
-            memory_repo,
+            memory_store,
             distiller,
             memory_recall,
             delegation_semaphore,
             embedding_client,
             model_registry,
             rate_limiters,
-            graph_storage: None,
+            kg_store: None,
             kg_episode_repo: None,
             ingestion_adapter: None,
             goal_adapter: None,
@@ -488,16 +488,18 @@ impl ExecutionRunner {
         self.model_registry.store(Some(registry));
     }
 
-    /// Late-wired setter. Mirrored to `self.bootstrap.graph_storage` because
-    /// `InvokeBootstrap::finish_setup` reads its own clone at session-setup time.
-    pub fn set_graph_storage(&mut self, storage: Arc<knowledge_graph::GraphStorage>) {
-        self.bootstrap.graph_storage = Some(storage.clone());
-        self.graph_storage = Some(storage);
+    /// Set the KG episode repository used by post-distillation ward indexing.
+    pub fn set_kg_episode_repo(&mut self, repo: Arc<zero_stores_sqlite::KgEpisodeRepository>) {
+        self.kg_episode_repo = Some(repo);
     }
 
-    /// Set the KG episode repository used by post-distillation ward indexing.
-    pub fn set_kg_episode_repo(&mut self, repo: Arc<gateway_database::KgEpisodeRepository>) {
-        self.kg_episode_repo = Some(repo);
+    /// Late-wired setter for the trait-routed kg store. Mirrored to the
+    /// bootstrap so `InvokeBootstrap::finish_setup` reads its own clone
+    /// at session-setup time. Phase E5b — wired by AppState so the
+    /// `graph_query` tool registers regardless of backend.
+    pub fn set_kg_store(&mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) {
+        self.bootstrap.kg_store = Some(store.clone());
+        self.kg_store = Some(store);
     }
 
     /// Late-wired setter. Mirrored to `self.bootstrap.ingestion_adapter` because
@@ -537,12 +539,12 @@ impl ExecutionRunner {
             log_service: self.log_service.clone(),
             state_service: self.state_service.clone(),
             workspace_cache: self.workspace_cache.clone(),
-            memory_repo: self.memory_repo.clone(),
+            memory_store: self.memory_store.clone(),
             embedding_client: self.embedding_client.clone(),
             distiller: self.distiller.clone(),
             memory_recall: self.memory_recall.clone(),
             model_registry: self.model_registry.clone(),
-            graph_storage: self.graph_storage.clone(),
+            kg_store: self.kg_store.clone(),
             kg_episode_repo: self.kg_episode_repo.clone(),
             ingestion_adapter: self.ingestion_adapter.clone(),
             goal_adapter: self.goal_adapter.clone(),
@@ -571,11 +573,11 @@ impl ExecutionRunner {
             log_service: self.log_service.clone(),
             state_service: self.state_service.clone(),
             workspace_cache: self.workspace_cache.clone(),
-            memory_repo: self.memory_repo.clone(),
-            embedding_client: self.embedding_client.clone(),
+            memory_store: self.memory_store.clone(),
+            distiller: self.distiller.clone(),
             memory_recall: self.memory_recall.clone(),
             rate_limiters: self.rate_limiters.clone(),
-            graph_storage: self.graph_storage.clone(),
+            kg_store: self.kg_store.clone(),
             ingestion_adapter: self.ingestion_adapter.clone(),
             goal_adapter: self.goal_adapter.clone(),
         }
@@ -648,9 +650,9 @@ impl ExecutionRunner {
             handles: self.handles.clone(),
             distiller: self.distiller.clone(),
             kg_episode_repo: self.kg_episode_repo.clone(),
-            graph_storage: self.graph_storage.clone(),
             paths: self.paths.clone(),
-            memory_repo: self.memory_repo.clone(),
+            kg_store: self.kg_store.clone(),
+            memory_store: self.memory_store.clone(),
             connector_registry: self.connector_registry.clone(),
             bridge_registry: self.bridge_registry.clone(),
             bridge_outbox: self.bridge_outbox.clone(),
@@ -851,11 +853,11 @@ impl ExecutionRunner {
             self.state_service.clone(),
             self.workspace_cache.clone(),
             None, // No delegation permit needed for resume
-            self.memory_repo.clone(),
-            self.embedding_client.clone(),
+            self.memory_store.clone(),
+            self.distiller.clone(),
             self.memory_recall.clone(),
             self.rate_limiters.clone(),
-            self.graph_storage.clone(),
+            self.kg_store.clone(),
             self.ingestion_adapter.clone(),
             self.goal_adapter.clone(),
         )
@@ -1029,12 +1031,12 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         log_service,
         state_service,
         workspace_cache,
-        memory_repo,
-        embedding_client,
+        memory_store,
+        embedding_client: _embedding_client,
         distiller,
         memory_recall,
         model_registry,
-        graph_storage,
+        kg_store,
         kg_episode_repo,
         ingestion_adapter,
         goal_adapter,
@@ -1138,14 +1140,9 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         builder = builder.with_model_registry(registry);
     }
 
-    // Build fact store for continuation (so save_fact uses DB, not file fallback)
-    let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
-        memory_repo.as_ref().map(|repo| {
-            Arc::new(gateway_database::GatewayMemoryFactStore::new(
-                repo.clone(),
-                embedding_client.clone(),
-            )) as Arc<dyn zero_stores::MemoryFactStore>
-        });
+    // Trait-routed fact store used for save_fact and ctx writes during
+    // continuation. Wired via AppState.
+    let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = memory_store.clone();
     // Clone for session-ctx plan_snapshot below — the builder moves the
     // primary Arc, so we keep a separate handle to write plan text to
     // ctx.<sid>.plan on continuations that load a plan.md.
@@ -1153,9 +1150,8 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
     if let Some(fs) = fact_store {
         builder = builder.with_fact_store(fs);
     }
-    let graph_storage_for_indexer = graph_storage.clone();
-    if let Some(gs) = graph_storage {
-        builder = builder.with_graph_storage(gs);
+    if let Some(ks) = kg_store.clone() {
+        builder = builder.with_kg_store(ks);
     }
     if let Some(a) = ingestion_adapter {
         builder = builder.with_ingestion_adapter(a);
@@ -1240,7 +1236,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
 
         // Phase 6d: clones for real-time tool-result extraction (fire-and-forget).
         let kg_episode_repo_inner = kg_episode_repo.clone();
-        let graph_storage_inner = graph_storage_for_indexer.clone();
+        let kg_store_inner = kg_store.clone();
         let agent_id_inner = agent_id_clone.clone();
         // Track current tool name so the extractor can dispatch by name.
         let mut current_tool_name = String::new();
@@ -1315,16 +1311,18 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                         // Phase 6d: real-time graph extraction from tool output.
                         // Non-blocking — fires in a background task so the
                         // execution loop never waits.
-                        if let (Some(ref ep_repo), Some(ref graph)) =
-                            (&kg_episode_repo_inner, &graph_storage_inner)
+                        if let (Some(ref ep_repo), Some(ref kg)) =
+                            (&kg_episode_repo_inner, &kg_store_inner)
                         {
                             let tool_name_cl = current_tool_name.clone();
                             let tool_id_cl = tool_id.clone();
                             let result_cl = result.clone();
                             let session_id_cl = session_id_inner.clone();
                             let agent_id_cl = agent_id_inner.clone();
-                            let ep_repo_cl = ep_repo.clone();
-                            let graph_cl = graph.clone();
+                            let ep_store: Arc<dyn zero_stores_traits::KgEpisodeStore> = Arc::new(
+                                zero_stores_sqlite::GatewayKgEpisodeStore::new(ep_repo.clone()),
+                            );
+                            let kg_cl = kg.clone();
                             tokio::spawn(async move {
                                 crate::tool_result_extractor::extract_and_persist(
                                     &tool_name_cl,
@@ -1332,8 +1330,8 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                                     &result_cl,
                                     &session_id_cl,
                                     &agent_id_cl,
-                                    ep_repo_cl.as_ref(),
-                                    &graph_cl,
+                                    ep_store.as_ref(),
+                                    kg_cl.as_ref(),
                                 )
                                 .await;
                             });
@@ -1423,8 +1421,17 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                         .ok()
                         .flatten()
                         .and_then(|s| s.ward_id);
-                    let kg_episode_repo_for_indexer = kg_episode_repo.clone();
-                    let graph_storage_for_indexer = graph_storage_for_indexer.clone();
+                    // Phase C: indexer is trait-routed. Build a
+                    // KgEpisodeStore wrapper from the SQLite repo (or
+                    // re-use whatever trait impl is wired). graph_storage
+                    // -> kg_store is already on the runner via
+                    // set_kg_store, so we pass that directly.
+                    let kg_episode_store_for_indexer: Option<Arc<dyn zero_stores_traits::KgEpisodeStore>> =
+                        kg_episode_repo.as_ref().map(|r| {
+                            Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
+                                as Arc<dyn zero_stores_traits::KgEpisodeStore>
+                        });
+                    let kg_store_for_indexer = kg_store.clone();
                     let paths_for_indexer = paths.clone();
                     tokio::spawn(async move {
                         if let Err(e) = distiller.distill(&sid, &aid).await {
@@ -1434,8 +1441,8 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                             &ward_id_for_indexer,
                             &sid,
                             &aid,
-                            kg_episode_repo_for_indexer.as_ref(),
-                            graph_storage_for_indexer.as_ref(),
+                            kg_episode_store_for_indexer.as_ref(),
+                            kg_store_for_indexer.as_ref(),
                             &paths_for_indexer,
                         )
                         .await;
@@ -1533,18 +1540,18 @@ fn find_latest_plan(specs_dir: &std::path::Path) -> Option<String> {
 
 /// Phase 6a: index structured ward artifacts into the knowledge graph after distillation.
 ///
-/// Skips when the session has no ward (scratch), the KG episode repo is not wired,
-/// graph storage is unavailable, or the ward path does not exist on disk. All errors
-/// from the indexer are logged and never propagate — this must not crash the pipeline.
+/// Phase C: trait-routed. Skips when the session has no ward (scratch),
+/// either trait store is unwired, or the ward path does not exist on disk.
+/// All errors from the indexer are logged and never propagate.
 pub(super) async fn run_ward_artifact_indexer(
     ward_id: &Option<String>,
     session_id: &str,
     agent_id: &str,
-    kg_episode_repo: Option<&Arc<gateway_database::KgEpisodeRepository>>,
-    graph_storage: Option<&Arc<knowledge_graph::GraphStorage>>,
+    kg_episode_store: Option<&Arc<dyn zero_stores_traits::KgEpisodeStore>>,
+    kg_store: Option<&Arc<dyn zero_stores::KnowledgeGraphStore>>,
     paths: &SharedVaultPaths,
 ) {
-    let (Some(wid), Some(ep_repo), Some(graph)) = (ward_id, kg_episode_repo, graph_storage) else {
+    let (Some(wid), Some(ep_store), Some(kg)) = (ward_id, kg_episode_store, kg_store) else {
         return;
     };
     let ward_path = paths.vault_dir().join("wards").join(wid);
@@ -1555,8 +1562,8 @@ pub(super) async fn run_ward_artifact_indexer(
         &ward_path,
         session_id,
         agent_id,
-        ep_repo.as_ref(),
-        graph,
+        ep_store,
+        kg,
     )
     .await;
     tracing::info!(

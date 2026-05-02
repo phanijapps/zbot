@@ -1,31 +1,9 @@
 //! # Memory Endpoints
 //!
-//! CRUD and search operations for agent memory facts.
-//!
-//! ## Migration status (TD-023)
-//!
-//! Handlers in this file split into two groups:
-//!
-//! 1. **Migrated** to trait stores: `stats`, `health`. Both pull
-//!    aggregate counts through `state.memory_store` (and
-//!    `state.kg_store` for the entity/relationship part of `stats`).
-//!    The SQL that was previously inlined in this file now lives
-//!    behind `MemoryFactStore::aggregate_stats` /
-//!    `MemoryFactStore::health_metrics`.
-//!
-//! 2. **Not migrated** (deliberate, tracked under TD-023's
-//!    HTTP-handler retirement follow-up): every handler that
-//!    returns or accepts a typed `MemoryFact` row —
-//!    `list_memory_facts`, `search_memory_facts`, `get_memory_fact`,
-//!    `delete_memory_fact`, `create_memory_fact`,
-//!    `search_all_memory_facts`, `list_all_memory_facts`. The
-//!    `MemoryFactStore` trait surface returns `serde_json::Value`
-//!    payloads (the design choice keeps the trait portable to
-//!    SurrealDB without dragging `MemoryFact` into the `zero-stores`
-//!    types crate). Migrating these handlers requires hoisting
-//!    `MemoryFact` from `gateway-database` up to `zero-stores`,
-//!    which has a large blast radius (11 import sites) and is
-//!    intentionally a separate workstream.
+//! CRUD and search operations for agent memory facts. All handlers
+//! route through `state.memory_store` (and `state.kg_store` for the
+//! entity/relationship part of `stats`) so the underlying backend is
+//! abstracted from the HTTP surface.
 
 use crate::state::AppState;
 use axum::{
@@ -33,8 +11,8 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use gateway_database::MemoryFact;
 use serde::{Deserialize, Serialize};
+use zero_stores_domain::MemoryFact;
 
 // ============================================================================
 // REQUEST/RESPONSE TYPES
@@ -147,8 +125,9 @@ pub async fn list_memory_facts(
     Path(agent_id): Path<String>,
     Query(query): Query<MemoryListQuery>,
 ) -> Result<Json<MemoryListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let memory_repo = match &state.memory_repo {
-        Some(repo) => repo,
+    // Routed through the trait surface.
+    let memory_store = match &state.memory_store {
+        Some(s) => s,
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -159,14 +138,15 @@ pub async fn list_memory_facts(
         }
     };
 
-    let facts = memory_repo
+    let raw_facts = memory_store
         .list_memory_facts(
-            &agent_id,
+            Some(&agent_id),
             query.category.as_deref(),
             query.scope.as_deref(),
             query.limit,
             query.offset,
         )
+        .await
         .map_err(|e| {
             tracing::error!("Failed to list memory facts: {}", e);
             (
@@ -177,12 +157,24 @@ pub async fn list_memory_facts(
             )
         })?;
 
-    let total = memory_repo.count_memory_facts(&agent_id).unwrap_or(0);
+    let total = memory_store
+        .count_all_facts(Some(&agent_id))
+        .await
+        .map(|n| n as usize)
+        .unwrap_or(0);
 
-    Ok(Json(MemoryListResponse {
-        facts: facts.into_iter().map(MemoryFactResponse::from).collect(),
-        total,
-    }))
+    let facts: Vec<MemoryFactResponse> = raw_facts
+        .into_iter()
+        .filter_map(|v| match serde_json::from_value::<MemoryFactResponse>(v) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                tracing::warn!("memory fact row decode failed: {e}");
+                None
+            }
+        })
+        .collect();
+
+    Ok(Json(MemoryListResponse { facts, total }))
 }
 
 /// GET /api/memory/:agent_id/search - Search memory facts.
@@ -191,8 +183,8 @@ pub async fn search_memory_facts(
     Path(agent_id): Path<String>,
     Query(query): Query<MemorySearchQuery>,
 ) -> Result<Json<MemoryListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let memory_repo = match &state.memory_repo {
-        Some(repo) => repo,
+    let memory_store = match &state.memory_store {
+        Some(s) => s,
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -205,19 +197,14 @@ pub async fn search_memory_facts(
 
     let mode = query.mode.as_deref().unwrap_or("hybrid");
     let ward_id = query.ward_id.as_deref();
-
-    // Build (fact, source) pairs according to the requested mode.
     let scope_agent: Option<&str> = Some(agent_id.as_str());
-    let scored: Vec<(MemoryFact, &'static str)> = match mode {
-        "fts" => {
-            let rows = memory_repo
-                .search_memory_facts_fts(&query.q, scope_agent, query.limit, ward_id)
-                .map_err(|e| search_err("Failed to search memory facts (fts)", e))?;
-            rows.into_iter().map(|sf| (sf.fact, "fts")).collect()
-        }
+
+    // For semantic + hybrid we need an embedding of the query text. Fall
+    // through to FTS-only on hybrid if the embedding backend is down;
+    // bubble the error as 400 for explicit semantic requests.
+    let qe_opt: Option<Vec<f32>> = match mode {
+        "fts" => None,
         "semantic" => {
-            // Bubble embedding errors as 400 — caller asked for a mode that
-            // requires an embedding backend.
             let emb = state
                 .embedding_service
                 .client()
@@ -231,67 +218,49 @@ pub async fn search_memory_facts(
                         }),
                     )
                 })?;
-            let qe = emb.into_iter().next().unwrap_or_default();
-            let rows = memory_repo
-                .search_similar_facts(&qe, scope_agent, 0.0, query.limit, ward_id)
-                .map_err(|e| search_err("Failed to search memory facts (semantic)", e))?;
-            rows.into_iter().map(|sf| (sf.fact, "vec")).collect()
+            emb.into_iter().next()
         }
-        // Default: hybrid. If embedding fails, degrade to FTS-only (embedding=None).
-        _ => {
-            let qe_opt: Option<Vec<f32>> = match state
-                .embedding_service
-                .client()
-                .embed(&[query.q.as_str()])
-                .await
-            {
-                Ok(v) => v.into_iter().next(),
-                Err(e) => {
-                    tracing::debug!("hybrid search: embedding unavailable ({e}); FTS-only");
-                    None
-                }
-            };
-            let (rows, sources) = memory_repo
-                .search_memory_facts_hybrid(
-                    &query.q,
-                    qe_opt.as_deref(),
-                    scope_agent,
-                    query.limit,
-                    0.7,
-                    0.3,
-                    ward_id,
-                )
-                .map_err(|e| search_err("Failed to search memory facts (hybrid)", e))?;
-            let src_map: std::collections::HashMap<String, &'static str> =
-                sources.into_iter().collect();
-            rows.into_iter()
-                .map(|sf| {
-                    let src = src_map.get(&sf.fact.id).copied().unwrap_or("fts");
-                    (sf.fact, src)
-                })
-                .collect()
-        }
+        _ => match state
+            .embedding_service
+            .client()
+            .embed(&[query.q.as_str()])
+            .await
+        {
+            Ok(v) => v.into_iter().next(),
+            Err(e) => {
+                tracing::debug!("hybrid search: embedding unavailable ({e}); FTS-only");
+                None
+            }
+        },
     };
 
-    // Filter by category if specified; attach match_source.
-    let facts: Vec<MemoryFactResponse> = scored
+    let raw_rows = memory_store
+        .search_memory_facts_hybrid(
+            scope_agent,
+            &query.q,
+            mode,
+            query.limit,
+            ward_id,
+            qe_opt.as_deref(),
+        )
+        .await
+        .map_err(|e| search_err("Failed to search memory facts", e))?;
+
+    // Decode rows + apply optional category filter (the trait method doesn't
+    // filter by category — we do it client-side here so the trait stays simple).
+    let facts: Vec<MemoryFactResponse> = raw_rows
         .into_iter()
-        .filter(|(fact, _)| {
+        .filter_map(|v| serde_json::from_value::<MemoryFactResponse>(v).ok())
+        .filter(|f| {
             query
                 .category
                 .as_ref()
-                .map(|c| fact.category == *c)
+                .map(|c| f.category == *c)
                 .unwrap_or(true)
-        })
-        .map(|(fact, src)| {
-            let mut r = MemoryFactResponse::from(fact);
-            r.match_source = Some(src.to_string());
-            r
         })
         .collect();
 
     let total = facts.len();
-
     Ok(Json(MemoryListResponse { facts, total }))
 }
 
@@ -310,8 +279,8 @@ pub async fn get_memory_fact(
     State(state): State<AppState>,
     Path((agent_id, fact_id)): Path<(String, String)>,
 ) -> Result<Json<MemoryFactResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let memory_repo = match &state.memory_repo {
-        Some(repo) => repo,
+    let memory_store = match &state.memory_store {
+        Some(s) => s,
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -322,18 +291,24 @@ pub async fn get_memory_fact(
         }
     };
 
-    let fact = memory_repo.get_memory_fact_by_id(&fact_id).map_err(|e| {
-        tracing::error!("Failed to get memory fact: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to get memory fact: {}", e),
-            }),
-        )
-    })?;
+    let raw = memory_store
+        .get_memory_fact_by_id(&fact_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get memory fact: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to get memory fact: {}", e),
+                }),
+            )
+        })?;
+
+    let fact: Option<MemoryFactResponse> =
+        raw.and_then(|v| serde_json::from_value::<MemoryFactResponse>(v).ok());
 
     match fact {
-        Some(f) if f.agent_id == agent_id => Ok(Json(MemoryFactResponse::from(f))),
+        Some(f) if f.agent_id == agent_id => Ok(Json(f)),
         Some(_) => Err((
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
@@ -354,8 +329,8 @@ pub async fn delete_memory_fact(
     State(state): State<AppState>,
     Path((agent_id, fact_id)): Path<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let memory_repo = match &state.memory_repo {
-        Some(repo) => repo,
+    let memory_store = match &state.memory_store {
+        Some(s) => s,
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -367,27 +342,35 @@ pub async fn delete_memory_fact(
     };
 
     // First verify the fact belongs to this agent
-    let fact = memory_repo.get_memory_fact_by_id(&fact_id).map_err(|e| {
-        tracing::error!("Failed to get memory fact for deletion: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to get memory fact: {}", e),
-            }),
-        )
-    })?;
+    let raw = memory_store
+        .get_memory_fact_by_id(&fact_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get memory fact for deletion: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to get memory fact: {}", e),
+                }),
+            )
+        })?;
+    let fact: Option<MemoryFactResponse> =
+        raw.and_then(|v| serde_json::from_value::<MemoryFactResponse>(v).ok());
 
     match fact {
         Some(f) if f.agent_id == agent_id => {
-            let deleted = memory_repo.delete_memory_fact(&fact_id).map_err(|e| {
-                tracing::error!("Failed to delete memory fact: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Failed to delete memory fact: {}", e),
-                    }),
-                )
-            })?;
+            let deleted = memory_store
+                .delete_memory_fact(&fact_id)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to delete memory fact: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: format!("Failed to delete memory fact: {}", e),
+                        }),
+                    )
+                })?;
 
             if deleted {
                 Ok(StatusCode::NO_CONTENT)
@@ -441,8 +424,8 @@ pub async fn create_memory_fact(
     Path(agent_id): Path<String>,
     Json(request): Json<CreateMemoryFactRequest>,
 ) -> Result<(StatusCode, Json<MemoryFactResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let memory_repo = match &state.memory_repo {
-        Some(repo) => repo,
+    let memory_store = match &state.memory_store {
+        Some(s) => s,
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -480,14 +463,25 @@ pub async fn create_memory_fact(
         source_ref: None,
     };
 
-    memory_repo.upsert_memory_fact(&fact).map_err(|e| {
+    let fact_value = serde_json::to_value(&fact).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: format!("Failed to create fact: {}", e),
+                error: format!("Failed to encode fact: {}", e),
             }),
         )
     })?;
+    memory_store
+        .upsert_typed_fact(fact_value, None)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to create fact: {}", e),
+                }),
+            )
+        })?;
 
     Ok((StatusCode::CREATED, Json(MemoryFactResponse::from(fact))))
 }
@@ -509,8 +503,14 @@ pub async fn search_all_memory_facts(
     State(state): State<AppState>,
     Query(query): Query<GlobalMemorySearchQuery>,
 ) -> Result<Json<MemoryListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let memory_repo = match &state.memory_repo {
-        Some(repo) => repo,
+    // Routed through the trait surface so the underlying backend is
+    // honored when opted in. Defaults to the FTS arm — the historical
+    // handler was FTS-only and the trait's `mode = "fts"` matches.
+    // The trait method does not accept a category filter; for now we
+    // post-filter on the deserialized Value rows. Migrating the
+    // category filter into the trait surface is a follow-up.
+    let memory_store = match &state.memory_store {
+        Some(s) => s,
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -521,8 +521,9 @@ pub async fn search_all_memory_facts(
         }
     };
 
-    let results = memory_repo
-        .search_all_memory_facts_fts(&query.q, query.limit, query.category.as_deref())
+    let raw = memory_store
+        .search_memory_facts_hybrid(None, &query.q, "fts", query.limit, None, None)
+        .await
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -532,9 +533,19 @@ pub async fn search_all_memory_facts(
             )
         })?;
 
-    let facts: Vec<MemoryFactResponse> = results
+    let facts: Vec<MemoryFactResponse> = raw
         .into_iter()
-        .map(|sf| MemoryFactResponse::from(sf.fact))
+        .filter_map(|v| match serde_json::from_value::<MemoryFactResponse>(v) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                tracing::warn!("memory fact row decode failed: {e}");
+                None
+            }
+        })
+        .filter(|f| match query.category.as_deref() {
+            Some(cat) => f.category == cat,
+            None => true,
+        })
         .collect();
     let total = facts.len();
 
@@ -546,8 +557,11 @@ pub async fn list_all_memory_facts(
     Query(query): Query<AllMemoryListQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<MemoryListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let memory_repo = match &state.memory_repo {
-        Some(repo) => repo,
+    // Route through the trait surface so the underlying backend is abstracted
+    // when the user has opted in via Settings → Persistence. The legacy
+    // concrete `state.memory_repo` is no longer the source of truth here.
+    let memory_store = match &state.memory_store {
+        Some(s) => s,
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -558,16 +572,17 @@ pub async fn list_all_memory_facts(
         }
     };
 
-    let facts = memory_repo
-        .list_all_memory_facts(
+    let raw_facts = memory_store
+        .list_memory_facts(
             query.agent_id.as_deref(),
             query.category.as_deref(),
             query.scope.as_deref(),
             query.limit,
             query.offset,
         )
+        .await
         .map_err(|e| {
-            tracing::error!("Failed to list all memory facts: {}", e);
+            tracing::error!("Failed to list memory facts: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
@@ -576,14 +591,27 @@ pub async fn list_all_memory_facts(
             )
         })?;
 
-    let total = memory_repo
-        .count_all_memory_facts(query.agent_id.as_deref())
+    let total = memory_store
+        .count_all_facts(query.agent_id.as_deref())
+        .await
+        .map(|n| n as usize)
         .unwrap_or(0);
 
-    Ok(Json(MemoryListResponse {
-        facts: facts.into_iter().map(MemoryFactResponse::from).collect(),
-        total,
-    }))
+    // Each row is a serde_json::Value matching the MemoryFactResponse shape.
+    // Rows that fail to deserialize are skipped with a warning rather than
+    // failing the whole request.
+    let facts: Vec<MemoryFactResponse> = raw_facts
+        .into_iter()
+        .filter_map(|v| match serde_json::from_value::<MemoryFactResponse>(v) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                tracing::warn!("memory fact row decode failed: {e}");
+                None
+            }
+        })
+        .collect();
+
+    Ok(Json(MemoryListResponse { facts, total }))
 }
 
 // ============================================================================

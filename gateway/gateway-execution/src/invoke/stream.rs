@@ -5,12 +5,12 @@
 use agent_runtime::StreamEvent;
 use api_logs::{ExecutionLog, LogCategory, LogLevel, LogService};
 use execution_state::{AgentExecution, DelegationType, StateService};
-use gateway_database::DatabaseManager;
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::skills::{SkillFrontmatter, WardSetup};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use zero_stores_sqlite::DatabaseManager;
 
 use super::super::delegation::DelegationRequest;
 use super::super::events::convert_stream_event;

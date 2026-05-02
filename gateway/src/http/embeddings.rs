@@ -85,7 +85,7 @@ async fn vec_health_snapshot(state: &AppState) -> zero_stores::VecIndexHealth {
     }
     zero_stores::VecIndexHealth {
         tables_present: Vec::new(),
-        tables_missing: gateway_database::REQUIRED_VEC_TABLES
+        tables_missing: zero_stores_sqlite::REQUIRED_VEC_TABLES
             .iter()
             .map(|s| s.to_string())
             .collect(),
@@ -230,36 +230,46 @@ pub async fn configure(
         // Phase 2: reindex if required (dim or model changed).
         if svc_clone.needs_reindex() {
             let current_dim = svc_clone.dimensions();
-            let client = svc_clone.client();
-            let tx_reindex = tx.clone();
-            let on_progress = move |table: &'static str, current: usize, total: usize| {
-                let ev = Health::Reindexing {
-                    table: table.to_string(),
-                    current,
-                    total,
-                };
-                // Also publish into service.health so pollers see it.
-                let _ = tx_reindex.send(ev);
-            };
-            match gateway_execution::sleep::embedding_reindex::reindex_all(
-                &knowledge_db,
-                client,
-                current_dim,
-                &on_progress,
-            )
-            .await
-            {
-                Ok(_) => {
-                    if let Err(e) = svc_clone.mark_indexed(current_dim) {
-                        let _ = tx.send(Health::Misconfigured(format!(
-                            "reindex ok but mark_indexed failed: {e}"
-                        )));
-                        return;
+            match knowledge_db.as_ref() {
+                Some(db) => {
+                    let client = svc_clone.client();
+                    let tx_reindex = tx.clone();
+                    let on_progress = move |table: &'static str, current: usize, total: usize| {
+                        let ev = Health::Reindexing {
+                            table: table.to_string(),
+                            current,
+                            total,
+                        };
+                        // Also publish into service.health so pollers see it.
+                        let _ = tx_reindex.send(ev);
+                    };
+                    match gateway_execution::sleep::embedding_reindex::reindex_all(
+                        db,
+                        client,
+                        current_dim,
+                        &on_progress,
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            if let Err(e) = svc_clone.mark_indexed(current_dim) {
+                                let _ = tx.send(Health::Misconfigured(format!(
+                                    "reindex ok but mark_indexed failed: {e}"
+                                )));
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Health::Misconfigured(format!("reindex failed: {e}")));
+                            return;
+                        }
                     }
                 }
-                Err(e) => {
-                    let _ = tx.send(Health::Misconfigured(format!("reindex failed: {e}")));
-                    return;
+                None => {
+                    // No knowledge DB wired (test fixture path) — nothing to reindex.
+                    if let Err(e) = svc_clone.mark_indexed(current_dim) {
+                        tracing::warn!("mark_indexed failed: {e}");
+                    }
                 }
             }
         }

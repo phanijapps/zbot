@@ -29,8 +29,8 @@
 
 use std::sync::Arc;
 
+use crate::KnowledgeDatabase;
 use agent_runtime::llm::EmbeddingClient;
-use gateway_database::KnowledgeDatabase;
 
 const BATCH_SIZE: usize = 100;
 
@@ -577,10 +577,8 @@ mod tests {
             .await
             .unwrap();
         // Also run the gateway-database helper explicitly — must not error.
-        db.with_connection(|conn| {
-            gateway_database::knowledge_schema::cleanup_orphan_reindex_tables(conn)
-        })
-        .unwrap();
+        db.with_connection(|conn| crate::knowledge_schema::cleanup_orphan_reindex_tables(conn))
+            .unwrap();
     }
 
     #[tokio::test]

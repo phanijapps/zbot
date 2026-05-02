@@ -9,8 +9,9 @@
 use agent_runtime::llm::client::LlmClient;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::types::ChatMessage;
-use gateway_database::{WardWikiRepository, WikiArticle};
 use serde::Deserialize;
+use zero_stores_traits::wiki::WikiArticle;
+use zero_stores_traits::WikiStore;
 
 /// Summary of a fact for the compilation prompt.
 #[derive(Debug, Clone)]
@@ -44,7 +45,7 @@ pub async fn compile_ward_wiki(
     ward_id: &str,
     agent_id: &str,
     new_facts: &[FactSummary],
-    wiki_repo: &WardWikiRepository,
+    wiki_store: &dyn WikiStore,
     llm_client: &dyn LlmClient,
     embedding_client: Option<&dyn EmbeddingClient>,
 ) -> Result<usize, String> {
@@ -54,7 +55,7 @@ pub async fn compile_ward_wiki(
     }
 
     // Load existing articles
-    let existing = wiki_repo.list_articles(ward_id)?;
+    let existing = wiki_store.list_articles_typed(ward_id).await?;
 
     // Build compilation prompt
     let prompt = build_compilation_prompt(&existing, new_facts);
@@ -121,7 +122,10 @@ pub async fn compile_ward_wiki(
 
         if title_is_new {
             if let Some(ref new_emb) = embedding {
-                if let Ok(matches) = wiki_repo.search_by_similarity(ward_id, new_emb, 1) {
+                if let Ok(matches) = wiki_store
+                    .search_wiki_by_similarity_typed(ward_id, new_emb, 1)
+                    .await
+                {
                     if let Some((nearest, score)) = matches.first() {
                         if *score >= 0.82 && nearest.title != "__index__" {
                             tracing::info!(
@@ -155,7 +159,17 @@ pub async fn compile_ward_wiki(
             updated_at: now.clone(),
         };
 
-        if let Err(e) = wiki_repo.upsert_article(&article) {
+        let article_v = match serde_json::to_value(&article) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(title = %article_data.title, error = %e, "Failed to encode wiki article");
+                continue;
+            }
+        };
+        if let Err(e) = wiki_store
+            .upsert_article(article_v, article.embedding.clone())
+            .await
+        {
             tracing::warn!(title = %article_data.title, error = %e, "Failed to upsert wiki article");
         } else {
             upserted += 1;
@@ -164,7 +178,7 @@ pub async fn compile_ward_wiki(
 
     // Update index article
     if upserted > 0 {
-        let index_content = build_index_content(ward_id, wiki_repo)?;
+        let index_content = build_index_content(ward_id, wiki_store).await?;
         let index_article = WikiArticle {
             id: format!("wiki-{}-index", ward_id),
             ward_id: ward_id.to_string(),
@@ -178,7 +192,9 @@ pub async fn compile_ward_wiki(
             created_at: now.clone(),
             updated_at: now,
         };
-        let _ = wiki_repo.upsert_article(&index_article);
+        if let Ok(v) = serde_json::to_value(&index_article) {
+            let _ = wiki_store.upsert_article(v, None).await;
+        }
     }
 
     tracing::info!(ward = %ward_id, articles = upserted, "Ward wiki compilation complete");
@@ -270,8 +286,8 @@ fn parse_compilation_response(text: &str) -> Result<CompilationResponse, String>
         .map_err(|e| format!("Failed to parse compilation response: {e}"))
 }
 
-fn build_index_content(ward_id: &str, wiki_repo: &WardWikiRepository) -> Result<String, String> {
-    let articles = wiki_repo.list_articles(ward_id)?;
+async fn build_index_content(ward_id: &str, wiki_store: &dyn WikiStore) -> Result<String, String> {
+    let articles = wiki_store.list_articles_typed(ward_id).await?;
     let mut index = format!("# {} Wiki Index\n\n", ward_id);
     for article in &articles {
         if article.title == "__index__" {
@@ -384,10 +400,12 @@ mod tests {
     use agent_runtime::llm::embedding::EmbeddingError;
     use agent_runtime::llm::LlmError;
     use async_trait::async_trait;
-    use gateway_database::vector_index::VectorIndex;
-    use gateway_database::{KnowledgeDatabase, SqliteVecIndex};
     use gateway_services::VaultPaths;
     use std::sync::{Arc, Mutex};
+    use zero_stores_sqlite::vector_index::VectorIndex;
+    use zero_stores_sqlite::{
+        GatewayWikiStore, KnowledgeDatabase, SqliteVecIndex, WardWikiRepository,
+    };
 
     /// Scripted LLM returning a fixed textual response — whatever the caller
     /// passes in. We only use `chat`; `chat_stream` panics if invoked so a
@@ -452,20 +470,20 @@ mod tests {
         }
     }
 
-    fn make_wiki_repo() -> (tempfile::TempDir, WardWikiRepository) {
+    fn make_wiki_store() -> (tempfile::TempDir, GatewayWikiStore) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
         std::fs::create_dir_all(paths.conversations_db().parent().expect("parent")).expect("mkdir");
         let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
         let vec: Arc<dyn VectorIndex> =
             Arc::new(SqliteVecIndex::new(db.clone(), "wiki_articles_index", "article_id").unwrap());
-        let repo = WardWikiRepository::new(db, vec);
-        (tmp, repo)
+        let repo = Arc::new(WardWikiRepository::new(db, vec));
+        (tmp, GatewayWikiStore::new(repo))
     }
 
     #[tokio::test]
     async fn compile_ward_wiki_empty_facts_short_circuits() {
-        let (_tmp, repo) = make_wiki_repo();
+        let (_tmp, repo) = make_wiki_store();
         let llm = MockLlm::new("unused");
         let out = compile_ward_wiki("w1", "root", &[], &repo, &llm, None)
             .await
@@ -475,7 +493,7 @@ mod tests {
 
     #[tokio::test]
     async fn compile_ward_wiki_upserts_article_and_writes_index() {
-        let (_tmp, repo) = make_wiki_repo();
+        let (_tmp, repo) = make_wiki_store();
         let llm_response = r#"{"articles": [
             {"title": "Rate Limits", "content": "Use 1 req/sec.", "tags": ["yfinance"]}
         ]}"#;
@@ -491,7 +509,7 @@ mod tests {
             .expect("compile");
         assert_eq!(out, 1);
 
-        let articles = repo.list_articles("w1").expect("list");
+        let articles = repo.list_articles_typed("w1").await.expect("list");
         // Expect 2: the new article + the __index__ rollup.
         assert!(articles.iter().any(|a| a.title == "Rate Limits"));
         assert!(articles.iter().any(|a| a.title == "__index__"));
@@ -507,7 +525,7 @@ mod tests {
 
     #[tokio::test]
     async fn compile_ward_wiki_malformed_llm_json_returns_err() {
-        let (_tmp, repo) = make_wiki_repo();
+        let (_tmp, repo) = make_wiki_store();
         let llm = MockLlm::new("not json at all");
         let facts = vec![FactSummary {
             category: "x".into(),
@@ -526,7 +544,7 @@ mod tests {
         // We don't assert dedup behavior (that's integration-testing the
         // repo's similarity search) — just that the embedding path runs
         // end-to-end without erroring when an embedding client is supplied.
-        let (_tmp, repo) = make_wiki_repo();
+        let (_tmp, repo) = make_wiki_store();
         let llm_response = r#"{"articles": [
             {"title": "Doc A", "content": "body", "tags": null}
         ]}"#;
@@ -549,10 +567,10 @@ mod tests {
     // takes a live repo.
     // ------------------------------------------------------------------
 
-    #[test]
-    fn build_index_content_empty_ward_returns_just_header() {
-        let (_tmp, repo) = make_wiki_repo();
-        let out = build_index_content("w1", &repo).expect("build index");
+    #[tokio::test]
+    async fn build_index_content_empty_ward_returns_just_header() {
+        let (_tmp, repo) = make_wiki_store();
+        let out = build_index_content("w1", &repo).await.expect("build index");
         assert!(out.starts_with("# w1 Wiki Index"));
         // No bullet lines: the only article would've been __index__ itself,
         // which is filtered out.

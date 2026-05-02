@@ -6,7 +6,6 @@
 //! and provides a high-level API for invoking agents.
 
 use crate::connectors::ConnectorRegistry;
-use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::{EventBus, GatewayEvent};
 use crate::execution::{
     new_workspace_cache, ExecutionConfig, ExecutionHandle, ExecutionRunner, MemoryRecall,
@@ -16,8 +15,8 @@ use crate::hooks::HookContext;
 use crate::services::{AgentService, McpService, ProviderService, SharedVaultPaths, SkillService};
 use api_logs::LogService;
 use execution_state::StateService;
-use gateway_database::MemoryRepository;
 use std::sync::Arc;
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 /// Execution state for a conversation.
 #[derive(Debug, Clone)]
@@ -77,14 +76,14 @@ impl RuntimeService {
             state_service,
             None,
             new_workspace_cache(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            None, // memory_store
+            None, // distiller
+            None, // memory_recall
+            None, // bridge_registry
+            None, // bridge_outbox
+            None, // embedding_client
             2,    // default max_parallel_agents
-            None, // graph_storage
+            None, // kg_store
             None, // kg_episode_repo
             None, // ingestion_adapter
             None, // goal_adapter
@@ -105,15 +104,15 @@ impl RuntimeService {
         state_service: Arc<StateService<DatabaseManager>>,
         connector_registry: Option<Arc<ConnectorRegistry>>,
         workspace_cache: WorkspaceCache,
-        memory_repo: Option<Arc<MemoryRepository>>,
+        memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
         distiller: Option<Arc<SessionDistiller>>,
         memory_recall: Option<Arc<MemoryRecall>>,
         bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
         bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
         embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
         max_parallel_agents: u32,
-        graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
-        kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+        kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
+        kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
         ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
         goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     ) -> Self {
@@ -129,7 +128,7 @@ impl RuntimeService {
             state_service,
             connector_registry,
             workspace_cache,
-            memory_repo,
+            memory_store,
             distiller,
             memory_recall,
             bridge_registry,
@@ -147,8 +146,9 @@ impl RuntimeService {
             paths.vault_dir(),
         )));
 
-        if let Some(gs) = graph_storage {
-            runner.set_graph_storage(gs);
+
+        if let Some(ks) = kg_store {
+            runner.set_kg_store(ks);
         }
 
         if let Some(repo) = kg_episode_repo {

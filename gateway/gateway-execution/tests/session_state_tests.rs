@@ -7,11 +7,11 @@
 use std::sync::Arc;
 
 use api_logs::LogService;
-use gateway_database::{ConversationRepository, DatabaseManager};
 use gateway_execution::session_state::{SessionPhase, SessionStateBuilder};
 use gateway_services::VaultPaths;
 #[allow(deprecated)]
 use tempfile::tempdir;
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 // ============================================================================
 // HELPERS

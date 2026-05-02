@@ -6,7 +6,7 @@
 //! consumed by `rrf_merge`.
 
 use crate::recall::scored_item::{ItemKind, Provenance, ScoredItem};
-use gateway_database::{MemoryFact, Procedure, WikiArticle};
+use zero_stores_domain::{MemoryFact, Procedure, WikiArticle};
 
 /// Project a [`MemoryFact`] into a [`ScoredItem`].
 ///
@@ -68,7 +68,6 @@ pub fn procedure_to_item(proc: &Procedure, score: f64) -> ScoredItem {
     }
 }
 
-use knowledge_graph::GraphStorage;
 use std::sync::Arc;
 
 /// ANN-query `kg_name_index` for entities whose name embedding is closest to
@@ -79,7 +78,7 @@ use std::sync::Arc;
 /// via rank during fusion, so this per-source score only matters for the
 /// adapter-local order, which we preserve by sorting by `(rank, cosine)`.
 pub async fn graph_ann_to_items(
-    graph: &Arc<GraphStorage>,
+    kg_store: &Arc<dyn zero_stores::KnowledgeGraphStore>,
     query_embedding: &[f32],
     top_k: usize,
     agent_id: &str,
@@ -87,24 +86,28 @@ pub async fn graph_ann_to_items(
     if query_embedding.is_empty() || top_k == 0 {
         return Ok(Vec::new());
     }
-    let results = graph
-        .search_entities_by_name_embedding(query_embedding, top_k, agent_id)
+    let results = kg_store
+        .search_entities_by_name_embedding(agent_id, query_embedding, top_k)
+        .await
         .map_err(|e| format!("graph ANN search failed: {e}"))?;
 
     let mut out = Vec::with_capacity(results.len());
-    for (idx, (name, entity_type, dist)) in results.into_iter().enumerate() {
+    for (idx, hit) in results.into_iter().enumerate() {
         // L2-squared on normalized vectors → cosine similarity = 1 - dist/2.
-        let cosine = 1.0 - (dist as f64) / 2.0;
+        let cosine = 1.0 - (hit.distance as f64) / 2.0;
         let rank_one = (idx as f64) + 1.0;
         let score = (1.0 / rank_one) * cosine;
         out.push(ScoredItem {
             kind: ItemKind::GraphNode,
-            id: format!("graph:{name}"),
-            content: format!("Entity: {name} [{entity_type}] (cosine ~ {cosine:.2})"),
+            id: format!("graph:{}", hit.name),
+            content: format!(
+                "Entity: {} [{}] (cosine ~ {cosine:.2})",
+                hit.name, hit.entity_type
+            ),
             score,
             provenance: Provenance {
                 source: "kg_name_index".to_string(),
-                source_id: name,
+                source_id: hit.name,
                 session_id: None,
                 ward_id: None,
             },

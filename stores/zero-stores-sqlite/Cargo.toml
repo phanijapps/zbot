@@ -4,25 +4,42 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# Trait surfaces / domain types this crate implements
 zero-stores = { path = "../zero-stores" }
+zero-stores-traits = { path = "../zero-stores-traits" }
+zero-stores-domain = { path = "../zero-stores-domain" }
 knowledge-graph = { path = "../../services/knowledge-graph" }
-# `agent-runtime` brings in the `EmbeddingClient` trait used by
-# `SqliteKgStore::reindex_embeddings`. Dep direction is acyclic:
-# agent-runtime does not depend on zero-stores or zero-stores-sqlite.
+
+# Internal crates the per-table stores need (DbProvider trait impls etc.)
+api-logs = { path = "../../services/api-logs" }
+execution-state = { path = "../../services/execution-state" }
 agent-runtime = { path = "../../runtime/agent-runtime" }
-# `gateway-database` exposes `KnowledgeDatabase` (the shared knowledge.db
-# pool) which the reindex orchestration drives. Dep direction stays acyclic:
-# gateway-database does not depend on zero-stores or zero-stores-sqlite.
-gateway-database = { path = "../../gateway/gateway-database" }
+gateway-services = { path = "../../gateway/gateway-services" }
+zero-core = { path = "../../framework/zero-core" }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled", "load_extension"] }
+sqlite-vec = "0.1"
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+
+# Async
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
-tracing = { workspace = true }
-serde_json = { workspace = true }
-rusqlite = { version = "0.32", features = ["bundled"] }
 
-# Pre-staged for Task 4+ integration test fixtures (tests/fixtures/mod.rs)
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Utilities
+tracing = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+
 [dev-dependencies]
 tempfile = "3"
+rusqlite = { version = "0.32", features = ["bundled", "load_extension"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 gateway-services = { path = "../../gateway/gateway-services" }
 zero-stores-conformance = { path = "../zero-stores-conformance" }
 

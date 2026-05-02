@@ -24,12 +24,12 @@ use super::session_invoker::ContinuationSpawner;
 use api_logs::LogService;
 use async_trait::async_trait;
 use execution_state::StateService;
-use gateway_database::{ConversationRepository, DatabaseManager};
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use crate::delegation::{DelegationRegistry, DelegationRequest};
 use crate::handle::ExecutionHandle;
@@ -65,7 +65,7 @@ pub(crate) struct RunnerContinuationInvoker {
     pub(crate) log_service: Arc<LogService<DatabaseManager>>,
     pub(crate) state_service: Arc<StateService<DatabaseManager>>,
     pub(crate) workspace_cache: WorkspaceCache,
-    pub(crate) memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    pub(crate) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub(crate) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     pub(crate) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub(crate) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
@@ -73,8 +73,8 @@ pub(crate) struct RunnerContinuationInvoker {
     /// the live value at fire time via `.load_full()`.
     pub(crate) model_registry:
         Arc<arc_swap::ArcSwapOption<gateway_services::models::ModelRegistry>>,
-    pub(crate) graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
-    pub(crate) kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+    pub(crate) kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
+    pub(crate) kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     pub(crate) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(crate) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 }
@@ -107,13 +107,13 @@ impl ContinuationSpawner for RunnerContinuationInvoker {
             log_service: self.log_service.clone(),
             state_service: self.state_service.clone(),
             workspace_cache: self.workspace_cache.clone(),
-            memory_repo: self.memory_repo.clone(),
+            memory_store: self.memory_store.clone(),
             embedding_client: self.embedding_client.clone(),
             distiller: self.distiller.clone(),
             memory_recall: self.memory_recall.clone(),
             // Read the live registry at fire time — not a stale capture.
             model_registry: self.model_registry.load_full(),
-            graph_storage: self.graph_storage.clone(),
+            kg_store: self.kg_store.clone(),
             kg_episode_repo: self.kg_episode_repo.clone(),
             ingestion_adapter: self.ingestion_adapter.clone(),
             goal_adapter: self.goal_adapter.clone(),

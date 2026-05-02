@@ -5,6 +5,27 @@
 
 use zero_core::ToolContext;
 
+/// Check if the given `specs/` directory holds any unfilled placeholder
+/// spec — a file containing the literal text `"Status: placeholder"`.
+///
+/// Single source of truth for the placeholder check. Pure file-IO (takes a
+/// concrete path), so it's also callable from non-tool contexts like
+/// the bootstrap path that doesn't have a `ToolContext` yet.
+pub fn specs_dir_has_placeholders(specs_dir: &std::path::Path) -> bool {
+    if !specs_dir.exists() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(specs_dir) else {
+        return false;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        if entry.path().is_dir() && dir_has_placeholder_spec(&entry.path()) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Check if the active ward has unfilled placeholder specs.
 ///
 /// Returns `true` when the root agent (not a delegated subagent) has a ward
@@ -38,19 +59,7 @@ pub(crate) fn has_placeholder_specs(ctx: &dyn ToolContext) -> bool {
     let Some(specs_dir) = specs_dir else {
         return false;
     };
-    if !specs_dir.exists() {
-        return false;
-    }
-    let Ok(entries) = std::fs::read_dir(&specs_dir) else {
-        return false;
-    };
-
-    for entry in entries.filter_map(|e| e.ok()) {
-        if entry.path().is_dir() && dir_has_placeholder_spec(&entry.path()) {
-            return true;
-        }
-    }
-    false
+    specs_dir_has_placeholders(&specs_dir)
 }
 
 fn dir_has_placeholder_spec(dir: &std::path::Path) -> bool {

@@ -165,9 +165,9 @@ async fn run_cycle(
         }
     }
 
-    let candidates = decay_engine.list_prune_candidates(agent_id);
+    let candidates = decay_engine.list_prune_candidates(agent_id).await;
     stats.prune_candidates = candidates.len() as u64;
-    let prune_stats = pruner.prune(&run_id, &candidates);
+    let prune_stats = pruner.prune(&run_id, &candidates).await;
     stats.pruned = prune_stats.pruned;
     stats.pruned_failed = prune_stats.failed;
 
@@ -222,17 +222,17 @@ mod tests {
     use crate::sleep::pattern_extractor::{PatternExtractLlm, PatternInput, PatternResponse};
     use crate::sleep::synthesizer::{SynthesisInput, SynthesisLlm, SynthesisResponse};
     use async_trait::async_trait;
-    use gateway_database::vector_index::{SqliteVecIndex, VectorIndex};
-    use gateway_database::{
-        CompactionRepository, DatabaseManager, KnowledgeDatabase, MemoryRepository,
-        ProcedureRepository,
-    };
     use gateway_services::VaultPaths;
-    use knowledge_graph::GraphStorage;
     use std::sync::Mutex;
     use tempfile::tempdir;
     use zero_stores::KnowledgeGraphStore;
     use zero_stores_sqlite::SqliteKgStore;
+    use zero_stores_sqlite::kg::storage::GraphStorage;
+    use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+    use zero_stores_sqlite::{
+        CompactionRepository, DatabaseManager, KnowledgeDatabase, MemoryRepository,
+        ProcedureRepository,
+    };
 
     struct Harness {
         _tmp: tempfile::TempDir,
@@ -275,13 +275,18 @@ mod tests {
 
     fn build_core(h: &Harness) -> (Arc<Compactor>, Arc<DecayEngine>, Arc<Pruner>) {
         use crate::sleep::{DecayConfig, Pruner as Pr};
+        use zero_stores_sqlite::GatewayCompactionStore;
+        use zero_stores_traits::CompactionStore;
+        let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(h.graph.clone()));
+        let compaction_store: Arc<dyn CompactionStore> =
+            Arc::new(GatewayCompactionStore::new(h.compaction_repo.clone()));
         let compactor = Arc::new(Compactor::new(
-            h.graph.clone(),
-            h.compaction_repo.clone(),
+            kg_store.clone(),
+            compaction_store.clone(),
             None,
         ));
-        let decay = Arc::new(DecayEngine::new(h.graph.clone(), DecayConfig::default()));
-        let pruner = Arc::new(Pr::new(h.graph.clone(), h.compaction_repo.clone()));
+        let decay = Arc::new(DecayEngine::new(kg_store.clone(), DecayConfig::default()));
+        let pruner = Arc::new(Pr::new(kg_store, compaction_store));
         (compactor, decay, pruner)
     }
 
@@ -330,29 +335,60 @@ mod tests {
         // verify they were invoked (no panic, stats all zero, cycle completes).
         let h = harness();
         let (c, d, p) = build_core(&h);
-        let synth = Arc::new(Synthesizer::new(
+        let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(h.graph.clone()));
+        let episode_vec: Arc<dyn zero_stores_sqlite::vector_index::VectorIndex> = Arc::new(
+            zero_stores_sqlite::vector_index::SqliteVecIndex::new(
+                h.db.clone(),
+                "session_episodes_index",
+                "episode_id",
+            )
+            .expect("vec idx"),
+        );
+        let episode_repo = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
             h.db.clone(),
-            h.memory_repo.clone(),
-            h.compaction_repo.clone(),
+            episode_vec,
+        ));
+        let episode_store: Arc<dyn zero_stores_traits::EpisodeStore> =
+            Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo));
+        let memory_store: Arc<dyn zero_stores::MemoryFactStore> = Arc::new(
+            zero_stores_sqlite::GatewayMemoryFactStore::new(h.memory_repo.clone(), None),
+        );
+        let compaction_store: Arc<dyn zero_stores_traits::CompactionStore> = Arc::new(
+            zero_stores_sqlite::GatewayCompactionStore::new(h.compaction_repo.clone()),
+        );
+        let synth = Arc::new(Synthesizer::new(
+            kg_store.clone(),
+            episode_store.clone(),
+            memory_store.clone(),
+            compaction_store.clone(),
             Arc::new(RecordingSynthLlm {
                 calls: Mutex::new(0),
                 fail: false,
             }),
             None,
         ));
-        let px = Arc::new(PatternExtractor::new(
-            h.db.clone(),
+        let conv_repo = Arc::new(zero_stores_sqlite::ConversationRepository::new(
             h.convo.clone(),
-            h.procedure_repo.clone(),
-            h.compaction_repo.clone(),
+        ));
+        let conversation_store: Arc<dyn zero_stores_traits::ConversationStore> = conv_repo;
+        let procedure_store: Arc<dyn zero_stores_traits::ProcedureStore> = Arc::new(
+            zero_stores_sqlite::GatewayProcedureStore::new(h.procedure_repo.clone()),
+        );
+        let px = Arc::new(PatternExtractor::new(
+            episode_store.clone(),
+            conversation_store,
+            procedure_store,
+            compaction_store.clone(),
             Arc::new(RecordingPatternLlm),
         ));
         let archiver_kg_store: Arc<dyn KnowledgeGraphStore> =
             Arc::new(SqliteKgStore::new(h.graph.clone()));
+        let archiver_compaction_store: Arc<dyn zero_stores_traits::CompactionStore> = Arc::new(
+            zero_stores_sqlite::GatewayCompactionStore::new(h.compaction_repo.clone()),
+        );
         let archiver = Arc::new(crate::sleep::OrphanArchiver::new(
-            h.db.clone(),
             archiver_kg_store,
-            h.compaction_repo.clone(),
+            archiver_compaction_store,
         ));
         let ops = SleepOps {
             synthesizer: Some(synth),
@@ -397,10 +433,32 @@ mod tests {
         // counter is reachable (no panic) and cycle returns stats.
         let h = harness();
         let (c, d, p) = build_core(&h);
-        let synth = Arc::new(Synthesizer::new(
+        let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(h.graph.clone()));
+        let episode_vec: Arc<dyn zero_stores_sqlite::vector_index::VectorIndex> = Arc::new(
+            zero_stores_sqlite::vector_index::SqliteVecIndex::new(
+                h.db.clone(),
+                "session_episodes_index",
+                "episode_id",
+            )
+            .expect("vec idx"),
+        );
+        let episode_repo = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
             h.db.clone(),
-            h.memory_repo.clone(),
-            h.compaction_repo.clone(),
+            episode_vec,
+        ));
+        let episode_store: Arc<dyn zero_stores_traits::EpisodeStore> =
+            Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo));
+        let memory_store: Arc<dyn zero_stores::MemoryFactStore> = Arc::new(
+            zero_stores_sqlite::GatewayMemoryFactStore::new(h.memory_repo.clone(), None),
+        );
+        let compaction_store: Arc<dyn zero_stores_traits::CompactionStore> = Arc::new(
+            zero_stores_sqlite::GatewayCompactionStore::new(h.compaction_repo.clone()),
+        );
+        let synth = Arc::new(Synthesizer::new(
+            kg_store,
+            episode_store.clone(),
+            memory_store,
+            compaction_store.clone(),
             Arc::new(RecordingSynthLlm {
                 calls: Mutex::new(0),
                 fail: true,
@@ -410,11 +468,18 @@ mod tests {
         let counter = Arc::new(CountingPatternLlm {
             calls: Mutex::new(0),
         });
-        let px = Arc::new(PatternExtractor::new(
-            h.db.clone(),
+        let conv_repo = Arc::new(zero_stores_sqlite::ConversationRepository::new(
             h.convo.clone(),
-            h.procedure_repo.clone(),
-            h.compaction_repo.clone(),
+        ));
+        let conversation_store: Arc<dyn zero_stores_traits::ConversationStore> = conv_repo;
+        let procedure_store: Arc<dyn zero_stores_traits::ProcedureStore> = Arc::new(
+            zero_stores_sqlite::GatewayProcedureStore::new(h.procedure_repo.clone()),
+        );
+        let px = Arc::new(PatternExtractor::new(
+            episode_store.clone(),
+            conversation_store,
+            procedure_store,
+            compaction_store.clone(),
             counter.clone(),
         ));
         let ops = SleepOps {

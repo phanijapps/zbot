@@ -5,10 +5,14 @@ use std::time::Duration;
 
 use tempfile::tempdir;
 
-use gateway_database::{CompactionRepository, KnowledgeDatabase};
 use gateway_execution::sleep::{Compactor, DecayConfig, DecayEngine, Pruner, SleepTimeWorker};
 use gateway_services::VaultPaths;
-use knowledge_graph::GraphStorage;
+use zero_stores::KnowledgeGraphStore;
+use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::{
+    CompactionRepository, GatewayCompactionStore, KnowledgeDatabase, SqliteKgStore,
+};
+use zero_stores_traits::CompactionStore;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn trigger_causes_immediate_cycle() {
@@ -19,9 +23,16 @@ async fn trigger_causes_immediate_cycle() {
 
     let graph = Arc::new(GraphStorage::new(db.clone()).unwrap());
     let compaction_repo = Arc::new(CompactionRepository::new(db.clone()));
-    let compactor = Arc::new(Compactor::new(graph.clone(), compaction_repo.clone(), None));
-    let decay = Arc::new(DecayEngine::new(graph.clone(), DecayConfig::default()));
-    let pruner = Arc::new(Pruner::new(graph, compaction_repo.clone()));
+    let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(graph));
+    let compaction_store: Arc<dyn CompactionStore> =
+        Arc::new(GatewayCompactionStore::new(compaction_repo.clone()));
+    let compactor = Arc::new(Compactor::new(
+        kg_store.clone(),
+        compaction_store.clone(),
+        None,
+    ));
+    let decay = Arc::new(DecayEngine::new(kg_store.clone(), DecayConfig::default()));
+    let pruner = Arc::new(Pruner::new(kg_store, compaction_store));
 
     // Interval long enough that the periodic timer won't fire during the test.
     let worker = SleepTimeWorker::start(

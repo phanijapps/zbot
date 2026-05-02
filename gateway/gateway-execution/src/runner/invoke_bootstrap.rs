@@ -19,12 +19,12 @@ use agent_runtime::{AgentExecutor, ChatMessage};
 use api_logs::LogService;
 use arc_swap::ArcSwapOption;
 use execution_state::StateService;
-use gateway_database::{ConversationRepository, DatabaseManager};
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::{
     AgentService, McpService, ModelRegistry, ProviderService, SharedVaultPaths, SkillService,
 };
 use tokio::sync::RwLock;
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use crate::config::ExecutionConfig;
 use crate::handle::ExecutionHandle;
@@ -52,9 +52,9 @@ pub(super) struct InvokeBootstrap {
     pub(super) log_service: Arc<LogService<DatabaseManager>>,
     pub(super) conversation_repo: Arc<ConversationRepository>,
     pub(super) paths: SharedVaultPaths,
-    pub(super) memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    /// Trait-routed memory store used to build the executor's fact_store.
+    pub(super) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub(super) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
-    pub(super) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     pub(super) model_registry: Arc<ArcSwapOption<ModelRegistry>>,
     pub(super) rate_limiters: Arc<
         std::sync::RwLock<
@@ -64,7 +64,7 @@ pub(super) struct InvokeBootstrap {
     pub(super) connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     pub(super) bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
     pub(super) bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
-    pub(super) graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    pub(super) kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     pub(super) event_bus: Arc<EventBus>,
@@ -418,14 +418,9 @@ impl InvokeBootstrap {
             .as_ref()
             .and_then(|ctx| serde_json::to_value(ctx).ok());
 
-        // Build fact store from memory repo + embedding client (if available)
-        let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
-            self.memory_repo.as_ref().map(|repo| {
-                Arc::new(gateway_database::GatewayMemoryFactStore::new(
-                    repo.clone(),
-                    self.embedding_client.clone(),
-                )) as Arc<dyn zero_stores::MemoryFactStore>
-            });
+        // Trait-routed fact store wired by AppState. None only in
+        // stripped-down test fixtures that don't drive save_fact / recall paths.
+        let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = self.memory_store.clone();
         // Clone for resource indexing (before fact_store is moved into builder)
         let fact_store_for_indexing = fact_store.clone();
 
@@ -476,8 +471,8 @@ impl InvokeBootstrap {
         if let Some(cp) = connector_provider {
             builder = builder.with_connector_provider(cp);
         }
-        if let Some(ref gs) = self.graph_storage {
-            builder = builder.with_graph_storage(gs.clone());
+        if let Some(ref ks) = self.kg_store {
+            builder = builder.with_kg_store(ks.clone());
         }
         if let Some(ref a) = self.ingestion_adapter {
             builder = builder.with_ingestion_adapter(a.clone());
@@ -510,21 +505,19 @@ impl InvokeBootstrap {
                 .push_str(&out.instructions_injection);
         }
 
-        // Flag if placeholder specs exist — delegate tool uses this to block ad-hoc delegations
+        // Flag if placeholder specs exist — delegate tool uses this to block
+        // ad-hoc delegations. Single source of truth lives in
+        // `agent_tools::tools::guards::specs_dir_has_placeholders` so this
+        // path agrees with the same check used by list_skills / load_skill /
+        // update_plan / introspection.
         if is_root {
             if let Some(wid) = ward_id {
                 let specs_dir = self.paths.vault_dir().join("wards").join(wid).join("specs");
-                if specs_dir.exists() {
-                    let has_placeholders = std::fs::read_dir(&specs_dir)
-                        .ok()
-                        .map(|entries| entries.filter_map(|e| e.ok()).any(|e| e.path().is_dir()))
-                        .unwrap_or(false);
-                    if has_placeholders {
-                        builder = builder.with_initial_state(
-                            "app:has_placeholder_specs",
-                            serde_json::Value::Bool(true),
-                        );
-                    }
+                if agent_tools::guards::specs_dir_has_placeholders(&specs_dir) {
+                    builder = builder.with_initial_state(
+                        "app:has_placeholder_specs",
+                        serde_json::Value::Bool(true),
+                    );
                 }
             }
         }
@@ -819,10 +812,10 @@ mod tests {
     use api_logs::LogService;
     use arc_swap::ArcSwapOption;
     use execution_state::StateService;
-    use gateway_database::{ConversationRepository, DatabaseManager};
     use gateway_events::EventBus;
     use gateway_services::VaultPaths;
     use tokio::sync::RwLock;
+    use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
     #[test]
     fn invoke_bootstrap_constructs_with_minimum_required_deps() {
@@ -846,15 +839,14 @@ mod tests {
             log_service: Arc::new(LogService::new(db.clone())),
             conversation_repo: Arc::new(ConversationRepository::new(db)),
             paths,
-            memory_repo: None,
+            memory_store: None,
             memory_recall: None,
-            embedding_client: None,
             model_registry: Arc::new(ArcSwapOption::empty()),
             rate_limiters: Arc::new(std::sync::RwLock::new(HashMap::new())),
             connector_registry: None,
             bridge_registry: None,
             bridge_outbox: None,
-            graph_storage: None,
+            kg_store: None,
             ingestion_adapter: None,
             goal_adapter: None,
             event_bus: Arc::new(EventBus::new()),

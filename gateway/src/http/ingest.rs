@@ -47,9 +47,12 @@ pub async fn ingest(
         StatusCode::SERVICE_UNAVAILABLE,
         "ingestion queue not initialized".into(),
     ))?;
-    let episode_repo = state.kg_episode_repo.clone().ok_or((
+    // Phase B: prefer the trait-routed kg_episode_store (wired in both
+    // backends). Falls back to the concrete kg_episode_repo only when
+    // only that is available (legacy / minimal AppStates).
+    let episode_store = state.kg_episode_store.clone().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
-        "episode repo missing".into(),
+        "kg episode store missing".into(),
     ))?;
     let backpressure = state.ingestion_backpressure.clone().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
@@ -58,6 +61,7 @@ pub async fn ingest(
 
     backpressure
         .check(&req.source_id)
+        .await
         .map_err(|e| (StatusCode::TOO_MANY_REQUESTS, e))?;
 
     let opts = ChunkOptions {
@@ -83,7 +87,7 @@ pub async fn ingest(
             h.update(chunk.text.as_bytes());
             format!("{:x}", h.finalize())
         };
-        let episode_id = episode_repo
+        let episode_id = episode_store
             .upsert_pending(
                 &req.source_type,
                 &source_ref,
@@ -91,9 +95,11 @@ pub async fn ingest(
                 req.session_id.as_deref(),
                 &agent_id,
             )
+            .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-        episode_repo
+        episode_store
             .set_payload(&episode_id, &chunk.text)
+            .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
         enqueued += 1;
     }
@@ -121,12 +127,14 @@ pub async fn progress(
     State(state): State<AppState>,
     Path(source_id): Path<String>,
 ) -> Result<Json<ProgressResponse>, (StatusCode, String)> {
-    let repo = state.kg_episode_repo.clone().ok_or((
+    // Phase B: trait-routed (works on both backends).
+    let store = state.kg_episode_store.clone().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
-        "episode repo missing".into(),
+        "kg episode store missing".into(),
     ))?;
-    let counts = repo
+    let counts = store
         .status_counts_for_source(&source_id)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(ProgressResponse {
         source_id,

@@ -9,8 +9,8 @@
 mod common;
 
 use common::{make_episode_repo, make_procedure_repo, make_wiki_repo, now_iso, setup};
-use gateway_database::{MemoryFact, Procedure, SessionEpisode, WikiArticle};
 use serde_json::Value;
+use zero_stores_domain::{MemoryFact, Procedure, SessionEpisode, WikiArticle};
 
 const TEST_WARD: &str = "literature-library";
 
@@ -46,12 +46,15 @@ async fn returns_four_content_types_with_age_buckets() {
         source_episode_id: None,
         source_ref: None,
     };
-    state
-        .memory_repo
-        .as_ref()
-        .expect("memory_repo")
-        .upsert_memory_fact(&fact)
-        .expect("upsert fact");
+    let fact_v = serde_json::to_value(&fact).expect("encode MemoryFact");
+    futures::executor::block_on(
+        state
+            .memory_store
+            .as_ref()
+            .expect("memory_store")
+            .upsert_typed_fact(fact_v, None),
+    )
+    .expect("upsert fact");
 
     // Wiki (including an __index__ article to drive summary)
     let wiki = make_wiki_repo(&state);

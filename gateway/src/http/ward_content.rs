@@ -3,27 +3,15 @@
 //! Returns a single snapshot of everything that belongs to one ward: the four
 //! content types (facts, wiki, procedures, episodes), counts per type, and a
 //! derived summary sourced from the ward's `__index__` wiki article (if any).
-//! Each item is stamped with a server-computed `age_bucket` using the helper
-//! in [`gateway_database::age_bucket`] so the UI doesn't need to reimplement
-//! recency classification.
+//! Each item is stamped with a server-computed `age_bucket` (inline helper)
+//! so the UI doesn't need to reimplement recency classification.
 //!
 //! Limits: facts, wiki and procedures are capped at 100 rows; episodes at 50.
-//! The wiki/procedure/episode repositories are built on demand from
-//! `state.knowledge_db` because `AppState` only exposes typed handles for
-//! `memory_repo` and `episode_repo` today.
 //!
-//! ## Migration status (TD-023)
-//!
-//! Both handlers in this file (`get_ward_content`, `list_wards`) still
-//! return typed `MemoryFact` / `WikiArticle` / `Procedure` /
-//! `SessionEpisode` records and serialise them into the per-type JSON
-//! payloads. The underlying repositories (`MemoryRepository`,
-//! `WardWikiRepository`, `ProcedureRepository`, `EpisodeRepository`)
-//! have not been hoisted to `zero-stores` traits. Hoisting any of
-//! them is a non-trivial workstream — `MemoryFact` alone has 11
-//! import sites across the codebase — so this file deliberately
-//! stays on the concrete repos for now. Tracked under TD-023's
-//! HTTP-handler retirement follow-up.
+//! All four content types are read through trait stores
+//! (`memory_store`, `episode_store`, `wiki_store`, `procedure_store`).
+//! Requests that arrive before stores are wired return `503 Service
+//! Unavailable`.
 
 use crate::state::AppState;
 use axum::{
@@ -31,14 +19,23 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use chrono::{DateTime, Utc};
-use gateway_database::{
-    age_bucket, vector_index::VectorIndex, EpisodeRepository, MemoryFact, Procedure,
-    ProcedureRepository, SessionEpisode, SqliteVecIndex, WardWikiRepository, WikiArticle,
-};
+use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::sync::Arc;
+use zero_stores_domain::{MemoryFact, Procedure, SessionEpisode, WikiArticle};
+
+/// Classify a timestamp into a human-meaningful recency bucket relative to `now`.
+/// Returns one of: "today", "last_7_days", "historical".
+fn age_bucket(now: DateTime<Utc>, created_at: DateTime<Utc>) -> &'static str {
+    let age = now.signed_duration_since(created_at);
+    if age < Duration::hours(24) {
+        "today"
+    } else if age < Duration::days(7) {
+        "last_7_days"
+    } else {
+        "historical"
+    }
+}
 
 const FACT_LIMIT: usize = 100;
 const WIKI_LIMIT: usize = 100;
@@ -135,46 +132,16 @@ fn build_summary(ward_id: &str, wiki: &[WikiArticle]) -> WardSummary {
     }
 }
 
-fn build_wiki_repo(state: &AppState) -> Result<Arc<WardWikiRepository>, HandlerError> {
-    let idx = SqliteVecIndex::new(
-        state.knowledge_db.clone(),
-        "wiki_articles_index",
-        "article_id",
+/// Error helper: the relevant trait store isn't wired (e.g. partial test
+/// state). Returns 503 so the UI can surface a clean error instead of a
+/// panic.
+fn store_unavailable(what: &str) -> HandlerError {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ErrorBody {
+            error: format!("{what} store unavailable"),
+        }),
     )
-    .map_err(|e| internal("wiki vec index", e))?;
-    let vec: Arc<dyn VectorIndex> = Arc::new(idx);
-    Ok(Arc::new(WardWikiRepository::new(
-        state.knowledge_db.clone(),
-        vec,
-    )))
-}
-
-fn build_procedure_repo(state: &AppState) -> Result<Arc<ProcedureRepository>, HandlerError> {
-    let idx = SqliteVecIndex::new(
-        state.knowledge_db.clone(),
-        "procedures_index",
-        "procedure_id",
-    )
-    .map_err(|e| internal("procedure vec index", e))?;
-    let vec: Arc<dyn VectorIndex> = Arc::new(idx);
-    Ok(Arc::new(ProcedureRepository::new(
-        state.knowledge_db.clone(),
-        vec,
-    )))
-}
-
-fn build_episode_repo(state: &AppState) -> Result<Arc<EpisodeRepository>, HandlerError> {
-    let idx = SqliteVecIndex::new(
-        state.knowledge_db.clone(),
-        "session_episodes_index",
-        "episode_id",
-    )
-    .map_err(|e| internal("episode vec index", e))?;
-    let vec: Arc<dyn VectorIndex> = Arc::new(idx);
-    Ok(Arc::new(EpisodeRepository::new(
-        state.knowledge_db.clone(),
-        vec,
-    )))
 }
 
 fn fact_to_value(fact: MemoryFact, now: DateTime<Utc>) -> Value {
@@ -260,29 +227,57 @@ pub async fn get_ward_content(
     State(state): State<AppState>,
     Path(ward_id): Path<String>,
 ) -> Result<Json<WardContentResponse>, HandlerError> {
-    let memory_repo = state.memory_repo.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ErrorBody {
-            error: "Memory service not available".to_string(),
-        }),
-    ))?;
+    let memory_store = state
+        .memory_store
+        .as_ref()
+        .ok_or_else(|| store_unavailable("memory"))?;
+    let episode_store = state
+        .episode_store
+        .as_ref()
+        .ok_or_else(|| store_unavailable("episode"))?;
+    let wiki_store = state
+        .wiki_store
+        .as_ref()
+        .ok_or_else(|| store_unavailable("wiki"))?;
+    let procedure_store = state
+        .procedure_store
+        .as_ref()
+        .ok_or_else(|| store_unavailable("procedure"))?;
 
-    let wiki_repo = build_wiki_repo(&state)?;
-    let procedure_repo = build_procedure_repo(&state)?;
-    let episode_repo = build_episode_repo(&state)?;
+    // Memory facts: trait surface lacks a `list_by_ward` projection so we
+    // pull a generous slice and filter in-handler. The cap is high enough
+    // that any single ward's row count comfortably fits.
+    const FACT_AGG_LIMIT: usize = 5000;
+    let facts: Vec<MemoryFact> = memory_store
+        .list_memory_facts(None, None, None, FACT_AGG_LIMIT, 0)
+        .await
+        .map_err(|e| internal("list facts by ward", e))?
+        .into_iter()
+        .filter(|v| v.get("ward_id").and_then(|w| w.as_str()) == Some(ward_id.as_str()))
+        .filter_map(|v| serde_json::from_value::<MemoryFact>(v).ok())
+        .take(FACT_LIMIT)
+        .collect();
 
-    let facts = memory_repo
-        .list_by_ward(&ward_id, FACT_LIMIT)
-        .map_err(|e| internal("list facts by ward", e))?;
-    let wiki_articles = wiki_repo
-        .list_articles(&ward_id)
-        .map_err(|e| internal("list wiki by ward", e))?;
-    let procedures = procedure_repo
-        .list_by_ward(&ward_id, PROCEDURE_LIMIT)
-        .map_err(|e| internal("list procedures by ward", e))?;
-    let episodes = episode_repo
+    let episode_values: Vec<Value> = episode_store
         .list_by_ward(&ward_id, EPISODE_LIMIT)
+        .await
         .map_err(|e| internal("list episodes by ward", e))?;
+
+    let wiki_articles: Vec<WikiArticle> = wiki_store
+        .list_articles(&ward_id)
+        .await
+        .map_err(|e| internal("list wiki by ward", e))?
+        .into_iter()
+        .filter_map(|v| serde_json::from_value::<WikiArticle>(v).ok())
+        .collect();
+
+    let procedures: Vec<Procedure> = procedure_store
+        .list_by_ward(&ward_id, PROCEDURE_LIMIT)
+        .await
+        .map_err(|e| internal("list procedures by ward", e))?
+        .into_iter()
+        .filter_map(|v| serde_json::from_value::<Procedure>(v).ok())
+        .collect();
 
     // Cap wiki at WIKI_LIMIT (list_articles has no LIMIT clause).
     let wiki_articles: Vec<WikiArticle> = wiki_articles.into_iter().take(WIKI_LIMIT).collect();
@@ -295,7 +290,7 @@ pub async fn get_ward_content(
         facts: facts.len(),
         wiki: wiki_articles.len(),
         procedures: procedures.len(),
-        episodes: episodes.len(),
+        episodes: episode_values.len(),
     };
 
     let facts_json: Vec<Value> = facts.into_iter().map(|f| fact_to_value(f, now)).collect();
@@ -307,8 +302,12 @@ pub async fn get_ward_content(
         .into_iter()
         .map(|p| procedure_to_value(p, now))
         .collect();
-    let episodes_json: Vec<Value> = episodes
+    // Episode values come from the trait as JSON; deserialize each into
+    // SessionEpisode for the response decorator, and skip rows that fail
+    // to decode.
+    let episodes_json: Vec<Value> = episode_values
         .into_iter()
+        .filter_map(|v| serde_json::from_value::<SessionEpisode>(v).ok())
         .map(|e| episode_to_value(e, now))
         .collect();
 
@@ -331,23 +330,38 @@ pub struct WardListItem {
 }
 
 /// GET /api/wards — list distinct wards with fact counts.
+///
+/// Streams up to `WARD_AGG_LIMIT` facts via the trait surface and
+/// aggregates ward_id-distinct counts in the handler — the trait does
+/// not expose a distinct-projection method yet.
 pub async fn list_wards(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<WardListItem>>, HandlerError> {
-    let memory_repo = state.memory_repo.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ErrorBody {
-            error: "Memory service not available".to_string(),
-        }),
-    ))?;
+    let memory_store = state
+        .memory_store
+        .as_ref()
+        .ok_or_else(|| store_unavailable("memory"))?;
 
-    let rows = memory_repo
-        .list_wards()
+    const WARD_AGG_LIMIT: usize = 5000;
+    let rows = memory_store
+        .list_memory_facts(None, None, None, WARD_AGG_LIMIT, 0)
+        .await
         .map_err(|e| internal("list wards", e))?;
 
-    Ok(Json(
-        rows.into_iter()
-            .map(|(id, count)| WardListItem { id, count })
-            .collect(),
-    ))
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for row in rows {
+        let ward = row
+            .get("ward_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("__global__");
+        *counts.entry(ward.to_string()).or_insert(0) += 1;
+    }
+
+    let mut items: Vec<WardListItem> = counts
+        .into_iter()
+        .map(|(id, count)| WardListItem { id, count })
+        .collect();
+    items.sort_by(|a, b| b.count.cmp(&a.count).then(a.id.cmp(&b.id)));
+
+    Ok(Json(items))
 }

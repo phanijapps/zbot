@@ -6,17 +6,20 @@
 //! any LLM/DB/parse error skips the candidate — the whole cycle never
 //! fails hard.
 //!
-//! Not yet wired into `SleepTimeWorker` — that happens in T5.
+//! Phase D4: trait-routed. The kg / episode / memory reads + writes go
+//! through `Arc<dyn ...>` so the synthesis cycle runs against either
+//! the configured backend. No SQL bodies live here anymore — each backend
+//! implements the underlying operations natively.
 
 use std::sync::Arc;
 
 use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::{ChatMessage, LlmClient, LlmConfig};
 use async_trait::async_trait;
-use gateway_database::{CompactionRepository, KnowledgeDatabase, MemoryFact, MemoryRepository};
 use gateway_services::ProviderService;
-use rusqlite::params;
 use serde::Deserialize;
+use zero_stores::{KnowledgeGraphStore, StrategyCandidate};
+use zero_stores_traits::{CompactionStore, EpisodeStore, MemoryFactStore, StrategyFactInsert};
 
 use crate::ingest::json_shape::parse_llm_json;
 
@@ -28,12 +31,8 @@ const MAX_LLM_CALLS_PER_CYCLE: usize = 10;
 const MIN_CONFIDENCE: f64 = 0.7;
 /// Cosine threshold for dedup against existing strategy facts.
 const DEDUP_COSINE_THRESHOLD: f64 = 0.88;
-/// Default `scope` for memory_facts written by the Synthesizer.
-const FACT_SCOPE: &str = "agent";
-/// Default `ward_id` — global across wards.
-const FACT_WARD: &str = "__global__";
-/// Fact category used by cross-session strategy syntheses.
-const STRATEGY_CATEGORY: &str = "strategy";
+/// Time window the synthesizer scans for cross-session activity.
+const LOOKBACK_DAYS: i64 = 30;
 
 /// Stats returned from one synthesis cycle.
 #[derive(Debug, Default, Clone)]
@@ -72,20 +71,15 @@ pub trait SynthesisLlm: Send + Sync {
     async fn synthesize(&self, input: &SynthesisInput) -> Result<SynthesisResponse, String>;
 }
 
-/// Internal representation of a single candidate row.
-struct Candidate {
-    entity_id: String,
-    agent_id: String,
-    name: String,
-    entity_type: String,
-    n_sessions: u64,
-}
-
 /// Cross-session strategy synthesizer.
+///
+/// Phase D4: trait-routed. All KG / episode / memory reads + writes
+/// flow through trait objects; each backend implements them natively.
 pub struct Synthesizer {
-    db: Arc<KnowledgeDatabase>,
-    memory_repo: Arc<MemoryRepository>,
-    compaction_repo: Arc<CompactionRepository>,
+    kg_store: Arc<dyn KnowledgeGraphStore>,
+    episode_store: Arc<dyn EpisodeStore>,
+    memory_store: Arc<dyn MemoryFactStore>,
+    compaction_store: Arc<dyn CompactionStore>,
     llm: Arc<dyn SynthesisLlm>,
     /// Optional embedding client used for cosine dedup. When absent,
     /// dedup falls back to the unique `(agent_id, scope, ward_id, key)`
@@ -95,16 +89,18 @@ pub struct Synthesizer {
 
 impl Synthesizer {
     pub fn new(
-        db: Arc<KnowledgeDatabase>,
-        memory_repo: Arc<MemoryRepository>,
-        compaction_repo: Arc<CompactionRepository>,
+        kg_store: Arc<dyn KnowledgeGraphStore>,
+        episode_store: Arc<dyn EpisodeStore>,
+        memory_store: Arc<dyn MemoryFactStore>,
+        compaction_store: Arc<dyn CompactionStore>,
         llm: Arc<dyn SynthesisLlm>,
         embedder: Option<Arc<dyn EmbeddingClient>>,
     ) -> Self {
         Self {
-            db,
-            memory_repo,
-            compaction_repo,
+            kg_store,
+            episode_store,
+            memory_store,
+            compaction_store,
             llm,
             embedder,
         }
@@ -114,7 +110,11 @@ impl Synthesizer {
     /// error is logged and skipped — the cycle never fails hard.
     pub async fn run_cycle(&self, run_id: &str) -> Result<SynthesisStats, String> {
         let mut stats = SynthesisStats::default();
-        let candidates = self.load_candidates()?;
+        let candidates = self
+            .kg_store
+            .list_strategy_candidates(2, LOOKBACK_DAYS, CANDIDATE_LIMIT)
+            .await
+            .map_err(|e| format!("list_strategy_candidates: {e}"))?;
         for cand in candidates.into_iter().take(MAX_LLM_CALLS_PER_CYCLE) {
             stats.candidates_considered += 1;
             self.process_candidate(run_id, &cand, &mut stats).await;
@@ -122,40 +122,13 @@ impl Synthesizer {
         Ok(stats)
     }
 
-    fn load_candidates(&self) -> Result<Vec<Candidate>, String> {
-        let limit = CANDIDATE_LIMIT as i64;
-        self.db.with_connection(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT e.id, e.agent_id, e.name, e.entity_type, COUNT(DISTINCT ep.session_id) AS n_sessions
-                 FROM kg_entities e
-                 JOIN kg_relationships r ON r.source_entity_id = e.id OR r.target_entity_id = e.id
-                 JOIN kg_episodes ep    ON instr(COALESCE(r.source_episode_ids, ''), ep.id) > 0
-                 WHERE e.epistemic_class != 'archival'
-                   AND e.compressed_into IS NULL
-                   AND ep.created_at > datetime('now', '-30 days')
-                   AND ep.session_id IS NOT NULL
-                 GROUP BY e.id
-                 HAVING n_sessions >= 2
-                 ORDER BY n_sessions DESC, e.mention_count DESC
-                 LIMIT ?1",
-            )?;
-            let rows = stmt
-                .query_map(params![limit], |row| {
-                    Ok(Candidate {
-                        entity_id: row.get(0)?,
-                        agent_id: row.get(1)?,
-                        name: row.get(2)?,
-                        entity_type: row.get(3)?,
-                        n_sessions: row.get::<_, i64>(4)? as u64,
-                    })
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(rows)
-        })
-    }
-
-    async fn process_candidate(&self, run_id: &str, cand: &Candidate, stats: &mut SynthesisStats) {
-        let input = match self.build_input(cand) {
+    async fn process_candidate(
+        &self,
+        run_id: &str,
+        cand: &StrategyCandidate,
+        stats: &mut SynthesisStats,
+    ) {
+        let input = match self.build_input(cand).await {
             Ok(i) => i,
             Err(e) => {
                 tracing::warn!(entity = %cand.entity_id, error = %e, "synth: build_input failed");
@@ -163,7 +136,11 @@ impl Synthesizer {
                 return;
             }
         };
-        let episode_ids = match self.episode_ids_for(cand) {
+        let episode_ids = match self
+            .kg_store
+            .episode_ids_for_entity(&cand.entity_id, LOOKBACK_DAYS)
+            .await
+        {
             Ok(ids) => ids,
             Err(e) => {
                 tracing::warn!(entity = %cand.entity_id, error = %e, "synth: episode_ids failed");
@@ -194,7 +171,7 @@ impl Synthesizer {
     async fn commit_synthesis(
         &self,
         run_id: &str,
-        cand: &Candidate,
+        cand: &StrategyCandidate,
         resp: &SynthesisResponse,
         episode_ids: &[String],
         stats: &mut SynthesisStats,
@@ -202,10 +179,30 @@ impl Synthesizer {
         // Dedup step (optional — requires embedder)
         let embedding = self.embed_content(&resp.key_fact).await;
         if let Some(ref emb) = embedding {
-            match self.try_bump_existing(&cand.agent_id, emb, episode_ids) {
-                Ok(Some(fact_id)) => {
+            match self
+                .memory_store
+                .find_strategy_fact_by_similarity(
+                    &cand.agent_id,
+                    emb,
+                    DEDUP_COSINE_THRESHOLD as f32,
+                    50,
+                )
+                .await
+            {
+                Ok(Some(existing)) => {
+                    let merged =
+                        merge_episode_ids(existing.source_episode_id.as_deref(), episode_ids);
+                    let now = chrono::Utc::now().to_rfc3339();
+                    if let Err(e) = self
+                        .memory_store
+                        .bump_strategy_fact_episodes(&existing.fact_id, &merged, &now)
+                        .await
+                    {
+                        tracing::warn!(fact_id = %existing.fact_id, error = %e, "synth: bump failed");
+                    }
                     stats.facts_bumped += 1;
-                    self.audit(run_id, &fact_id, resp, "bumped existing");
+                    self.audit(run_id, &existing.fact_id, resp, "bumped existing")
+                        .await;
                     return;
                 }
                 Ok(None) => {}
@@ -215,7 +212,7 @@ impl Synthesizer {
             }
         }
 
-        let fact_id = match self.insert_new(cand, resp, episode_ids, embedding) {
+        let fact_id = match self.insert_new(cand, resp, episode_ids, embedding).await {
             Ok(id) => id,
             Err(e) => {
                 tracing::warn!(entity = %cand.entity_id, error = %e, "synth: insert failed");
@@ -224,109 +221,49 @@ impl Synthesizer {
             }
         };
         stats.facts_inserted += 1;
-        self.audit(run_id, &fact_id, resp, "new synthesis");
+        self.audit(run_id, &fact_id, resp, "new synthesis").await;
     }
 
-    fn audit(&self, run_id: &str, fact_id: &str, resp: &SynthesisResponse, note: &str) {
+    async fn audit(&self, run_id: &str, fact_id: &str, resp: &SynthesisResponse, note: &str) {
         let reason = format!(
             "{note}: strategy={} confidence={:.2}",
             resp.strategy, resp.confidence
         );
         if let Err(e) = self
-            .compaction_repo
+            .compaction_store
             .record_synthesis(run_id, fact_id, &reason)
+            .await
         {
             tracing::warn!(fact_id = %fact_id, error = %e, "synth: record_synthesis failed");
         }
     }
 
-    fn try_bump_existing(
+    async fn insert_new(
         &self,
-        agent_id: &str,
-        key_fact_emb: &[f32],
-        episode_ids: &[String],
-    ) -> Result<Option<String>, String> {
-        // Pull candidate strategy facts and compare embeddings pulled from
-        // the vec0 index. Limit of 50 is plenty for the strategy category.
-        let candidates = self
-            .memory_repo
-            .get_facts_by_category(agent_id, STRATEGY_CATEGORY, 50)
-            .unwrap_or_default();
-        for fact in candidates {
-            let stored = match self.memory_repo.get_fact_embedding(&fact.id)? {
-                Some(v) => v,
-                None => continue,
-            };
-            let sim = cosine_similarity(key_fact_emb, &stored);
-            if sim >= DEDUP_COSINE_THRESHOLD {
-                self.bump_fact(&fact, episode_ids)?;
-                return Ok(Some(fact.id));
-            }
-        }
-        Ok(None)
-    }
-
-    fn bump_fact(&self, fact: &MemoryFact, episode_ids: &[String]) -> Result<(), String> {
-        let merged = merge_episode_ids(fact.source_episode_id.as_deref(), episode_ids);
-        let now = chrono::Utc::now().to_rfc3339();
-        self.db.with_connection(|conn| {
-            conn.execute(
-                "UPDATE memory_facts
-                 SET mention_count = mention_count + 1,
-                     updated_at = ?1,
-                     source_episode_id = ?2
-                 WHERE id = ?3",
-                params![now, merged, fact.id],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn insert_new(
-        &self,
-        cand: &Candidate,
+        cand: &StrategyCandidate,
         resp: &SynthesisResponse,
         episode_ids: &[String],
         embedding: Option<Vec<f32>>,
     ) -> Result<String, String> {
-        let now = chrono::Utc::now().to_rfc3339();
         let hash8 = short_hash(&resp.key_fact);
         let slug = slugify(&cand.name);
         let key = format!("strategy.synthesis.{slug}.{hash8}");
-        let id = format!("fact-{}", uuid::Uuid::new_v4());
         let source_episode_id = Some(encode_episode_ids(episode_ids));
 
-        let fact = MemoryFact {
-            id: id.clone(),
-            session_id: None,
-            agent_id: cand.agent_id.clone(),
-            scope: FACT_SCOPE.to_string(),
-            category: STRATEGY_CATEGORY.to_string(),
-            key,
-            content: resp.key_fact.clone(),
-            confidence: resp.confidence,
-            mention_count: 1,
-            source_summary: Some(format!(
-                "cross-session synthesis over {} sessions (entity: {})",
-                cand.n_sessions, cand.name
-            )),
-            embedding,
-            ward_id: FACT_WARD.to_string(),
-            contradicted_by: None,
-            created_at: now.clone(),
-            updated_at: now,
-            expires_at: None,
-            valid_from: None,
-            valid_until: None,
-            superseded_by: None,
-            pinned: false,
-            epistemic_class: Some("convention".to_string()),
-            source_episode_id,
-            source_ref: None,
-        };
-
-        self.memory_repo.upsert_memory_fact(&fact)?;
-        Ok(id)
+        self.memory_store
+            .insert_strategy_fact(StrategyFactInsert {
+                agent_id: cand.agent_id.clone(),
+                key,
+                content: resp.key_fact.clone(),
+                confidence: resp.confidence,
+                source_summary: Some(format!(
+                    "cross-session synthesis over {} sessions (entity: {})",
+                    cand.n_sessions, cand.name
+                )),
+                embedding,
+                source_episode_id,
+            })
+            .await
     }
 
     async fn embed_content(&self, text: &str) -> Option<Vec<f32>> {
@@ -341,129 +278,22 @@ impl Synthesizer {
         }
     }
 
-    fn build_input(&self, cand: &Candidate) -> Result<SynthesisInput, String> {
-        let (rel_summaries, session_ids) = self.fetch_relationships(cand)?;
-        let task_summaries = self.fetch_task_summaries(&session_ids)?;
+    async fn build_input(&self, cand: &StrategyCandidate) -> Result<SynthesisInput, String> {
+        let ctx = self
+            .kg_store
+            .relationship_context_for_entity(&cand.entity_id, LOOKBACK_DAYS, 50)
+            .await
+            .map_err(|e| format!("relationship_context_for_entity: {e}"))?;
+        let task_summaries = self
+            .episode_store
+            .task_summaries_for_sessions(&ctx.session_ids)
+            .await?;
         Ok(SynthesisInput {
             entity_name: cand.name.clone(),
             entity_type: cand.entity_type.clone(),
-            session_count: cand.n_sessions,
+            session_count: cand.n_sessions as u64,
             task_summaries,
-            relationship_summaries: rel_summaries,
-        })
-    }
-
-    /// Returns (relationship_summaries, distinct_session_ids) for a candidate.
-    #[allow(clippy::type_complexity)]
-    fn fetch_relationships(&self, cand: &Candidate) -> Result<(Vec<String>, Vec<String>), String> {
-        let entity_id = cand.entity_id.clone();
-        self.db.with_connection(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT r.relationship_type, r.source_entity_id, r.target_entity_id,
-                        r.source_episode_ids
-                 FROM kg_relationships r
-                 WHERE r.source_entity_id = ?1 OR r.target_entity_id = ?1
-                 LIMIT 50",
-            )?;
-            let rows: Vec<(String, String, String, Option<String>)> = stmt
-                .query_map(params![entity_id], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                    ))
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-
-            let summaries: Vec<String> = rows
-                .iter()
-                .map(|(ty, src, tgt, _)| format!("{src} --[{ty}]--> {tgt}"))
-                .collect();
-
-            let episode_id_blob: String = rows
-                .iter()
-                .filter_map(|(_, _, _, eids)| eids.clone())
-                .collect::<Vec<_>>()
-                .join(",");
-
-            let mut session_ids: Vec<String> = Vec::new();
-            if !episode_id_blob.is_empty() {
-                let mut q = conn.prepare(
-                    "SELECT DISTINCT session_id FROM kg_episodes
-                     WHERE session_id IS NOT NULL
-                       AND instr(?1, id) > 0
-                       AND created_at > datetime('now', '-30 days')",
-                )?;
-                session_ids = q
-                    .query_map(params![episode_id_blob], |row| row.get::<_, String>(0))?
-                    .collect::<Result<Vec<_>, _>>()?;
-            }
-            Ok((summaries, session_ids))
-        })
-    }
-
-    fn fetch_task_summaries(&self, session_ids: &[String]) -> Result<Vec<String>, String> {
-        if session_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let placeholders = vec!["?"; session_ids.len()].join(",");
-        let sql = format!(
-            "SELECT task_summary FROM session_episodes
-             WHERE session_id IN ({placeholders}) AND task_summary IS NOT NULL"
-        );
-        self.db.with_connection(|conn| {
-            let mut stmt = conn.prepare(&sql)?;
-            let params_vec: Vec<&dyn rusqlite::types::ToSql> = session_ids
-                .iter()
-                .map(|s| s as &dyn rusqlite::types::ToSql)
-                .collect();
-            let rows = stmt
-                .query_map(params_vec.as_slice(), |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(rows)
-        })
-    }
-
-    /// Contributing episode ids for the candidate (distinct).
-    fn episode_ids_for(&self, cand: &Candidate) -> Result<Vec<String>, String> {
-        let entity_id = cand.entity_id.clone();
-        self.db.with_connection(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT r.source_episode_ids FROM kg_relationships r
-                 WHERE (r.source_entity_id = ?1 OR r.target_entity_id = ?1)
-                   AND r.source_episode_ids IS NOT NULL",
-            )?;
-            let blobs = stmt
-                .query_map(params![entity_id], |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?;
-            let mut ids: Vec<String> = blobs
-                .iter()
-                .flat_map(|b| b.split(',').map(|s| s.trim().to_string()))
-                .filter(|s| !s.is_empty())
-                .collect();
-            ids.sort();
-            ids.dedup();
-            // Filter to those that exist AND are within 30 days AND have a session.
-            if ids.is_empty() {
-                return Ok(ids);
-            }
-            let placeholders = vec!["?"; ids.len()].join(",");
-            let sql = format!(
-                "SELECT id FROM kg_episodes
-                 WHERE id IN ({placeholders})
-                   AND session_id IS NOT NULL
-                   AND created_at > datetime('now', '-30 days')"
-            );
-            let mut q = conn.prepare(&sql)?;
-            let params_vec: Vec<&dyn rusqlite::types::ToSql> = ids
-                .iter()
-                .map(|s| s as &dyn rusqlite::types::ToSql)
-                .collect();
-            let filtered: Vec<String> = q
-                .query_map(params_vec.as_slice(), |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(filtered)
+            relationship_summaries: ctx.summaries,
         })
     }
 }
@@ -596,26 +426,6 @@ fn slugify(s: &str) -> String {
     }
 }
 
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let mut dot = 0f64;
-    let mut na = 0f64;
-    let mut nb = 0f64;
-    for (x, y) in a.iter().zip(b.iter()) {
-        let x = *x as f64;
-        let y = *y as f64;
-        dot += x * y;
-        na += x * x;
-        nb += y * y;
-    }
-    if na == 0.0 || nb == 0.0 {
-        return 0.0;
-    }
-    dot / (na.sqrt() * nb.sqrt())
-}
-
 // ============================================================================
 // Tests
 // ============================================================================
@@ -623,9 +433,16 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gateway_database::vector_index::{SqliteVecIndex, VectorIndex};
     use gateway_services::VaultPaths;
+    use rusqlite::params;
     use std::sync::Mutex;
+    use zero_stores_sqlite::EpisodeRepository;
+    use zero_stores_sqlite::kg::storage::GraphStorage;
+    use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+    use zero_stores_sqlite::{
+        CompactionRepository, GatewayCompactionStore, GatewayEpisodeStore, GatewayMemoryFactStore,
+        KnowledgeDatabase, MemoryRepository, SqliteKgStore,
+    };
 
     struct MockLlm {
         response: Mutex<SynthesisResponse>,
@@ -654,6 +471,10 @@ mod tests {
         db: Arc<KnowledgeDatabase>,
         memory_repo: Arc<MemoryRepository>,
         compaction_repo: Arc<CompactionRepository>,
+        kg_store: Arc<dyn KnowledgeGraphStore>,
+        episode_store: Arc<dyn EpisodeStore>,
+        memory_store: Arc<dyn MemoryFactStore>,
+        compaction_store: Arc<dyn CompactionStore>,
     }
 
     fn setup() -> Harness {
@@ -667,11 +488,27 @@ mod tests {
         );
         let memory_repo = Arc::new(MemoryRepository::new(db.clone(), vec_index));
         let compaction_repo = Arc::new(CompactionRepository::new(db.clone()));
+        let graph = Arc::new(GraphStorage::new(db.clone()).expect("graph"));
+        let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(graph));
+        let episode_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(db.clone(), "session_episodes_index", "episode_id")
+                .expect("vec index init"),
+        );
+        let episode_repo = Arc::new(EpisodeRepository::new(db.clone(), episode_vec));
+        let episode_store: Arc<dyn EpisodeStore> = Arc::new(GatewayEpisodeStore::new(episode_repo));
+        let memory_store: Arc<dyn MemoryFactStore> =
+            Arc::new(GatewayMemoryFactStore::new(memory_repo.clone(), None));
+        let compaction_store: Arc<dyn CompactionStore> =
+            Arc::new(GatewayCompactionStore::new(compaction_repo.clone()));
         Harness {
             _tmp: tmp,
             db,
             memory_repo,
             compaction_repo,
+            kg_store,
+            episode_store,
+            memory_store,
+            compaction_store,
         }
     }
 
@@ -760,9 +597,10 @@ mod tests {
         }));
 
         let synth = Synthesizer::new(
-            h.db.clone(),
-            h.memory_repo.clone(),
-            h.compaction_repo.clone(),
+            h.kg_store.clone(),
+            h.episode_store.clone(),
+            h.memory_store.clone(),
+            h.compaction_store.clone(),
             mock.clone(),
             None, // no embedder -> key-based dedup path
         );
@@ -820,9 +658,10 @@ mod tests {
             decision: "skip".into(),
         }));
         let synth = Synthesizer::new(
-            h.db.clone(),
-            h.memory_repo.clone(),
-            h.compaction_repo.clone(),
+            h.kg_store.clone(),
+            h.episode_store.clone(),
+            h.memory_store.clone(),
+            h.compaction_store.clone(),
             mock,
             None,
         );
@@ -844,9 +683,10 @@ mod tests {
             decision: "synthesize".into(),
         }));
         let synth = Synthesizer::new(
-            h.db.clone(),
-            h.memory_repo.clone(),
-            h.compaction_repo.clone(),
+            h.kg_store.clone(),
+            h.episode_store.clone(),
+            h.memory_store.clone(),
+            h.compaction_store.clone(),
             mock,
             None,
         );
@@ -865,14 +705,5 @@ mod tests {
     fn slugify_replaces_nonalnum() {
         assert_eq!(slugify("Postgres Timeout!"), "postgres-timeout");
         assert_eq!(slugify("   "), "entity");
-    }
-
-    #[test]
-    fn cosine_similarity_basics() {
-        let a = vec![1.0f32, 0.0];
-        let b = vec![1.0f32, 0.0];
-        assert!((cosine_similarity(&a, &b) - 1.0).abs() < 1e-9);
-        let c = vec![0.0f32, 1.0];
-        assert!(cosine_similarity(&a, &c).abs() < 1e-9);
     }
 }

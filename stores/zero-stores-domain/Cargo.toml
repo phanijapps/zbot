@@ -1,0 +1,13 @@
+[package]
+name = "zero-stores-domain"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Pure-data domain types for the AgentZero persistence layer"
+
+[dependencies]
+serde = { workspace = true }
+
+[lints]
+workspace = true

@@ -5,9 +5,8 @@
 use crate::ingest::json_shape::parse_llm_json;
 use agent_runtime::llm::{ChatMessage, LlmClient};
 use async_trait::async_trait;
-use gateway_database::KgEpisode;
 use gateway_services::ProviderService;
-use knowledge_graph::{Entity, EntityType, GraphStorage};
+use knowledge_graph::{Entity, EntityType};
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -60,13 +59,18 @@ pub struct RelationshipTriple {
 
 /// Processes one episode — runs extraction + writes to graph.
 /// Errors propagate to the worker which marks the episode failed.
+///
+/// Phase B2: takes the trait-routed `kg_store` instead of the concrete
+/// `Arc<GraphStorage>` so writes work on both SQLite (and any future alternate backend).
+/// Episode metadata is passed by id only (the extractor needs only the
+/// id for provenance — agent_id lives on the extractor itself).
 #[async_trait]
 pub trait Extractor: Send + Sync {
     async fn process(
         &self,
-        episode: &KgEpisode,
+        episode_id: &str,
         chunk_text: &str,
-        graph: &Arc<GraphStorage>,
+        kg_store: &Arc<dyn zero_stores::KnowledgeGraphStore>,
     ) -> Result<(), String>;
 }
 
@@ -93,11 +97,11 @@ impl Default for NoopExtractor {
 impl Extractor for NoopExtractor {
     async fn process(
         &self,
-        episode: &KgEpisode,
+        episode_id: &str,
         _chunk_text: &str,
-        _graph: &Arc<GraphStorage>,
+        _kg_store: &Arc<dyn zero_stores::KnowledgeGraphStore>,
     ) -> Result<(), String> {
-        self.seen.lock().await.push(episode.id.clone());
+        self.seen.lock().await.push(episode_id.to_string());
         Ok(())
     }
 }
@@ -223,9 +227,9 @@ impl LlmExtractor {
 impl Extractor for LlmExtractor {
     async fn process(
         &self,
-        episode: &KgEpisode,
+        episode_id: &str,
         chunk_text: &str,
-        graph: &Arc<GraphStorage>,
+        kg_store: &Arc<dyn zero_stores::KnowledgeGraphStore>,
     ) -> Result<(), String> {
         if chunk_text.trim().is_empty() {
             return Ok(());
@@ -283,7 +287,7 @@ impl Extractor for LlmExtractor {
             );
             rel.properties.insert(
                 "source_episode_id".to_string(),
-                serde_json::Value::String(episode.id.clone()),
+                serde_json::Value::String(episode_id.to_string()),
             );
             candidate_rels.push(rel);
         }
@@ -292,16 +296,21 @@ impl Extractor for LlmExtractor {
         for e in &mut entities {
             e.properties.insert(
                 "_source_episode_id".to_string(),
-                serde_json::Value::String(episode.id.clone()),
+                serde_json::Value::String(episode_id.to_string()),
             );
         }
 
-        let extracted = knowledge_graph::ExtractedKnowledge {
+        // Phase B2: write through the trait surface so SurrealDB
+        // is honored. The trait wants `zero_stores::ExtractedKnowledge`;
+        // the local `knowledge_graph::ExtractedKnowledge` converts via
+        // the `From` impl in zero-stores.
+        let extracted = zero_stores::ExtractedKnowledge {
             entities,
             relationships: candidate_rels,
         };
-        graph
+        kg_store
             .store_knowledge(&self.agent_id, extracted)
+            .await
             .map_err(|e| format!("store_knowledge: {e}"))?;
         Ok(())
     }

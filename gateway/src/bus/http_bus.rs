@@ -4,8 +4,8 @@
 //! interface for HTTP-based session management.
 
 use super::{BusError, GatewayBus, SessionHandle, SessionRequest};
-use crate::database::DatabaseManager;
 use crate::execution::{ExecutionConfig, ExecutionRunner};
+use zero_stores_sqlite::DatabaseManager;
 use async_trait::async_trait;
 use execution_state::{SessionStatus, StateService};
 use std::path::PathBuf;

@@ -8,13 +8,13 @@ use super::registry::DelegationRegistry;
 use agent_runtime::AgentExecutor;
 use api_logs::LogService;
 use execution_state::StateService;
-use gateway_database::{ConversationRepository, DatabaseManager};
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths, SkillService};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock};
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use agent_runtime::ChatMessage;
 
@@ -59,15 +59,15 @@ pub async fn spawn_delegated_agent(
     state_service: Arc<StateService<DatabaseManager>>,
     workspace_cache: WorkspaceCache,
     delegation_permit: Option<OwnedSemaphorePermit>,
-    memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
-    embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+    memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+    distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     memory_recall: Option<Arc<MemoryRecall>>,
     rate_limiters: Arc<
         std::sync::RwLock<
             std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
         >,
     >,
-    graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 ) -> Result<String, String> {
@@ -287,20 +287,15 @@ pub async fn spawn_delegated_agent(
         builder = builder.with_rate_limiter(limiter);
     }
 
-    // Build fact store for subagent (so save_fact uses DB, not file fallback)
-    let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
-        memory_repo.as_ref().map(|repo| {
-            Arc::new(gateway_database::GatewayMemoryFactStore::new(
-                repo.clone(),
-                embedding_client.clone(),
-            )) as Arc<dyn zero_stores::MemoryFactStore>
-        });
-    if let Some(fs) = fact_store {
+    // Build fact store for subagent (so save_fact uses DB, not file
+    // fallback). Trait-routed memory_store is wired in both SQLite and
+    // SurrealDB modes; this is what makes `memory.get_fact` /
+    // `memory.save_fact` work for subagents through the configured backend.
+    if let Some(fs) = memory_store.clone() {
         builder = builder.with_fact_store(fs);
     }
-    let graph_storage_for_recall = graph_storage.clone();
-    if let Some(gs) = graph_storage {
-        builder = builder.with_graph_storage(gs);
+    if let Some(ks) = kg_store.clone() {
+        builder = builder.with_kg_store(ks);
     }
     if let Some(a) = ingestion_adapter {
         builder = builder.with_ingestion_adapter(a);
@@ -334,7 +329,6 @@ pub async fn spawn_delegated_agent(
 
     // Delegation recall: prime the subagent with unified scored recall over
     // facts, wiki, procedures, graph nodes, episodes, and goals.
-    let _ = graph_storage_for_recall; // retained for future wiring
     let initial_history = if let Some(recall) = &memory_recall {
         let ward_id = session_ward_id.as_deref();
         match recall
@@ -386,20 +380,14 @@ pub async fn spawn_delegated_agent(
         handles_guard.insert(child_conversation_id.clone(), handle.clone());
     }
 
-    // Build a fact_store handle for the post-execution state_handoff hook.
-    // Kept separate from the executor's fact_store (already moved into the
-    // builder) — this one only drives session_ctx writes, not the executor.
-    let fact_store_for_ctx: Option<Arc<dyn zero_stores::MemoryFactStore>> =
-        memory_repo.as_ref().map(|repo| {
-            Arc::new(gateway_database::GatewayMemoryFactStore::new(
-                repo.clone(),
-                embedding_client.clone(),
-            )) as Arc<dyn zero_stores::MemoryFactStore>
-        });
+    // The post-execution state_handoff hook reuses the same trait store
+    // the executor was wired with. Cloning is cheap (Arc) and lets the
+    // handoff fire after the executor has consumed its own copy.
+    let fact_store_for_ctx: Option<Arc<dyn zero_stores::MemoryFactStore>> = memory_store.clone();
 
-    // Phase 7: pass a MemoryRepository handle through so spawn_execution_task
+    // Phase 7: pass the memory_store handle through so spawn_execution_task
     // can query ctx.state.* rows when building the ward_snapshot preamble.
-    let memory_repo_for_snapshot = memory_repo.clone();
+    let memory_store_for_snapshot = memory_store.clone();
 
     // Spawn the execution task
     spawn_execution_task(SpawnContext {
@@ -420,7 +408,8 @@ pub async fn spawn_delegated_agent(
         delegation_permit,
         initial_history,
         fact_store_for_ctx,
-        memory_repo_for_snapshot,
+        memory_store_for_snapshot,
+        distiller,
     });
 
     tracing::info!(
@@ -506,7 +495,10 @@ struct SpawnContext {
 
     // --- Optional memory wiring (Phase 4b + 7 ward_snapshot preamble) ---
     fact_store_for_ctx: Option<Arc<dyn zero_stores::MemoryFactStore>>,
-    memory_repo_for_snapshot: Option<Arc<gateway_database::MemoryRepository>>,
+    memory_store_for_snapshot: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+    /// Distiller for the subagent's child session — fired after
+    /// `complete_session(child_session_id)`.
+    distiller: Option<Arc<crate::distillation::SessionDistiller>>,
 }
 
 /// Spawn the async execution task for the delegated agent.
@@ -529,7 +521,8 @@ fn spawn_execution_task(ctx: SpawnContext) {
         state_service,
         paths,
         fact_store_for_ctx,
-        memory_repo_for_snapshot,
+        memory_store_for_snapshot,
+        distiller,
     } = ctx;
 
     let agent_id = request.child_agent_id.clone();
@@ -562,37 +555,43 @@ fn spawn_execution_task(ctx: SpawnContext) {
         &request.task,
     );
 
-    // Step 2: ward_snapshot block (prepended if a real ward is active)
-    let with_snapshot = if let Some(ref ward) = ward_for_preamble {
-        crate::session_ctx::snapshot::prepend_to_task(
-            ward,
-            &session_id,
-            &paths.wards_dir(),
-            memory_repo_for_snapshot.as_ref(),
-            &with_ctx_tag,
-        )
-    } else {
-        with_ctx_tag
-    };
-
-    // Step 3: reuse_check imperative for coding-capable agents.
-    // Placed at the very top of the prompt so the LLM reads it before
-    // any other context. Concrete ✓/✗ examples anchor the behavior —
-    // stronger than free-text policy recall.
-    let task_msg = if let Some(block) = reuse_check_block(&request.child_agent_id) {
-        format!("{}\n\n{}", block, with_snapshot)
-    } else {
-        with_snapshot
-    };
-
     let parent_agent = request.parent_agent_id.clone();
     let parent_execution_id = request.parent_execution_id.clone();
+    let paths_for_snapshot = paths.clone();
+    let session_id_for_snapshot = session_id.clone();
+    let child_agent_id_for_block = request.child_agent_id.clone();
 
     tokio::spawn(async move {
         // Hold the delegation permit for the duration of the task.
         // When this task completes (or is dropped), the permit is released,
         // allowing another queued delegation to proceed.
         let _delegation_permit = delegation_permit;
+
+        // Step 2: ward_snapshot block (prepended if a real ward is active).
+        // Reads ward_snapshot via `MemoryFactStore`, so awaited inside the
+        // spawned task rather than in the sync caller.
+        let with_snapshot = if let Some(ref ward) = ward_for_preamble {
+            crate::session_ctx::snapshot::prepend_to_task(
+                ward,
+                &session_id_for_snapshot,
+                &paths_for_snapshot.wards_dir(),
+                memory_store_for_snapshot.as_ref(),
+                &with_ctx_tag,
+            )
+            .await
+        } else {
+            with_ctx_tag
+        };
+
+        // Step 3: reuse_check imperative for coding-capable agents.
+        // Placed at the very top of the prompt so the LLM reads it before
+        // any other context. Concrete ✓/✗ examples anchor the behavior —
+        // stronger than free-text policy recall.
+        let task_msg = if let Some(block) = reuse_check_block(&child_agent_id_for_block) {
+            format!("{}\n\n{}", block, with_snapshot)
+        } else {
+            with_snapshot
+        };
 
         // Create batch writer with conversation repo for session message streaming
         let batch_writer = spawn_batch_writer_with_repo(
@@ -780,6 +779,27 @@ fn spawn_execution_task(ctx: SpawnContext) {
         // Mark child session as completed (prevents orphaned "running" sessions)
         if let Err(e) = state_service.complete_session(&child_session_id) {
             tracing::warn!(child_session_id = %child_session_id, "Failed to complete child session: {}", e);
+        }
+
+        // Fire-and-forget subagent distillation. The subagent's transcript
+        // is the only place where the substantive tool results (web_fetch
+        // article content, shell stdout, etc.) live — root distillation
+        // sees only the admin chatter (delegate_to_agent + callbacks), so
+        // without this the KG misses everything subagents discover.
+        if let Some(distiller) = distiller.as_ref() {
+            let distiller = distiller.clone();
+            let sid = child_session_id.clone();
+            let aid = agent_id.clone();
+            tokio::spawn(async move {
+                if let Err(e) = distiller.distill(&sid, &aid).await {
+                    tracing::warn!(
+                        child_session_id = %sid,
+                        agent_id = %aid,
+                        error = %e,
+                        "Subagent distillation failed"
+                    );
+                }
+            });
         }
     });
 }

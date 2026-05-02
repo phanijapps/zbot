@@ -19,6 +19,9 @@ pub enum StoreError {
 
     #[error("invalid input: {0}")]
     Invalid(String),
+
+    #[error("config error: {0}")]
+    Config(String),
 }
 
 pub type StoreResult<T> = Result<T, StoreError>;

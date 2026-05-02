@@ -1,8 +1,8 @@
-use gateway_database::knowledge_db::KnowledgeDatabase;
 use gateway_services::paths::VaultPaths;
-use knowledge_graph::storage::GraphStorage;
 use std::sync::Arc;
 use tempfile::TempDir;
+use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::knowledge_db::KnowledgeDatabase;
 use zero_stores_sqlite::SqliteKgStore;
 
 pub async fn sqlite_store() -> (TempDir, SqliteKgStore) {

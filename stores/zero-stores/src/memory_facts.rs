@@ -11,5 +11,6 @@
 //! callers that import `zero_stores::MemoryFactStore` continue to work.
 
 pub use zero_stores_traits::{
-    MemoryAggregateStats, MemoryFactStore, MemoryHealthMetrics, SkillIndexRow,
+    MemoryAggregateStats, MemoryFactStore, MemoryHealthMetrics, SkillIndexRow, StrategyFactInsert,
+    StrategyFactMatch,
 };
