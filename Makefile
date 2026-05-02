@@ -49,3 +49,22 @@ uninstall:
 	systemctl --user daemon-reload
 	@echo ""
 	@echo "Uninstalled. User data in ~/Documents/zbot is preserved."
+
+start:
+	systemctl --user start agentzero
+
+stop:
+	systemctl --user stop agentzero
+
+restart:
+	systemctl --user restart agentzero
+
+status:
+	systemctl --user status agentzero
+
+logs:
+	@tail -F $(HOME)/Documents/zbot/logs/*.log
+
+clean:
+	cargo clean
+	rm -rf $(UI_BUILD_DIR)
