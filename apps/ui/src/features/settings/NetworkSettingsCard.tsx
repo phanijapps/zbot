@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
 
 type MdnsStatus = {
   active: boolean;
@@ -17,6 +18,10 @@ type NetworkInfo = {
 };
 
 type ApiEnvelope<T> = { success: boolean; data?: T; error?: string };
+
+function primaryUrl(info: NetworkInfo): string | null {
+  return info.hostnameUrls[0] ?? info.ipUrls[0] ?? null;
+}
 
 export function NetworkSettingsCard() {
   const [info, setInfo] = useState<NetworkInfo | null>(null);
@@ -52,6 +57,8 @@ export function NetworkSettingsCard() {
   if (error) return <div className="settings-card error">{error}</div>;
   if (!info) return null;
 
+  const qrTarget = primaryUrl(info);
+
   return (
     <section className="settings-card network-settings-card">
       <header>
@@ -62,6 +69,52 @@ export function NetworkSettingsCard() {
         <p className="muted">
           LAN exposure is off. Turn it on to make this daemon reachable from other devices.
         </p>
+      )}
+
+      {info.exposeToLan && (
+        <>
+          {!info.mdns.active && (
+            <div className="warning" role="status">
+              ⚠ mDNS responder failed to start — devices can still reach the IP URL above.
+            </div>
+          )}
+
+          {info.mdns.active && !info.mdns.aliasClaimed && (
+            <div className="info" role="status">
+              <code>agentzero.local</code> is already in use on this network — only the
+              per-instance hostname is being advertised.
+            </div>
+          )}
+
+          <div className="network-urls">
+            <div className="url-list">
+              <strong>Reachable at:</strong>
+              <ul>
+                {info.hostnameUrls.map((u) => (
+                  <li key={u}>
+                    <code>{u}</code>
+                  </li>
+                ))}
+                {info.ipUrls.map((u) => (
+                  <li key={u}>
+                    <code>{u}</code>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            {qrTarget && (
+              <div className="qr" data-testid="network-qr">
+                <QRCodeSVG value={qrTarget} size={128} includeMargin />
+              </div>
+            )}
+          </div>
+
+          {info.mdns.interfaces.length > 0 && (
+            <div className="status muted">
+              ● Advertising on {info.mdns.interfaces.join(", ")}
+            </div>
+          )}
+        </>
       )}
     </section>
   );
