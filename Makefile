@@ -28,3 +28,24 @@ help:
 build:
 	cargo build --release
 	cd apps/ui && npm install && npm run build
+
+install: build
+	install -d $(BIN_DIR) $(DIST_DIR) $(UNIT_DIR)
+	install -m 755 target/release/zerod $(BIN_DIR)/zerod
+	rm -rf $(DIST_DIR)/* && cp -r $(UI_BUILD_DIR)/* $(DIST_DIR)/
+	@sed 's|@@BIN@@|$(BIN_DIR)/zerod|g; s|@@DIST@@|$(DIST_DIR)|g' \
+	    scripts/agentzero.service.in > $(UNIT_DIR)/agentzero.service
+	systemctl --user daemon-reload
+	systemctl --user enable --now agentzero
+	@echo ""
+	@echo "Installed. Status: systemctl --user status agentzero"
+
+uninstall:
+	-systemctl --user stop agentzero
+	-systemctl --user disable agentzero
+	rm -f $(UNIT_DIR)/agentzero.service
+	rm -f $(BIN_DIR)/zerod
+	rm -rf $(PREFIX)/share/agentzero
+	systemctl --user daemon-reload
+	@echo ""
+	@echo "Uninstalled. User data in ~/Documents/zbot is preserved."
