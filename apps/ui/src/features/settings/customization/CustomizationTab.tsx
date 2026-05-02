@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { FileEditor } from "./FileEditor";
 import { FileList } from "./FileList";
 
 type FileEntry = {
@@ -56,7 +57,11 @@ export function CustomizationTab() {
       </p>
       <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: "var(--spacing-4)" }}>
         <FileList files={files} selectedPath={selectedPath} onSelect={setSelectedPath} />
-        <div className="muted">{selectedPath ? `Selected: ${selectedPath}` : "Select a file to edit."}</div>
+        {selectedPath ? (
+          <FileEditor key={selectedPath} path={selectedPath} />
+        ) : (
+          <div className="muted">Select a file to edit.</div>
+        )}
       </div>
     </section>
   );
