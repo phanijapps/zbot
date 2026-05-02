@@ -66,8 +66,8 @@ function reducer(state: WizardState, action: WizardAction): WizardState {
 
 const initialState: WizardState = {
   currentStep: 1,
-  agentName: "Brahmi",
-  namePreset: "brahmi",
+  agentName: "Bhrami Software Engineer",
+  namePreset: "bhrami",
   aboutMe: "I am a private person, just call me Mr Z.",
   providers: [],
   defaultProviderId: "",
