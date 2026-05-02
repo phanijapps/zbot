@@ -2,9 +2,13 @@
 //! Used by the Settings → Customization UI tab.
 
 use crate::state::AppState;
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    Json,
+};
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Validate a relative path supplied by the UI.
@@ -19,8 +23,6 @@ use std::path::{Path, PathBuf};
 /// - parent traversal (`..`)
 /// - non-`.md` files
 /// - any nested path beyond `shards/<file>.md`
-// Allowed: handlers that consume this validator land in a follow-up task; tests already exercise it.
-#[allow(dead_code)]
 pub(crate) fn validate_customization_path(p: &str) -> Result<PathBuf, &'static str> {
     if p.is_empty() || p.starts_with('/') || p.starts_with('\\') {
         return Err("invalid path");
@@ -149,6 +151,219 @@ pub async fn list_files(State(state): State<AppState>) -> (StatusCode, Json<List
     }
 }
 
+const MAX_CONTENT_BYTES: usize = 1_000_000; // 1 MB cap
+
+#[derive(Debug, Deserialize)]
+pub struct PathQuery {
+    pub path: String,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileResponse {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_generated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Populated only on 409 conflict
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_version: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveRequest {
+    pub path: String,
+    pub content: String,
+    pub expected_version: String,
+}
+
+#[derive(Debug)]
+pub(crate) enum SaveOutcome {
+    Ok(String /* new version */),
+    Conflict {
+        current_content: String,
+        current_version: String,
+    },
+    NotFound,
+    Io(String),
+}
+
+pub(crate) fn resolve_path(config_dir: &Path, p: &str) -> Result<std::path::PathBuf, &'static str> {
+    let validated = validate_customization_path(p)?;
+    Ok(config_dir.join(validated))
+}
+
+pub(crate) fn file_version(path: &Path) -> std::io::Result<String> {
+    let mtime: DateTime<Utc> = std::fs::metadata(path)?.modified()?.into();
+    Ok(mtime.to_rfc3339())
+}
+
+pub(crate) fn save_file_with_check(
+    config_dir: &Path,
+    rel_path: &str,
+    new_content: &str,
+    expected_version: &str,
+) -> SaveOutcome {
+    let resolved = match resolve_path(config_dir, rel_path) {
+        Ok(p) => p,
+        Err(e) => return SaveOutcome::Io(format!("invalid path: {}", e)),
+    };
+    if !resolved.exists() {
+        return SaveOutcome::NotFound;
+    }
+    let current_version = match file_version(&resolved) {
+        Ok(v) => v,
+        Err(e) => return SaveOutcome::Io(e.to_string()),
+    };
+    if current_version != expected_version {
+        let current_content = match std::fs::read_to_string(&resolved) {
+            Ok(c) => c,
+            Err(e) => return SaveOutcome::Io(e.to_string()),
+        };
+        return SaveOutcome::Conflict {
+            current_content,
+            current_version,
+        };
+    }
+    if let Err(e) = std::fs::write(&resolved, new_content) {
+        return SaveOutcome::Io(e.to_string());
+    }
+    match file_version(&resolved) {
+        Ok(v) => SaveOutcome::Ok(v),
+        Err(e) => SaveOutcome::Io(e.to_string()),
+    }
+}
+
+/// `GET /api/customization/file?path=<relative>`
+// Wired by the route registration in a follow-up task.
+#[allow(dead_code)]
+pub async fn get_file(
+    State(state): State<AppState>,
+    Query(q): Query<PathQuery>,
+) -> (StatusCode, Json<FileResponse>) {
+    let config_dir = state.paths.config_dir();
+    let resolved = match resolve_path(&config_dir, &q.path) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(FileResponse {
+                    error: Some(e.to_string()),
+                    ..Default::default()
+                }),
+            );
+        }
+    };
+    if !resolved.exists() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(FileResponse {
+                error: Some("file not found".to_string()),
+                ..Default::default()
+            }),
+        );
+    }
+    let content = match std::fs::read_to_string(&resolved) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(FileResponse {
+                    error: Some(e.to_string()),
+                    ..Default::default()
+                }),
+            );
+        }
+    };
+    let version = file_version(&resolved).unwrap_or_default();
+    let name = std::path::Path::new(&q.path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let auto_generated = AUTO_GENERATED_NAMES.contains(&name);
+    (
+        StatusCode::OK,
+        Json(FileResponse {
+            success: true,
+            path: Some(q.path.clone()),
+            content: Some(content),
+            version: Some(version),
+            auto_generated: Some(auto_generated),
+            ..Default::default()
+        }),
+    )
+}
+
+/// `PUT /api/customization/file`
+// Wired by the route registration in a follow-up task.
+#[allow(dead_code)]
+pub async fn put_file(
+    State(state): State<AppState>,
+    Json(req): Json<SaveRequest>,
+) -> (StatusCode, Json<FileResponse>) {
+    if req.content.len() > MAX_CONTENT_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(FileResponse {
+                error: Some(format!(
+                    "content too large ({} bytes > {} limit)",
+                    req.content.len(),
+                    MAX_CONTENT_BYTES
+                )),
+                ..Default::default()
+            }),
+        );
+    }
+    let config_dir = state.paths.config_dir();
+    match save_file_with_check(&config_dir, &req.path, &req.content, &req.expected_version) {
+        SaveOutcome::Ok(version) => (
+            StatusCode::OK,
+            Json(FileResponse {
+                success: true,
+                path: Some(req.path.clone()),
+                version: Some(version),
+                ..Default::default()
+            }),
+        ),
+        SaveOutcome::Conflict {
+            current_content,
+            current_version,
+        } => (
+            StatusCode::CONFLICT,
+            Json(FileResponse {
+                error: Some("version mismatch".to_string()),
+                current_content: Some(current_content),
+                current_version: Some(current_version),
+                ..Default::default()
+            }),
+        ),
+        SaveOutcome::NotFound => (
+            StatusCode::NOT_FOUND,
+            Json(FileResponse {
+                error: Some("file not found".to_string()),
+                ..Default::default()
+            }),
+        ),
+        SaveOutcome::Io(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(FileResponse {
+                error: Some(e),
+                ..Default::default()
+            }),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +478,72 @@ mod tests {
 
         let soul_entry = entries.iter().find(|e| e.path == "SOUL.md").unwrap();
         assert!(!soul_entry.auto_generated);
+    }
+
+    use std::time::Duration;
+
+    fn touch(path: &Path, content: &str) {
+        fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn read_file_content_resolves_relative_to_config_dir() {
+        let tmp = tempdir().unwrap();
+        let config = tmp.path();
+        touch(&config.join("SOUL.md"), "soul body");
+
+        let resolved = resolve_path(config, "SOUL.md").expect("ok");
+        assert_eq!(resolved, config.join("SOUL.md"));
+
+        let body = fs::read_to_string(&resolved).unwrap();
+        assert_eq!(body, "soul body");
+    }
+
+    #[test]
+    fn read_file_rejects_invalid_path() {
+        let tmp = tempdir().unwrap();
+        assert!(resolve_path(tmp.path(), "../escape.md").is_err());
+        assert!(resolve_path(tmp.path(), "/abs.md").is_err());
+        assert!(resolve_path(tmp.path(), "wards/x.md").is_err());
+    }
+
+    #[test]
+    fn save_file_succeeds_when_version_matches() {
+        let tmp = tempdir().unwrap();
+        let config = tmp.path();
+        let file = config.join("SOUL.md");
+        touch(&file, "v1");
+
+        let initial_version = file_version(&file).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+
+        let result = save_file_with_check(config, "SOUL.md", "v2", &initial_version);
+        assert!(matches!(result, SaveOutcome::Ok(_)));
+        assert_eq!(fs::read_to_string(&file).unwrap(), "v2");
+    }
+
+    #[test]
+    fn save_file_returns_conflict_when_disk_changed() {
+        let tmp = tempdir().unwrap();
+        let config = tmp.path();
+        let file = config.join("SOUL.md");
+        touch(&file, "v1");
+
+        let stale_version = file_version(&file).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        // Someone else updates the file:
+        touch(&file, "v_external");
+
+        let result = save_file_with_check(config, "SOUL.md", "v_ours", &stale_version);
+        match result {
+            SaveOutcome::Conflict {
+                current_content,
+                current_version,
+            } => {
+                assert_eq!(current_content, "v_external");
+                assert_ne!(current_version, stale_version);
+            }
+            other => panic!("expected Conflict, got {:?}", other),
+        }
     }
 }
