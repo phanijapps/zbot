@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { NetworkSettingsCard } from "./NetworkSettingsCard";
 
 beforeEach(() => {
@@ -131,5 +131,63 @@ describe("NetworkSettingsCard — on state", () => {
       expect(screen.getByText(/mDNS responder failed to start/i)).toBeInTheDocument();
     });
     expect(screen.getByText("http://192.168.1.42:18791")).toBeInTheDocument();
+  });
+});
+
+describe("NetworkSettingsCard — toggle", () => {
+  it("clicking the toggle PUTs new settings and shows the restart banner", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    globalThis.fetch = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      const u = url.toString();
+      calls.push({ url: u, init });
+      if (u.endsWith("/api/network/info")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              exposeToLan: true,
+              bindHost: "0.0.0.0",
+              port: 18791,
+              hostnameUrls: ["http://agentzero.local"],
+              ipUrls: ["http://192.168.1.42:18791"],
+              mdns: { active: true, interfaces: ["en0"], aliasClaimed: true, instanceId: "u" },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (u.endsWith("/api/settings/network") && (!init?.method || init.method === "GET")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              exposeToLan: true,
+              discovery: {},
+              advanced: { bindHost: null, httpPort: 18791 },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (u.endsWith("/api/settings/network") && init?.method === "PUT") {
+        return new Response(
+          JSON.stringify({ success: true, data: JSON.parse(init.body as string) }),
+          { status: 200 },
+        );
+      }
+      return new Response("not mocked", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    render(<NetworkSettingsCard />);
+    await waitFor(() => screen.getByRole("checkbox", { name: /Expose to LAN/i }));
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /Expose to LAN/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Daemon restart required/i)).toBeInTheDocument();
+    });
+    const putCall = calls.find((c) => c.url.endsWith("/api/settings/network") && c.init?.method === "PUT");
+    expect(putCall).toBeDefined();
+    expect(JSON.parse(putCall!.init!.body as string).exposeToLan).toBe(false);
   });
 });

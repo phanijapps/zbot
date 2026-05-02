@@ -27,6 +27,7 @@ export function NetworkSettingsCard() {
   const [info, setInfo] = useState<NetworkInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showRestartBanner, setShowRestartBanner] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,6 +54,40 @@ export function NetworkSettingsCard() {
     };
   }, []);
 
+  async function onToggle() {
+    if (!info) return;
+    const next = !info.exposeToLan;
+    // Optimistic UI flip.
+    setInfo({ ...info, exposeToLan: next });
+
+    // Fetch current settings to preserve nested fields the user might have changed.
+    const getRes = await fetch("/api/settings/network");
+    const getBody = (await getRes.json()) as ApiEnvelope<{
+      exposeToLan: boolean;
+      discovery: Record<string, unknown>;
+      advanced: { bindHost: string | null; httpPort: number };
+    }>;
+    const current = getBody.data ?? {
+      exposeToLan: info.exposeToLan,
+      discovery: {},
+      advanced: { bindHost: null, httpPort: info.port },
+    };
+
+    const putRes = await fetch("/api/settings/network", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...current, exposeToLan: next }),
+    });
+    const putBody = (await putRes.json()) as ApiEnvelope<unknown>;
+    if (putBody.success) {
+      setShowRestartBanner(true);
+    } else {
+      // Revert optimistic flip on failure.
+      setInfo({ ...info, exposeToLan: info.exposeToLan });
+      setError(putBody.error ?? "Failed to update network settings");
+    }
+  }
+
   if (loading) return <div className="settings-card">Loading network status…</div>;
   if (error) return <div className="settings-card error">{error}</div>;
   if (!info) return null;
@@ -61,9 +96,26 @@ export function NetworkSettingsCard() {
 
   return (
     <section className="settings-card network-settings-card">
-      <header>
+      <header className="row">
         <h3>Network</h3>
+        <label className="toggle">
+          <input
+            type="checkbox"
+            aria-label="Expose to LAN"
+            checked={info.exposeToLan}
+            onChange={() => void onToggle()}
+          />
+          <span>Expose to LAN</span>
+        </label>
       </header>
+      <p className="muted small">
+        Other devices on your network can reach this daemon. Restart daemon to apply changes.
+      </p>
+      {showRestartBanner && (
+        <div className="banner restart-required" role="status">
+          Daemon restart required to apply changes.
+        </div>
+      )}
 
       {!info.exposeToLan && (
         <p className="muted">
