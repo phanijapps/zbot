@@ -27,6 +27,12 @@ pub struct AppSettings {
     /// Execution settings (concurrency, delegation limits, etc.)
     #[serde(default)]
     pub execution: ExecutionSettings,
+
+    /// Network / discovery configuration. New top-level block; absent in
+    /// pre-v0.X settings.json files, in which case the default
+    /// (`exposeToLan: true`) applies.
+    #[serde(default)]
+    pub network: discovery::DiscoveryConfig,
 }
 
 /// Execution settings for controlling agent concurrency and delegation behavior.
@@ -590,5 +596,35 @@ mod tests {
             Some(true),
             "typed field update must still take effect"
         );
+    }
+}
+
+#[cfg(test)]
+mod network_settings_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_have_expose_to_lan_true() {
+        let s = AppSettings::default();
+        assert!(s.network.expose_to_lan);
+        assert_eq!(s.network.advanced.http_port, 18791);
+    }
+
+    #[test]
+    fn old_settings_without_network_block_still_parses() {
+        let json = r#"{
+            "tools": {},
+            "logs": {},
+            "execution": {}
+        }"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(s.network.expose_to_lan);
+    }
+
+    #[test]
+    fn explicit_off_round_trips() {
+        let json = r#"{ "network": { "exposeToLan": false } }"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(!s.network.expose_to_lan);
     }
 }
