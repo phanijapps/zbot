@@ -9,6 +9,7 @@ mod chat;
 mod connectors;
 mod conversations;
 mod cron;
+mod customization;
 mod embeddings;
 mod events;
 mod gateway_bus;
