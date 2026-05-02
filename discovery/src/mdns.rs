@@ -5,22 +5,64 @@ use crate::advertiser::{
 };
 use mdns_sd::{ServiceDaemon, ServiceInfo as MdnsServiceInfo};
 use std::collections::HashMap;
+#[cfg(debug_assertions)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{info, warn};
 
+/// mDNS advertiser with **single-shot** semantics.
+///
+/// Holds a `mdns_sd::ServiceDaemon` whose `shutdown()` is global across every
+/// `Clone` of the daemon (one underlying background thread, shared command
+/// channel). Dropping any [`AdvertiseHandle`] produced by `advertise` therefore
+/// terminates the daemon for this advertiser and any other live handles.
+///
+/// **Construct one `MdnsAdvertiser` per advertise lifecycle.** Drop the
+/// advertiser when you drop the handle; do not reuse. Calling [`advertise`]
+/// more than once on the same instance is undefined at the protocol level —
+/// the second registration shares the daemon thread, and dropping any handle
+/// kills it for all of them.
+///
+/// [`advertise`]: Advertiser::advertise
 pub struct MdnsAdvertiser {
     daemon: ServiceDaemon,
+    #[cfg(debug_assertions)]
+    advertised: AtomicBool,
 }
 
 impl MdnsAdvertiser {
     pub fn new() -> Result<Self> {
         let daemon =
             ServiceDaemon::new().map_err(|e| DiscoveryError::ResponderStart(e.to_string()))?;
-        Ok(Self { daemon })
+        Ok(Self {
+            daemon,
+            #[cfg(debug_assertions)]
+            advertised: AtomicBool::new(false),
+        })
     }
 }
 
 impl Advertiser for MdnsAdvertiser {
+    /// Register the per-instance and alias records on the shared daemon.
+    ///
+    /// **Single-shot:** call this at most once per `MdnsAdvertiser`. The
+    /// returned handle owns a clone of the underlying `ServiceDaemon`; when
+    /// it is dropped, `shutdown()` tears down the daemon thread for every
+    /// clone — including this advertiser. v1 callers must construct a fresh
+    /// `MdnsAdvertiser` per advertise cycle. A future revision could enforce
+    /// this with interior mutability (e.g. `take()` on an `Option<daemon>`)
+    /// if a use case for reuse appears.
     fn advertise(&self, info: ServiceInfo) -> Result<AdvertiseHandle> {
+        #[cfg(debug_assertions)]
+        {
+            // Catch reuse of the same advertiser in dev/test builds. Release
+            // builds rely on the documented contract (zero overhead).
+            let already = self.advertised.swap(true, Ordering::SeqCst);
+            debug_assert!(
+                !already,
+                "MdnsAdvertiser::advertise called more than once; construct a fresh advertiser per lifecycle"
+            );
+        }
+
         let per_instance_host = format!(
             "{}-agentzero.local.",
             crate::network_info::sanitize_for_hostname(&info.instance_name)
