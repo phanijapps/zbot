@@ -7,5 +7,9 @@
 #![forbid(unsafe_code)]
 
 pub mod config;
+pub mod interfaces;
 
 pub use config::{AdvancedConfig, DiscoveryConfig, DiscoveryDetails};
+pub use interfaces::{
+    filter_interfaces, ipv4_only, Interface, InterfaceEnumerator, RealEnumerator,
+};
