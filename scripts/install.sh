@@ -147,6 +147,46 @@ run_all_checks() {
 }
 
 # ---------------------------------------------------------------------------
+# Bootstrap (build, install, enable linger, summarize)
+# ---------------------------------------------------------------------------
+
+bootstrap() {
+    local upgrade_mode=false
+    if systemctl --user is-enabled agentzero.service >/dev/null 2>&1; then
+        upgrade_mode=true
+    fi
+
+    if "$upgrade_mode"; then
+        header "Upgrading AgentZero (this takes ~15 min on a Pi 4)..."
+    else
+        header "Building AgentZero (this takes ~15 min on a Pi 4)..."
+    fi
+
+    note "  → make build"
+    make build
+    note "  → make install (binary, UI dist, systemd unit)"
+    make install >/dev/null
+
+    note "  → loginctl enable-linger ${USER}"
+    loginctl enable-linger "${USER}"
+
+    if "$upgrade_mode"; then
+        note "  → systemctl --user restart agentzero"
+        systemctl --user restart agentzero
+    fi
+
+    note ""
+    note "${GREEN}${BOLD}✓ AgentZero is running.${RESET}"
+    note ""
+    note "  Status:  systemctl --user status agentzero"
+    note "  Logs:    tail -F ~/Documents/zbot/logs/*.log"
+    note "  URL:     http://agentzero.local:18791  (or http://<your-ip>:18791)"
+    note ""
+    note "  To stop:    make stop"
+    note "  To remove:  ./scripts/uninstall.sh"
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -169,8 +209,7 @@ main() {
         exit 1
     fi
 
-    note ""
-    note "(bootstrap not yet implemented)"
+    bootstrap
 }
 
 main "$@"
