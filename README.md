@@ -103,6 +103,17 @@ cargo run -p daemon --release -- --static-dir ./dist
 2. Click **Set as Default** on your preferred provider
 3. Start chatting — z-Bot will analyze your intent and get to work
 
+### LAN access
+
+By default the daemon advertises itself on your local network so phones, tablets, and other devices can reach it without typing an IP. Visit:
+
+- `http://agentzero.local` from any device on the same Wi-Fi.
+- Or scan the QR code in **Settings → Network** to open the URL on your phone.
+
+If you'd rather keep the daemon loopback-only, toggle **Expose to LAN** off in Settings or set `network.exposeToLan: false` in `~/Documents/zbot/config/settings.json` (restart required).
+
+**Heads up for upgraders:** prior versions only listened on `127.0.0.1`. After this release the daemon listens on `0.0.0.0` by default.
+
 ## Architecture
 
 ```
