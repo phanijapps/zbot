@@ -5,3 +5,7 @@
 //! mDNS implementation and so tests can swap in a no-op or recorder.
 
 #![forbid(unsafe_code)]
+
+pub mod config;
+
+pub use config::{AdvancedConfig, DiscoveryConfig, DiscoveryDetails};
