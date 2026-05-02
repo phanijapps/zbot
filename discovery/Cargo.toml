@@ -1,0 +1,23 @@
+[package]
+name = "discovery"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+mdns-sd = { workspace = true }
+if-addrs = { workspace = true }
+gethostname = { workspace = true }
+glob-match = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true
