@@ -408,6 +408,38 @@ impl GatewayServer {
             });
         });
 
+        let event_bus = self.state.event_bus.clone();
+        let config_dir = self.state.paths.config_dir();
+        let config_dir_for_filter = config_dir.clone();
+        watcher.add_watch(config_dir.clone(), "customization", move |path| {
+            // Compute relative path; reject anything outside the customization allow-list.
+            let rel = match path.strip_prefix(&config_dir_for_filter) {
+                Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
+                Err(_) => return,
+            };
+            if !rel.ends_with(".md") {
+                return;
+            }
+            let parts: Vec<&str> = rel.split('/').collect();
+            let valid = matches!(parts.as_slice(), [_] | ["shards", _]);
+            if !valid {
+                return;
+            }
+            let modified_at = std::fs::metadata(&path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .map(|t| {
+                    let dt: chrono::DateTime<chrono::Utc> = t.into();
+                    dt.to_rfc3339()
+                })
+                .unwrap_or_default();
+            let event = gateway_events::GatewayEvent::CustomizationFileChanged {
+                path: rel,
+                modified_at,
+            };
+            event_bus.publish_sync(event);
+        });
+
         watcher.start();
         self.file_watcher = Some(watcher);
     }
