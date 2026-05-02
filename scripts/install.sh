@@ -19,7 +19,6 @@ set -euo pipefail
 # Color output (with NO_COLOR support)
 # ---------------------------------------------------------------------------
 
-# shellcheck disable=SC2034  # color vars are used inside ok/fail/note/header below
 if [[ -t 1 ]] && [[ -z "${NO_COLOR:-}" ]] && command -v tput >/dev/null 2>&1; then
     GREEN=$(tput setaf 2)
     RED=$(tput setaf 1)
@@ -50,15 +49,128 @@ require_linux() {
 }
 
 # ---------------------------------------------------------------------------
+# Prereq checks
+#
+# Each check_* function:
+#   - prints a single status line (✓ or ✗)
+#   - returns 0 if the prereq is satisfied, 1 otherwise
+#   - emits its fix suggestion to MISSING_FIXES (deferred to end-of-run)
+# ---------------------------------------------------------------------------
+
+declare -a MISSING_FIXES
+
+check_rust() {
+    if command -v cargo >/dev/null 2>&1 && command -v rustc >/dev/null 2>&1; then
+        ok "rustc $(rustc --version | awk '{print $2}'), cargo $(cargo --version | awk '{print $2}')"
+        return 0
+    fi
+    fail "rustc + cargo not found"
+    MISSING_FIXES+=("Rust toolchain (rustc + cargo):
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    source \$HOME/.cargo/env")
+    return 1
+}
+
+check_node() {
+    if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+        ok "node $(node --version), npm $(npm --version)"
+        return 0
+    fi
+    fail "node + npm not found"
+    MISSING_FIXES+=("Node.js + npm (for UI build):
+    sudo apt update && sudo apt install -y nodejs npm")
+    return 1
+}
+
+check_gcc() {
+    if command -v gcc >/dev/null 2>&1; then
+        ok "gcc $(gcc --version | head -1 | awk '{print $NF}')"
+        return 0
+    fi
+    fail "gcc not found (cargo needs a C linker)"
+    MISSING_FIXES+=("GCC + build-essential:
+    sudo apt install -y build-essential pkg-config")
+    return 1
+}
+
+check_systemd_user() {
+    if command -v systemctl >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; then
+        ok "systemctl --user is functional"
+        return 0
+    fi
+    fail "systemctl --user is not functional"
+    MISSING_FIXES+=("systemd user mode:
+    On Pi OS / Debian this should work out of the box. If your distro
+    has stripped it down, you may need to enable user lingering or
+    install systemd-container. Distro-specific — please consult docs.")
+    return 1
+}
+
+check_loginctl() {
+    if command -v loginctl >/dev/null 2>&1; then
+        ok "loginctl available"
+        return 0
+    fi
+    fail "loginctl not found"
+    MISSING_FIXES+=("loginctl (part of systemd, used to enable user-service linger):
+    Should be present alongside systemctl. If missing, your distro is
+    unusual — please check installation.")
+    return 1
+}
+
+check_disk_space() {
+    # cargo build cache for the workspace lands around 1.5 GB.
+    # Require 2 GB free in the user's home as a safety margin.
+    local available_kb required_kb=2097152
+    available_kb=$(df -P "$HOME" | awk 'NR==2 {print $4}')
+    if [[ "$available_kb" -ge "$required_kb" ]]; then
+        ok "disk free: $((available_kb / 1024 / 1024)) GB"
+        return 0
+    fi
+    fail "disk free: only $((available_kb / 1024 / 1024)) GB (need 2 GB)"
+    MISSING_FIXES+=("Disk space:
+    Free up at least $((required_kb / 1024 / 1024 - available_kb / 1024 / 1024)) GB
+    (cargo's build cache will need ~2 GB).
+    Try: cargo clean (if ~/.cargo is large)")
+    return 1
+}
+
+run_all_checks() {
+    local failures=0
+    check_rust          || failures=$((failures+1))
+    check_node          || failures=$((failures+1))
+    check_gcc           || failures=$((failures+1))
+    check_systemd_user  || failures=$((failures+1))
+    check_loginctl      || failures=$((failures+1))
+    check_disk_space    || failures=$((failures+1))
+    return "$failures"
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 main() {
-    header "AgentZero installer"
+    header "Checking prerequisites for AgentZero..."
     require_linux
-    note "Platform check passed: Linux"
+    # shellcheck source=/dev/null
+    ok "Linux ($(. /etc/os-release && echo "$PRETTY_NAME"))"
+
+    local failures=0
+    run_all_checks || failures=$?
+
+    if [[ "$failures" -gt 0 ]]; then
+        header "To install missing prerequisites:"
+        for fix in "${MISSING_FIXES[@]}"; do
+            note "  $fix"
+            note ""
+        done
+        note "${YELLOW}Re-run ./scripts/install.sh once these are resolved.${RESET}"
+        exit 1
+    fi
+
     note ""
-    note "(prereq checks and bootstrap not yet implemented)"
+    note "(bootstrap not yet implemented)"
 }
 
 main "$@"
