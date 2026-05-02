@@ -19,6 +19,7 @@ mod mcps;
 mod memory;
 mod memory_search;
 mod models;
+mod network;
 mod openapi;
 mod plugins;
 mod providers;
@@ -76,6 +77,8 @@ pub fn create_http_router(
         // Health endpoints
         .route("/api/health", get(health::health_check))
         .route("/api/status", get(health::status))
+        // Network info (LAN discoverability snapshot for Settings UI)
+        .route("/api/network/info", get(network::get_network_info))
         // Agent endpoints
         .route("/api/agents", get(agents::list_agents))
         .route("/api/agents", post(agents::create_agent))

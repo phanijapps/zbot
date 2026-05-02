@@ -453,7 +453,7 @@ impl GatewayServer {
     }
 }
 
-fn default_instance_name() -> String {
+pub(crate) fn default_instance_name() -> String {
     let raw = gethostname::gethostname().to_string_lossy().into_owned();
     let trimmed = raw.trim_end_matches(".local").to_string();
     if trimmed.is_empty() {
@@ -463,7 +463,7 @@ fn default_instance_name() -> String {
     }
 }
 
-fn persist_instance_id(
+pub(crate) fn persist_instance_id(
     settings: &gateway_services::SettingsService,
     new_id: &str,
 ) -> std::result::Result<(), String> {
