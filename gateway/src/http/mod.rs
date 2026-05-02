@@ -190,6 +190,11 @@ pub fn create_http_router(
             "/api/settings/execution",
             put(settings::update_execution_settings),
         )
+        .route("/api/settings/network", get(settings::get_network_settings))
+        .route(
+            "/api/settings/network",
+            put(settings::update_network_settings),
+        )
         // Setup wizard endpoints
         .route("/api/setup/status", get(setup::get_setup_status))
         .route("/api/setup/mcp-defaults", get(setup::get_mcp_defaults))
