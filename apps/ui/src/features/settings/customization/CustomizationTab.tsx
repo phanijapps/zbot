@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { FileList } from "./FileList";
 
 type FileEntry = {
   path: string;
@@ -14,6 +15,7 @@ export function CustomizationTab() {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,7 +54,10 @@ export function CustomizationTab() {
         Edit the markdown files that shape your agent's behavior. Changes save back to{" "}
         <code>~/Documents/zbot/config/</code>.
       </p>
-      <p className="muted small">{files.length} file(s) found.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: "var(--spacing-4)" }}>
+        <FileList files={files} selectedPath={selectedPath} onSelect={setSelectedPath} />
+        <div className="muted">{selectedPath ? `Selected: ${selectedPath}` : "Select a file to edit."}</div>
+      </div>
     </section>
   );
 }
