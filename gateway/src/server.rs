@@ -221,14 +221,7 @@ impl GatewayServer {
             let mut txt = std::collections::BTreeMap::new();
             txt.insert("version".into(), env!("CARGO_PKG_VERSION").to_string());
             txt.insert("instance".into(), instance_id.clone());
-            txt.insert(
-                "name".into(),
-                network_cfg
-                    .discovery
-                    .instance_name
-                    .clone()
-                    .unwrap_or_else(|| instance_name.clone()),
-            );
+            txt.insert("name".into(), instance_name.clone());
             txt.insert("path".into(), "/".into());
             txt.insert("ws".into(), "1".into());
             for (k, v) in &network_cfg.discovery.txt_records {
@@ -273,10 +266,11 @@ impl GatewayServer {
                 Err(e) => warn!("mDNS advertise failed: {}; daemon reachable via IP only", e),
             }
 
-            // Replace the noop with the real one so /api/network/info reflects truth.
-            // This requires AppState to hold an Arc that we can swap. In the current
-            // shape we simply leave AppState pointing at noop; runtime activity is
-            // tracked via advertise_handle.is_some(). See network_info handler.
+            // Decision: AppState.advertiser stays as noop. The live mDNS daemon's
+            // lifetime is rooted in the AdvertiseHandle's boxed AdvertiseInner
+            // (see discovery::advertiser), not in this Arc. /api/network/info
+            // treats advertise_handle.is_some() as the source of truth for "mDNS
+            // is live", not AppState.advertiser's concrete type.
             drop(advertiser);
         }
 
