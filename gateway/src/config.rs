@@ -101,3 +101,86 @@ impl GatewayConfig {
         format!("{}:{}", self.host, self.http_port)
     }
 }
+
+/// Resolve the effective bind host from a `DiscoveryConfig`.
+///
+/// Precedence:
+/// 1. `advanced.bind_host` if present and parseable.
+/// 2. `0.0.0.0` if `expose_to_lan = true`.
+/// 3. `127.0.0.1` otherwise.
+///
+/// Garbage in `advanced.bind_host` falls back to loopback rather than
+/// crashing — surfacing the misconfiguration via logs is better than
+/// failing to start. Defensive: when an override is set but invalid,
+/// we deliberately do NOT fall through to `expose_to_lan` — a typo
+/// must never accidentally publish the daemon on 0.0.0.0.
+pub fn resolve_bind_host(cfg: &discovery::DiscoveryConfig) -> std::net::IpAddr {
+    use std::net::{IpAddr, Ipv4Addr};
+    if let Some(s) = cfg.advanced.bind_host.as_deref() {
+        if let Ok(parsed) = s.parse::<IpAddr>() {
+            return parsed;
+        }
+        tracing::warn!(
+            target: "discovery",
+            "ignoring invalid network.advanced.bindHost={:?}; falling back to loopback for safety",
+            s
+        );
+        return IpAddr::V4(Ipv4Addr::LOCALHOST);
+    }
+    if cfg.expose_to_lan {
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+    } else {
+        IpAddr::V4(Ipv4Addr::LOCALHOST)
+    }
+}
+
+#[cfg(test)]
+mod resolve_bind_tests {
+    use super::*;
+    use discovery::{AdvancedConfig, DiscoveryConfig};
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn off_yields_loopback() {
+        let cfg = DiscoveryConfig {
+            expose_to_lan: false,
+            ..Default::default()
+        };
+        assert_eq!(resolve_bind_host(&cfg), IpAddr::V4(Ipv4Addr::LOCALHOST));
+    }
+
+    #[test]
+    fn on_yields_unspecified() {
+        let cfg = DiscoveryConfig::default();
+        assert!(cfg.expose_to_lan);
+        assert_eq!(resolve_bind_host(&cfg), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    }
+
+    #[test]
+    fn advanced_override_wins_when_present_and_valid() {
+        let cfg = DiscoveryConfig {
+            expose_to_lan: false, // would be loopback…
+            advanced: AdvancedConfig {
+                bind_host: Some("10.1.2.3".into()), // …but override wins
+                http_port: 18791,
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_bind_host(&cfg),
+            IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3))
+        );
+    }
+
+    #[test]
+    fn advanced_override_with_garbage_falls_back_to_loopback() {
+        let cfg = DiscoveryConfig {
+            advanced: AdvancedConfig {
+                bind_host: Some("not-an-ip".into()),
+                http_port: 18791,
+            },
+            ..Default::default()
+        };
+        assert_eq!(resolve_bind_host(&cfg), IpAddr::V4(Ipv4Addr::LOCALHOST));
+    }
+}

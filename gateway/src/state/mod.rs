@@ -183,6 +183,13 @@ pub struct AppState {
 
     /// Configuration directory path (legacy, use paths.vault_dir() instead).
     pub config_dir: PathBuf,
+
+    /// LAN service advertiser. NoopAdvertiser when discovery is disabled.
+    pub advertiser: std::sync::Arc<dyn discovery::Advertiser>,
+
+    /// Active mDNS advertise handle. None until `start()` runs and only
+    /// populated when `network.exposeToLan = true`.
+    pub advertise_handle: std::sync::Arc<std::sync::Mutex<Option<discovery::AdvertiseHandle>>>,
 }
 
 /// Boot-time helper: synchronously reconcile vec0 tables to match the
@@ -899,6 +906,8 @@ impl AppState {
             kg_store,
             ingestion_queue,
             ingestion_backpressure,
+            advertiser: discovery::noop(),
+            advertise_handle: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -1035,6 +1044,8 @@ impl AppState {
             kg_store: None,
             ingestion_queue: None,
             ingestion_backpressure: None,
+            advertiser: discovery::noop(),
+            advertise_handle: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -1171,6 +1182,8 @@ impl AppState {
             kg_store: None,
             ingestion_queue: None,
             ingestion_backpressure: None,
+            advertiser: discovery::noop(),
+            advertise_handle: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 

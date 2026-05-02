@@ -405,6 +405,76 @@ pub async fn update_execution_settings(
     }
 }
 
+// ============================================================================
+// NETWORK SETTINGS ENDPOINTS
+// ============================================================================
+
+/// GET /api/settings/network — current network/discovery configuration.
+pub async fn get_network_settings(
+    State(state): State<AppState>,
+) -> Result<
+    Json<SettingsResponse<discovery::DiscoveryConfig>>,
+    (StatusCode, Json<SettingsResponse<()>>),
+> {
+    match state.settings.load() {
+        Ok(settings) => Ok(Json(SettingsResponse {
+            success: true,
+            data: Some(settings.network),
+            error: None,
+        })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(SettingsResponse {
+                success: false,
+                data: None,
+                error: Some(e),
+            }),
+        )),
+    }
+}
+
+/// PUT /api/settings/network — replace the network/discovery block.
+///
+/// Note: changes apply on next daemon restart; the UI shows a banner
+/// reminding the user.
+pub async fn update_network_settings(
+    State(state): State<AppState>,
+    Json(new_cfg): Json<discovery::DiscoveryConfig>,
+) -> Result<
+    Json<SettingsResponse<discovery::DiscoveryConfig>>,
+    (StatusCode, Json<SettingsResponse<()>>),
+> {
+    let mut current = match state.settings.load() {
+        Ok(s) => s,
+        Err(e) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SettingsResponse {
+                    success: false,
+                    data: None,
+                    error: Some(e),
+                }),
+            ))
+        }
+    };
+    current.network = new_cfg.clone();
+    match state.settings.save(&current) {
+        Ok(()) => Ok(Json(SettingsResponse {
+            success: true,
+            data: Some(new_cfg),
+            error: None,
+        })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(SettingsResponse {
+                success: false,
+                data: None,
+                error: Some(e),
+            }),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
