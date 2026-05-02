@@ -58,8 +58,6 @@ pub enum FileKind {
     Shard,
 }
 
-// Wired by the route registration in a follow-up task.
-#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct ListResponse {
     pub success: bool,
@@ -127,8 +125,6 @@ impl FileEntry {
 }
 
 /// `GET /api/customization/files` — list editable markdowns.
-// Wired by the route registration in a follow-up task.
-#[allow(dead_code)]
 pub async fn list_files(State(state): State<AppState>) -> (StatusCode, Json<ListResponse>) {
     let config_dir = state.paths.config_dir();
     match enumerate_customization_files(&config_dir) {
@@ -245,8 +241,6 @@ pub(crate) fn save_file_with_check(
 }
 
 /// `GET /api/customization/file?path=<relative>`
-// Wired by the route registration in a follow-up task.
-#[allow(dead_code)]
 pub async fn get_file(
     State(state): State<AppState>,
     Query(q): Query<PathQuery>,
@@ -305,8 +299,6 @@ pub async fn get_file(
 }
 
 /// `PUT /api/customization/file`
-// Wired by the route registration in a follow-up task.
-#[allow(dead_code)]
 pub async fn put_file(
     State(state): State<AppState>,
     Json(req): Json<SaveRequest>,

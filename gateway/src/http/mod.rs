@@ -196,6 +196,10 @@ pub fn create_http_router(
             "/api/settings/network",
             put(settings::update_network_settings),
         )
+        // Customization endpoints
+        .route("/api/customization/files", get(customization::list_files))
+        .route("/api/customization/file", get(customization::get_file))
+        .route("/api/customization/file", put(customization::put_file))
         // Setup wizard endpoints
         .route("/api/setup/status", get(setup::get_setup_status))
         .route("/api/setup/mcp-defaults", get(setup::get_mcp_defaults))
