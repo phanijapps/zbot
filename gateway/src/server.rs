@@ -142,6 +142,28 @@ impl GatewayServer {
         // so invokes ran server-side but no tokens reached the UI.
         self.ws_handler.spawn_background_tasks(&shutdown_tx);
 
+        // Read network settings from AppSettings (cached in SettingsService).
+        // If exposeToLan changed since startup, the user must restart — this
+        // read happens at boot so a stale toggle from a prior run is fine.
+        let network_cfg = match self.state.settings.load() {
+            Ok(s) => s.network,
+            Err(e) => {
+                warn!(
+                    "Failed to load settings.json for network config: {}; defaulting to LAN exposure ON",
+                    e
+                );
+                discovery::DiscoveryConfig::default()
+            }
+        };
+        let resolved_host = crate::config::resolve_bind_host(&network_cfg);
+        if resolved_host != self.config.host {
+            info!(
+                "Bind host resolved from network settings: {} (was {})",
+                resolved_host, self.config.host
+            );
+            self.config.host = resolved_host;
+        }
+
         // Start HTTP server. The WebSocket upgrade route (`/ws`) shares
         // this listener — mobile clients and single-port deployments
         // don't need a second firewall hole.
