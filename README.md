@@ -97,6 +97,39 @@ cargo run -p daemon --release -- --static-dir ./dist
 # Open http://localhost:18791
 ```
 
+## Install on Raspberry Pi (or any Linux box)
+
+Run AgentZero as an auto-starting user-account daemon, no `sudo` required.
+
+```bash
+git clone <repo> agentzero
+cd agentzero
+./scripts/install.sh
+```
+
+The script:
+
+1. Validates prerequisites (rustc, cargo, node, npm, gcc, systemd, disk space).
+2. If anything is missing, prints the exact `apt` / `rustup` command for you to run, then exits.
+3. Once everything's green, builds the daemon and UI, installs into `~/.local/bin` and `~/.local/share/agentzero/`, and enables the systemd `--user` service with linger so it survives SSH logout and reboots.
+
+To upgrade after pulling new code:
+
+```bash
+git pull
+./scripts/install.sh
+```
+
+The same script handles fresh installs and upgrades — your `~/Documents/zbot/` data directory is never touched.
+
+Common operations:
+
+- `make status` — service status
+- `make logs` — tail the rolling log
+- `make restart` — restart the daemon
+- `make stop` / `make start` — stop or start
+- `./scripts/uninstall.sh` — remove the daemon (preserves user data)
+
 ### First Run
 
 1. Navigate to **Settings** → Add your LLM provider (any OpenAI-compatible API)
