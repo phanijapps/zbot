@@ -1194,7 +1194,11 @@ export class HttpTransport implements Transport {
   }
 
   private handleGlobalMessage(message: StreamEvent): boolean {
-    if (message.type === "stats_update" || message.type === "session_notification") {
+    if (
+      message.type === "stats_update" ||
+      message.type === "session_notification" ||
+      message.type === "customization_file_changed"
+    ) {
       const callbacks = [...this.globalEventCallbacks];
       for (const callback of callbacks) {
         try {

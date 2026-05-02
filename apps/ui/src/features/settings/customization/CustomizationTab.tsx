@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { FileEditor } from "./FileEditor";
 import { FileList } from "./FileList";
+import { useGlobalEvents } from "@/hooks/useGlobalEvents";
+import type { GlobalEvent } from "@/services/transport/types";
 
 type FileEntry = {
   path: string;
@@ -18,30 +20,40 @@ export function CustomizationTab() {
   const [error, setError] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
+  const loadFiles = useCallback(async () => {
+    try {
+      const res = await fetch("/api/customization/files");
+      const body = (await res.json()) as ApiList;
+      if (body.success && body.files) {
+        setFiles(body.files);
+        setError(null);
+      } else {
+        setError(body.error ?? "Failed to load files");
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
-    async function load() {
-      try {
-        const res = await fetch("/api/customization/files");
-        const body = (await res.json()) as ApiList;
-        if (!cancelled) {
-          if (body.success && body.files) {
-            setFiles(body.files);
-          } else {
-            setError(body.error ?? "Failed to load files");
-          }
-        }
-      } catch (e) {
-        if (!cancelled) setError(String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    void load();
+    void (async () => {
+      await loadFiles();
+      if (!cancelled) setLoading(false);
+    })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadFiles]);
+
+  // Refresh file list when the gateway broadcasts an external file change.
+  // The editor's own 409-on-save flow handles edit conflicts; here we just
+  // keep the list (and its mtimes) current.
+  useGlobalEvents((event: GlobalEvent) => {
+    if (event.type === "customization_file_changed") {
+      void loadFiles();
+    }
+  });
 
   if (loading) return <div className="settings-card">Loading customization files…</div>;
   if (error) return <div className="settings-card error">{error}</div>;
