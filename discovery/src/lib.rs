@@ -6,10 +6,15 @@
 
 #![forbid(unsafe_code)]
 
+pub mod advertiser;
 pub mod config;
 pub mod interfaces;
 pub mod network_info;
 
+pub use advertiser::{
+    noop, AdvertiseHandle, AdvertiseInner, Advertiser, DiscoveryError, NoopAdvertiser,
+    Result as DiscoveryResult, ServiceInfo,
+};
 pub use config::{AdvancedConfig, DiscoveryConfig, DiscoveryDetails};
 pub use interfaces::{
     filter_interfaces, ipv4_only, Interface, InterfaceEnumerator, RealEnumerator,
