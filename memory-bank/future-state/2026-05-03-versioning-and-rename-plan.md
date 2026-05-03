@@ -33,52 +33,53 @@ These share a release flow, so handling them together is cheaper than three sepa
 
 `rg` totals: 54 files mention `agentzero`, 84 mention `zbot`/`z-bot`, 143 mention bare `zero`.
 
-## Part 1 — Versioning: `YYYY.MM.PATCH` (CalVer)
+## Part 1 — Versioning: `YYYY.M.D` (date-only CalVer)
 
-### Choice: `YYYY.MM.PATCH`
+### Choice: `YYYY.M.D`, **no zero-padding**
 
-Examples: `2026.05.0`, `2026.05.1`, `2026.06.0`.
+Examples: `2026.5.3`, `2026.5.4`, `2026.6.1`, `2026.12.31`.
 
-### Why this and not the alternatives
+### Why no zero-padding
 
-- **`YYYY.MM.PATCH`** ✓ chosen — three numeric segments, semver-compatible parsers happy, sortable as strings, "when was this cut" is obvious.
-- `YY.MM.PATCH` (`26.5.0`): one less digit but ambiguous in 100 years and slightly weirder for tooling that expects 4-digit year.
-- `YYYY.MM.DD`: every release becomes a unique date — fine until you ship two patches the same day, then needs a 4th segment.
-- `YYYY.0M.MICRO` (zero-padded month): solves the "is `2026.5` < `2026.10` lexically?" problem; semver parsing of the segment is unaffected because they all parse as `u32`. **Worth considering** if any downstream tool (lockfiles, git tags) sorts versions as strings.
+The version string lives in `Cargo.toml`. Semver explicitly forbids leading zeros in numeric identifiers (`05` is invalid; `5` is valid). Zero-padding the month/day would generate `2026.05.03` which fails strict semver parsers (cargo accepts it leniently today, but other tools in the chain — especially npm-side and CI matchers — may not). Sticking to `YYYY.M.D` keeps every downstream parser happy.
 
-**Recommendation:** `YYYY.MM.PATCH`, no zero-padding. Bump rules:
-- Start of month → `YYYY.MM.0`
-- Patch within month → `YYYY.MM.1`, `YYYY.MM.2`, …
-- Hotfix on an old minor → `YYYY.MM.PATCH+1` (no separate hotfix track)
+Tradeoff: lexical sort within a year breaks (`2026.5.3` > `2026.10.3` as strings). That's fine — sort by `git tag --sort=creatordate` or numerically by component, not lexically.
+
+### Bump rules
+
+- One release per calendar day. Today's cut → today's date.
+- Multiple cuts the same day → bump the day component to "tomorrow's date" or wait. We don't introduce a 4th `PATCH` segment because that breaks the 3-segment semver shape.
+- Hotfix on a prior tag: cut a fresh date, no separate "patch" track.
 
 ### What carries the version
 
 Single source of truth: `Cargo.toml [workspace.package] version`. Everything else reads from there:
 
 - All workspace crates inherit via `version.workspace = true`
-- `apps/ui/package.json` — `npm version 2026.05.0` once per cut
-- Daemon `--version` and CLI `--version` — emitted by `env!("CARGO_PKG_VERSION")` (already wired)
-- Systemd unit `Description=` — pull from a build-time env or skip
-- Git tag — `vYYYY.MM.PATCH`
+- `apps/ui/package.json` — `npm version 2026.5.3` once per cut
+- Daemon `--version` and CLI `--version` — emitted by `env!("CARGO_PKG_VERSION")` (already wired in Rust binaries)
+- Systemd unit `Description=` — substituted at install time (see Part 2)
+- Git tag — `v2026.5.3`
 
-### Tooling: `scripts/release.sh` (later, not in the rename PR)
+### Tooling: `scripts/release.sh` (later)
 
 ```bash
 #!/usr/bin/env bash
-# Usage: scripts/release.sh [patch|minor]
-# Computes next CalVer from current date + last tag.
+# Usage: scripts/release.sh
+# Bumps Cargo.toml + package.json to today's date and tags.
+set -euo pipefail
+TODAY=$(date +%Y.%-m.%-d)   # %-m / %-d strip leading zeros (GNU date)
+cargo set-version --workspace "$TODAY"
+( cd apps/ui && npm version --no-git-tag-version "$TODAY" )
+git add Cargo.toml apps/ui/package.json
+git commit -m "release: $TODAY"
+git tag -a "v$TODAY" -m "Release $TODAY"
+echo "Tagged v$TODAY. Push with: git push --follow-tags"
 ```
 
-- Reads last tag, parses date components.
-- If month changed since last tag → bump to `YYYY.MM.0`.
-- Else → bump PATCH.
-- `cargo set-version` (cargo-edit) updates `[workspace.package].version`.
-- `npm version` updates `apps/ui/package.json`.
-- Creates annotated tag, no push (review before push).
+Out of scope for the first version-bump PR. Hand-edit the two version strings the first time; automate next cut.
 
-Out of scope for the first version-bump PR. Just hand-edit the two version strings the first time; automate later.
-
-## Part 2 — Install script rename (immediate, narrow scope)
+## Part 2 — Install script rename + auto-embed version
 
 The smallest-blast-radius change. Touches:
 
@@ -89,7 +90,60 @@ The smallest-blast-radius change. Touches:
 - `apps/cli/Cargo.toml` — `[[bin]] name = "zero"` → `name = "zbot"`. 1 line.
 - `gateway/Cargo.toml` — `[[bin]] name = "zerod"` → `name = "zbotd"`. 1 line.
 
-**Migration for existing installs.** Add a one-time migration block in `scripts/install.sh`:
+### Auto-embed the version (single-source from `Cargo.toml`)
+
+Hand-coding the version into the install script is fragile — the rename PR shouldn't pin a version, and every release shouldn't need an install-script edit. Read it once, substitute everywhere.
+
+**1. Read the version from `Cargo.toml` at install time.** In the `Makefile`:
+
+```makefile
+VERSION := $(shell awk -F\" '/^version[[:space:]]*=/ {print $$2; exit}' Cargo.toml)
+```
+
+(Reads the first `version = "..."` line — that's `[workspace.package].version` since it appears before any per-crate override.) Equivalent in `install.sh`:
+
+```bash
+VERSION=$(awk -F\" '/^version[[:space:]]*=/ {print $2; exit}' Cargo.toml)
+```
+
+**2. Add a `@@VERSION@@` placeholder** to the systemd template `scripts/zbot.service.in`:
+
+```ini
+[Unit]
+Description=z-bot daemon (@@VERSION@@)
+After=network.target
+
+[Service]
+ExecStart=@@BIN@@
+Environment=AGENTZERO_STATIC_DIR=@@DIST@@
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+**3. Substitute on install** — extend the existing `sed` chain in the `Makefile`:
+
+```makefile
+@sed 's|@@BIN@@|$(BIN_DIR)/zbotd|g; s|@@DIST@@|$(DIST_DIR)|g; s|@@VERSION@@|$(VERSION)|g' \
+    scripts/zbot.service.in > $(UNIT_DIR)/zbot.service
+```
+
+**4. Display the version** in `install.sh` banners and final-summary output so the user sees what they just installed:
+
+```bash
+note "Installing z-bot ${VERSION}..."
+# ... install steps ...
+note "Installed: z-bot ${VERSION}"
+note "  Status:  systemctl --user status zbot"
+note "  Logs:    tail -F ~/zbot/logs/*.log"
+```
+
+The Rust binaries already self-report (`zbotd --version`, `zbot --version`) via `CARGO_PKG_VERSION` — those need no plumbing.
+
+### Migration for existing installs
+
+Add a one-time migration block in `scripts/install.sh`:
 
 ```bash
 # Migrate old service name if present
@@ -132,29 +186,37 @@ Pick once and stop drifting:
 - **Display form** (user copy, README headings, wizard text): `z-bot` — preserves the playful brand.
 - **Never use:** `AgentZero`, `agentzero`, `zerod`, `zero` (as the product name; `zero` as a CLI command is also being renamed).
 
-### Sequencing — three PRs, in order
+### Sequencing — start small and iterate
 
-**PR A — Layer 1 only** (~80 lines, mechanical):
-- Cargo `[[bin]]` rename (zerod → zbotd, zero → zbot)
-- `scripts/install.sh` + `scripts/uninstall.sh` updates
-- `Makefile` updates  
-- Service template rename (`scripts/agentzero.service.in` → `scripts/zbot.service.in`)
-- mDNS hostname + instance defaults
-- Migration block in install.sh for existing installs
-- **Test:** fresh install on a Pi produces `zbotd`, `zbot.service`, `zbot.local`. Existing install upgrades cleanly.
+Each PR builds on the last; don't bundle. Reviewer can ship A1 alone and stop if needed.
+
+**PR A1 — Cargo binary rename ONLY** (~5 lines):
+- `apps/cli/Cargo.toml`: `[[bin]] name = "zero"` → `name = "zbot"`
+- `gateway/Cargo.toml`: `[[bin]] name = "zerod"` → `name = "zbotd"`
+- **Nothing else.** Build artifacts now produce the new names; install scripts still expect old names so this PR alone leaves the system mid-rename. That's intentional — the next PRs make it consistent.
+- **Test:** `cargo build --release` produces `target/release/zbotd` and `target/release/zbot`. CI green.
+
+**PR A2 — Install scripts + Makefile + service template** (~30 lines):
+- `Makefile` references the new binary names; new `VERSION` macro reads `Cargo.toml`; substitutes `@@VERSION@@` into the systemd template.
+- `scripts/install.sh` + `scripts/uninstall.sh`: new binary + service name; migration block; version banner display.
+- `git mv scripts/agentzero.service.in scripts/zbot.service.in`; add `@@VERSION@@` placeholder.
+- mDNS hostname + instance default name.
+- **Test:** fresh install on a Pi produces `zbot.service` with `Description=z-bot daemon (X.Y.Z)` matching `Cargo.toml`'s version. Existing install upgrades cleanly.
 
 **PR B — Versioning bump** (~5 lines):
-- Cargo workspace version → `2026.05.0`
-- `apps/ui/package.json` version → `2026.05.0`
-- Tag `v2026.05.0` after merge
-- **Out of scope:** `release.sh` automation. Hand-edit this once; automate next month.
+- `Cargo.toml [workspace.package].version` → today's date (`2026.5.3` or whenever this lands).
+- `apps/ui/package.json` version → same.
+- Tag `vYYYY.M.D` after merge.
 
 **PR C — Layer 2 (user copy + README)** (~30 files):
-- README, install docs, CONTRIBUTING
-- Wizard / settings page strings
-- HTTP banner / version display
-- Standardize on `z-bot` (display) / `zbot` (identifier)
-- **Test:** `rg -i "agentzero"` returns only intentional historical references (e.g., this plan doc).
+- README, install docs, CONTRIBUTING.
+- Wizard / settings page strings.
+- HTTP banner / version display.
+- Standardize on `z-bot` (display) / `zbot` (identifier).
+- **Test:** `rg -i "agentzero"` returns only intentional historical references (this plan doc, CHANGELOG entries about the rename).
+
+**PR D — `scripts/release.sh` automation** (later, optional, ~30 lines):
+- The release helper sketched above. Useful once the rhythm of monthly cuts kicks in.
 
 ### What does NOT get renamed
 
@@ -176,12 +238,13 @@ Pick once and stop drifting:
 
 ## Suggested execution order
 
-1. **PR #X** — File this plan doc (this PR) for review.
-2. **PR A** — Layer 1 rename. Self-contained, mechanical.
-3. **PR B** — Bump version to `2026.05.0`. Tiny.
-4. **PR C** — Layer 2 user copy. Skim and merge.
-5. **Future** — `scripts/release.sh` automation.
-6. **Future** — Layer 3 if it ever feels worth it (probably never).
+1. **PR #X (this one)** — File this plan doc for review.
+2. **PR A1** — Cargo `[[bin]]` rename. ~5 lines. Smallest possible first move.
+3. **PR A2** — Install scripts + Makefile + service template + version auto-embed. ~30 lines.
+4. **PR B** — Version bump to `YYYY.M.D` (e.g., `2026.5.3`). ~5 lines.
+5. **PR C** — Layer 2 user copy. Skim and merge.
+6. **PR D (future)** — `scripts/release.sh` automation.
+7. **Future** — Layer 3 if it ever feels worth it (probably never).
 
 ## Out of scope for now
 
