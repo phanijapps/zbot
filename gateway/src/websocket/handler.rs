@@ -1161,6 +1161,10 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
             execution_id,
             seq: None,
         }),
+
+        // Customization file change events are UI-only (delivered via the
+        // /api/customization SSE stream, not the session WebSocket).
+        GatewayEvent::CustomizationFileChanged { .. } => None,
     }
 }
 

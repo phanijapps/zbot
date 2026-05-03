@@ -806,10 +806,19 @@ export interface ConversationEvent extends StreamEvent {
 }
 
 /**
- * Global event (stats updates, notifications).
+ * Global event (stats updates, notifications, customization file changes).
+ *
+ * `customization_file_changed` is broadcast by the gateway file watcher
+ * whenever a markdown file under <vault>/config/ is created, modified, or
+ * deleted. The Settings → Customization tab subscribes to refresh its
+ * file list. `modified_at` is RFC3339 (or empty string for deletions).
  */
 export interface GlobalEvent extends StreamEvent {
-  type: "stats_update" | "session_notification";
+  type: "stats_update" | "session_notification" | "customization_file_changed";
+  /** Present when type is "customization_file_changed". */
+  path?: string;
+  /** Present when type is "customization_file_changed". RFC3339, or "" for deletions. */
+  modified_at?: string;
 }
 
 /**

@@ -22,6 +22,7 @@ import { TabBar, TabPanel } from "@/components/TabBar";
 import { HelpBox } from "@/components/HelpBox";
 import { EmbeddingsCard } from "./EmbeddingsCard";
 import { NetworkSettingsCard } from "./NetworkSettingsCard";
+import { CustomizationTab } from "./customization/CustomizationTab";
 import { ProvidersEmptyState } from "./ProvidersEmptyState";
 import { ProvidersGrid } from "./ProvidersGrid";
 import { ProviderSlideover } from "./ProviderSlideover";
@@ -286,6 +287,7 @@ export function WebSettingsPanel() {
           { id: "general", label: "General" },
           { id: "logging", label: "Logging" },
           { id: "advanced", label: "Advanced" },
+          { id: "customization", label: "Customization" },
         ]}
         activeTab={activeTab}
         onTabChange={setActiveTab}
@@ -877,6 +879,13 @@ export function WebSettingsPanel() {
               </div>
             </>
           ) : null}
+        </TabPanel>
+
+        {/* ═══════════════════════════════════════════════════════════════════
+            CUSTOMIZATION TAB
+           ═══════════════════════════════════════════════════════════════════ */}
+        <TabPanel id="customization" activeTab={activeTab}>
+          <CustomizationTab />
         </TabPanel>
       </div>
 
