@@ -36,16 +36,20 @@ import { AgentEditPanel } from "./AgentEditPanel";
 // Constants
 // ============================================================================
 
+// 6-field cron (sec min hour day month weekday) — the format
+// `tokio-cron-scheduler` requires. The backend also accepts 5-field
+// input and prepends `0 ` automatically, but we send canonical 6-field
+// from here so the UI matches what gets persisted.
 const CRON_PRESETS = [
-  { label: "Every minute", value: "* * * * *" },
-  { label: "Every 5 minutes", value: "*/5 * * * *" },
-  { label: "Every 15 minutes", value: "*/15 * * * *" },
-  { label: "Every hour", value: "0 * * * *" },
-  { label: "Every 6 hours", value: "0 */6 * * *" },
-  { label: "Daily at midnight", value: "0 0 * * *" },
-  { label: "Daily at 9 AM", value: "0 9 * * *" },
-  { label: "Weekly on Monday", value: "0 0 * * 1" },
-  { label: "Monthly on the 1st", value: "0 0 1 * *" },
+  { label: "Every minute", value: "0 * * * * *" },
+  { label: "Every 5 minutes", value: "0 */5 * * * *" },
+  { label: "Every 15 minutes", value: "0 */15 * * * *" },
+  { label: "Every hour", value: "0 0 * * * *" },
+  { label: "Every 6 hours", value: "0 0 */6 * * *" },
+  { label: "Daily at midnight", value: "0 0 0 * * *" },
+  { label: "Daily at 9 AM", value: "0 0 9 * * *" },
+  { label: "Weekly on Monday", value: "0 0 0 * * 1" },
+  { label: "Monthly on the 1st", value: "0 0 0 1 * *" },
 ];
 
 const AGENT_EMOJIS = [
@@ -137,7 +141,7 @@ export function WebAgentsPanel() {
   const [scheduleForm, setScheduleForm] = useState({
     id: "",
     name: "",
-    schedule: "0 * * * *",
+    schedule: "0 0 * * * *",
     agent_id: "root",
     message: "",
     enabled: true,
@@ -318,7 +322,7 @@ export function WebAgentsPanel() {
     setScheduleForm({
       id: "",
       name: "",
-      schedule: "0 * * * *",
+      schedule: "0 0 * * * *",
       agent_id: "root",
       message: "",
       enabled: true,

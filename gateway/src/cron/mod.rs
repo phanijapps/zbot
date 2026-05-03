@@ -430,7 +430,7 @@ mod tests {
             .expect("bundled `default-cleanup` cron job missing");
 
         assert_eq!(cleanup.agent_id, "general-purpose");
-        assert_eq!(cleanup.schedule, "0 */4 * * *");
+        assert_eq!(cleanup.schedule, "0 0 */4 * * *");
         assert!(cleanup.enabled);
     }
 }
