@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { FileEditor } from "./FileEditor";
 import { FileList } from "./FileList";
 import { useGlobalEvents } from "@/hooks/useGlobalEvents";
+import { usePaths } from "@/hooks/usePaths";
 import type { GlobalEvent } from "@/services/transport/types";
 
 type FileEntry = {
@@ -19,6 +20,7 @@ export function CustomizationTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const paths = usePaths();
 
   const loadFiles = useCallback(async () => {
     try {
@@ -65,7 +67,7 @@ export function CustomizationTab() {
       </header>
       <p className="muted small">
         Edit the markdown files that shape your agent's behavior. Changes save back to{" "}
-        <code>~/Documents/zbot/config/</code>.
+        <code>{paths?.configDirDisplay ?? "~/Documents/zbot/config"}</code>.
       </p>
       <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: "var(--spacing-4)" }}>
         <FileList files={files} selectedPath={selectedPath} onSelect={setSelectedPath} />
