@@ -1,4 +1,4 @@
-# UI hardcodes `~/Documents/zbot/` even when daemon's actual vault is elsewhere
+# [FIXED 2026-05-03] UI hardcodes `~/Documents/zbot/` even when daemon's actual vault is elsewhere
 
 **Severity:** Medium (cosmetic, no data loss)
 **Discovered:** 2026-05-03 on Raspberry Pi (Pi OS Lite, no `~/Documents/`)

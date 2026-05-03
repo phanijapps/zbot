@@ -1,4 +1,4 @@
-# Defect — Memory UI sends `agent:root` but DB stores `root`
+# [FIXED 2026-05-03] Defect — Memory UI sends `agent:root` but DB stores `root`
 
 ## Symptom
 
