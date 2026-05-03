@@ -6,6 +6,7 @@ mod agents;
 mod artifacts;
 mod bridge;
 mod chat;
+mod cleanup;
 mod connectors;
 mod conversations;
 mod cron;
@@ -78,6 +79,8 @@ pub fn create_http_router(
         // Health endpoints
         .route("/api/health", get(health::health_check))
         .route("/api/status", get(health::status))
+        // Cleanup operations (bounded to vault-owned directories)
+        .route("/api/cleanup/vault-temp", post(cleanup::cleanup_vault_temp))
         // Network info (LAN discoverability snapshot for Settings UI)
         .route("/api/network/info", get(network::get_network_info))
         // Agent endpoints
