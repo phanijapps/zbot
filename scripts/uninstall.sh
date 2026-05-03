@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 #
-# AgentZero uninstaller. Symmetric with install.sh.
+# z-bot uninstaller. Symmetric with install.sh.
 #
-# Removes:
-#   - systemd unit
-#   - binary at ~/.local/bin/zerod
-#   - UI dist at ~/.local/share/agentzero/
+# Removes (current install + legacy `agentzero` artifacts):
+#   - systemd unit (zbot.service or agentzero.service)
+#   - binary at ~/.local/bin/zbotd (or zerod)
+#   - UI dist at ~/.local/share/zbot/ (or agentzero/)
 #
 # Preserves:
-#   - User data at ~/Documents/zbot/ (config, providers, agents, sessions)
+#   - User data at ~/Documents/zbot/ (or ~/zbot/ on hosts without
+#     ~/Documents/) — config, providers, agents, sessions.
 #   - User-service linger (other services may depend on it)
 
 set -euo pipefail
@@ -24,40 +25,56 @@ fi
 note()   { printf "%s\n" "$1"; }
 header() { printf "\n%s%s%s\n\n" "$BOLD" "$1" "$RESET"; }
 
-header "Removing AgentZero..."
-
-if systemctl --user is-active agentzero.service >/dev/null 2>&1; then
-    note "  → stopping agentzero.service"
-    systemctl --user stop agentzero
+# Match the daemon's runtime resolution.
+if [[ -d "${HOME}/Documents" ]]; then
+    VAULT_DIR="${HOME}/Documents/zbot"
+else
+    VAULT_DIR="${HOME}/zbot"
 fi
 
-if systemctl --user is-enabled agentzero.service >/dev/null 2>&1; then
-    note "  → disabling agentzero.service"
-    systemctl --user disable agentzero
-fi
+header "Removing z-bot..."
 
-UNIT_FILE="${HOME}/.config/systemd/user/agentzero.service"
-if [[ -f "${UNIT_FILE}" ]]; then
-    note "  → removing ${UNIT_FILE}"
-    rm -f "${UNIT_FILE}"
-fi
+# Stop + disable the current service AND any legacy unit. Both names
+# get the same treatment so an old install left behind by a previous
+# version still cleans up properly.
+for svc in zbot agentzero; do
+    if systemctl --user is-active "${svc}.service" >/dev/null 2>&1; then
+        note "  → stopping ${svc}.service"
+        systemctl --user stop "${svc}" || true
+    fi
+    if systemctl --user is-enabled "${svc}.service" >/dev/null 2>&1; then
+        note "  → disabling ${svc}.service"
+        systemctl --user disable "${svc}" || true
+    fi
+    UNIT_FILE="${HOME}/.config/systemd/user/${svc}.service"
+    if [[ -f "${UNIT_FILE}" ]]; then
+        note "  → removing ${UNIT_FILE}"
+        rm -f "${UNIT_FILE}"
+    fi
+done
 
-BIN_FILE="${HOME}/.local/bin/zerod"
-if [[ -f "${BIN_FILE}" ]]; then
-    note "  → removing ${BIN_FILE}"
-    rm -f "${BIN_FILE}"
-fi
+# Binary cleanup — current and legacy names.
+for bin in zbotd zerod; do
+    BIN_FILE="${HOME}/.local/bin/${bin}"
+    if [[ -f "${BIN_FILE}" ]]; then
+        note "  → removing ${BIN_FILE}"
+        rm -f "${BIN_FILE}"
+    fi
+done
 
-DIST_DIR="${HOME}/.local/share/agentzero"
-if [[ -d "${DIST_DIR}" ]]; then
-    note "  → removing ${DIST_DIR}"
-    rm -rf "${DIST_DIR}"
-fi
+# UI dist cleanup — current and legacy directory names.
+for d in zbot agentzero; do
+    DIST_DIR="${HOME}/.local/share/${d}"
+    if [[ -d "${DIST_DIR}" ]]; then
+        note "  → removing ${DIST_DIR}"
+        rm -rf "${DIST_DIR}"
+    fi
+done
 
 systemctl --user daemon-reload
 
 note ""
-note "${GREEN}${BOLD}✓ AgentZero uninstalled.${RESET}"
+note "${GREEN}${BOLD}✓ z-bot uninstalled.${RESET}"
 note ""
-note "  To also delete user data: rm -rf ~/Documents/zbot"
+note "  To also delete user data: rm -rf ${VAULT_DIR}"
 note "  To disable user-service linger: loginctl disable-linger ${USER}"

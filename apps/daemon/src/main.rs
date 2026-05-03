@@ -390,7 +390,15 @@ async fn main() -> Result<()> {
     // Setup logging based on merged configuration
     let _guard = setup_logging(&log_config, &data_dir)?;
 
-    info!("z-Bot Daemon v{}", env!("CARGO_PKG_VERSION"));
+    // `option_env!("BUILD_VERSION")` resolves to e.g. `2026.5.3.develop`
+    // when `apps/daemon/build.rs` ran with `ZBOT_INSTALL=1` (set by
+    // `make install` / `scripts/install.sh`). Otherwise it's None and
+    // the bare `CARGO_PKG_VERSION` is used.
+    const VERSION: &str = match option_env!("BUILD_VERSION") {
+        Some(v) => v,
+        None => env!("CARGO_PKG_VERSION"),
+    };
+    info!("z-Bot Daemon v{}", VERSION);
     info!("Data directory: {:?}", data_dir);
 
     // Load gateway configuration
