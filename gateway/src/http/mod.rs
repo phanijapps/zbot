@@ -23,6 +23,7 @@ mod memory_search;
 mod models;
 mod network;
 mod openapi;
+mod paths;
 mod plugins;
 mod providers;
 mod sessions;
@@ -79,6 +80,8 @@ pub fn create_http_router(
         // Health endpoints
         .route("/api/health", get(health::health_check))
         .route("/api/status", get(health::status))
+        // Vault path discovery (tells UI where the daemon's data lives)
+        .route("/api/paths", get(paths::get_paths))
         // Cleanup operations (bounded to vault-owned directories)
         .route("/api/cleanup/vault-temp", post(cleanup::cleanup_vault_temp))
         // Network info (LAN discoverability snapshot for Settings UI)
