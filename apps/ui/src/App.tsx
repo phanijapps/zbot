@@ -31,6 +31,7 @@ import { QuickChat } from "./features/chat-v2";
 import { ResearchPage } from "./features/research-v2";
 import { MissionControlPage } from "./features/mission-control";
 import { AccentPicker } from "./components/AccentPicker";
+import { useVersion } from "@/hooks/useVersion";
 
 // ============================================================================
 // Types
@@ -49,6 +50,25 @@ interface ConnectionStatus {
 function ResearchV2Redirect() {
   const { sessionId } = useParams<{ sessionId: string }>();
   return <Navigate to={`/research/${sessionId ?? ""}`} replace />;
+}
+
+/**
+ * Topbar version badge — fetches /api/health once and renders the
+ * daemon's reported version. Hidden while the fetch is in flight or on
+ * failure (rather than showing a placeholder) so the bar stays clean.
+ *
+ * Branch-suffixed versions (e.g. `2026.5.3.develop`) come straight from
+ * the build.rs that runs on `make install` / `scripts/install.sh`. Plain
+ * `cargo build` reports the bare `2026.5.3`.
+ */
+function VersionBadge() {
+  const version = useVersion();
+  if (!version) return null;
+  return (
+    <span className="topbar__version" title={`z-bot ${version}`}>
+      v{version}
+    </span>
+  );
 }
 
 function App() {
@@ -278,6 +298,7 @@ export function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
         </nav>
 
         <div className="topbar__right">
+          <VersionBadge />
           <AccentPicker />
           <div className="connection-status">
             <div className={`connection-status__dot ${

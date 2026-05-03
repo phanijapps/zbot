@@ -446,6 +446,22 @@
   color: var(--muted-foreground);
 }
 
+/* Version badge in the topbar right-side cluster. Same monospace +
+   size as connection-status to read as part of the same metadata
+   row. Hidden on narrow widths to preserve the brand + nav. */
+.topbar__version {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--muted-foreground);
+  user-select: text;
+  white-space: nowrap;
+}
+
+@media (max-width: 1024px) {
+  .topbar__version { display: none; }
+}
+
 .connection-status__dot {
   width: 6px;
   height: 6px;
