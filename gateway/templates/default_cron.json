@@ -1,0 +1,16 @@
+[
+  {
+    "id": "default-cleanup",
+    "name": "Cleanup temp files",
+    "schedule": "0 */4 * * *",
+    "agent_id": "general-purpose",
+    "message": "Delete files older than 24 hours from /tmp/zbot-* and ~/zbot/wards/scratch/. Be conservative — only touch these paths, skip anything that doesn't look ephemeral, and report counts and total size at the end.",
+    "respond_to": [],
+    "enabled": true,
+    "timezone": null,
+    "metadata": {
+      "source": "default_cron.json",
+      "purpose": "cleanup"
+    }
+  }
+]
