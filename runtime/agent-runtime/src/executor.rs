@@ -417,6 +417,27 @@ impl AgentExecutor {
         &self,
         user_message: &str,
         history: &[ChatMessage],
+        on_event: impl FnMut(StreamEvent),
+    ) -> Result<(), ExecutorError> {
+        self.execute_stream_with_stop_flag(user_message, history, None, on_event)
+            .await
+    }
+
+    /// Like `execute_stream` but accepts an optional cooperative stop
+    /// signal. When `stop_flag` is `Some`, the streaming-LLM `select!`
+    /// loop polls it every ~100 ms; on stop, the spawned LLM task is
+    /// aborted and the executor returns [`ExecutorError::Stopped`] so
+    /// the caller can finalize the session without treating it as a
+    /// real failure.
+    ///
+    /// Existing callers who don't have a stop signal continue to use
+    /// `execute_stream` (which delegates here with `None`); their
+    /// behaviour is bytecode-equivalent to before this method existed.
+    pub async fn execute_stream_with_stop_flag(
+        &self,
+        user_message: &str,
+        history: &[ChatMessage],
+        stop_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         mut on_event: impl FnMut(StreamEvent),
     ) -> Result<(), ExecutorError> {
         // Emit metadata event
@@ -483,7 +504,7 @@ impl AgentExecutor {
         tracing::debug!("Starting execute_with_tools_loop");
 
         // Execute with tool calling loop
-        self.execute_with_tools_loop(processed_messages, tools_schema, &mut on_event)
+        self.execute_with_tools_loop(processed_messages, tools_schema, stop_flag, &mut on_event)
             .await
     }
 
@@ -491,6 +512,7 @@ impl AgentExecutor {
         &self,
         messages: Vec<ChatMessage>,
         tools_schema: Option<Value>,
+        stop_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         on_event: &mut impl FnMut(StreamEvent),
     ) -> Result<(), ExecutorError> {
         tracing::debug!("=== execute_with_tools_loop starting ===");
@@ -825,9 +847,19 @@ impl AgentExecutor {
             // Uses tokio::select! with a 10s heartbeat interval so that during
             // extended silent phases (e.g., LLM reasoning), heartbeat events keep
             // WebSocket connections alive (client PONG_TIMEOUT is 30s).
+            //
+            // When `stop_flag` is provided, an additional 100ms-cadence arm
+            // polls it; on observation the spawned LLM task is aborted so the
+            // executor can return immediately rather than waiting for the LLM
+            // call to finish naturally. 100ms is the perceived-instant
+            // threshold for UI cancellation.
             let mut streamed_content = String::new();
             let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(10));
             heartbeat_interval.tick().await; // consume immediate first tick
+            let mut stop_poll = tokio::time::interval(std::time::Duration::from_millis(100));
+            stop_poll.tick().await; // consume immediate first tick
+
+            let mut stop_observed = false;
 
             loop {
                 tokio::select! {
@@ -861,14 +893,38 @@ impl AgentExecutor {
                             timestamp: chrono::Utc::now().timestamp_millis() as u64,
                         });
                     }
+                    _ = stop_poll.tick(), if stop_flag.is_some() => {
+                        let observed: bool = stop_flag
+                            .as_ref()
+                            .map(|f| f.load(std::sync::atomic::Ordering::SeqCst))
+                            .unwrap_or(false);
+                        if observed {
+                            tracing::info!("Stop requested mid-stream; aborting LLM task");
+                            stream_handle.abort();
+                            stop_observed = true;
+                            break;
+                        }
+                    }
                 }
             }
 
-            // Await the final response (channel closed = stream complete)
-            let response = stream_handle
-                .await
-                .map_err(|e| ExecutorError::LlmError(format!("Stream task panicked: {e}")))?
-                .map_err(|e| ExecutorError::LlmError(e.to_string()))?;
+            // Await the final response. If we observed a stop, the spawned
+            // task was aborted and `await` returns a cancelled JoinError; we
+            // surface that as `ExecutorError::Stopped` so the outer iteration
+            // loop can finalize the session without treating it as a real
+            // failure (no partial response is fed into history persistence,
+            // tool-call accumulation, or distillation).
+            let response = match stream_handle.await {
+                Ok(inner) => inner.map_err(|e| ExecutorError::LlmError(e.to_string()))?,
+                Err(e) if stop_observed || e.is_cancelled() => {
+                    return Err(ExecutorError::Stopped);
+                }
+                Err(e) => {
+                    return Err(ExecutorError::LlmError(format!(
+                        "Stream task panicked: {e}"
+                    )));
+                }
+            };
 
             // Update cumulative token counts and emit event
             if let Some(usage) = &response.usage {
@@ -2005,6 +2061,13 @@ pub enum ExecutorError {
     /// Maximum iterations reached with no progress detected.
     #[error("Maximum iterations reached")]
     MaxIterationsReached,
+
+    /// Cooperative stop — caller signaled the executor to stop via the
+    /// optional `stop_flag` parameter on `execute_stream`. Distinct from
+    /// `LlmError` so callers can short-circuit cleanup paths instead of
+    /// treating it as a real failure.
+    #[error("Execution stopped by caller")]
+    Stopped,
 
     /// Maximum iterations reached but agent needs user intervention.
     #[error("Max iterations reached after {iterations_used} iterations: {reason}")]
