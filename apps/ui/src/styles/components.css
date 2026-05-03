@@ -840,7 +840,8 @@
   color: var(--foreground);
 }
 
-.form-input {
+.form-input,
+.form-select {
   width: 100%;
   padding: var(--spacing-2) var(--spacing-3);
   font-size: var(--text-sm);
@@ -851,7 +852,8 @@
   transition: all 0.15s ease;
 }
 
-.form-input:focus {
+.form-input:focus,
+.form-select:focus {
   outline: none;
   border-color: var(--primary);
   box-shadow: 0 0 0 2px var(--ring-muted);
@@ -875,6 +877,14 @@
   background-repeat: no-repeat;
   background-position: right 12px center;
   padding-right: 40px;
+}
+
+/* Native <option> elements don't inherit the parent <select>'s
+   background — the browser renders the popup using OS defaults. Style
+   each option explicitly so the open dropdown stays dark. */
+.form-select option {
+  background-color: var(--background);
+  color: var(--foreground);
 }
 
 /* ============================================================================

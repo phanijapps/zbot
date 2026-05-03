@@ -1325,6 +1325,10 @@ impl AppState {
         // Seed default skills from bundled templates if skills dir is empty
         self.seed_default_skills();
 
+        // Seed default cron jobs (idempotent on job id) so first-run
+        // installs ship with the bundled cleanup schedule wired up.
+        self.seed_default_cron().await;
+
         // Seed default policies from bundled template if no policies exist
         self.seed_default_policies().await;
 
@@ -1407,6 +1411,69 @@ impl AppState {
             .map(|entries| entries.count())
             .unwrap_or(0);
         tracing::info!("Seeded {} default skills", count);
+    }
+
+    /// Seed default cron jobs from bundled `default_cron.json` template.
+    ///
+    /// Idempotent: any job whose `id` already exists on disk is left
+    /// alone, so users can edit or delete the seeded jobs without them
+    /// reappearing on every restart (until they delete and we re-seed
+    /// after that — same property the agent seeder has).
+    async fn seed_default_cron(&self) {
+        let template_bytes = match gateway_templates::Templates::get("default_cron.json") {
+            Some(file) => file.data.to_vec(),
+            None => {
+                tracing::debug!(
+                    "seed_default_cron: bundled `default_cron.json` not found, skipping"
+                );
+                return;
+            }
+        };
+
+        let requests: Vec<gateway_cron::CreateCronJobRequest> =
+            match serde_json::from_slice(&template_bytes) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("seed_default_cron: failed to parse default_cron.json: {e}");
+                    return;
+                }
+            };
+
+        if requests.is_empty() {
+            tracing::debug!("seed_default_cron: no entries in default_cron.json");
+            return;
+        }
+
+        let cron_service = gateway_cron::CronService::new(self.paths.clone());
+        let mut seeded = 0usize;
+        for request in requests {
+            if cron_service.get(&request.id).await.is_ok() {
+                tracing::debug!(
+                    job_id = %request.id,
+                    "seed_default_cron: job already exists, skipping"
+                );
+                continue;
+            }
+
+            let job_id = request.id.clone();
+            match cron_service.create(request).await {
+                Ok(_) => {
+                    seeded += 1;
+                    tracing::info!(job_id = %job_id, "Seeded default cron job");
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        job_id = %job_id,
+                        error = %e,
+                        "seed_default_cron: failed to create job"
+                    );
+                }
+            }
+        }
+
+        if seeded > 0 {
+            tracing::info!(seeded, "seed_default_cron: completed");
+        }
     }
 
     /// Seed default policies from bundled template if no policies/corrections exist.

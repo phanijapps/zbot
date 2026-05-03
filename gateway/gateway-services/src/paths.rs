@@ -149,6 +149,15 @@ impl VaultPaths {
         self.vault_dir.join("plugins")
     }
 
+    /// Path to the vault-owned temp directory.
+    ///
+    /// Convention: ephemeral working files, agent scratch output,
+    /// download caches — anything safe to wipe periodically. The
+    /// `/api/cleanup/vault-temp` endpoint is bounded to this path.
+    pub fn temp_dir(&self) -> PathBuf {
+        self.vault_dir.join("temp")
+    }
+
     /// Path to a specific ward (also used for agent data and session data).
     /// Returns `wards/{ward_id}/`
     pub fn ward_dir(&self, ward_id: &str) -> PathBuf {
@@ -190,6 +199,7 @@ impl VaultPaths {
             self.skills_dir(),
             self.plugins_dir(),
             self.wards_dir(),
+            self.temp_dir(),
         ];
 
         for dir in &dirs {

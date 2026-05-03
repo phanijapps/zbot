@@ -81,12 +81,27 @@ impl CronService {
         Ok(())
     }
 
-    /// Validate a cron schedule expression.
-    fn validate_schedule(schedule: &str) -> CronResult<()> {
-        // Try to parse the schedule to validate it
+    /// Normalize and validate a cron schedule expression.
+    ///
+    /// `tokio-cron-scheduler` requires 6-field cron (`sec min hour day
+    /// month weekday`) — 5-field Unix/Vixie cron is rejected. Many
+    /// callers (UI presets, third-party API consumers) send 5-field;
+    /// auto-prepend `0 ` so they get the natural at-second-zero
+    /// interpretation. Returns the canonical 6-field form for storage so
+    /// the scheduler reads it back unchanged.
+    fn normalize_schedule(schedule: &str) -> CronResult<String> {
         use tokio_cron_scheduler::Job;
-        match Job::new_async(schedule, |_uuid, _lock| Box::pin(async {})) {
-            Ok(_) => Ok(()),
+
+        let trimmed = schedule.trim();
+        let field_count = trimmed.split_whitespace().count();
+        let normalized = if field_count == 5 {
+            format!("0 {}", trimmed)
+        } else {
+            trimmed.to_string()
+        };
+
+        match Job::new_async(normalized.as_str(), |_uuid, _lock| Box::pin(async {})) {
+            Ok(_) => Ok(normalized),
             Err(e) => Err(CronServiceError::InvalidSchedule(format!(
                 "'{}': {}",
                 schedule, e
@@ -130,8 +145,8 @@ impl CronService {
             )));
         }
 
-        // Validate schedule
-        Self::validate_schedule(&request.schedule)?;
+        // Normalize 5-field cron to 6-field and validate
+        let schedule = Self::normalize_schedule(&request.schedule)?;
 
         let mut store = self.load().await?;
 
@@ -144,7 +159,7 @@ impl CronService {
         let job = CronJobConfig {
             id: request.id.clone(),
             name: request.name,
-            schedule: request.schedule,
+            schedule,
             agent_id: request.agent_id,
             message: request.message,
             respond_to: request.respond_to,
@@ -170,10 +185,11 @@ impl CronService {
         id: &str,
         request: UpdateCronJobRequest,
     ) -> CronResult<CronJobConfig> {
-        // Validate schedule if provided
-        if let Some(ref schedule) = request.schedule {
-            Self::validate_schedule(schedule)?;
-        }
+        // Normalize + validate schedule if provided
+        let normalized_schedule = match &request.schedule {
+            Some(schedule) => Some(Self::normalize_schedule(schedule)?),
+            None => None,
+        };
 
         let mut store = self.load().await?;
 
@@ -187,7 +203,7 @@ impl CronService {
         if let Some(name) = request.name {
             job.name = name;
         }
-        if let Some(schedule) = request.schedule {
+        if let Some(schedule) = normalized_schedule {
             job.schedule = schedule;
             job.next_run = None; // Will be recalculated by scheduler
         }
@@ -406,5 +422,54 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(CronServiceError::AlreadyExists(_))));
+    }
+
+    #[test]
+    fn normalize_schedule_passes_six_field_through() {
+        let normalized = CronService::normalize_schedule("0 0 */4 * * *").unwrap();
+        assert_eq!(normalized, "0 0 */4 * * *");
+    }
+
+    #[test]
+    fn normalize_schedule_promotes_five_field_to_six() {
+        // 5-field "every 5 minutes" → at second 0, every 5th minute
+        let normalized = CronService::normalize_schedule("*/5 * * * *").unwrap();
+        assert_eq!(normalized, "0 */5 * * * *");
+    }
+
+    #[test]
+    fn normalize_schedule_trims_whitespace() {
+        let normalized = CronService::normalize_schedule("  */15 * * * *  ").unwrap();
+        assert_eq!(normalized, "0 */15 * * * *");
+    }
+
+    #[test]
+    fn normalize_schedule_rejects_garbage() {
+        assert!(matches!(
+            CronService::normalize_schedule("nonsense"),
+            Err(CronServiceError::InvalidSchedule(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn create_persists_normalized_schedule_for_five_field_input() {
+        let (service, _temp) = test_service().await;
+
+        let created = service
+            .create(CreateCronJobRequest {
+                id: "ui-style".to_string(),
+                name: "UI-style".to_string(),
+                schedule: "0 */6 * * *".to_string(), // 5-field, what the UI presets emit
+                agent_id: "general-purpose".to_string(),
+                message: "Test".to_string(),
+                respond_to: vec![],
+                enabled: true,
+                timezone: None,
+                metadata: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(created.schedule, "0 0 */6 * * *");
     }
 }

@@ -36,6 +36,21 @@ use tokio_cron_scheduler::{Job, JobScheduler, JobSchedulerError};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+/// Default agent for cron jobs that don't specify (or leave blank) an
+/// `agent_id`. Routes through the orchestrator, which can then delegate.
+const DEFAULT_CRON_AGENT_ID: &str = "root";
+
+/// Resolve which agent a cron job dispatches to. Trims the configured
+/// `agent_id`; falls back to [`DEFAULT_CRON_AGENT_ID`] when empty.
+fn resolve_cron_agent_id(configured: &str) -> &str {
+    let trimmed = configured.trim();
+    if trimmed.is_empty() {
+        DEFAULT_CRON_AGENT_ID
+    } else {
+        trimmed
+    }
+}
+
 /// The cron scheduler for scheduling agent executions.
 pub struct CronScheduler {
     service: CronService,
@@ -126,19 +141,21 @@ impl CronScheduler {
 
         let job = Job::new_async(job_config.schedule.as_str(), move |_uuid, _lock| {
             let job_id = job_id.clone();
-            let _agent_id = agent_id.clone(); // Kept for logging, but not used
+            let agent_id = agent_id.clone();
             let message = message.clone();
             let respond_to = respond_to.clone();
             let bus = bus.clone();
             let service = service.clone();
 
             Box::pin(async move {
-                // Always send to root agent - cron jobs are external triggers
-                // that should go through the main orchestrating agent
-                info!(job_id = %job_id, "Cron job triggered (routing to root agent)");
+                let target_agent = resolve_cron_agent_id(&agent_id).to_string();
+                info!(
+                    job_id = %job_id,
+                    agent_id = %target_agent,
+                    "Cron job triggered"
+                );
 
-                // Create session request - always route to root agent
-                let request = SessionRequest::new("root", &message)
+                let request = SessionRequest::new(&target_agent, &message)
                     .with_source(TriggerSource::Cron)
                     .with_external_ref(format!("cron-{}", job_id))
                     .with_respond_to(respond_to);
@@ -227,12 +244,15 @@ impl CronScheduler {
     /// Manually trigger a job.
     pub async fn trigger(&self, job_id: &str) -> Result<TriggerResult, CronSchedulerError> {
         let job = self.service.get(job_id).await?;
+        let target_agent = resolve_cron_agent_id(&job.agent_id).to_string();
 
-        // Always send to root agent - cron jobs are external triggers
-        info!(job_id = %job_id, "Manually triggering cron job (routing to root agent)");
+        info!(
+            job_id = %job_id,
+            agent_id = %target_agent,
+            "Manually triggering cron job"
+        );
 
-        // Create session request - always route to root agent
-        let request = SessionRequest::new("root", &job.message)
+        let request = SessionRequest::new(&target_agent, &job.message)
             .with_source(TriggerSource::Cron)
             .with_external_ref(format!("cron-{}-manual", job_id))
             .with_respond_to(job.respond_to.clone());
@@ -362,4 +382,55 @@ pub enum CronSchedulerError {
 
     #[error("Scheduler error: {0}")]
     Scheduler(#[from] JobSchedulerError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_CRON_AGENT_ID, resolve_cron_agent_id};
+
+    #[test]
+    fn returns_configured_agent_id_when_present() {
+        assert_eq!(resolve_cron_agent_id("general-purpose"), "general-purpose");
+        assert_eq!(resolve_cron_agent_id("research-agent"), "research-agent");
+    }
+
+    #[test]
+    fn falls_back_to_root_when_empty() {
+        assert_eq!(resolve_cron_agent_id(""), DEFAULT_CRON_AGENT_ID);
+    }
+
+    #[test]
+    fn falls_back_to_root_when_whitespace_only() {
+        assert_eq!(resolve_cron_agent_id("   "), DEFAULT_CRON_AGENT_ID);
+        assert_eq!(resolve_cron_agent_id("\t\n"), DEFAULT_CRON_AGENT_ID);
+    }
+
+    #[test]
+    fn trims_surrounding_whitespace() {
+        assert_eq!(resolve_cron_agent_id("  builder-agent  "), "builder-agent");
+    }
+
+    #[test]
+    fn passes_through_explicit_root() {
+        assert_eq!(resolve_cron_agent_id("root"), "root");
+    }
+
+    #[test]
+    fn bundled_default_cron_template_parses() {
+        let bytes = gateway_templates::Templates::get("default_cron.json")
+            .expect("default_cron.json bundled in gateway-templates")
+            .data;
+
+        let requests: Vec<gateway_cron::CreateCronJobRequest> = serde_json::from_slice(&bytes)
+            .expect("default_cron.json must match CreateCronJobRequest schema");
+
+        let cleanup = requests
+            .iter()
+            .find(|r| r.id == "default-cleanup")
+            .expect("bundled `default-cleanup` cron job missing");
+
+        assert_eq!(cleanup.agent_id, "general-purpose");
+        assert_eq!(cleanup.schedule, "0 0 */4 * * *");
+        assert!(cleanup.enabled);
+    }
 }

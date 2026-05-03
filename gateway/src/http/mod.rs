@@ -6,6 +6,7 @@ mod agents;
 mod artifacts;
 mod bridge;
 mod chat;
+mod cleanup;
 mod connectors;
 mod conversations;
 mod cron;
@@ -81,6 +82,8 @@ pub fn create_http_router(
         .route("/api/status", get(health::status))
         // Vault path discovery (tells UI where the daemon's data lives)
         .route("/api/paths", get(paths::get_paths))
+        // Cleanup operations (bounded to vault-owned directories)
+        .route("/api/cleanup/vault-temp", post(cleanup::cleanup_vault_temp))
         // Network info (LAN discoverability snapshot for Settings UI)
         .route("/api/network/info", get(network::get_network_info))
         // Agent endpoints
