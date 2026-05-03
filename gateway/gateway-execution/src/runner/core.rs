@@ -1472,8 +1472,11 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                 }
             }
             Err(agent_runtime::ExecutorError::Stopped) => {
-                // Cooperative stop — handled by the post-match stop block
-                // below which calls stop_execution. No crash report.
+                // Cooperative stop — the trailing
+                // `if handle.is_stop_requested()` block below calls
+                // stop_execution. No crash report; no double call (which
+                // would warn "Cannot cancel session in CANCELLED state"
+                // because cancel_session is non-idempotent).
                 tracing::info!(
                     session_id = %session_id_clone,
                     "Continuation stopped cooperatively"

@@ -519,20 +519,17 @@ impl ExecutionStream {
             }
             Err(agent_runtime::ExecutorError::Stopped) => {
                 // Cooperative stop — the executor's mid-stream poll
-                // observed handle.stop() and aborted. Treat as a graceful
-                // exit (stop_execution, not crash_execution) so the
-                // session ends with status=cancelled rather than crashed.
-                stop_execution(StopExecution {
-                    state_service: &self.state_service,
-                    log_service: &self.log_service,
-                    event_bus: &self.event_bus,
-                    execution_id: &execution_id,
-                    session_id: &session_id,
-                    agent_id: &agent_id,
-                    conversation_id: &conversation_id,
-                    iteration: handle.current_iteration(),
-                })
-                .await;
+                // observed handle.stop() and aborted. We don't call
+                // stop_execution here; the trailing
+                // `if handle.is_stop_requested()` block below is the
+                // canonical path. Calling it twice would warn
+                // "Failed to cancel session: Cannot cancel session in
+                // CANCELLED state" on the second attempt because the
+                // session is already terminal.
+                tracing::info!(
+                    session_id = %session_id,
+                    "Cooperative stop observed; trailing check will finalize"
+                );
 
                 // Cancel any orphaned delegations spawned before the stop.
                 cancel_session_delegations(
