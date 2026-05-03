@@ -309,8 +309,15 @@ impl ExecutionStream {
         // Execute with streaming — closure dispatches into free-fn
         // handlers defined at module scope (handle_tool_call_start,
         // handle_tool_result). Keeps the spawn body flat.
+        //
+        // Pass the handle's stop signal so the executor's mid-stream
+        // recv loop can abort the in-flight LLM task when the user
+        // clicks Stop. On observation it returns ExecutorError::Stopped
+        // which we handle as a graceful exit below (stop_execution,
+        // not crash_execution).
+        let stop_sig = Some(handle.stop_signal());
         let result = executor
-            .execute_stream(&message, &history, |event| {
+            .execute_stream_with_stop_flag(&message, &history, stop_sig, |event| {
                 if handle.is_stop_requested() {
                     return;
                 }
@@ -509,6 +516,29 @@ impl ExecutionStream {
                         .await;
                     });
                 }
+            }
+            Err(agent_runtime::ExecutorError::Stopped) => {
+                // Cooperative stop — the executor's mid-stream poll
+                // observed handle.stop() and aborted. We don't call
+                // stop_execution here; the trailing
+                // `if handle.is_stop_requested()` block below is the
+                // canonical path. Calling it twice would warn
+                // "Failed to cancel session: Cannot cancel session in
+                // CANCELLED state" on the second attempt because the
+                // session is already terminal.
+                tracing::info!(
+                    session_id = %session_id,
+                    "Cooperative stop observed; trailing check will finalize"
+                );
+
+                // Cancel any orphaned delegations spawned before the stop.
+                cancel_session_delegations(
+                    &session_id,
+                    &self.delegation_registry,
+                    &self.handles,
+                    &self.state_service,
+                )
+                .await;
             }
             Err(e) => {
                 // Crash execution and emit events

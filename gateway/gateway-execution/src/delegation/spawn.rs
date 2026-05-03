@@ -632,8 +632,9 @@ fn spawn_execution_task(ctx: SpawnContext) {
         let mut turn_tool_calls: Vec<serde_json::Value> = Vec::new();
         let mut turn_text = String::new();
 
+        let stop_sig = Some(handle.stop_signal());
         let result = executor
-            .execute_stream(&task_msg, &initial_history, |event| {
+            .execute_stream_with_stop_flag(&task_msg, &initial_history, stop_sig, |event| {
                 if handle.is_stop_requested() {
                     return;
                 }
@@ -746,6 +747,14 @@ fn spawn_execution_task(ctx: SpawnContext) {
                     fact_store_for_ctx: fact_store_for_ctx.as_ref(),
                 })
                 .await;
+            }
+            Err(agent_runtime::ExecutorError::Stopped) => {
+                // Cooperative stop cascaded from parent — exit the
+                // delegated session cleanly without a crash report.
+                tracing::info!(
+                    session_id = %session_id,
+                    "Delegated agent stopped cooperatively"
+                );
             }
             Err(e) => {
                 // Build structured crash report with plan status and ward files

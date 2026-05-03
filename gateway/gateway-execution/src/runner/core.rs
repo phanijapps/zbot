@@ -677,10 +677,31 @@ impl ExecutionRunner {
     }
 
     /// Stop an execution by conversation ID.
+    ///
+    /// Cascades the stop signal to any delegated subagents currently
+    /// running under this conversation. Without the cascade, stopping a
+    /// root that's awaiting a planner would only signal the root's
+    /// handle; the planner would keep running until its next iteration
+    /// boundary. The cascade is one-level (parent → direct children) —
+    /// extend to a BFS over `get_children` if multi-level delegation
+    /// becomes common.
     pub async fn stop(&self, conversation_id: &str) -> Result<(), String> {
         let handles = self.handles.read().await;
+        let stopped_root = handles.get(conversation_id).is_some();
         if let Some(handle) = handles.get(conversation_id) {
             handle.stop();
+        }
+        for child_conv_id in self.delegation_registry.get_children(conversation_id) {
+            if let Some(child) = handles.get(&child_conv_id) {
+                child.stop();
+                tracing::info!(
+                    parent = %conversation_id,
+                    child = %child_conv_id,
+                    "Cascaded stop signal to delegated subagent"
+                );
+            }
+        }
+        if stopped_root {
             Ok(())
         } else {
             Err(format!(
@@ -1241,8 +1262,9 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         // Track current tool name so the extractor can dispatch by name.
         let mut current_tool_name = String::new();
 
+        let stop_sig = Some(handle.stop_signal());
         let result = executor
-            .execute_stream(&continuation_message, &history, |event| {
+            .execute_stream_with_stop_flag(&continuation_message, &history, stop_sig, |event| {
                 if handle.is_stop_requested() {
                     return;
                 }
@@ -1448,6 +1470,17 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                         .await;
                     });
                 }
+            }
+            Err(agent_runtime::ExecutorError::Stopped) => {
+                // Cooperative stop — the trailing
+                // `if handle.is_stop_requested()` block below calls
+                // stop_execution. No crash report; no double call (which
+                // would warn "Cannot cancel session in CANCELLED state"
+                // because cancel_session is non-idempotent).
+                tracing::info!(
+                    session_id = %session_id_clone,
+                    "Continuation stopped cooperatively"
+                );
             }
             Err(e) => {
                 crash_execution(CrashExecution {
