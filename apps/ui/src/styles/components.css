@@ -879,6 +879,14 @@
   padding-right: 40px;
 }
 
+/* Native <option> elements don't inherit the parent <select>'s
+   background — the browser renders the popup using OS defaults. Style
+   each option explicitly so the open dropdown stays dark. */
+.form-select option {
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
 /* ============================================================================
    BADGES & TAGS
    ============================================================================ */
