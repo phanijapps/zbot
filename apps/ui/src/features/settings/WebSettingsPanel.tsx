@@ -20,6 +20,7 @@ import {
 } from "@/services/transport";
 import { TabBar, TabPanel } from "@/components/TabBar";
 import { HelpBox } from "@/components/HelpBox";
+import { usePaths } from "@/hooks/usePaths";
 import { EmbeddingsCard } from "./EmbeddingsCard";
 import { NetworkSettingsCard } from "./NetworkSettingsCard";
 import { CustomizationTab } from "./customization/CustomizationTab";
@@ -37,6 +38,7 @@ import { ModelTextInput } from "../shared/modelTextInput";
 export function WebSettingsPanel() {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get("tab") || "providers";
+  const paths = usePaths();
 
   const setActiveTab = useCallback(
     (tab: string) => {
@@ -391,7 +393,7 @@ export function WebSettingsPanel() {
                 <span style={{ opacity: 0.3 }}>|</span>
                 <span>WS <code style={{ color: "var(--foreground)" }}>localhost:18791/ws</code></span>
                 <span style={{ opacity: 0.3 }}>|</span>
-                <span>Data <code style={{ color: "var(--foreground)" }}>~/Documents/zbot/</code></span>
+                <span>Data <code style={{ color: "var(--foreground)" }}>{paths?.vaultDirDisplay ?? "~/Documents/zbot"}</code></span>
               </div>
             </div>
 
