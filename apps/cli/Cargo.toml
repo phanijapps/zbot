@@ -7,7 +7,7 @@ license.workspace = true
 description = "Zero Agent CLI with rich TUI interface"
 
 [[bin]]
-name = "zero"
+name = "zbot"
 path = "src/main.rs"
 
 [dependencies]

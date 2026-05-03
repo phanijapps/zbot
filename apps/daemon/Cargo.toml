@@ -47,7 +47,7 @@ dirs = "5"
 tikv-jemallocator = "0.6"
 
 [[bin]]
-name = "zerod"
+name = "zbotd"
 path = "src/main.rs"
 
 [lints]
