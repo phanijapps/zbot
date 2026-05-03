@@ -1,4 +1,4 @@
-# Defect — `/logs` sidebar leaks subagents under `root_only=true`
+# [FIXED 2026-05-03] Defect — `/logs` sidebar leaks subagents under `root_only=true`
 
 ## Symptom
 

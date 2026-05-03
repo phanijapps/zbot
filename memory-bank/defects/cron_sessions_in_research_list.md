@@ -1,4 +1,4 @@
-# Defect — Cron-fired sessions appear in the Research list
+# [OBSOLETE 2026-05-03] Defect — Cron-fired sessions appear in the Research list
 
 **Severity:** Low (cosmetic, no data loss)
 **Discovered:** 2026-05-03 after default cleanup schedule shipped (PR #96)

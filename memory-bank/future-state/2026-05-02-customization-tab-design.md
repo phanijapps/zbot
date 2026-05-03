@@ -1,4 +1,4 @@
-# Customization Tab — Design
+# [IMPLEMENTED 2026-05-03] Customization Tab — Design
 
 **Status:** Design (awaiting review)
 **Date:** 2026-05-02
