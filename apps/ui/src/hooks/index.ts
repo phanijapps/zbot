@@ -1,5 +1,5 @@
 /**
- * React hooks for AgentZero UI.
+ * React hooks for the z-bot UI.
  */
 
 export { useConversationEvents } from "./useConversationEvents";

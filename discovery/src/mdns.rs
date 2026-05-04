@@ -64,7 +64,7 @@ impl Advertiser for MdnsAdvertiser {
         }
 
         let per_instance_host = format!(
-            "{}-agentzero.local.",
+            "{}-zbot.local.",
             crate::network_info::sanitize_for_hostname(&info.instance_name)
         );
         let alias_host = if info.hostname_alias.ends_with('.') {

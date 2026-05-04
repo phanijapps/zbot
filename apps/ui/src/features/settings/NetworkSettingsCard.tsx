@@ -133,7 +133,7 @@ export function NetworkSettingsCard() {
 
           {info.mdns.active && !info.mdns.aliasClaimed && (
             <div className="info" role="status">
-              <code>agentzero.local</code> is already in use on this network — only the
+              <code>zbot.local</code> is already in use on this network — only the
               per-instance hostname is being advertised.
             </div>
           )}

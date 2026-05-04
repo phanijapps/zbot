@@ -6,9 +6,9 @@
 
 ### How to Report
 
-If you discover a security vulnerability in AgentZero, please send an email to:
+If you discover a security vulnerability in z-bot, please send an email to:
 
-- **Email:** `security@agentzero.dev` (or replace with actual security email)
+- **Email:** `security@zbot.dev` (or replace with actual security email)
 
 Please include:
 
@@ -233,4 +233,4 @@ npm test
 
 ## License
 
-This security policy is part of the AgentZero project and is licensed under the same terms as the main project (MIT License).
+This security policy is part of the z-bot project and is licensed under the same terms as the main project (MIT License).

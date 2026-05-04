@@ -75,8 +75,8 @@ Each subagent works in isolation with its own conversation, tools, and context. 
 
 ```bash
 # Clone the repository
-git clone https://github.com/phanijapps/agentzero.git
-cd agentzero
+git clone https://github.com/phanijapps/zbot.git
+cd zbot
 
 # Install frontend dependencies
 cd apps/ui && npm install && cd ../..
@@ -99,11 +99,11 @@ cargo run -p daemon --release -- --static-dir ./dist
 
 ## Install on Raspberry Pi (or any Linux box)
 
-Run AgentZero as an auto-starting user-account daemon, no `sudo` required.
+Run z-bot as an auto-starting user-account daemon, no `sudo` required.
 
 ```bash
-git clone <repo> agentzero
-cd agentzero
+git clone https://github.com/phanijapps/zbot.git
+cd zbot
 ./scripts/install.sh
 ```
 
@@ -111,7 +111,7 @@ The script:
 
 1. Validates prerequisites (rustc, cargo, node, npm, gcc, systemd, disk space).
 2. If anything is missing, prints the exact `apt` / `rustup` command for you to run, then exits.
-3. Once everything's green, builds the daemon and UI, installs into `~/.local/bin` and `~/.local/share/agentzero/`, and enables the systemd `--user` service with linger so it survives SSH logout and reboots.
+3. Once everything's green, builds the daemon and UI, installs into `~/.local/bin` and `~/.local/share/zbot/`, and enables the systemd `--user` service with linger so it survives SSH logout and reboots.
 
 To upgrade after pulling new code:
 
@@ -140,7 +140,7 @@ Common operations:
 
 By default the daemon advertises itself on your local network so phones, tablets, and other devices can reach it without typing an IP. Visit:
 
-- `http://agentzero.local` from any device on the same Wi-Fi.
+- `http://zbot.local` from any device on the same Wi-Fi.
 - Or scan the QR code in **Settings → Network** to open the URL on your phone.
 
 If you'd rather keep the daemon loopback-only, toggle **Expose to LAN** off in Settings or set `network.exposeToLan: false` in `~/Documents/zbot/config/settings.json` (restart required).
@@ -161,7 +161,7 @@ If you'd rather keep the daemon loopback-only, toggle **Expose to LAN** off in S
             └──────────────┬──────────────┘
                            │
 ┌──────────────────────────┴──────────────────────────────┐
-│                     DAEMON (zerod)                      │
+│                     DAEMON (zbotd)                      │
 │  ┌────────────────────────────────────────────────────┐ │
 │  │  HTTP API :18791  │  WebSocket :18790  │  Static   │ │
 │  └────────────────────────────────────────────────────┘ │

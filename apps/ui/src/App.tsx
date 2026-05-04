@@ -162,7 +162,7 @@ function App() {
             Make sure the z-Bot daemon is running:
             <br />
             <code className="badge mt-inline">
-              zerod
+              zbotd
             </code>
           </p>
           <button
@@ -307,7 +307,7 @@ export function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
                 : 'connection-status__dot--disconnected'
             }`} />
             <span className="connection-status__text">
-              {connectionStatus.connected ? "Connected · zerod" : "Disconnected"}
+              {connectionStatus.connected ? "Connected · zbotd" : "Disconnected"}
             </span>
           </div>
         </div>
