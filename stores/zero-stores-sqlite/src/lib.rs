@@ -37,6 +37,7 @@ pub mod recall_log_repository;
 pub mod repository;
 mod schema;
 pub mod sqlite_vec_loader;
+pub mod system_profile;
 pub mod vector_index;
 pub mod wiki_repository;
 pub mod wiki_store;

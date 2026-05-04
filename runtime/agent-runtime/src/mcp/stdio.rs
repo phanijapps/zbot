@@ -9,10 +9,19 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::time::Duration;
 
 use super::client::McpClient;
 use super::error::McpError;
 use super::tool::McpTool;
+
+/// Wall-clock budget for an entire stdio MCP exchange (spawn + init +
+/// request + response). A wedged Node MCP server used to park a tokio
+/// worker forever; this caps it. 60 s is generous enough for slow tool
+/// implementations while bounding the worst case. The spawned child
+/// uses `kill_on_drop` so timing out actually frees the process —
+/// otherwise we'd leak zombies.
+const STDIO_MCP_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Stdio-based MCP client (subprocess communication)
 pub(super) struct StdioMcpClient {
@@ -65,6 +74,7 @@ impl StdioMcpClient {
                 format!("{} {}", self.command, self.args.join(" "))
             };
             c.args(["/c", &full_cmd]);
+            c.kill_on_drop(true);
             c
         };
 
@@ -72,6 +82,7 @@ impl StdioMcpClient {
         let mut cmd = {
             let mut c = tokio::process::Command::new(&self.command);
             c.args(&self.args);
+            c.kill_on_drop(true);
             c
         };
 
@@ -220,6 +231,7 @@ impl StdioMcpClient {
                 format!("{} {}", self.command, self.args.join(" "))
             };
             c.args(["/c", &full_cmd]);
+            c.kill_on_drop(true);
             c
         };
 
@@ -227,6 +239,7 @@ impl StdioMcpClient {
         let mut cmd = {
             let mut c = tokio::process::Command::new(&self.command);
             c.args(&self.args);
+            c.kill_on_drop(true);
             c
         };
 
@@ -398,10 +411,29 @@ impl McpClient for StdioMcpClient {
     }
 
     async fn call_tool(&self, tool_name: &str, arguments: Value) -> Result<Value, McpError> {
-        self.spawn_and_call(tool_name, &arguments).await
+        match tokio::time::timeout(
+            STDIO_MCP_TIMEOUT,
+            self.spawn_and_call(tool_name, &arguments),
+        )
+        .await
+        {
+            Ok(res) => res,
+            Err(_) => Err(McpError::ProtocolError(format!(
+                "STDIO MCP call_tool timed out after {}s ({})",
+                STDIO_MCP_TIMEOUT.as_secs(),
+                self.name,
+            ))),
+        }
     }
 
     async fn list_tools(&self) -> Result<Vec<McpTool>, McpError> {
-        self.spawn_and_list().await
+        match tokio::time::timeout(STDIO_MCP_TIMEOUT, self.spawn_and_list()).await {
+            Ok(res) => res,
+            Err(_) => Err(McpError::ProtocolError(format!(
+                "STDIO MCP list_tools timed out after {}s ({})",
+                STDIO_MCP_TIMEOUT.as_secs(),
+                self.name,
+            ))),
+        }
     }
 }

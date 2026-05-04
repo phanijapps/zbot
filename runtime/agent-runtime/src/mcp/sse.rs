@@ -9,10 +9,15 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::time::Duration;
 
 use super::client::McpClient;
 use super::error::McpError;
 use super::tool::McpTool;
+
+/// Same budgets as the plain-HTTP MCP client — see `mcp::http`.
+const SSE_MCP_TIMEOUT: Duration = Duration::from_secs(30);
+const SSE_MCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// SSE-based MCP client
 pub(super) struct SseMcpClient {
@@ -37,7 +42,11 @@ impl SseMcpClient {
             name,
             url,
             headers,
-            client: reqwest::Client::builder().build().expect("reqwest client"),
+            client: reqwest::Client::builder()
+                .timeout(SSE_MCP_TIMEOUT)
+                .connect_timeout(SSE_MCP_CONNECT_TIMEOUT)
+                .build()
+                .expect("reqwest client"),
         }
     }
 

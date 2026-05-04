@@ -5,8 +5,17 @@
 
 use async_trait::async_trait;
 use serde_json::json;
+use std::time::Duration;
 
 use super::embedding::{EmbeddingClient, EmbeddingError};
+
+/// Overall budget for an embedding request. Embedding calls land on the
+/// memory-save and recall hot paths, so a wedged upstream stalls the
+/// daemon. 120 s is generous enough for slow-network Ollama deployments
+/// while still failing fast on real outages.
+const EMBEDDING_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// TCP connect deadline — fail fast on unreachable embedding backends.
+const EMBEDDING_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// OpenAI-compatible embedding client.
 ///
@@ -29,7 +38,11 @@ impl OpenAiEmbeddingClient {
             api_key,
             model,
             dimensions,
-            http_client: reqwest::Client::builder().build().expect("reqwest client"),
+            http_client: reqwest::Client::builder()
+                .timeout(EMBEDDING_REQUEST_TIMEOUT)
+                .connect_timeout(EMBEDDING_CONNECT_TIMEOUT)
+                .build()
+                .expect("reqwest client"),
         }
     }
 }
