@@ -218,8 +218,16 @@ impl GatewayServer {
                 }
             };
 
+            // Same const lives in `http::health` — mDNS TXT and the
+            // `/api/health` body should agree on what version is
+            // running. See that module's `VERSION` for the
+            // `option_env!("BUILD_VERSION")` fallback shape.
+            const VERSION: &str = match option_env!("BUILD_VERSION") {
+                Some(v) => v,
+                None => env!("CARGO_PKG_VERSION"),
+            };
             let mut txt = std::collections::BTreeMap::new();
-            txt.insert("version".into(), env!("CARGO_PKG_VERSION").to_string());
+            txt.insert("version".into(), VERSION.to_string());
             txt.insert("instance".into(), instance_id.clone());
             txt.insert("name".into(), instance_name.clone());
             txt.insert("path".into(), "/".into());

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# AgentZero installer for Raspberry Pi / Linux.
+# z-bot installer for Raspberry Pi / Linux.
 #
 # Validates prerequisites, builds the daemon and UI, installs as a
 # systemd --user service, and enables linger so the daemon survives
@@ -14,6 +14,23 @@
 # rustup command for you to run yourself.
 
 set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Version + vault path resolution
+# ---------------------------------------------------------------------------
+
+# Single source of truth: Cargo.toml [workspace.package].version. The
+# first `version = "..."` line in the file (workspace versions appear
+# before any per-crate override).
+VERSION="$(awk -F\" '/^version[[:space:]]*=/ {print $2; exit}' Cargo.toml)"
+
+# Match the daemon's runtime resolution: `dirs::document_dir()` if it
+# exists, else `home_dir()`. Affects log path display only.
+if [[ -d "${HOME}/Documents" ]]; then
+    VAULT_DIR="${HOME}/Documents/zbot"
+else
+    VAULT_DIR="${HOME}/zbot"
+fi
 
 # ---------------------------------------------------------------------------
 # Color output (with NO_COLOR support)
@@ -152,35 +169,36 @@ run_all_checks() {
 
 bootstrap() {
     local upgrade_mode=false
-    if systemctl --user is-enabled agentzero.service >/dev/null 2>&1; then
+    # Detect any prior install (legacy `agentzero.service` or current
+    # `zbot.service`). Either case enters upgrade mode.
+    if systemctl --user is-enabled agentzero.service >/dev/null 2>&1 \
+        || systemctl --user is-enabled zbot.service >/dev/null 2>&1; then
         upgrade_mode=true
     fi
 
     if "$upgrade_mode"; then
-        header "Upgrading AgentZero (this takes ~15 min on a Pi 4)..."
+        header "Upgrading z-bot ${VERSION} (this takes ~15 min on a Pi 4)..."
     else
-        header "Building AgentZero (this takes ~15 min on a Pi 4)..."
+        header "Building z-bot ${VERSION} (this takes ~15 min on a Pi 4)..."
     fi
 
-    note "  → make build"
-    make build
-    note "  → make install (binary, UI dist, systemd unit)"
+    note "  → make install (cargo build with ZBOT_INSTALL=1, UI dist, systemd unit)"
     make install >/dev/null
 
     note "  → loginctl enable-linger ${USER}"
     loginctl enable-linger "${USER}"
 
     if "$upgrade_mode"; then
-        note "  → systemctl --user restart agentzero"
-        systemctl --user restart agentzero
+        note "  → systemctl --user restart zbot"
+        systemctl --user restart zbot
     fi
 
     note ""
-    note "${GREEN}${BOLD}✓ AgentZero is running.${RESET}"
+    note "${GREEN}${BOLD}✓ z-bot ${VERSION} is running.${RESET}"
     note ""
-    note "  Status:  systemctl --user status agentzero"
-    note "  Logs:    tail -F ~/Documents/zbot/logs/*.log"
-    note "  URL:     http://agentzero.local:18791  (or http://<your-ip>:18791)"
+    note "  Status:  systemctl --user status zbot"
+    note "  Logs:    tail -F ${VAULT_DIR}/logs/*.log"
+    note "  URL:     http://zbot.local:18791  (or http://<your-ip>:18791)"
     note ""
     note "  To stop:    make stop"
     note "  To remove:  ./scripts/uninstall.sh"
@@ -191,7 +209,7 @@ bootstrap() {
 # ---------------------------------------------------------------------------
 
 main() {
-    header "Checking prerequisites for AgentZero..."
+    header "Checking prerequisites for z-bot ${VERSION}..."
     require_linux
     # shellcheck source=/dev/null
     ok "Linux ($(. /etc/os-release && echo "$PRETTY_NAME"))"
