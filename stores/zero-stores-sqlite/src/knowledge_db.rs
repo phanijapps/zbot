@@ -12,6 +12,7 @@ use crate::knowledge_schema::{
     initialize_knowledge_database, initialize_vec_tables_with_dim,
 };
 use crate::sqlite_vec_loader::load_sqlite_vec;
+use crate::system_profile;
 
 /// Connection pool for `knowledge.db`.
 ///
@@ -22,20 +23,29 @@ pub struct KnowledgeDatabase {
 }
 
 /// Customizer: applies WAL pragmas and loads sqlite-vec on every acquired connection.
+///
+/// `cache_size` and `mmap_size` are sourced from [`system_profile`] so
+/// the knowledge DB scales with the host (Pi → laptop → CI runner).
 #[derive(Debug)]
-struct KnowledgeConnectionCustomizer;
+struct KnowledgeConnectionCustomizer {
+    cache_kib: u32,
+    mmap_bytes: u64,
+}
 
 impl r2d2::CustomizeConnection<Connection, rusqlite::Error> for KnowledgeConnectionCustomizer {
     fn on_acquire(&self, conn: &mut Connection) -> Result<(), rusqlite::Error> {
-        conn.execute_batch(
+        conn.execute_batch(&format!(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
-             PRAGMA cache_size = -8000;
+             PRAGMA cache_size = -{cache_kib};
+             PRAGMA mmap_size = {mmap_bytes};
              PRAGMA busy_timeout = 5000;
              PRAGMA wal_autocheckpoint = 1000;
              PRAGMA temp_store = MEMORY;
              PRAGMA foreign_keys = ON;",
-        )?;
+            cache_kib = self.cache_kib,
+            mmap_bytes = self.mmap_bytes,
+        ))?;
         load_sqlite_vec(conn)?;
         Ok(())
     }
@@ -67,12 +77,19 @@ impl KnowledgeDatabase {
                 .map_err(|e| format!("Failed to create data dir: {e}"))?;
         }
 
+        let pool_max = system_profile::pool_max_size();
+        let cache_kib = system_profile::cache_size_kib();
+        let mmap_bytes = system_profile::mmap_size_bytes();
+
         let manager = SqliteConnectionManager::file(&db_path);
         let pool = Pool::builder()
-            .max_size(8)
+            .max_size(pool_max)
             .min_idle(Some(2))
-            .connection_timeout(Duration::from_secs(5))
-            .connection_customizer(Box::new(KnowledgeConnectionCustomizer))
+            .connection_timeout(Duration::from_secs(15))
+            .connection_customizer(Box::new(KnowledgeConnectionCustomizer {
+                cache_kib,
+                mmap_bytes,
+            }))
             .build(manager)
             .map_err(|e| format!("Failed to create knowledge pool: {e}"))?;
 
@@ -91,7 +108,14 @@ impl KnowledgeDatabase {
                 .map_err(|e| format!("Failed to cleanup orphan reindex tables: {e}"))?;
         }
 
-        tracing::info!("Knowledge database initialized at {:?}", db_path);
+        tracing::info!(
+            target: "zbot_sqlite",
+            "knowledge.db pool: path={:?} pool_max={} cache_kib={} mmap_mib={}",
+            db_path,
+            pool_max,
+            cache_kib,
+            mmap_bytes / (1024 * 1024),
+        );
 
         Ok(Self { pool })
     }

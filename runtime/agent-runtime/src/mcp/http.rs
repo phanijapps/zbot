@@ -9,10 +9,19 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::time::Duration;
 
 use super::client::McpClient;
 use super::error::McpError;
 use super::tool::McpTool;
+
+/// Overall request budget. Without this, a wedged upstream parks a tokio
+/// worker indefinitely (the OS-level TCP timeout is ~2 min on Linux, but
+/// the daemon "looks stuck" the whole time). 30 s covers any reasonable
+/// MCP tool call.
+const HTTP_MCP_TIMEOUT: Duration = Duration::from_secs(30);
+/// TCP connect deadline — fail fast on dead hosts before issuing the call.
+const HTTP_MCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// HTTP-based MCP client
 pub(super) struct HttpMcpClient {
@@ -37,7 +46,11 @@ impl HttpMcpClient {
             name,
             url,
             headers,
-            client: reqwest::Client::builder().build().expect("reqwest client"),
+            client: reqwest::Client::builder()
+                .timeout(HTTP_MCP_TIMEOUT)
+                .connect_timeout(HTTP_MCP_CONNECT_TIMEOUT)
+                .build()
+                .expect("reqwest client"),
         }
     }
 

@@ -12,6 +12,7 @@ use rusqlite::Connection;
 use std::time::Duration;
 
 use crate::schema::initialize_database;
+use crate::system_profile;
 
 /// Database connection pool manager.
 ///
@@ -23,23 +24,30 @@ pub struct DatabaseManager {
 }
 
 /// r2d2 connection customizer that applies pragmas to every new connection.
+///
+/// `cache_size` and `mmap_size` are set per-acquire from
+/// [`system_profile`], so each pool sized to the host. WAL mode etc. are
+/// database-wide (effectively set once) but cheap to re-apply.
 #[derive(Debug)]
-struct PragmaCustomizer;
+struct PragmaCustomizer {
+    cache_kib: u32,
+    mmap_bytes: u64,
+}
 
 impl r2d2::CustomizeConnection<Connection, rusqlite::Error> for PragmaCustomizer {
     fn on_acquire(&self, conn: &mut Connection) -> Result<(), rusqlite::Error> {
-        // Performance pragmas applied to each connection in the pool.
-        // WAL mode is database-wide (set once), but these per-connection
-        // settings ensure every pooled connection is properly configured.
-        conn.execute_batch(
+        conn.execute_batch(&format!(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
-             PRAGMA cache_size = -8000;
+             PRAGMA cache_size = -{cache_kib};
+             PRAGMA mmap_size = {mmap_bytes};
              PRAGMA busy_timeout = 5000;
              PRAGMA wal_autocheckpoint = 1000;
              PRAGMA temp_store = MEMORY;
              PRAGMA foreign_keys = ON;",
-        )?;
+            cache_kib = self.cache_kib,
+            mmap_bytes = self.mmap_bytes,
+        ))?;
         Ok(())
     }
 }
@@ -47,8 +55,9 @@ impl r2d2::CustomizeConnection<Connection, rusqlite::Error> for PragmaCustomizer
 impl DatabaseManager {
     /// Create a new database manager with a connection pool.
     ///
-    /// Opens a pool of up to 8 SQLite connections with WAL mode enabled.
-    /// Schema is initialized on the first connection.
+    /// Pool size, cache, and mmap are auto-tuned to the host (see
+    /// [`crate::system_profile`]). Each connection runs WAL mode and
+    /// the schema is initialized on first construction.
     pub fn new(paths: SharedVaultPaths) -> Result<Self, String> {
         let db_path = paths.conversations_db();
 
@@ -58,12 +67,19 @@ impl DatabaseManager {
                 .map_err(|e| format!("Failed to create database directory: {e}"))?;
         }
 
+        let pool_max = system_profile::pool_max_size();
+        let cache_kib = system_profile::cache_size_kib();
+        let mmap_bytes = system_profile::mmap_size_bytes();
+
         let manager = SqliteConnectionManager::file(&db_path);
         let pool = Pool::builder()
-            .max_size(8)
+            .max_size(pool_max)
             .min_idle(Some(2))
-            .connection_timeout(Duration::from_secs(5))
-            .connection_customizer(Box::new(PragmaCustomizer))
+            .connection_timeout(Duration::from_secs(15))
+            .connection_customizer(Box::new(PragmaCustomizer {
+                cache_kib,
+                mmap_bytes,
+            }))
             .build(manager)
             .map_err(|e| format!("Failed to create connection pool: {e}"))?;
 
@@ -77,8 +93,12 @@ impl DatabaseManager {
         }
 
         tracing::info!(
-            "Database pool initialized at {:?} (WAL mode, pool_size=8)",
-            db_path
+            target: "zbot_sqlite",
+            "conversations.db pool: path={:?} pool_max={} cache_kib={} mmap_mib={}",
+            db_path,
+            pool_max,
+            cache_kib,
+            mmap_bytes / (1024 * 1024),
         );
 
         Ok(Self { pool })
