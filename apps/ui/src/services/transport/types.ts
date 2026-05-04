@@ -1197,14 +1197,19 @@ export interface Procedure {
   updated_at: string;
 }
 
-/** Minimal session episode fields for ward content / search results. */
+/** Session episode fields from the backend (matches `zero_stores_domain::SessionEpisode`). */
 export interface SessionEpisode {
   id: string;
+  session_id: string;
+  agent_id: string;
   ward_id: string;
-  title: string;
-  content: string;
+  task_summary: string;
+  /** One of: 'success', 'partial', 'failed', 'crashed'. */
+  outcome: string;
+  strategy_used?: string | null;
+  key_learnings?: string | null;
+  token_cost?: number | null;
   created_at: string;
-  updated_at: string;
 }
 
 /** Summary block for a ward (lightweight header). */
