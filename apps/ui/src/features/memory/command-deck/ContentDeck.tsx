@@ -114,8 +114,13 @@ function EpisodeList({ items }: { items: WardContent["episodes"] }) {
     <ul className="memory-list-simple">
       {items.map((e) => (
         <li key={e.id} className="memory-item">
-          <strong>{e.title}</strong>
-          <p>{e.content?.slice(0, 240)}</p>
+          <strong>{e.task_summary}</strong>
+          <p>
+            <span className={`memory-item__outcome memory-item__outcome--${e.outcome}`}>
+              {e.outcome}
+            </span>
+            {e.key_learnings ? ` — ${e.key_learnings.slice(0, 220)}` : ""}
+          </p>
         </li>
       ))}
     </ul>

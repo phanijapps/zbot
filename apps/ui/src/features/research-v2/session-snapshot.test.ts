@@ -492,6 +492,61 @@ describe("extractRespondByExecId", () => {
     const map = extractRespondByExecId([first, second]);
     expect(map.get(ROOT_EXEC)).toBe("second");
   });
+
+  it("falls back to plain assistant text when no respond() tool call fires", () => {
+    // Regression: the model emitted its final answer directly in `content`
+    // instead of wrapping it in respond(). Without the fallback the snapshot
+    // loader returned an empty map → turn.respond stayed null → UI got stuck
+    // on "waiting…" after reload, even though /state.response had the text.
+    const toolCall = makeToolCallMessage(
+      ROOT_EXEC,
+      [{ tool_name: "shell", args: { command: "date" } }],
+      "2026-04-19T00:00:05.000Z",
+    );
+    const plainText = makeMessage({
+      execution_id: ROOT_EXEC,
+      role: "assistant",
+      content: "The current time is 9:42 PM EDT.",
+      created_at: "2026-04-19T00:00:10.000Z",
+    });
+    const map = extractRespondByExecId([toolCall, plainText]);
+    expect(map.get(ROOT_EXEC)).toBe("The current time is 9:42 PM EDT.");
+  });
+
+  it("ignores empty content and the [tool calls] placeholder", () => {
+    const placeholder = makeToolCallMessage(
+      ROOT_EXEC,
+      [{ tool_name: "shell", args: {} }],
+      "2026-04-19T00:00:05.000Z",
+    );
+    const empty = makeMessage({
+      execution_id: ROOT_EXEC,
+      role: "assistant",
+      content: "",
+      created_at: "2026-04-19T00:00:10.000Z",
+    });
+    const map = extractRespondByExecId([placeholder, empty]);
+    expect(map.has(ROOT_EXEC)).toBe(false);
+  });
+
+  it("respond() wins over plain text in the same execution", () => {
+    const respondCall = makeToolCallMessage(
+      ROOT_EXEC,
+      [{ tool_name: "respond", args: { message: "via respond()" } }],
+      "2026-04-19T00:00:05.000Z",
+    );
+    const laterPlain = makeMessage({
+      execution_id: ROOT_EXEC,
+      role: "assistant",
+      content: "later plain text",
+      created_at: "2026-04-19T00:00:10.000Z",
+    });
+    // Last write wins by message order, so plain text after respond() takes
+    // over — that's intentional: it matches "final assistant message wins",
+    // mirroring what /state.response computes.
+    const map = extractRespondByExecId([respondCall, laterPlain]);
+    expect(map.get(ROOT_EXEC)).toBe("later plain text");
+  });
 });
 
 // -----------------------------------------------------------------------------

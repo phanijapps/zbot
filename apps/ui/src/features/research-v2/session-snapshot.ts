@@ -254,7 +254,9 @@ function parseToolCalls(m: SessionMessage): ToolCall[] {
 }
 
 // -----------------------------------------------------------------------------
-// Respond extraction — last respond() per execution_id wins.
+// Respond extraction — last respond() per execution_id wins. Falls back to
+// plain assistant text when the agent didn't wrap its final answer in a
+// respond() tool call (some models emit the answer directly in `content`).
 // -----------------------------------------------------------------------------
 
 export function extractRespondByExecId(
@@ -263,12 +265,21 @@ export function extractRespondByExecId(
   const out = new Map<string, string>();
   for (const m of messages) {
     if (m.role !== ASSISTANT_ROLE) continue;
-    const calls = parseToolCalls(m);
-    for (const call of calls) {
+    let matched = false;
+    for (const call of parseToolCalls(m)) {
       if (call?.tool_name !== RESPOND_TOOL_NAME) continue;
       const message = call.args?.["message"];
       if (typeof message !== "string" || message.length === 0) continue;
       out.set(m.execution_id, message);
+      matched = true;
+    }
+    if (matched) continue;
+    if (
+      typeof m.content === "string" &&
+      m.content.length > 0 &&
+      m.content !== TOOL_CALLS_PLACEHOLDER
+    ) {
+      out.set(m.execution_id, m.content);
     }
   }
   return out;

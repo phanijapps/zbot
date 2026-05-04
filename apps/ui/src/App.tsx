@@ -25,7 +25,7 @@ import { SetupWizard, SetupGuard } from "./features/setup";
 import { WebAgentsPanel } from "./features/agent/WebAgentsPanel";
 import { WebSettingsPanel } from "./features/settings/WebSettingsPanel";
 import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPanel";
-import { MemoryPage } from "./features/memory";
+import { MemoryTab as MemoryPanel } from "./features/memory";
 import { ObservatoryPage } from "./features/observatory";
 import { QuickChat } from "./features/chat-v2";
 import { ResearchPage } from "./features/research-v2";
@@ -205,7 +205,7 @@ function App() {
                   {/* Legacy redirects — Dashboard + Logs are now Mission Control. */}
                   <Route path="/dashboard" element={<Navigate to="/mission-control" replace />} />
                   <Route path="/logs" element={<Navigate to="/mission-control" replace />} />
-                  <Route path="/memory" element={<MemoryPage />} />
+                  <Route path="/memory" element={<MemoryPanel agentId="root" />} />
                   <Route path="/observatory" element={<ObservatoryPage />} />
                   <Route path="/agents" element={<WebAgentsPanel />} />
                   <Route path="/integrations" element={<WebIntegrationsPanel />} />
