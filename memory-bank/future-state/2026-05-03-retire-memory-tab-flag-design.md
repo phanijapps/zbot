@@ -22,7 +22,7 @@ The flag is now a maintenance tax: two render paths to test, dead components in 
 
 UI only. No backend / migration / data changes.
 
-### Delete (6 files)
+### Delete (8 files)
 
 | File | Why |
 |---|---|
@@ -32,6 +32,8 @@ UI only. No backend / migration / data changes.
 | `apps/ui/src/features/memory/MemoryPage.tsx` | Thin flag-aware wrapper; replaced by direct deck mount in `App.tsx`. |
 | `apps/ui/src/features/memory/useFeatureFlag.ts` | Only used by the two files above. |
 | `apps/ui/src/features/memory/__tests__/useFeatureFlag.test.ts` | Tests the deleted hook. |
+| `apps/ui/src/features/memory/MemoryFactCard.tsx` | Sole consumer is `MemoryTabLegacy`; command deck uses its own card components (`MemoryItemCard`). |
+| `apps/ui/src/features/memory/MemoryFactCard.test.tsx` | Tests the deleted card. |
 
 ### Edit (2 files)
 
