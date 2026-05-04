@@ -91,8 +91,8 @@ mod tests {
     fn sample_info() -> ServiceInfo {
         ServiceInfo {
             instance_name: "test".into(),
-            service_type: "_agentzero._tcp.local.".into(),
-            hostname_alias: "agentzero.local".into(),
+            service_type: "_zbot._tcp.local.".into(),
+            hostname_alias: "zbot.local".into(),
             port: 18791,
             txt: BTreeMap::new(),
             addrs: vec![],

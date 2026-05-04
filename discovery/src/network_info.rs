@@ -62,7 +62,7 @@ pub fn collect_network_info(
         hostname_urls.push(format!("http://{}", cfg.discovery.hostname_alias));
     }
     hostname_urls.push(format!(
-        "http://{}-agentzero.local",
+        "http://{}-zbot.local",
         sanitize_for_hostname(instance_name)
     ));
 
@@ -153,8 +153,8 @@ mod tests {
         );
         assert!(info.expose_to_lan);
         assert_eq!(info.hostname_urls.len(), 2);
-        assert_eq!(info.hostname_urls[0], "http://agentzero.local");
-        assert_eq!(info.hostname_urls[1], "http://phani-mbp-agentzero.local");
+        assert_eq!(info.hostname_urls[0], "http://zbot.local");
+        assert_eq!(info.hostname_urls[1], "http://phani-mbp-zbot.local");
         assert_eq!(info.ip_urls, vec!["http://192.168.1.42:18791"]);
         assert!(info.mdns.alias_claimed);
     }
@@ -177,7 +177,7 @@ mod tests {
             "uuid",
         );
         assert_eq!(info.hostname_urls.len(), 1);
-        assert_eq!(info.hostname_urls[0], "http://phani-mbp-agentzero.local");
+        assert_eq!(info.hostname_urls[0], "http://phani-mbp-zbot.local");
     }
 
     #[test]
@@ -226,7 +226,7 @@ mod tests {
         );
         assert_eq!(
             info.hostname_urls[1],
-            "http://phani-s-mbp-2-agentzero.local"
+            "http://phani-s-mbp-2-zbot.local"
         );
     }
 }
