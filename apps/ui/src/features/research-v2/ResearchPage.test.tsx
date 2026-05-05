@@ -78,7 +78,7 @@ function makeIdleResearch(): MockResearchHook {
     status: "idle",
     wardId: null,
     wardName: null,
-    messages: [],
+    rootExecutionId: null,
     turns: [],
     intentAnalyzing: false,
     intentClassification: null,
@@ -267,13 +267,31 @@ describe("<ResearchPage>", () => {
     expect(newSpy).toHaveBeenCalled();
   });
 
-  it("renders a user-query bubble when state.messages has entries", () => {
+  it("renders a user-query bubble when state.turns has an open turn", () => {
     researchRef.current = {
       ...makeIdleResearch(),
       state: {
         ...makeIdleResearch().state,
         sessionId: "sess-1",
-        messages: [{ id: "m1", role: "user", content: "what's the Q4 outlook?", timestamp: 1 }],
+        turns: [
+          {
+            id: "turn-m1",
+            index: 0,
+            userMessage: {
+              id: "m1",
+              content: "what's the Q4 outlook?",
+              createdAt: "2026-04-19T00:00:00.000Z",
+            },
+            subagents: [],
+            assistantText: null,
+            assistantStreaming: "",
+            timeline: [],
+            status: "running",
+            startedAt: "2026-04-19T00:00:00.000Z",
+            endedAt: null,
+            durationMs: null,
+          },
+        ],
       },
     };
     renderPage();
@@ -312,34 +330,26 @@ describe("<ResearchPage>", () => {
     expect(screen.getByText(/analyzing intent/i)).toBeTruthy();
   });
 
-  it("renders nested subagent cards under their parent (depth 0 → 1 → 2)", () => {
+  it("renders nested subagent cards under their parent (root → child → grandchild)", () => {
     const now = 1000;
-    const root = {
-      id: "root-1",
-      agentId: "root",
-      parentExecutionId: null,
-      startedAt: now,
-      completedAt: now + 100,
-      status: "completed" as const,
-      wardId: "w1",
-      timeline: [],
-      tokenCount: 10,
-      respond: "root body",
-      respondStreaming: "",
-      thinkingExpanded: false,
-      errorMessage: null, request: null,
-    };
     const child = {
-      ...root,
       id: "child-1",
       agentId: "planner-agent",
       parentExecutionId: "root-1",
       startedAt: now + 200,
-      respond: "child body",
+      completedAt: now + 300,
+      status: "completed" as const,
+      wardId: "w1",
       request: "Plan this goal.",
+      timeline: [],
+      tokenCount: 10,
+      respond: "child body",
+      respondStreaming: "",
+      thinkingExpanded: false,
+      errorMessage: null,
     };
     const grandchild = {
-      ...root,
+      ...child,
       id: "grand-1",
       agentId: "builder-agent",
       parentExecutionId: "child-1",
@@ -352,12 +362,31 @@ describe("<ResearchPage>", () => {
       state: {
         ...makeIdleResearch().state,
         sessionId: "sess-1",
-        turns: [root, child, grandchild],
+        rootExecutionId: "root-1",
+        turns: [
+          {
+            id: "turn-u1",
+            index: 0,
+            userMessage: {
+              id: "u1",
+              content: "do the thing",
+              createdAt: "2026-04-19T00:00:00.000Z",
+            },
+            subagents: [child, grandchild],
+            assistantText: "root body",
+            assistantStreaming: "",
+            timeline: [],
+            status: "completed",
+            startedAt: "2026-04-19T00:00:00.000Z",
+            endedAt: "2026-04-19T00:01:00.000Z",
+            durationMs: 60_000,
+          },
+        ],
       },
     };
     const { container } = renderPage();
 
-    // Root renders as an assistant message (not a bordered turn block).
+    // Root assistant area renders inside the SessionTurnBlock.
     expect(container.querySelector(".research-msg--assistant")).toBeTruthy();
 
     // Both subagent cards present, and grand-child is nested under child.
@@ -366,7 +395,7 @@ describe("<ResearchPage>", () => {
     const builder = container.querySelector('.subagent-card[data-parent="child-1"]');
     expect(builder).toBeTruthy();
 
-    // Root's respond is always visible on the root assistant block.
+    // Root's reply is always visible on the SessionTurn's assistant block.
     expect(container.textContent).toContain("root body");
     // Subagent cards are auto-collapsed on completion; expand them and
     // verify their responses then become visible.

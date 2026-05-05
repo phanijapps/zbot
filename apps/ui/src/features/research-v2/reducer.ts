@@ -1,14 +1,40 @@
+// =============================================================================
+// reducer — multi-turn state machine
+//
+// State shape:
+//   `state.turns: SessionTurn[]` — chronological user→assistant exchanges.
+//   `state.rootExecutionId` — disambiguates root vs subagent for events
+//      that arrive keyed by execution id (TOKEN, RESPOND, AGENT_*).
+//
+// Routing rules (used by every event that carries a `turnId`):
+//   if turnId === state.rootExecutionId  → applies to the latest SessionTurn
+//   else                                  → applies to the matching subagent
+//                                           (located by execution id within
+//                                           any turn's subagents[])
+//
+// "Latest open turn" is always `state.turns[turns.length - 1]`. We never
+// reorder, never close out-of-order, and never re-open a closed turn.
+// See `memory-bank/future-state/2026-05-05-research-multi-turn-design.md`.
+// =============================================================================
+
 import type {
   AgentTurn,
   ResearchArtifactRef,
-  ResearchMessage,
   ResearchSessionState,
+  SessionTurn,
   TimelineEntry,
 } from "./types";
 import { EMPTY_RESEARCH_STATE } from "./types";
 
 const SILENT_CRASH_MESSAGE =
   "Turn ended with no output (provider error or context limit)";
+
+export interface UserMessagePayload {
+  id: string;
+  content: string;
+  /** ISO timestamp from the gateway, or `now` when the UI mints it. */
+  createdAt: string;
+}
 
 export type ResearchAction =
   | {
@@ -19,11 +45,11 @@ export type ResearchAction =
       status: ResearchSessionState["status"];
       wardId: string | null;
       wardName: string | null;
-      messages: ResearchMessage[];
-      turns: AgentTurn[];
+      rootExecutionId: string | null;
+      turns: SessionTurn[];
       artifacts: ResearchArtifactRef[];
     }
-  | { type: "APPEND_USER"; message: ResearchMessage }
+  | { type: "APPEND_USER"; message: UserMessagePayload }
   | { type: "SESSION_BOUND"; sessionId: string | null; conversationId: string }
   | { type: "TITLE_CHANGED"; title: string }
   | { type: "WARD_CHANGED"; wardId: string; wardName: string }
@@ -56,62 +82,131 @@ export type ResearchAction =
   | { type: "SET_ARTIFACTS"; artifacts: ResearchArtifactRef[] };
 
 // ---------------------------------------------------------------------------
-// Turn helpers
+// SessionTurn-level helpers
 // ---------------------------------------------------------------------------
 
-function ensureTurn(
+function newOpenTurn(payload: UserMessagePayload, prior: number): SessionTurn {
+  return {
+    id: `turn-${payload.id}`,
+    index: prior,
+    userMessage: {
+      id: payload.id,
+      content: payload.content,
+      createdAt: payload.createdAt,
+    },
+    subagents: [],
+    assistantText: null,
+    assistantStreaming: "",
+    timeline: [],
+    status: "running",
+    startedAt: payload.createdAt,
+    endedAt: null,
+    durationMs: null,
+  };
+}
+
+function setLastTurn(
   state: ResearchSessionState,
-  turnId: string,
-  seed?: Partial<AgentTurn>
+  fn: (t: SessionTurn) => SessionTurn,
 ): ResearchSessionState {
-  const existing = state.turns.find((t) => t.id === turnId);
-  if (existing) return state;
-  const fresh: AgentTurn = {
-    id: turnId,
-    agentId: seed?.agentId ?? "root",
-    parentExecutionId: seed?.parentExecutionId ?? null,
-    startedAt: seed?.startedAt ?? Date.now(),
+  if (state.turns.length === 0) return state;
+  const next = state.turns.slice();
+  next[next.length - 1] = fn(next[next.length - 1]);
+  return { ...state, turns: next };
+}
+
+// ---------------------------------------------------------------------------
+// Subagent helpers — locate / update by execution id within any turn
+// ---------------------------------------------------------------------------
+
+interface SubagentLocation {
+  turnIndex: number;
+  subagentIndex: number;
+}
+
+function locateSubagent(
+  state: ResearchSessionState,
+  executionId: string,
+): SubagentLocation | null {
+  for (let ti = 0; ti < state.turns.length; ti++) {
+    const ix = state.turns[ti].subagents.findIndex((s) => s.id === executionId);
+    if (ix !== -1) return { turnIndex: ti, subagentIndex: ix };
+  }
+  return null;
+}
+
+function updateSubagent(
+  state: ResearchSessionState,
+  executionId: string,
+  fn: (s: AgentTurn) => AgentTurn,
+): ResearchSessionState {
+  const loc = locateSubagent(state, executionId);
+  if (!loc) return state;
+  const turns = state.turns.slice();
+  const turn = turns[loc.turnIndex];
+  const subs = turn.subagents.slice();
+  subs[loc.subagentIndex] = fn(subs[loc.subagentIndex]);
+  turns[loc.turnIndex] = { ...turn, subagents: subs };
+  return { ...state, turns };
+}
+
+function appendSubagent(
+  state: ResearchSessionState,
+  sub: AgentTurn,
+): ResearchSessionState {
+  return setLastTurn(state, (t) => ({
+    ...t,
+    subagents: [...t.subagents, sub],
+  }));
+}
+
+function newSubagent(args: {
+  turnId: string;
+  agentId: string;
+  parentExecutionId: string | null;
+  wardId: string | null;
+  startedAt: number;
+  request: string | null;
+}): AgentTurn {
+  return {
+    id: args.turnId,
+    agentId: args.agentId,
+    parentExecutionId: args.parentExecutionId,
+    startedAt: args.startedAt,
     completedAt: null,
     status: "running",
-    wardId: seed?.wardId ?? state.wardId,
-    request: seed?.request ?? null,
+    wardId: args.wardId,
+    request: args.request,
     timeline: [],
     tokenCount: 0,
     respond: null,
     respondStreaming: "",
     thinkingExpanded: false,
     errorMessage: null,
-    ...seed,
-  };
-  return { ...state, turns: [...state.turns, fresh] };
-}
-
-function updateTurn(
-  state: ResearchSessionState,
-  turnId: string,
-  patch: (t: AgentTurn) => AgentTurn
-): ResearchSessionState {
-  return {
-    ...state,
-    turns: state.turns.map((t) => (t.id === turnId ? patch(t) : t)),
   };
 }
 
-function turnHasMeaningfulContent(turn: AgentTurn): boolean {
-  if (turn.respond && turn.respond.length > 0) return true;
-  if (turn.respondStreaming && turn.respondStreaming.length > 0) return true;
-  return turn.timeline.some(
-    (e) => e.kind === "tool_call" || e.kind === "tool_result"
+function subagentHasMeaningfulContent(s: AgentTurn): boolean {
+  if (s.respond && s.respond.length > 0) return true;
+  if (s.respondStreaming && s.respondStreaming.length > 0) return true;
+  return s.timeline.some(
+    (e) => e.kind === "tool_call" || e.kind === "tool_result",
   );
 }
 
+function turnHasMeaningfulContent(t: SessionTurn): boolean {
+  if (t.assistantText && t.assistantText.length > 0) return true;
+  if (t.assistantStreaming && t.assistantStreaming.length > 0) return true;
+  return t.subagents.some(subagentHasMeaningfulContent);
+}
+
 // ---------------------------------------------------------------------------
-// Per-case handlers (keeps the switch under SonarQube's complexity threshold)
+// Per-action handlers
 // ---------------------------------------------------------------------------
 
 function handleHydrate(
   state: ResearchSessionState,
-  action: Extract<ResearchAction, { type: "HYDRATE" }>
+  action: Extract<ResearchAction, { type: "HYDRATE" }>,
 ): ResearchSessionState {
   return {
     ...state,
@@ -121,62 +216,142 @@ function handleHydrate(
     status: action.status,
     wardId: action.wardId,
     wardName: action.wardName,
-    messages: action.messages,
+    rootExecutionId: action.rootExecutionId,
     turns: action.turns,
     artifacts: action.artifacts,
   };
 }
 
-function handleAgentStarted(
+function handleAppendUser(
   state: ResearchSessionState,
-  action: Extract<ResearchAction, { type: "AGENT_STARTED" }>
+  action: Extract<ResearchAction, { type: "APPEND_USER" }>,
 ): ResearchSessionState {
-  // Sticky ward: null wardId on the event inherits from state (never clear).
-  const wardForTurn = action.wardId ?? state.wardId;
-  return ensureTurn(state, action.turnId, {
-    agentId: action.agentId,
-    parentExecutionId: action.parentExecutionId,
-    startedAt: action.startedAt,
-    wardId: wardForTurn,
-    request: action.request ?? null,
-  });
+  // Promote any in-flight buffer on the previous turn before opening the new
+  // one — prevents a streaming cursor from blinking forever after a
+  // follow-up message arrives mid-stream.
+  const promoted = state.turns.length > 0 ? promotePriorTurn(state) : state;
+  const fresh = newOpenTurn(action.message, promoted.turns.length);
+  return {
+    ...promoted,
+    turns: [...promoted.turns, fresh],
+    status: "running",
+  };
 }
 
-function handleAgentCompleted(
-  state: ResearchSessionState,
-  action: Extract<ResearchAction, { type: "AGENT_COMPLETED" }>
-): ResearchSessionState {
-  return updateTurn(state, action.turnId, (t) => {
-    if (turnHasMeaningfulContent(t)) {
-      // Promote streaming buffer to final respond when the agent ends without
-      // firing the `respond` tool (no turn_complete.final_message). Otherwise
-      // the streaming cursor keeps blinking after the turn is done.
-      const promotedRespond =
-        t.respond ?? (t.respondStreaming.length > 0 ? t.respondStreaming : null);
-      return {
-        ...t,
-        status: "completed",
-        completedAt: action.completedAt,
-        respond: promotedRespond,
-        respondStreaming: promotedRespond ? "" : t.respondStreaming,
-      };
-    }
-    // Silent-crash inference — workaround for chat-v2 backlog B3.
+function promotePriorTurn(state: ResearchSessionState): ResearchSessionState {
+  return setLastTurn(state, (t) => {
+    if (t.status !== "running") return t;
+    const promotedReply =
+      t.assistantText ??
+      (t.assistantStreaming.length > 0 ? t.assistantStreaming : null);
     return {
       ...t,
-      status: "error",
-      completedAt: action.completedAt,
-      errorMessage: SILENT_CRASH_MESSAGE,
+      status: "completed",
+      assistantText: promotedReply,
+      assistantStreaming: promotedReply ? "" : t.assistantStreaming,
     };
   });
 }
 
+function handleAgentStarted(
+  state: ResearchSessionState,
+  action: Extract<ResearchAction, { type: "AGENT_STARTED" }>,
+): ResearchSessionState {
+  // Sticky ward: null wardId on the event inherits from state (never clear).
+  const wardForTurn = action.wardId ?? state.wardId;
+
+  // Root agent: stamp rootExecutionId once. If no SessionTurn exists yet
+  // (e.g. live session that hasn't seen APPEND_USER), open a placeholder.
+  if (action.parentExecutionId === null) {
+    const withRoot =
+      state.rootExecutionId == null
+        ? { ...state, rootExecutionId: action.turnId }
+        : state;
+    return withRoot;
+  }
+
+  // Subagent. Append to the latest open turn.
+  const sub = newSubagent({
+    turnId: action.turnId,
+    agentId: action.agentId,
+    parentExecutionId: action.parentExecutionId,
+    wardId: wardForTurn,
+    startedAt: action.startedAt,
+    request: action.request ?? null,
+  });
+  // Idempotent: if we already have this subagent (from snapshot), skip.
+  if (locateSubagent(state, action.turnId)) return state;
+  return appendSubagent(state, sub);
+}
+
+function handleAgentCompleted(
+  state: ResearchSessionState,
+  action: Extract<ResearchAction, { type: "AGENT_COMPLETED" }>,
+): ResearchSessionState {
+  if (action.turnId === state.rootExecutionId) {
+    return setLastTurn(state, (t) => closeTurn(t, action.completedAt));
+  }
+  return updateSubagent(state, action.turnId, (s) => closeSubagent(s, action.completedAt));
+}
+
+function closeTurn(t: SessionTurn, completedAt: number): SessionTurn {
+  if (turnHasMeaningfulContent(t)) {
+    const promotedReply =
+      t.assistantText ??
+      (t.assistantStreaming.length > 0 ? t.assistantStreaming : null);
+    return {
+      ...t,
+      status: "completed",
+      assistantText: promotedReply,
+      assistantStreaming: promotedReply ? "" : t.assistantStreaming,
+      endedAt: t.endedAt ?? new Date(completedAt).toISOString(),
+      durationMs:
+        t.durationMs ?? Math.max(0, completedAt - Date.parse(t.startedAt)),
+    };
+  }
+  // Silent crash: turn ended with nothing useful. Mirror today's per-turn
+  // error inference so the user sees a clear failure message.
+  return {
+    ...t,
+    status: "error",
+    endedAt: t.endedAt ?? new Date(completedAt).toISOString(),
+    assistantText: t.assistantText ?? SILENT_CRASH_MESSAGE,
+  };
+}
+
+function closeSubagent(s: AgentTurn, completedAt: number): AgentTurn {
+  if (subagentHasMeaningfulContent(s)) {
+    const promotedRespond =
+      s.respond ?? (s.respondStreaming.length > 0 ? s.respondStreaming : null);
+    return {
+      ...s,
+      status: "completed",
+      completedAt,
+      respond: promotedRespond,
+      respondStreaming: promotedRespond ? "" : s.respondStreaming,
+    };
+  }
+  return {
+    ...s,
+    status: "error",
+    completedAt,
+    errorMessage: SILENT_CRASH_MESSAGE,
+  };
+}
+
 function handleAgentStopped(
   state: ResearchSessionState,
-  action: Extract<ResearchAction, { type: "AGENT_STOPPED" }>
+  action: Extract<ResearchAction, { type: "AGENT_STOPPED" }>,
 ): ResearchSessionState {
-  return updateTurn(state, action.turnId, (t) => ({
-    ...t,
+  if (action.turnId === state.rootExecutionId) {
+    return setLastTurn(state, (t) => ({
+      ...t,
+      status: "stopped",
+      endedAt: t.endedAt ?? new Date(action.completedAt).toISOString(),
+    }));
+  }
+  return updateSubagent(state, action.turnId, (s) => ({
+    ...s,
     status: "stopped",
     completedAt: action.completedAt,
   }));
@@ -185,33 +360,49 @@ function handleAgentStopped(
 function handleTimelineAppend(
   state: ResearchSessionState,
   turnId: string,
-  entry: TimelineEntry
+  entry: TimelineEntry,
 ): ResearchSessionState {
-  const seeded = ensureTurn(state, turnId);
-  return updateTurn(seeded, turnId, (t) => ({
-    ...t,
-    timeline: [...t.timeline, entry],
+  if (turnId === state.rootExecutionId) {
+    return setLastTurn(state, (t) => ({
+      ...t,
+      timeline: [...t.timeline, entry],
+    }));
+  }
+  return updateSubagent(state, turnId, (s) => ({
+    ...s,
+    timeline: [...s.timeline, entry],
   }));
 }
 
 function handleToken(
   state: ResearchSessionState,
-  action: Extract<ResearchAction, { type: "TOKEN" }>
+  action: Extract<ResearchAction, { type: "TOKEN" }>,
 ): ResearchSessionState {
-  const seeded = ensureTurn(state, action.turnId);
-  return updateTurn(seeded, action.turnId, (t) => ({
-    ...t,
-    respondStreaming: t.respondStreaming + action.text,
+  if (action.turnId === state.rootExecutionId) {
+    return setLastTurn(state, (t) => ({
+      ...t,
+      assistantStreaming: t.assistantStreaming + action.text,
+    }));
+  }
+  return updateSubagent(state, action.turnId, (s) => ({
+    ...s,
+    respondStreaming: s.respondStreaming + action.text,
   }));
 }
 
 function handleRespond(
   state: ResearchSessionState,
-  action: Extract<ResearchAction, { type: "RESPOND" }>
+  action: Extract<ResearchAction, { type: "RESPOND" }>,
 ): ResearchSessionState {
-  const seeded = ensureTurn(state, action.turnId);
-  return updateTurn(seeded, action.turnId, (t) => ({
-    ...t,
+  if (action.turnId === state.rootExecutionId) {
+    return setLastTurn(state, (t) => ({
+      ...t,
+      assistantText: action.text,
+      assistantStreaming: "",
+    }));
+  }
+  return updateSubagent(state, action.turnId, (s) => ({
+    ...s,
     respond: action.text,
     respondStreaming: "",
   }));
@@ -219,19 +410,13 @@ function handleRespond(
 
 function handleToggleThinking(
   state: ResearchSessionState,
-  action: Extract<ResearchAction, { type: "TOGGLE_THINKING" }>
+  action: Extract<ResearchAction, { type: "TOGGLE_THINKING" }>,
 ): ResearchSessionState {
-  return updateTurn(state, action.turnId, (t) => ({
-    ...t,
-    thinkingExpanded: !t.thinkingExpanded,
+  // Thinking expand toggle is per-subagent only; root has no chevron.
+  return updateSubagent(state, action.turnId, (s) => ({
+    ...s,
+    thinkingExpanded: !s.thinkingExpanded,
   }));
-}
-
-function handleAppendUser(
-  state: ResearchSessionState,
-  action: Extract<ResearchAction, { type: "APPEND_USER" }>
-): ResearchSessionState {
-  return { ...state, messages: [...state.messages, action.message], status: "running" };
 }
 
 // ---------------------------------------------------------------------------
@@ -240,7 +425,7 @@ function handleAppendUser(
 
 export function reduceResearch(
   state: ResearchSessionState,
-  action: ResearchAction
+  action: ResearchAction,
 ): ResearchSessionState {
   switch (action.type) {
     case "HYDRATE":

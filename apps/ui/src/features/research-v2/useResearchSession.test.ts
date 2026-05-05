@@ -422,7 +422,7 @@ function makeArtifact(id: string, sessionId = "sess-existing-123"): Artifact {
 describe("useResearchSession — snapshot flow (R14f)", () => {
   const EXISTING_SESSION = "sess-existing-123";
 
-  it("hydrates title + messages + artifacts via snapshotSession on open", async () => {
+  it("hydrates title + turns + artifacts via snapshotSession on open", async () => {
     listLogSessions.mockResolvedValueOnce({
       success: true,
       data: [makeRootRow(EXISTING_SESSION, { title: "Hydrated title" })],
@@ -448,7 +448,9 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
 
     expect(result.current.state.sessionId).toBe(EXISTING_SESSION);
     expect(result.current.state.title).toBe("Hydrated title");
-    expect(result.current.state.messages).toHaveLength(1);
+    // The single hydrated user message becomes one SessionTurn carrying it.
+    expect(result.current.state.turns).toHaveLength(1);
+    expect(result.current.state.turns[0].userMessage.content).toBe("old prompt");
     expect(result.current.state.artifacts).toHaveLength(1);
     expect(result.current.state.artifacts[0].id).toBe("a1");
     // Cache populated so ArtifactSlideOut can resolve by id.

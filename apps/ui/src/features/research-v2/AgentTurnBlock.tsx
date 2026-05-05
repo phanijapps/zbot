@@ -316,7 +316,7 @@ interface SubagentCardTreeProps {
   allTurns: AgentTurn[];
 }
 
-function SubagentCardTree({ turn, allTurns }: SubagentCardTreeProps) {
+export function SubagentCardTree({ turn, allTurns }: SubagentCardTreeProps) {
   const grandChildren = childrenOf(turn, allTurns);
   return (
     <div className="subagent-card-tree">
