@@ -23,14 +23,12 @@ import { isChatSession } from "@/services/session-kind";
 type UploadedFileShim = UploadedFile;
 import { ArtifactSlideOut } from "../chat/ArtifactSlideOut";
 import { StatusPill } from "../shared/statusPill";
-import { AgentTurnBlock } from "./AgentTurnBlock";
+import { SessionTurnBlock } from "./SessionTurnBlock";
 import { ArtifactStrip } from "./ArtifactStrip";
-import { AssistantMessage, UserMessage } from "./ResearchMessages";
 import { IntentInfoButton } from "./IntentInfoButton";
 import { SessionsDrawer } from "./SessionsDrawer";
 import { useResearchSession } from "./useResearchSession";
 import { useSessionsList } from "./useSessionsList";
-import { rootTurns, childrenOf } from "./turn-tree";
 import { getTransport } from "@/services/transport";
 import type { ResearchArtifactRef, ResearchSessionState } from "./types";
 import type { Artifact } from "@/services/transport/types";
@@ -50,7 +48,8 @@ const TITLE_FIRST_MSG_MAX = 60;
  */
 function deriveTitle(state: ResearchSessionState): string {
   if (state.title && state.title.trim().length > 0) return state.title;
-  const firstUserMsg = state.messages.find((m) => m.role === "user")?.content ?? "";
+  // Multi-turn: the title is derived from the FIRST turn's user message.
+  const firstUserMsg = state.turns[0]?.userMessage.content ?? "";
   const trimmed = firstUserMsg.trim();
   if (trimmed.length === 0) return DEFAULT_RESEARCH_TITLE;
   if (trimmed.length <= TITLE_FIRST_MSG_MAX) return trimmed;
@@ -168,39 +167,19 @@ function EmptyHero({ onSend }: EmptyHeroProps) {
 
 interface MainColumnProps {
   state: ResearchSessionState;
-  onToggleThinking(turnId: string): void;
   onSend: (message: string, attachments: UploadedFileShim[]) => void;
 }
 
-function MainColumn({ state, onToggleThinking, onSend }: MainColumnProps) {
-  const hasContent =
-    state.messages.length > 0 || state.turns.length > 0 || state.sessionId !== null;
+function MainColumn({ state, onSend }: MainColumnProps) {
+  const hasContent = state.turns.length > 0 || state.sessionId !== null;
 
   if (!hasContent) return <EmptyHero onSend={onSend} />;
 
-  // Render root turns at depth 0; nested children are derived inside
-  // AgentTurnBlock via the allTurns prop. See turn-tree.ts and the R14b spec
-  // (option A) for why the tree shape is derived at render, not stored.
-  const roots = rootTurns(state.turns);
-
   return (
     <>
-      {state.messages.map((m) =>
-        m.role === "user" ? (
-          <UserMessage key={m.id} content={m.content} />
-        ) : (
-          <AssistantMessage key={m.id} content={m.content} />
-        ),
-      )}
       <IntentLine state={state} />
-      {roots.map((turn) => (
-        <AgentTurnBlock
-          key={turn.id}
-          turn={turn}
-          onToggleThinking={onToggleThinking}
-          childTurns={childrenOf(turn, state.turns)}
-          allTurns={state.turns}
-        />
+      {state.turns.map((turn) => (
+        <SessionTurnBlock key={turn.id} turn={turn} />
       ))}
     </>
   );
@@ -209,7 +188,7 @@ function MainColumn({ state, onToggleThinking, onSend }: MainColumnProps) {
 // --- Page --------------------------------------------------------------------
 
 export function ResearchPage() {
-  const { state, pillState, sendMessage, stopAgent, startNewResearch, toggleThinking, getFullArtifact } =
+  const { state, pillState, sendMessage, stopAgent, startNewResearch, getFullArtifact } =
     useResearchSession();
   const { sessions, refresh: refreshSessions, deleteSession } = useSessionsList({
     onAfterDelete: (deletedId) => {
@@ -281,8 +260,7 @@ export function ResearchPage() {
   // Landing state: no user message, no agent turns, no bound session. Hero
   // takes over the column; the bottom composer + the header's "New
   // research" button are hidden so the landing experience is uncluttered.
-  const isLanding =
-    state.messages.length === 0 && state.turns.length === 0 && state.sessionId === null;
+  const isLanding = state.turns.length === 0 && state.sessionId === null;
 
   return (
     <div className="research-page">
@@ -313,7 +291,7 @@ export function ResearchPage() {
 
       <div className="research-page__body">
         <div className="research-page__column">
-          <MainColumn state={state} onToggleThinking={toggleThinking} onSend={sendMessage} />
+          <MainColumn state={state} onSend={sendMessage} />
         </div>
       </div>
 

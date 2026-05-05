@@ -191,7 +191,7 @@ async function hydrateFromSnapshot(
     status: snap.status,
     wardId: snap.wardId,
     wardName: snap.wardName,
-    messages: snap.messages,
+    rootExecutionId: snap.rootExecutionId,
     turns: snap.turns,
     artifacts: snap.artifacts,
   });
@@ -442,9 +442,8 @@ export function useResearchSession() {
         type: "APPEND_USER",
         message: {
           id: randomId(),
-          role: "user",
           content: promptText,
-          timestamp: sendAt,
+          createdAt: new Date(sendAt).toISOString(),
         },
       });
       // Closure read: safe because only SESSION_BOUND (dispatched below) mutates state.conversationId.

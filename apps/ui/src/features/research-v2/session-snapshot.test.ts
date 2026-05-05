@@ -1,16 +1,19 @@
 // =============================================================================
-// session-snapshot — R14f unit tests.
+// session-snapshot — R14f unit tests (post multi-turn refactor).
 //
-// Coverage targets:
+// Coverage targets (new shape):
 // - null returns on listLogSessions failure and missing root row
-// - completed session: title, turns, respond per turn from tool_calls
+// - completed session: title, SessionTurn rollup with subagents per turn
 // - running session: status + conversationId:null documented limitation
-// - turnFromLogRow status mapping
-// - extractDelegationTasks walks only root messages in timestamp order
+// - turnFromLogRow status mapping (still emits AgentTurn for subagent rows)
 // - children sorted by startedAt; leftover children get request:null
 // - /artifacts endpoint wins over respond.args.artifacts fallback
-// - last-respond-per-exec wins when an agent fires multiple
 // - isRootRow ignores empty/undefined parent_session_id
+//
+// The old `extractRespondByExecId` / `extractDelegationTasks` helpers were
+// deleted as part of the refactor; their per-turn equivalents
+// (`extractAssistantReplyForTurn`, `extractDelegationTasksInWindow`) live in
+// `turns.test.ts`.
 // =============================================================================
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -54,8 +57,6 @@ function makeTransport(): Transport {
 }
 
 import {
-  extractDelegationTasks,
-  extractRespondByExecId,
   isRootRow,
   snapshotSession,
   turnFromLogRow,
@@ -173,7 +174,7 @@ describe("snapshotSession — null returns", () => {
 // -----------------------------------------------------------------------------
 
 describe("snapshotSession — completed session", () => {
-  it("builds title + root + child turns with per-turn respond", async () => {
+  it("builds a SessionTurn carrying user message + subagents + assistant reply", async () => {
     const rootRow = makeRow({
       session_id: ROOT_EXEC,
       title: "Q4 market analysis",
@@ -216,16 +217,12 @@ describe("snapshotSession — completed session", () => {
       [{ tool_name: "respond", args: { message: "Final answer." } }],
       "2026-04-19T00:00:50.000Z",
     );
-    const child1Respond = makeToolCallMessage(
-      CHILD_EXEC_1,
-      [{ tool_name: "respond", args: { message: "Plan done." } }],
-      "2026-04-19T00:00:12.000Z",
-    );
-    const child2Respond = makeToolCallMessage(
-      CHILD_EXEC_2,
-      [{ tool_name: "respond", args: { message: "Draft ready." } }],
-      "2026-04-19T00:00:22.000Z",
-    );
+    // Subagent respond rows aren't on the root execution; they don't appear
+    // in the per-turn assistant-reply window. Their respond text comes from
+    // the WS stream during a live run; for snapshot reload, the subagents
+    // simply land with respond=null (turnFromLogRow doesn't backfill it).
+    // What we DO assert is that the per-turn rollup zips delegation tasks
+    // onto the matching subagent in chronological order.
 
     listLogSessions.mockResolvedValueOnce({
       success: true,
@@ -233,7 +230,7 @@ describe("snapshotSession — completed session", () => {
     });
     getSessionMessages.mockResolvedValueOnce({
       success: true,
-      data: [userMsg, rootDelegate1, child1Respond, rootDelegate2, child2Respond, rootRespond],
+      data: [userMsg, rootDelegate1, rootDelegate2, rootRespond],
     });
     listSessionArtifacts.mockResolvedValueOnce({ success: true, data: [] });
 
@@ -241,23 +238,23 @@ describe("snapshotSession — completed session", () => {
     expect(snap).not.toBeNull();
     expect(snap!.title).toBe("Q4 market analysis");
     expect(snap!.status).toBe("complete");
+    expect(snap!.rootExecutionId).toBe(ROOT_EXEC);
 
-    expect(snap!.turns).toHaveLength(3);
-    const [root, c1, c2] = snap!.turns;
-    expect(root.id).toBe(ROOT_EXEC);
-    expect(root.parentExecutionId).toBeNull();
-    expect(root.respond).toBe("Final answer.");
+    // One user message → one SessionTurn carrying both subagents.
+    expect(snap!.turns).toHaveLength(1);
+    const turn = snap!.turns[0];
+    expect(turn.userMessage.content).toBe("What's the Q4 outlook?");
+    expect(turn.assistantText).toBe("Final answer.");
+    expect(turn.subagents).toHaveLength(2);
+
+    // Subagents sorted by started_at; delegation tasks zipped in order.
+    const [c1, c2] = turn.subagents;
     expect(c1.id).toBe(CHILD_EXEC_1);
     expect(c1.parentExecutionId).toBe(ROOT_EXEC);
-    expect(c1.respond).toBe("Plan done.");
     expect(c1.request).toBe("Plan the analysis.");
     expect(c2.id).toBe(CHILD_EXEC_2);
-    expect(c2.respond).toBe("Draft ready.");
+    expect(c2.parentExecutionId).toBe(ROOT_EXEC);
     expect(c2.request).toBe("Draft the response.");
-
-    // User bubble preserved, no assistants in state.messages.
-    expect(snap!.messages).toHaveLength(1);
-    expect(snap!.messages[0]).toMatchObject({ role: "user", content: "What's the Q4 outlook?" });
   });
 
   it("returns conversationId:null — documented limitation for re-attach", async () => {
@@ -360,41 +357,11 @@ describe("turnFromLogRow", () => {
 });
 
 // -----------------------------------------------------------------------------
-// extractDelegationTasks
-// -----------------------------------------------------------------------------
-
-describe("extractDelegationTasks", () => {
-  it("walks only ROOT's messages in timestamp order and returns tasks in order", () => {
-    const earlier = makeToolCallMessage(
-      ROOT_EXEC,
-      [{ tool_name: "delegate_to_agent", args: { task: "first" } }],
-      "2026-04-19T00:00:05.000Z",
-    );
-    const later = makeToolCallMessage(
-      ROOT_EXEC,
-      [{ tool_name: "delegate_to_agent", args: { task: "second" } }],
-      "2026-04-19T00:00:15.000Z",
-    );
-    // Child execution's delegation-like calls must NOT pollute the root task
-    // list (subagents don't spawn subagents, but this guards the filter).
-    const childNoise = makeToolCallMessage(
-      CHILD_EXEC_1,
-      [{ tool_name: "delegate_to_agent", args: { task: "noise" } }],
-      "2026-04-19T00:00:10.000Z",
-    );
-
-    // Intentional reverse insert to prove the function sorts.
-    const tasks = extractDelegationTasks([later, childNoise, earlier], ROOT_EXEC);
-    expect(tasks).toEqual(["first", "second"]);
-  });
-});
-
-// -----------------------------------------------------------------------------
-// Zip tasks → children
+// Zip tasks → children (per-turn)
 // -----------------------------------------------------------------------------
 
 describe("snapshotSession — children zip + sort", () => {
-  it("leftover children get request:null when delegation count < children count", async () => {
+  it("leftover subagents get request:null when delegation count < subagent count", async () => {
     const rootRow = makeRow({ session_id: ROOT_EXEC, parent_session_id: undefined });
     const childA = makeRow({
       session_id: "child-A",
@@ -406,6 +373,12 @@ describe("snapshotSession — children zip + sort", () => {
       parent_session_id: ROOT_EXEC,
       started_at: "2026-04-19T00:00:20.000Z",
     });
+    const userMsg = makeMessage({
+      execution_id: ROOT_EXEC,
+      role: "user",
+      content: "do the thing",
+      created_at: "2026-04-19T00:00:00.000Z",
+    });
     // Only one delegation task, two children — second child is orphan.
     const delegate = makeToolCallMessage(
       ROOT_EXEC,
@@ -414,12 +387,13 @@ describe("snapshotSession — children zip + sort", () => {
     );
 
     listLogSessions.mockResolvedValueOnce({ success: true, data: [rootRow, childB, childA] });
-    getSessionMessages.mockResolvedValueOnce({ success: true, data: [delegate] });
+    getSessionMessages.mockResolvedValueOnce({ success: true, data: [userMsg, delegate] });
     listSessionArtifacts.mockResolvedValueOnce({ success: true, data: [] });
 
     const snap = await snapshotSession(makeTransport(), SESSION_ID);
-    const [, first, second] = snap!.turns;
-    // Children sorted by started_at ascending.
+    expect(snap!.turns).toHaveLength(1);
+    const [first, second] = snap!.turns[0].subagents;
+    // Subagents sorted by started_at ascending.
     expect(first.id).toBe("child-A");
     expect(second.id).toBe("child-B");
     expect(first.request).toBe("only task");
@@ -470,82 +444,6 @@ describe("snapshotSession — artifacts", () => {
     expect(snap!.artifacts[0].id).toBe("/tmp/hint.md");
     expect(snap!.artifacts[0].fileName).toBe("hint.md");
     expect(snap!.artifacts[0].label).toBe("Plan");
-  });
-});
-
-// -----------------------------------------------------------------------------
-// Last-respond-wins semantics
-// -----------------------------------------------------------------------------
-
-describe("extractRespondByExecId", () => {
-  it("returns the LAST respond() per execution id", () => {
-    const first = makeToolCallMessage(
-      ROOT_EXEC,
-      [{ tool_name: "respond", args: { message: "first" } }],
-      "2026-04-19T00:00:05.000Z",
-    );
-    const second = makeToolCallMessage(
-      ROOT_EXEC,
-      [{ tool_name: "respond", args: { message: "second" } }],
-      "2026-04-19T00:00:15.000Z",
-    );
-    const map = extractRespondByExecId([first, second]);
-    expect(map.get(ROOT_EXEC)).toBe("second");
-  });
-
-  it("falls back to plain assistant text when no respond() tool call fires", () => {
-    // Regression: the model emitted its final answer directly in `content`
-    // instead of wrapping it in respond(). Without the fallback the snapshot
-    // loader returned an empty map → turn.respond stayed null → UI got stuck
-    // on "waiting…" after reload, even though /state.response had the text.
-    const toolCall = makeToolCallMessage(
-      ROOT_EXEC,
-      [{ tool_name: "shell", args: { command: "date" } }],
-      "2026-04-19T00:00:05.000Z",
-    );
-    const plainText = makeMessage({
-      execution_id: ROOT_EXEC,
-      role: "assistant",
-      content: "The current time is 9:42 PM EDT.",
-      created_at: "2026-04-19T00:00:10.000Z",
-    });
-    const map = extractRespondByExecId([toolCall, plainText]);
-    expect(map.get(ROOT_EXEC)).toBe("The current time is 9:42 PM EDT.");
-  });
-
-  it("ignores empty content and the [tool calls] placeholder", () => {
-    const placeholder = makeToolCallMessage(
-      ROOT_EXEC,
-      [{ tool_name: "shell", args: {} }],
-      "2026-04-19T00:00:05.000Z",
-    );
-    const empty = makeMessage({
-      execution_id: ROOT_EXEC,
-      role: "assistant",
-      content: "",
-      created_at: "2026-04-19T00:00:10.000Z",
-    });
-    const map = extractRespondByExecId([placeholder, empty]);
-    expect(map.has(ROOT_EXEC)).toBe(false);
-  });
-
-  it("respond() wins over plain text in the same execution", () => {
-    const respondCall = makeToolCallMessage(
-      ROOT_EXEC,
-      [{ tool_name: "respond", args: { message: "via respond()" } }],
-      "2026-04-19T00:00:05.000Z",
-    );
-    const laterPlain = makeMessage({
-      execution_id: ROOT_EXEC,
-      role: "assistant",
-      content: "later plain text",
-      created_at: "2026-04-19T00:00:10.000Z",
-    });
-    // Last write wins by message order, so plain text after respond() takes
-    // over — that's intentional: it matches "final assistant message wins",
-    // mirroring what /state.response computes.
-    const map = extractRespondByExecId([respondCall, laterPlain]);
-    expect(map.get(ROOT_EXEC)).toBe("later plain text");
   });
 });
 
