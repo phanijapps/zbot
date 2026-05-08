@@ -55,7 +55,7 @@ EOF
     echo ""
     echo -e "Vault: ${GREEN}$VAULT_PATH${NC}"
     echo -e "HTTP:  ${GREEN}http://localhost:18791${NC}"
-    echo -e "WS:    ${GREEN}ws://localhost:18790${NC}"
+    echo -e "WS:    ${GREEN}ws://localhost:18791/ws${NC}"
     echo ""
 fi
 

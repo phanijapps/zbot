@@ -29,8 +29,8 @@ Edit `docker/.env`:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `VAULT_PATH` | `~/Documents/zbot` | Host directory for all z-Bot data |
-| `HTTP_PORT` | `18971` | Web UI and HTTP API port |
-| `WS_PORT` | `18790` | WebSocket streaming port |
+| `HTTP_PORT` | `18791` | Web UI + HTTP API + `/ws` WebSocket upgrade |
+| `WS_PORT` | `18790` | Legacy standalone WebSocket bind, off by default — flip `legacy_ws_port_enabled: true` only if you have integrations that hardcode `ws://host:18790` and haven't migrated to the unified `/ws` route |
 
 ## What's in the Container
 
@@ -49,14 +49,15 @@ The vault (`VAULT_PATH`) is bind-mounted into the container. The daemon creates 
 
 ```
 zbot/
-├── config/          # providers.json, settings.json, mcps.json
-├── data/            # conversations.db, knowledge_graph.db
+├── config/          # providers.json, settings.json, mcps.json, cron_jobs.json, …
+├── data/            # conversations.db, knowledge.db
 ├── agents/          # Agent configurations
+├── agents_data/     # Per-agent runtime data + shared memory
 ├── skills/          # Skill definitions
 ├── wards/           # Persistent project directories
 ├── plugins/         # Bridge workers
 ├── logs/            # Execution logs
-└── temp/            # Offloaded tool results
+└── temp/            # Ephemeral scratch (auto-wiped)
 ```
 
 ## Embedding Models
