@@ -88,7 +88,7 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 RUN pip3 install --break-system-packages uv
 
 # Copy daemon binary
-COPY --from=builder /build/target/release/zerod /usr/local/bin/zerod
+COPY --from=builder /build/target/release/zbotd /usr/local/bin/zbotd
 
 # Copy built frontend
 COPY --from=frontend /build/dist /opt/zbot/ui
@@ -99,14 +99,18 @@ RUN useradd -m -u 1000 -s /bin/bash zbot \
     && mkdir -p /data/zbot /home/zbot/.cache/fastembed \
     && chown -R zbot:zbot /data/zbot /opt/zbot /home/zbot
 
-USER videogamer
+USER zbot
 WORKDIR /home/zbot
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
     CMD curl -f http://localhost:18791/api/health || exit 1
 
-EXPOSE 18791 18790
+# WebSocket shares the HTTP port via the `/ws` upgrade. The legacy
+# standalone WebSocket port (18790) is off by default; uncomment the
+# second value below if you need it for old integrations.
+EXPOSE 18791
+# EXPOSE 18790
 
-ENTRYPOINT ["/usr/local/bin/zerod"]
+ENTRYPOINT ["/usr/local/bin/zbotd"]
 CMD ["--host", "0.0.0.0", "--data-dir", "/data/zbot", "--static-dir", "/opt/zbot/ui"]
