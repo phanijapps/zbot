@@ -39,7 +39,6 @@ use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use crate::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
 use crate::handle::ExecutionHandle;
-use crate::invoke::WorkspaceCache;
 use crate::runner::session_invoker::DelegationSpawner;
 
 /// Dispatcher that enforces per-session sequential ordering and global
@@ -218,7 +217,6 @@ pub(crate) struct RunnerDelegationInvoker {
     pub(crate) delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
     pub(crate) log_service: Arc<LogService<DatabaseManager>>,
     pub(crate) state_service: Arc<StateService<DatabaseManager>>,
-    pub(crate) workspace_cache: WorkspaceCache,
     pub(crate) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub(crate) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub(crate) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
@@ -253,7 +251,6 @@ impl DelegationSpawner for RunnerDelegationInvoker {
             self.delegation_tx.clone(),
             self.log_service.clone(),
             self.state_service.clone(),
-            self.workspace_cache.clone(),
             permit,
             self.memory_store.clone(),
             self.distiller.clone(),

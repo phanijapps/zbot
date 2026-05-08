@@ -29,7 +29,7 @@ use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 use crate::config::ExecutionConfig;
 use crate::handle::ExecutionHandle;
 use crate::invoke::{
-    collect_agents_summary, collect_skills_summary, AgentLoader, ExecutorBuilder, WorkspaceCache,
+    collect_agents_summary, collect_skills_summary, AgentLoader, ExecutorBuilder,
 };
 use crate::lifecycle::{emit_agent_started, get_or_create_session, start_execution};
 use crate::middleware::intent_analysis::{
@@ -69,7 +69,6 @@ pub(super) struct InvokeBootstrap {
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     pub(super) event_bus: Arc<EventBus>,
     pub(super) handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
-    pub(super) workspace_cache: WorkspaceCache,
 }
 
 /// Output of [`InvokeBootstrap::begin_setup`]. Carries the state that phase 2
@@ -459,7 +458,6 @@ impl InvokeBootstrap {
 
         // Use ExecutorBuilder to create the executor
         let mut builder = ExecutorBuilder::new(self.paths.vault_dir().clone(), tool_settings)
-            .with_workspace_cache(self.workspace_cache.clone())
             .with_rate_limiter(rate_limiter)
             .with_chat_mode(config.is_chat_mode());
         if let Some(registry) = self.model_registry.load_full() {
@@ -851,7 +849,6 @@ mod tests {
             goal_adapter: None,
             event_bus: Arc::new(EventBus::new()),
             handles,
-            workspace_cache: crate::invoke::new_workspace_cache(),
         };
     }
 }

@@ -35,7 +35,6 @@ use gateway_services::agents::Agent;
 use gateway_services::models::ModelRegistry;
 use gateway_services::providers::Provider;
 use gateway_services::{McpService, SettingsService, SkillService};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use zero_core::{ConnectorResourceProvider, FileSystemContext};
@@ -43,10 +42,6 @@ use zero_stores::MemoryFactStore;
 
 use crate::config::GatewayFileSystem;
 
-/// Workspace context cache type — same pattern as SkillService/ConnectorRegistry.
-pub type WorkspaceCache = Arc<tokio::sync::RwLock<Option<HashMap<String, serde_json::Value>>>>;
-
-/// Create an empty workspace cache.
 /// Resolve the effective thinking flag for an agent execution.
 ///
 /// Previously this consulted `ModelRegistry.has_capability(model, Thinking)`
@@ -64,10 +59,6 @@ pub fn resolve_thinking_flag(user_flag: bool, _model: &str) -> bool {
     user_flag
 }
 
-pub fn new_workspace_cache() -> WorkspaceCache {
-    Arc::new(tokio::sync::RwLock::new(None))
-}
-
 // ============================================================================
 // EXECUTOR BUILDER
 // ============================================================================
@@ -79,7 +70,6 @@ pub fn new_workspace_cache() -> WorkspaceCache {
 pub struct ExecutorBuilder {
     config_dir: PathBuf,
     tool_settings: ToolSettings,
-    workspace_cache: Option<WorkspaceCache>,
     fact_store: Option<Arc<dyn MemoryFactStore>>,
     connector_provider: Option<Arc<dyn ConnectorResourceProvider>>,
     rate_limiter: Option<Arc<agent_runtime::ProviderRateLimiter>>,
@@ -100,7 +90,6 @@ impl ExecutorBuilder {
         Self {
             config_dir,
             tool_settings,
-            workspace_cache: None,
             fact_store: None,
             connector_provider: None,
             rate_limiter: None,
@@ -113,12 +102,6 @@ impl ExecutorBuilder {
             extra_initial_state: None,
             chat_mode: false,
         }
-    }
-
-    /// Set workspace cache for this builder.
-    pub fn with_workspace_cache(mut self, cache: WorkspaceCache) -> Self {
-        self.workspace_cache = Some(cache);
-        self
     }
 
     /// Set the memory fact store for DB-backed save_fact/recall.
@@ -247,21 +230,6 @@ impl ExecutorBuilder {
                 "available_skills",
                 serde_json::Value::Array(available_skills.to_vec()),
             );
-        }
-
-        // Load workspace context (from cache if available, otherwise disk)
-        let workspace = if let Some(cache) = &self.workspace_cache {
-            cache.read().await.clone()
-        } else {
-            load_workspace_from_disk(&self.config_dir)
-        };
-        if let Some(ws) = workspace {
-            tracing::debug!(
-                "Loaded workspace context: {:?}",
-                ws.keys().collect::<Vec<_>>()
-            );
-            executor_config =
-                executor_config.with_initial_state("workspace", serde_json::json!(ws));
         }
 
         // Inject session_id so tools (e.g., shell) can scope working directories
@@ -695,144 +663,3 @@ pub async fn collect_skills_summary(skill_service: &SkillService) -> Vec<serde_j
     }
 }
 
-/// Load workspace context from shared memory.
-///
-/// Reads `agents_data/shared/workspace.json` and returns its contents
-/// as a HashMap for injection into executor initial state.
-fn load_workspace_from_disk(
-    config_dir: &std::path::Path,
-) -> Option<HashMap<String, serde_json::Value>> {
-    let workspace_path = config_dir
-        .join("agents_data")
-        .join("shared")
-        .join("workspace.json");
-
-    if !workspace_path.exists() {
-        return None;
-    }
-
-    match std::fs::read_to_string(&workspace_path) {
-        Ok(content) => {
-            match serde_json::from_str::<serde_json::Value>(&content) {
-                Ok(serde_json::Value::Object(obj)) => {
-                    // Extract the "entries" field which contains the key-value pairs
-                    if let Some(serde_json::Value::Object(entries)) = obj.get("entries") {
-                        let workspace: HashMap<String, serde_json::Value> = entries
-                            .iter()
-                            .filter_map(|(k, v)| {
-                                // Each entry has a "value" field with the actual data
-                                v.get("value").map(|val| (k.clone(), val.clone()))
-                            })
-                            .collect();
-
-                        if !workspace.is_empty() {
-                            return Some(workspace);
-                        }
-                    }
-                    None
-                }
-                Ok(_) => {
-                    tracing::warn!("workspace.json is not a valid object");
-                    None
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to parse workspace.json: {}", e);
-                    None
-                }
-            }
-        }
-        Err(e) => {
-            tracing::warn!("Failed to read workspace.json: {}", e);
-            None
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_load_workspace_context_missing_file() {
-        let dir = TempDir::new().unwrap();
-        let result = load_workspace_from_disk(dir.path());
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_load_workspace_context_with_data() {
-        let dir = TempDir::new().unwrap();
-        let shared_dir = dir.path().join("agents_data").join("shared");
-        std::fs::create_dir_all(&shared_dir).unwrap();
-
-        let workspace_data = serde_json::json!({
-            "entries": {
-                "working_dir": {
-                    "value": "/home/user/projects/myproject",
-                    "tags": [],
-                    "created_at": "2024-02-04T10:00:00Z",
-                    "updated_at": "2024-02-04T10:00:00Z"
-                },
-                "project_name": {
-                    "value": "myproject",
-                    "tags": ["active"],
-                    "created_at": "2024-02-04T10:00:00Z",
-                    "updated_at": "2024-02-04T10:00:00Z"
-                }
-            }
-        });
-
-        std::fs::write(
-            shared_dir.join("workspace.json"),
-            serde_json::to_string(&workspace_data).unwrap(),
-        )
-        .unwrap();
-
-        let result = load_workspace_from_disk(dir.path());
-        assert!(result.is_some());
-
-        let workspace = result.unwrap();
-        assert_eq!(workspace.len(), 2);
-        assert_eq!(
-            workspace.get("working_dir"),
-            Some(&serde_json::json!("/home/user/projects/myproject"))
-        );
-        assert_eq!(
-            workspace.get("project_name"),
-            Some(&serde_json::json!("myproject"))
-        );
-    }
-
-    #[test]
-    fn test_load_workspace_context_empty_entries() {
-        let dir = TempDir::new().unwrap();
-        let shared_dir = dir.path().join("agents_data").join("shared");
-        std::fs::create_dir_all(&shared_dir).unwrap();
-
-        let workspace_data = serde_json::json!({
-            "entries": {}
-        });
-
-        std::fs::write(
-            shared_dir.join("workspace.json"),
-            serde_json::to_string(&workspace_data).unwrap(),
-        )
-        .unwrap();
-
-        let result = load_workspace_from_disk(dir.path());
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_load_workspace_context_invalid_json() {
-        let dir = TempDir::new().unwrap();
-        let shared_dir = dir.path().join("agents_data").join("shared");
-        std::fs::create_dir_all(&shared_dir).unwrap();
-
-        std::fs::write(shared_dir.join("workspace.json"), "not valid json").unwrap();
-
-        let result = load_workspace_from_disk(dir.path());
-        assert!(result.is_none());
-    }
-}
