@@ -54,59 +54,65 @@
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         DATA LAYER                                       │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  ~/Documents/zbot/                                                       │
-│  ├── conversations.db          # SQLite: conversations, messages,       │
-│  │                              #   memory_facts, embedding_cache       │
-│  ├── data/                                                               │
-│  │   ├── conversations.db     # SQLite: conversations, messages,       │
-│  │   │                        #   memory_facts, embedding_cache        │
-│  │   └── knowledge_graph.db   # SQLite: entities, relationships        │
-│  ├── config/                   # System prompt + app config             │
-│  │   ├── settings.json        #   App settings (offload, logs)         │
-│  │   ├── providers.json       #   LLM provider credentials             │
-│  │   ├── models.json          #   Model capability overrides (optional)│
-│  │   ├── SOUL.md               #   Agent identity/personality           │
-│  │   ├── INSTRUCTIONS.md       #   Execution rules                     │
-│  │   ├── OS.md                 #   Platform-specific commands (auto)    │
-│  │   ├── distillation_prompt.md#   Customizable distillation prompt     │
-│  │   ├── recall_config.json    #   Recall tuning: weights, decay, graph │
-│  │   ├── mcps.json             #   MCP server configurations            │
-│  │   └── shards/               #   Overridable prompt shards            │
-│  │       ├── tooling_skills.md #     Skills-first approach              │
-│  │       ├── memory_learning.md#     Memory patterns                    │
-│  │       └── planning_autonomy.md#   Planning and autonomy              │
-│  ├── logs/                     # Daemon log files (when enabled)        │
-│  │   └── zerod.YYYY-MM-DD.log  #   Rolling log files                    │
-│  ├── agents/{name}/            # Agent configurations                   │
-│  │   ├── config.yaml           #   Model, provider, temperature         │
-│  │   └── AGENTS.md             #   System instructions                  │
-│  ├── agents_data/{id}/         # Per-agent runtime data                 │
-│  │   └── memory.json           #   Persistent key-value storage         │
-│  ├── agents_data/shared/       # Cross-agent shared memory (file-locked)│
-│  │   ├── user_info.json        #   User preferences                     │
-│  │   ├── workspace.json        #   Project paths (auto-injected)        │
-│  │   ├── patterns.json         #   Learned patterns/conventions         │
-│  │   └── session_summaries.json#   Distilled learnings                  │
-│  ├── wards/                    # Code Wards (persistent project dirs)   │
-│  │   ├── .venv/                #   Shared Python venv for all wards     │
-│  │   ├── scratch/              #   Default ward for quick tasks         │
-│  │   └── {ward-name}/          #   Agent-named project directories      │
-│  │       └── AGENTS.md        #     Per-ward context (ward memory)      │
-│  ├── skills/{name}/            # Skill definitions                      │
-│  │   └── SKILL.md              #   Instructions + frontmatter           │
-│  ├── connectors.json           # Connector configurations               │
-│  ├── cron_jobs.json            # Scheduled job configurations           │
-│  ├── plugins/                  # Node.js plugin directories             │
-│  │   ├── .example/             #   Reference plugin implementation      │
-│  │   ├── slack/                #   Slack Socket Mode integration        │
-│  │   └── {plugin-name}/        #   Custom plugins                       │
-│  │       ├── plugin.json       #     Plugin manifest                    │
-│  │       ├── package.json      #     Node.js dependencies               │
-│  │       ├── index.js          #     Entry point                        │
-│  │       ├── .config.json      #     User config + secrets (auto-created)│
-│  │       └── node_modules/     #     Auto-installed dependencies        │
+│  ~/Documents/zbot/                  (vault root; --vault overrides)      │
+│  ├── config/                          # App config, prompts, registries  │
+│  │   ├── settings.json                #   App settings (network, logs)   │
+│  │   ├── providers.json               #   LLM provider credentials       │
+│  │   ├── models.json                  #   Model capability overrides     │
+│  │   ├── recall_config.json           #   Recall tuning: weights, graph  │
+│  │   ├── mcps.json                    #   MCP server configurations      │
+│  │   ├── connectors.json              #   Connector configurations       │
+│  │   ├── cron_jobs.json               #   Scheduled job configurations   │
+│  │   ├── seeded_defaults.json         #   IDs of bundled defaults seeded │
+│  │   ├── SOUL.md                      #   Agent identity/personality     │
+│  │   ├── INSTRUCTIONS.md              #   Execution rules                │
+│  │   ├── OS.md                        #   Platform commands (auto-gen)   │
+│  │   ├── distillation_prompt.md       #   Distillation prompt override   │
+│  │   ├── intent_analysis_prompt.md    #   Intent-analysis prompt override│
+│  │   ├── shards/                      #   Overridable prompt shards      │
+│  │   │   ├── tooling_skills.md        #     Skills-first approach        │
+│  │   │   ├── memory_learning.md       #     Memory patterns              │
+│  │   │   └── planning_autonomy.md     #     Planning and autonomy        │
+│  │   └── wards/                       #   Per-language ward index configs│
+│  │       └── *.yaml                                                      │
+│  ├── data/                            # SQLite databases                  │
+│  │   ├── conversations.db             #   Conversations, messages,       │
+│  │   │                                #   memory_facts, embedding_cache  │
+│  │   └── knowledge.db                 #   Knowledge graph + vec0 indexes │
+│  ├── logs/                            # Daemon log files (when enabled)  │
+│  │   └── zerod.YYYY-MM-DD.log         #   Rolling log files (see note)   │
+│  ├── agents/{name}/                   # Agent configurations             │
+│  │   ├── config.yaml                  #   Model, provider, temperature   │
+│  │   └── AGENTS.md                    #   System instructions            │
+│  ├── agents_data/{id}/                # Per-agent runtime data           │
+│  │   └── memory.json                  #   Persistent key-value storage   │
+│  ├── agents_data/shared/              # Cross-agent shared memory        │
+│  │   ├── user_info.json               #   User preferences               │
+│  │   ├── workspace.json               #   Project paths (auto-injected)  │
+│  │   ├── patterns.json                #   Learned patterns               │
+│  │   └── session_summaries.json       #   Distilled learnings            │
+│  ├── skills/{name}/                   # Vault-owned skill definitions    │
+│  │   └── SKILL.md                     #   Instructions + frontmatter     │
+│  ├── wards/                           # Code Wards (persistent dirs)     │
+│  │   ├── .venv/                       #   Shared Python venv             │
+│  │   ├── scratch/                     #   Default ward for quick tasks   │
+│  │   └── {ward-name}/                 #   Agent-named project dirs       │
+│  │       └── AGENTS.md                #     Per-ward context             │
+│  ├── plugins/                         # Node.js plugin directories       │
+│  │   ├── .example/                    #   Reference plugin               │
+│  │   └── {plugin-name}/                                                  │
+│  │       ├── plugin.json              #     Plugin manifest              │
+│  │       ├── package.json             #     Node.js dependencies         │
+│  │       ├── index.js                 #     Entry point                  │
+│  │       ├── .config.json             #     User config + secrets        │
+│  │       └── node_modules/            #     Auto-installed deps          │
+│  └── temp/                            # Ephemeral scratch (auto-wiped)   │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+> **Vault-path source of truth:** `gateway/gateway-services/src/paths.rs`. Schema for `config/*.json` files lives in the consuming services (e.g. `gateway-services::SettingsService`, `gateway-cron::CronJobsStore`). System-wide skills also load from `~/.agents/skills/` outside the vault.
+>
+> **Note on `zerod.YYYY-MM-DD.log`:** the daemon binary on disk is `zbotd`, but it still self-identifies as `zerod` via `apps/daemon/src/main.rs` (`#[command(name = "zerod")]` and `filename_prefix("zerod")`). The log filename matches the runtime string, not the binary. A follow-up rename will close that drift.
 
 ## Technology Stack
 
