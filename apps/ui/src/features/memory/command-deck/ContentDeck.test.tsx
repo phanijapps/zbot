@@ -65,4 +65,34 @@ describe("ContentDeck", () => {
     // removal of the prop drilling in future refactors.
     expect(onDeleteFact).not.toHaveBeenCalled();
   });
+
+  it("Episodes tab renders task_summary + outcome + key_learnings (regression: Episodes count > 0 but list was empty)", () => {
+    const data = {
+      ...makeWardContent(),
+      counts: { facts: 0, wiki: 0, procedures: 0, episodes: 1 },
+      episodes: [
+        {
+          id: "ep-1",
+          session_id: "sess-x",
+          agent_id: "root",
+          ward_id: "auth-system",
+          task_summary: "Refactor login validator",
+          outcome: "success",
+          strategy_used: "incremental",
+          key_learnings: "Email regex was too strict; loosened it.",
+          token_cost: 1234,
+          created_at: "2026-05-03T00:00:00Z",
+          age_bucket: "today",
+        },
+      ],
+    } as unknown as WardContent;
+    render(<ContentDeck data={data} />);
+    const episodesTab = screen
+      .getAllByRole("tab")
+      .find((t) => t.textContent?.includes("Episodes"))!;
+    fireEvent.click(episodesTab);
+    expect(screen.getByText("Refactor login validator")).toBeInTheDocument();
+    expect(screen.getByText(/success/i)).toBeInTheDocument();
+    expect(screen.getByText(/Email regex was too strict/)).toBeInTheDocument();
+  });
 });

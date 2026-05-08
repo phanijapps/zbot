@@ -1,10 +1,13 @@
 //! # Ingestion Adapter
 //!
-//! Bridges [`gateway_database::KgEpisodeRepository`] + [`IngestionQueue`] +
-//! [`knowledge_graph::GraphStorage`] to [`agent_tools::IngestionAccess`].
+//! Bridges the trait-routed `KgEpisodeStore` + [`IngestionQueue`] +
+//! `KnowledgeGraphStore` to [`agent_tools::IngestionAccess`].
 //! Wired into the agent tool registry so the `ingest` tool can both
 //! (a) enqueue text chunks for background LLM extraction, and
 //! (b) bulk-upsert structured entities and relationships synchronously.
+//!
+//! Phase B2: backend-agnostic. Both paths now go through trait surfaces
+//! so all backends share one code path.
 
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
@@ -13,34 +16,33 @@ use std::sync::Arc;
 
 use agent_tools::{IngestionAccess, StructuredCounts, StructuredEntity, StructuredRelationship};
 use chrono::Utc;
-use gateway_database::KgEpisodeRepository;
-use knowledge_graph::{
-    Entity, EntityType, ExtractedKnowledge, GraphStorage, Relationship, RelationshipType,
-};
+use knowledge_graph::{Entity, EntityType, Relationship, RelationshipType};
+use zero_stores::KnowledgeGraphStore;
+use zero_stores_traits::KgEpisodeStore;
 
 use crate::ingest::{
-    chunker::{chunk_text, ChunkOptions},
     IngestionQueue,
+    chunker::{ChunkOptions, chunk_text},
 };
 
 /// Adapter that implements [`IngestionAccess`] for both text and structured
 /// ingestion paths.
 pub struct IngestionAdapter {
     queue: Arc<IngestionQueue>,
-    episode_repo: Arc<KgEpisodeRepository>,
-    graph: Arc<GraphStorage>,
+    episode_store: Arc<dyn KgEpisodeStore>,
+    kg_store: Arc<dyn KnowledgeGraphStore>,
 }
 
 impl IngestionAdapter {
     pub fn new(
         queue: Arc<IngestionQueue>,
-        episode_repo: Arc<KgEpisodeRepository>,
-        graph: Arc<GraphStorage>,
+        episode_store: Arc<dyn KgEpisodeStore>,
+        kg_store: Arc<dyn KnowledgeGraphStore>,
     ) -> Self {
         Self {
             queue,
-            episode_repo,
-            graph,
+            episode_store,
+            kg_store,
         }
     }
 }
@@ -62,14 +64,19 @@ impl IngestionAccess for IngestionAdapter {
             let mut hasher = Sha256::new();
             hasher.update(chunk.text.as_bytes());
             let content_hash = format!("{:x}", hasher.finalize());
-            let episode_id = self.episode_repo.upsert_pending(
-                source_type,
-                &source_ref,
-                &content_hash,
-                session_id,
-                agent_id,
-            )?;
-            self.episode_repo.set_payload(&episode_id, &chunk.text)?;
+            let episode_id = self
+                .episode_store
+                .upsert_pending(
+                    source_type,
+                    &source_ref,
+                    &content_hash,
+                    session_id,
+                    agent_id,
+                )
+                .await?;
+            self.episode_store
+                .set_payload(&episode_id, &chunk.text)
+                .await?;
             enqueued += 1;
         }
         self.queue.notify();
@@ -84,19 +91,11 @@ impl IngestionAccess for IngestionAdapter {
     ) -> std::result::Result<StructuredCounts, String> {
         let entity_count = entities.len();
         let relationship_count = relationships.len();
-        let agent_id_owned = agent_id.to_string();
-        let graph = self.graph.clone();
-
-        // GraphStorage is sync; drop into spawn_blocking so we don't stall the
-        // tokio reactor during the INSERT..ON CONFLICT sequence.
-        tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
-            let knowledge = build_knowledge(&agent_id_owned, entities, relationships);
-            graph
-                .store_knowledge(&agent_id_owned, knowledge)
-                .map_err(|e| format!("store_knowledge: {e}"))
-        })
-        .await
-        .map_err(|e| format!("ingest_structured join: {e}"))??;
+        let knowledge = build_knowledge(agent_id, entities, relationships);
+        self.kg_store
+            .store_knowledge(agent_id, knowledge)
+            .await
+            .map_err(|e| format!("store_knowledge: {e}"))?;
 
         Ok(StructuredCounts {
             entities_upserted: entity_count,
@@ -105,12 +104,14 @@ impl IngestionAccess for IngestionAdapter {
     }
 }
 
-/// Map the generic agent-tools shapes onto `knowledge_graph::ExtractedKnowledge`.
+/// Map the generic agent-tools shapes onto `zero_stores::ExtractedKnowledge`.
+/// Returns the trait-side type so the result can be passed straight to
+/// `KnowledgeGraphStore::store_knowledge`.
 fn build_knowledge(
     agent_id: &str,
     entities: Vec<StructuredEntity>,
     relationships: Vec<StructuredRelationship>,
-) -> ExtractedKnowledge {
+) -> zero_stores::ExtractedKnowledge {
     let now = Utc::now();
 
     let kg_entities: Vec<Entity> = entities
@@ -155,7 +156,7 @@ fn build_knowledge(
         })
         .collect();
 
-    ExtractedKnowledge {
+    zero_stores::ExtractedKnowledge {
         entities: kg_entities,
         relationships: kg_relationships,
     }
@@ -165,8 +166,11 @@ fn build_knowledge(
 mod tests {
     use super::*;
     use crate::ingest::extractor::Extractor;
-    use gateway_database::{KgEpisode, KnowledgeDatabase};
     use gateway_services::VaultPaths;
+    use zero_stores_sqlite::kg::storage::GraphStorage;
+    use zero_stores_sqlite::{
+        GatewayKgEpisodeStore, KgEpisodeRepository, KnowledgeDatabase, SqliteKgStore,
+    };
 
     /// Minimal no-op extractor — lets IngestionQueue::start spawn cleanly
     /// without needing a provider/LLM. Tests never exercise the worker loop.
@@ -176,9 +180,9 @@ mod tests {
     impl Extractor for NoopExtractor {
         async fn process(
             &self,
-            _episode: &KgEpisode,
+            _episode_id: &str,
             _chunk_text: &str,
-            _graph: &Arc<GraphStorage>,
+            _kg_store: &Arc<dyn zero_stores::KnowledgeGraphStore>,
         ) -> std::result::Result<(), String> {
             Ok(())
         }
@@ -197,17 +201,20 @@ mod tests {
         std::fs::create_dir_all(paths.conversations_db().parent().expect("parent")).expect("mkdir");
         let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
         let episode_repo = Arc::new(KgEpisodeRepository::new(db.clone()));
+        let episode_store: Arc<dyn KgEpisodeStore> =
+            Arc::new(GatewayKgEpisodeStore::new(episode_repo.clone()));
         let graph = Arc::new(GraphStorage::new(db).expect("graph"));
+        let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(graph.clone()));
         // 0 workers — spawns the dispatcher only. notify() is a no-op,
         // no workers try to claim-and-process anything we enqueue. Keeps
         // tests deterministic: the rows we insert stay in `pending`.
         let queue = Arc::new(IngestionQueue::start(
             0,
-            episode_repo.clone(),
-            graph.clone(),
+            episode_store.clone(),
+            kg_store.clone(),
             Arc::new(NoopExtractor),
         ));
-        let adapter = IngestionAdapter::new(queue, episode_repo.clone(), graph.clone());
+        let adapter = IngestionAdapter::new(queue, episode_store, kg_store);
         Harness {
             _tmp: tmp,
             episode_repo,

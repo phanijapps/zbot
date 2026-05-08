@@ -55,6 +55,8 @@ tags:
     description: Server-Sent Events for real-time updates
   - name: Webhooks
     description: Webhook endpoints for external integrations
+  - name: Cleanup
+    description: Bounded admin operations that clear vault-owned ephemeral storage
 
 paths:
   # ============================================================================
@@ -87,6 +89,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusResponse'
+
+  # ============================================================================
+  # Cleanup Endpoints
+  # ============================================================================
+  /api/cleanup/vault-temp:
+    post:
+      tags: [Cleanup]
+      summary: Clean the vault temp directory
+      description: |
+        Wipes `<vault>/temp/`, either entirely or just files older than
+        N hours. Recurses into subdirectories and removes them once
+        their contents are gone. Symlinks are deleted as links and
+        never followed. Path is hardcoded to `VaultPaths::temp_dir()` —
+        no caller-supplied paths.
+      operationId: cleanupVaultTemp
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CleanupTempRequest'
+            examples:
+              wipeAll:
+                summary: Wipe everything in <vault>/temp
+                value: {}
+              olderThan24h:
+                summary: Delete files older than 24 hours
+                value:
+                  olderThanHours: 24
+      responses:
+        '200':
+          description: Cleanup completed (errors during the walk are counted, not raised)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CleanupTempResponse'
 
   # ============================================================================
   # Gateway Bus Endpoints (Session Control)
@@ -2505,3 +2543,48 @@ components:
         error:
           type: string
           nullable: true
+
+    CleanupTempRequest:
+      type: object
+      description: |
+        Request body for `POST /api/cleanup/vault-temp`. All fields are
+        optional. Empty body / no body wipes everything.
+      properties:
+        olderThanHours:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: |
+            When set, only files whose mtime is older than this many
+            hours are deleted. When `null` or omitted, everything is
+            wiped. Files with unreadable mtime are skipped (safer
+            default) when a threshold is set.
+
+    CleanupTempResponse:
+      type: object
+      required: [deletedFiles, totalBytes, removedDirectories, errors]
+      properties:
+        deletedFiles:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Number of files (and symlinks) that were deleted.
+        totalBytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Sum of `len()` for the deleted regular files.
+        removedDirectories:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Number of subdirectories removed after their contents were gone.
+        errors:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Count of I/O errors encountered during the walk. Errors are
+            counted, never raised — a single glitch doesn't truncate
+            the sweep.

@@ -25,12 +25,13 @@ import { SetupWizard, SetupGuard } from "./features/setup";
 import { WebAgentsPanel } from "./features/agent/WebAgentsPanel";
 import { WebSettingsPanel } from "./features/settings/WebSettingsPanel";
 import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPanel";
-import { MemoryPage } from "./features/memory";
+import { MemoryTab as MemoryPanel } from "./features/memory";
 import { ObservatoryPage } from "./features/observatory";
 import { QuickChat } from "./features/chat-v2";
 import { ResearchPage } from "./features/research-v2";
 import { MissionControlPage } from "./features/mission-control";
 import { AccentPicker } from "./components/AccentPicker";
+import { useVersion } from "@/hooks/useVersion";
 
 // ============================================================================
 // Types
@@ -49,6 +50,25 @@ interface ConnectionStatus {
 function ResearchV2Redirect() {
   const { sessionId } = useParams<{ sessionId: string }>();
   return <Navigate to={`/research/${sessionId ?? ""}`} replace />;
+}
+
+/**
+ * Topbar version badge — fetches /api/health once and renders the
+ * daemon's reported version. Hidden while the fetch is in flight or on
+ * failure (rather than showing a placeholder) so the bar stays clean.
+ *
+ * Branch-suffixed versions (e.g. `2026.5.3.develop`) come straight from
+ * the build.rs that runs on `make install` / `scripts/install.sh`. Plain
+ * `cargo build` reports the bare `2026.5.3`.
+ */
+function VersionBadge() {
+  const version = useVersion();
+  if (!version) return null;
+  return (
+    <span className="topbar__version" title={`z-bot ${version}`}>
+      v{version}
+    </span>
+  );
 }
 
 function App() {
@@ -142,7 +162,7 @@ function App() {
             Make sure the z-Bot daemon is running:
             <br />
             <code className="badge mt-inline">
-              zerod
+              zbotd
             </code>
           </p>
           <button
@@ -185,7 +205,7 @@ function App() {
                   {/* Legacy redirects — Dashboard + Logs are now Mission Control. */}
                   <Route path="/dashboard" element={<Navigate to="/mission-control" replace />} />
                   <Route path="/logs" element={<Navigate to="/mission-control" replace />} />
-                  <Route path="/memory" element={<MemoryPage />} />
+                  <Route path="/memory" element={<MemoryPanel agentId="root" />} />
                   <Route path="/observatory" element={<ObservatoryPage />} />
                   <Route path="/agents" element={<WebAgentsPanel />} />
                   <Route path="/integrations" element={<WebIntegrationsPanel />} />
@@ -278,6 +298,7 @@ export function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
         </nav>
 
         <div className="topbar__right">
+          <VersionBadge />
           <AccentPicker />
           <div className="connection-status">
             <div className={`connection-status__dot ${
@@ -286,7 +307,7 @@ export function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
                 : 'connection-status__dot--disconnected'
             }`} />
             <span className="connection-status__text">
-              {connectionStatus.connected ? "Connected · zerod" : "Disconnected"}
+              {connectionStatus.connected ? "Connected · zbotd" : "Disconnected"}
             </span>
           </div>
         </div>

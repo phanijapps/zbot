@@ -24,27 +24,35 @@ use agent_runtime::llm::config::LlmConfig;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::openai::OpenAiClient;
 use agent_runtime::types::ChatMessage;
-use gateway_database::{
-    ConversationRepository, DistillationRepository, DistillationRun, EpisodeRepository, MemoryFact,
-    MemoryRepository, ProcedureRepository, SessionEpisode, WardWikiRepository,
-};
 use gateway_services::{ProviderService, SettingsService, VaultPaths};
-use knowledge_graph::{Entity, EntityType, GraphStorage, Relationship, RelationshipType};
+use knowledge_graph::{Entity, EntityType, Relationship, RelationshipType};
 use serde::{Deserialize, Serialize};
+use zero_stores_domain::{MemoryFact, SessionEpisode};
+use zero_stores_sqlite::ConversationRepository;
 
 /// Distills completed sessions into structured memory facts.
+///
+/// Persistence routing: every store dependency is an `Arc<dyn ...>`
+/// trait companion. AppState wires the SQLite-backed implementations
+/// at construction time; consumers here only see the abstract surface.
 pub struct SessionDistiller {
     provider_service: Arc<ProviderService>,
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
     conversation_repo: Arc<ConversationRepository>,
-    memory_repo: Arc<MemoryRepository>,
-    graph_storage: Option<Arc<GraphStorage>>,
-    distillation_repo: Option<Arc<DistillationRepository>>,
-    episode_repo: Option<Arc<EpisodeRepository>>,
+    memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+    kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
+    /// Trait-routed distillation store. Run-tracking writes flow
+    /// through this handle.
+    distillation_store: Option<Arc<dyn zero_stores_traits::DistillationStore>>,
+    /// Trait-routed episode store for episode storage, strategy
+    /// emergence, and failure clustering.
+    episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>>,
     paths: Arc<VaultPaths>,
     settings_service: Option<Arc<SettingsService>>,
-    pub wiki_repo: Option<Arc<WardWikiRepository>>,
-    pub procedure_repo: Option<Arc<ProcedureRepository>>,
+    /// Trait-routed wiki store for ward-wiki compilation.
+    pub wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>>,
+    /// Trait-routed procedure store for procedure upsert.
+    pub procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
 }
 
 /// A single fact extracted by the distillation LLM call.
@@ -196,15 +204,10 @@ impl SessionDistiller {
     /// The distiller resolves the default provider and creates a lightweight
     /// LLM client on-demand in `distill()`, avoiding the need for a concrete
     /// LLM client at construction time.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider_service: Arc<ProviderService>,
         embedding_client: Option<Arc<dyn EmbeddingClient>>,
         conversation_repo: Arc<ConversationRepository>,
-        memory_repo: Arc<MemoryRepository>,
-        graph_storage: Option<Arc<GraphStorage>>,
-        distillation_repo: Option<Arc<DistillationRepository>>,
-        episode_repo: Option<Arc<EpisodeRepository>>,
         paths: Arc<VaultPaths>,
         settings_service: Option<Arc<SettingsService>>,
     ) -> Self {
@@ -212,25 +215,56 @@ impl SessionDistiller {
             provider_service,
             embedding_client,
             conversation_repo,
-            memory_repo,
-            graph_storage,
-            distillation_repo,
-            episode_repo,
+            memory_store: None,
+            kg_store: None,
+            distillation_store: None,
+            episode_store: None,
             paths,
             settings_service,
-            wiki_repo: None,
-            procedure_repo: None,
+            wiki_store: None,
+            procedure_store: None,
         }
     }
 
-    /// Set the ward wiki repository for post-distillation wiki compilation.
-    pub fn set_wiki_repo(&mut self, repo: Arc<WardWikiRepository>) {
-        self.wiki_repo = Some(repo);
+    /// Wire the trait-routed memory store. Upsert + supersede route
+    /// through this handle.
+    pub fn set_memory_store(&mut self, store: Arc<dyn zero_stores::MemoryFactStore>) {
+        self.memory_store = Some(store);
     }
 
-    /// Set the procedure repository for storing extracted procedures.
-    pub fn set_procedure_repo(&mut self, repo: Arc<ProcedureRepository>) {
-        self.procedure_repo = Some(repo);
+    /// Wire the trait-routed knowledge-graph store. Entity / relationship
+    /// writes route through this handle.
+    pub fn set_kg_store(&mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) {
+        self.kg_store = Some(store);
+    }
+
+    /// Wire the trait-routed episode store. Episode insert and
+    /// similarity-search route through this handle.
+    pub fn set_episode_store(&mut self, store: Arc<dyn zero_stores_traits::EpisodeStore>) {
+        self.episode_store = Some(store);
+    }
+
+    /// Wire the trait-routed wiki store (Phase E6b). When set, ward-wiki
+    /// compilation routes through this handle. Falls back to `wiki_repo`.
+    pub fn set_wiki_store(&mut self, store: Arc<dyn zero_stores_traits::WikiStore>) {
+        self.wiki_store = Some(store);
+    }
+
+    /// Wire the trait-routed distillation store (Phase E6c). Run-tracking
+    /// writes (pending/skipped/success/error) flow through this when set;
+    /// falls back to `distillation_repo` until E6c-4 drops the concrete
+    /// field.
+    pub fn set_distillation_store(
+        &mut self,
+        store: Arc<dyn zero_stores_traits::DistillationStore>,
+    ) {
+        self.distillation_store = Some(store);
+    }
+
+    /// Wire the trait-routed procedure store (Phase E6b). Procedure
+    /// upserts during distillation flow through this when set.
+    pub fn set_procedure_store(&mut self, store: Arc<dyn zero_stores_traits::ProcedureStore>) {
+        self.procedure_store = Some(store);
     }
 
     /// Resolve the target provider ID and model for distillation.
@@ -276,7 +310,8 @@ impl SessionDistiller {
     /// Load the distillation prompt from filesystem or use embedded default.
     ///
     /// Checks for `config/distillation_prompt.md` in the vault directory.
-    /// Falls back to the embedded DEFAULT_DISTILLATION_PROMPT if not found.
+    /// Falls back to the embedded `gateway/templates/distillation_prompt.md`
+    /// (loaded via [`default_distillation_prompt`]) if not found.
     fn load_distillation_prompt(&self) -> String {
         let prompt_path = self.paths.distillation_prompt();
 
@@ -287,19 +322,20 @@ impl SessionDistiller {
             }
             Ok(_) => {
                 tracing::debug!("Distillation prompt file is empty, using default");
-                DEFAULT_DISTILLATION_PROMPT.to_string()
+                default_distillation_prompt()
             }
             Err(_) => {
                 // Write default to disk so user can customize it
+                let default = default_distillation_prompt();
                 if let Some(parent) = prompt_path.parent() {
                     std::fs::create_dir_all(parent).ok();
                 }
-                if let Err(e) = std::fs::write(&prompt_path, DEFAULT_DISTILLATION_PROMPT) {
+                if let Err(e) = std::fs::write(&prompt_path, &default) {
                     tracing::debug!("Failed to write default distillation prompt: {}", e);
                 } else {
                     tracing::info!("Created default distillation prompt at {:?}", prompt_path);
                 }
-                DEFAULT_DISTILLATION_PROMPT.to_string()
+                default
             }
         }
     }
@@ -326,12 +362,12 @@ impl SessionDistiller {
                 "Skipping distillation — too few messages"
             );
             // Record as skipped
-            self.record_skipped(session_id);
+            self.record_skipped(session_id).await;
             return Ok(0);
         }
 
         // Insert optimistic-failure record before attempting distillation
-        self.record_pending(session_id);
+        self.record_pending(session_id).await;
 
         // Collect tool outputs from transcript for fact verification
         let tool_outputs: Vec<String> = messages
@@ -348,7 +384,7 @@ impl SessionDistiller {
             Ok(resp) => resp,
             Err(e) => {
                 // The initial 'failed' record stays — update with error message
-                self.record_error(session_id, &e);
+                self.record_error(session_id, &e).await;
                 return Err(e);
             }
         };
@@ -359,7 +395,8 @@ impl SessionDistiller {
                 "Distillation found nothing worth remembering"
             );
             let duration_ms = started.elapsed().as_millis() as i64;
-            self.record_success(session_id, 0, 0, 0, false, duration_ms);
+            self.record_success(session_id, 0, 0, 0, false, duration_ms)
+                .await;
             return Ok(0);
         }
 
@@ -376,15 +413,21 @@ impl SessionDistiller {
         let now = chrono::Utc::now().to_rfc3339();
         let mut upserted = 0;
 
-        // Load existing facts for content-similarity dedup
-        let existing_facts = self
-            .memory_repo
-            .get_memory_facts(agent_id, None, 500)
-            .unwrap_or_default();
-        let existing_contents: Vec<(String, String)> = existing_facts
-            .iter()
-            .map(|f: &gateway_database::MemoryFact| (f.key.clone(), f.content.clone()))
-            .collect();
+        // Load existing facts for content-similarity dedup. SQLite-only —
+        // the trait surface uses different listing semantics (paginated by
+        // Trait-routed (Phase E6c). Backends without get_memory_facts
+        // return empty, in which case distillation falls back to
+        // key-equality dedup at upsert time.
+        let existing_contents: Vec<(String, String)> = match self.memory_store.as_ref() {
+            Some(store) => store
+                .get_memory_facts(agent_id, None, 500)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|f| (f.key, f.content))
+                .collect(),
+            None => Vec::new(),
+        };
 
         // Reserved key prefixes — only created via UI, never by distillation
         const RESERVED_PREFIXES: &[&str] = &["policy.", "instruction.", "user.profile"];
@@ -460,12 +503,18 @@ impl SessionDistiller {
             let scope = "agent";
             let ward_id = "__global__";
 
-            // Check if an active fact with the same key exists and has different content
-            let existing_fact = self
-                .memory_repo
-                .get_fact_by_key(agent_id, scope, ward_id, &ef.key)
-                .ok()
-                .flatten();
+            // Check if an active fact with the same key exists and has
+            // different content. Trait-routed via `get_fact_by_key`;
+            // backends without an impl return None and supersede
+            // becomes a no-op (fresh upsert below).
+            let existing_fact = match self.memory_store.as_ref() {
+                Some(store) => store
+                    .get_fact_by_key(agent_id, scope, ward_id, &ef.key)
+                    .await
+                    .ok()
+                    .flatten(),
+                None => None,
+            };
 
             let fact = MemoryFact {
                 id: fact_id.clone(),
@@ -499,7 +548,11 @@ impl SessionDistiller {
             // Supersede the old fact if content differs
             if let Some(ref existing) = existing_fact {
                 if existing.content != ef.content && !existing.pinned {
-                    if let Err(e) = self.memory_repo.supersede_fact(&existing.id, &fact_id) {
+                    let supersede_res = match self.memory_store.as_ref() {
+                        Some(store) => store.supersede_fact(&existing.id, &fact_id).await,
+                        None => Err("no memory store wired".to_string()),
+                    };
+                    if let Err(e) = supersede_res {
                         tracing::warn!(
                             key = %ef.key,
                             old_id = %existing.id,
@@ -517,7 +570,14 @@ impl SessionDistiller {
                 }
             }
 
-            if let Err(e) = self.memory_repo.upsert_memory_fact(&fact) {
+            let upsert_res = match self.memory_store.as_ref() {
+                Some(store) => match serde_json::to_value(&fact) {
+                    Ok(v) => store.upsert_typed_fact(v, fact.embedding.clone()).await,
+                    Err(e) => Err(format!("encode fact: {e}")),
+                },
+                None => Err("no memory store wired".to_string()),
+            };
+            if let Err(e) = upsert_res {
                 tracing::warn!(
                     key = %ef.key,
                     error = %e,
@@ -528,23 +588,28 @@ impl SessionDistiller {
             }
         }
 
-        // 5. Store entities and relationships in knowledge graph
-        if let Some(graph) = &self.graph_storage {
+        // 5. Store entities and relationships in knowledge graph.
+        //
+        // Phase E6c: trait-routed. Block is a no-op when kg_store
+        // isn't wired (defensive — production composition always
+        // wires it).
+        if self.kg_store.is_some() {
             // Build entity map for relationship resolution
             let mut entity_map: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
 
             for ee in &response.entities {
-                // Check if entity already exists (dedup by name, case-insensitive)
-                match graph.find_entity_by_name(agent_id, &ee.name) {
-                    Ok(Some(existing_id)) => {
+                // Check if entity already exists (dedup by name).
+                let existing_id = self.find_entity_by_name(agent_id, &ee.name).await;
+                match existing_id {
+                    Some(id) => {
                         // Entity already exists — bump mention count and reuse ID
-                        if let Err(e) = graph.bump_entity_mention(&existing_id) {
+                        if let Err(e) = self.bump_entity_mention(&id).await {
                             tracing::warn!(entity = %ee.name, error = %e, "Failed to bump entity mention");
                         }
-                        entity_map.insert(ee.name.clone(), existing_id);
+                        entity_map.insert(ee.name.clone(), id);
                     }
-                    _ => {
+                    None => {
                         // Entity not found — create new
                         let mut entity = Entity::new(
                             agent_id.to_string(),
@@ -554,11 +619,7 @@ impl SessionDistiller {
                         entity.properties = ee.properties.clone();
                         entity_map.insert(ee.name.clone(), entity.id.clone());
 
-                        let knowledge = knowledge_graph::types::ExtractedKnowledge {
-                            entities: vec![entity],
-                            relationships: vec![],
-                        };
-                        if let Err(e) = graph.store_knowledge(agent_id, knowledge) {
+                        if let Err(e) = self.store_knowledge_one_entity(agent_id, entity).await {
                             tracing::warn!(entity = %ee.name, error = %e, "Failed to store entity");
                         }
                     }
@@ -575,18 +636,14 @@ impl SessionDistiller {
                 .collect();
 
             for er in &canonicalized {
-                // Resolve both endpoints to real `kg_entities.id` values. The
-                // LLM sometimes names an entity only in the relationships
-                // block without also declaring it in `response.entities` —
-                // the old fallback used the name itself as the id, which
-                // blew up the FOREIGN KEY constraint on `kg_relationships`
-                // and silently dropped the edge. See
-                // `resolve_relationship_endpoint` for the resolve-or-create
-                // policy.
-                let source_id =
-                    resolve_relationship_endpoint(graph, agent_id, &er.source, &mut entity_map);
-                let target_id =
-                    resolve_relationship_endpoint(graph, agent_id, &er.target, &mut entity_map);
+                // Resolve both endpoints to real entity IDs (creating stubs
+                // if the LLM only named them in the relationships block).
+                let source_id = self
+                    .resolve_relationship_endpoint(agent_id, &er.source, &mut entity_map)
+                    .await;
+                let target_id = self
+                    .resolve_relationship_endpoint(agent_id, &er.target, &mut entity_map)
+                    .await;
 
                 let relationship = Relationship::new(
                     agent_id.to_string(),
@@ -595,11 +652,10 @@ impl SessionDistiller {
                     RelationshipType::from_str(&er.relationship_type),
                 );
 
-                let knowledge = knowledge_graph::types::ExtractedKnowledge {
-                    entities: vec![],
-                    relationships: vec![relationship],
-                };
-                if let Err(e) = graph.store_knowledge(agent_id, knowledge) {
+                if let Err(e) = self
+                    .store_knowledge_one_relationship(agent_id, relationship)
+                    .await
+                {
                     tracing::warn!(
                         source = %er.source, target = %er.target,
                         error = %e, "Failed to store relationship"
@@ -639,9 +695,9 @@ impl SessionDistiller {
             }
         }
 
-        // 6b. Store extracted procedure (if any)
+        // 6b. Store extracted procedure (if any) through the trait surface.
         if let Some(ref procedure) = response.procedure {
-            if let Some(ref procedure_repo) = self.procedure_repo {
+            if self.procedure_store.is_some() {
                 let ward_id = self
                     .conversation_repo
                     .get_session_ward_id(session_id)
@@ -653,7 +709,7 @@ impl SessionDistiller {
                     .as_ref()
                     .map(|p| serde_json::to_string(p).unwrap_or_default());
 
-                let proc = gateway_database::Procedure {
+                let proc = zero_stores_sqlite::Procedure {
                     id: format!("proc-{}", uuid::Uuid::new_v4()),
                     agent_id: agent_id.to_string(),
                     ward_id: ward_id.or_else(|| Some("__global__".to_string())),
@@ -672,10 +728,21 @@ impl SessionDistiller {
                     updated_at: chrono::Utc::now().to_rfc3339(),
                 };
 
-                if let Err(e) = procedure_repo.upsert_procedure(&proc) {
-                    tracing::warn!(name = %procedure.name, error = %e, "Failed to store procedure");
-                } else {
-                    tracing::info!(name = %procedure.name, "Stored procedure from session");
+                let upsert_res = match &self.procedure_store {
+                    Some(store) => match serde_json::to_value(&proc) {
+                        Ok(v) => store.upsert_procedure(v, None).await,
+                        Err(e) => Err(format!("encode procedure: {e}")),
+                    },
+                    None => Err("no procedure store wired".to_string()),
+                };
+
+                match upsert_res {
+                    Ok(()) => tracing::info!(
+                        name = %procedure.name, "Stored procedure from session"
+                    ),
+                    Err(e) => tracing::warn!(
+                        name = %procedure.name, error = %e, "Failed to store procedure"
+                    ),
                 }
             }
         }
@@ -690,7 +757,8 @@ impl SessionDistiller {
             response.relationships.len() as i32,
             episode_created,
             duration_ms,
-        );
+        )
+        .await;
 
         tracing::info!(
             session_id = %session_id,
@@ -708,7 +776,7 @@ impl SessionDistiller {
             .unwrap_or(None);
 
         // 9. Compile ward wiki from extracted facts (best-effort)
-        if let (Some(wiki_repo), Some(ref wid)) = (&self.wiki_repo, &ward_id) {
+        if let (Some(wiki_store), Some(ref wid)) = (&self.wiki_store, &ward_id) {
             if wid != "__global__" && wid != "scratch" {
                 let fact_summaries: Vec<crate::ward_wiki::FactSummary> = response
                     .facts
@@ -728,7 +796,7 @@ impl SessionDistiller {
                                 wid,
                                 agent_id,
                                 &fact_summaries,
-                                wiki_repo,
+                                wiki_store.as_ref(),
                                 &*client,
                                 emb,
                             )
@@ -760,40 +828,31 @@ impl SessionDistiller {
     // =========================================================================
 
     /// Insert a pending/failed distillation run (optimistic failure).
-    fn record_pending(&self, session_id: &str) {
-        if let Some(repo) = &self.distillation_repo {
-            let run = DistillationRun {
-                id: format!("dr-{}", uuid::Uuid::new_v4()),
-                session_id: session_id.to_string(),
-                status: "failed".to_string(),
-                error: Some("Distillation in progress".to_string()),
-                created_at: chrono::Utc::now().to_rfc3339(),
-                ..Default::default()
-            };
-            if let Err(e) = repo.insert(&run) {
+    async fn record_pending(&self, session_id: &str) {
+        if let Some(store) = &self.distillation_store {
+            if let Err(e) = store
+                .record_distillation_pending(session_id, "failed", Some("Distillation in progress"))
+                .await
+            {
                 tracing::warn!(session_id = %session_id, error = %e, "Failed to insert distillation run record");
             }
         }
     }
 
     /// Record a skipped distillation (too few messages).
-    fn record_skipped(&self, session_id: &str) {
-        if let Some(repo) = &self.distillation_repo {
-            let run = DistillationRun {
-                id: format!("dr-{}", uuid::Uuid::new_v4()),
-                session_id: session_id.to_string(),
-                status: "skipped".to_string(),
-                created_at: chrono::Utc::now().to_rfc3339(),
-                ..Default::default()
-            };
-            if let Err(e) = repo.insert(&run) {
+    async fn record_skipped(&self, session_id: &str) {
+        if let Some(store) = &self.distillation_store {
+            if let Err(e) = store
+                .record_distillation_pending(session_id, "skipped", None)
+                .await
+            {
                 tracing::warn!(session_id = %session_id, error = %e, "Failed to record skipped distillation");
             }
         }
     }
 
     /// Update an existing distillation run to success.
-    fn record_success(
+    async fn record_success(
         &self,
         session_id: &str,
         facts: i32,
@@ -802,24 +861,30 @@ impl SessionDistiller {
         episode_created: bool,
         duration_ms: i64,
     ) {
-        if let Some(repo) = &self.distillation_repo {
-            if let Err(e) = repo.update_success(
-                session_id,
-                facts,
-                entities,
-                rels,
-                episode_created,
-                duration_ms,
-            ) {
+        if let Some(store) = &self.distillation_store {
+            if let Err(e) = store
+                .record_distillation_success(
+                    session_id,
+                    facts,
+                    entities,
+                    rels,
+                    episode_created,
+                    duration_ms,
+                )
+                .await
+            {
                 tracing::warn!(session_id = %session_id, error = %e, "Failed to record distillation success");
             }
         }
     }
 
     /// Update an existing distillation run with an error message.
-    fn record_error(&self, session_id: &str, error: &str) {
-        if let Some(repo) = &self.distillation_repo {
-            if let Err(e) = repo.update_retry(session_id, "failed", 0, Some(error)) {
+    async fn record_error(&self, session_id: &str, error: &str) {
+        if let Some(store) = &self.distillation_store {
+            if let Err(e) = store
+                .record_distillation_failure(session_id, "failed", 0, Some(error))
+                .await
+            {
                 tracing::warn!(session_id = %session_id, error = %e, "Failed to record distillation error");
             }
         }
@@ -889,10 +954,7 @@ impl SessionDistiller {
         let metrics = compute_session_metrics(transcript);
         let user = format!(
             "## Session Metrics\n\n- Delegations: {}\n- Tool actions: {}\n- Distinct agents involved: {}\n\nProcedure extraction is REQUIRED if delegations >= 2 OR tool actions >= 3.\n\n## Session Transcript\n\n{}\n\n---\nExtract durable facts, entities, relationships, an episode assessment, AND a reusable procedure. Respond with ONLY the JSON object, nothing else.",
-            metrics.delegations,
-            metrics.tool_actions,
-            metrics.distinct_agents,
-            transcript
+            metrics.delegations, metrics.tool_actions, metrics.distinct_agents, transcript
         );
 
         // Resolve distillation provider/model from settings chain:
@@ -1065,10 +1127,10 @@ impl SessionDistiller {
         extracted: &ExtractedEpisode,
         now: &str,
     ) -> Result<bool, String> {
-        let episode_repo = match &self.episode_repo {
-            Some(repo) => repo,
-            None => return Ok(false),
-        };
+        // Episode storage runs through the trait surface.
+        if self.episode_store.is_none() {
+            return Ok(false);
+        }
 
         // Look up ward_id from the sessions table
         let ward_id = self
@@ -1094,7 +1156,7 @@ impl SessionDistiller {
             created_at: now.to_string(),
         };
 
-        episode_repo.insert(&episode)?;
+        self.insert_episode_internal(&episode).await?;
 
         // Attempt strategy emergence for successful episodes
         if extracted.outcome == "success" {
@@ -1139,18 +1201,19 @@ impl SessionDistiller {
         embedding: Option<&[f32]>,
         now: &str,
     ) -> Result<(), String> {
-        let episode_repo = match &self.episode_repo {
-            Some(repo) => repo,
-            None => return Ok(()),
-        };
+        if self.episode_store.is_none() {
+            return Ok(());
+        }
 
         let query_embedding = match embedding {
             Some(emb) => emb,
             None => return Ok(()), // No embedding — cannot search by similarity
         };
 
-        // Search for similar episodes
-        let similar = episode_repo.search_by_similarity(agent_id, query_embedding, 0.7, 10)?;
+        // Search for similar episodes (trait preferred)
+        let similar = self
+            .search_episodes_by_similarity_internal(agent_id, query_embedding, 0.7, 10)
+            .await?;
 
         // Filter to only successful episodes (excluding the one we just inserted)
         let successful_similar: Vec<_> = similar
@@ -1190,12 +1253,16 @@ impl SessionDistiller {
         // Upsert the strategy as a memory fact
         let strategy_fact_id = format!("fact-{}", uuid::Uuid::new_v4());
 
-        // Check for existing strategy fact to supersede
-        let existing_strategy = self
-            .memory_repo
-            .get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
-            .ok()
-            .flatten();
+        // Check for existing strategy fact to supersede via the
+        // trait-routed memory store (Phase E6c).
+        let existing_strategy = match self.memory_store.as_ref() {
+            Some(store) => store
+                .get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
 
         let fact = MemoryFact {
             id: strategy_fact_id.clone(),
@@ -1230,10 +1297,11 @@ impl SessionDistiller {
         // Supersede old strategy if content differs
         if let Some(ref existing) = existing_strategy {
             if existing.content != strategy_description && !existing.pinned {
-                if let Err(e) = self
-                    .memory_repo
-                    .supersede_fact(&existing.id, &strategy_fact_id)
-                {
+                let supersede_res = match self.memory_store.as_ref() {
+                    Some(store) => store.supersede_fact(&existing.id, &strategy_fact_id).await,
+                    None => Err("no memory store wired".to_string()),
+                };
+                if let Err(e) = supersede_res {
                     tracing::warn!(
                         key = %fact_key,
                         error = %e,
@@ -1250,7 +1318,13 @@ impl SessionDistiller {
             }
         }
 
-        self.memory_repo.upsert_memory_fact(&fact)?;
+        match self.memory_store.as_ref() {
+            Some(store) => {
+                let v = serde_json::to_value(&fact).map_err(|e| format!("encode fact: {e}"))?;
+                store.upsert_typed_fact(v, fact.embedding.clone()).await?;
+            }
+            None => return Err("no memory store wired".to_string()),
+        }
 
         Ok(())
     }
@@ -1265,10 +1339,9 @@ impl SessionDistiller {
         episode: &SessionEpisode,
         ward_id: &str,
     ) -> Result<(), String> {
-        let episode_repo = match &self.episode_repo {
-            Some(repo) => repo,
-            None => return Ok(()),
-        };
+        if self.episode_store.is_none() {
+            return Ok(());
+        }
 
         // Embed the task summary for similarity search
         let embedding = self.embed_text(&episode.task_summary).await;
@@ -1277,8 +1350,11 @@ impl SessionDistiller {
             None => return Ok(()), // No embedding — cannot search by similarity
         };
 
-        // Search for similar episodes (wider threshold than strategy: 0.6 vs 0.7)
-        let similar = episode_repo.search_by_similarity(agent_id, query_embedding, 0.6, 20)?;
+        // Search for similar episodes (trait preferred; wider threshold than
+        // strategy: 0.6 vs 0.7)
+        let similar = self
+            .search_episodes_by_similarity_internal(agent_id, query_embedding, 0.6, 20)
+            .await?;
 
         // Filter to only failed/partial episodes (excluding the one we just inserted)
         let failed_similar: Vec<_> = similar
@@ -1328,12 +1404,16 @@ impl SessionDistiller {
             cluster_size, latest_key_learning
         );
 
-        // Check for existing correction fact to supersede
-        let existing_correction = self
-            .memory_repo
-            .get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
-            .ok()
-            .flatten();
+        // Check for existing correction fact to supersede via the
+        // trait-routed memory store (Phase E6c).
+        let existing_correction = match self.memory_store.as_ref() {
+            Some(store) => store
+                .get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
 
         let fact = MemoryFact {
             id: correction_fact_id.clone(),
@@ -1364,10 +1444,15 @@ impl SessionDistiller {
         // Supersede old correction if content differs
         if let Some(ref existing) = existing_correction {
             if existing.content != correction_content && !existing.pinned {
-                if let Err(e) = self
-                    .memory_repo
-                    .supersede_fact(&existing.id, &correction_fact_id)
-                {
+                let supersede_res = match self.memory_store.as_ref() {
+                    Some(store) => {
+                        store
+                            .supersede_fact(&existing.id, &correction_fact_id)
+                            .await
+                    }
+                    None => Err("no memory store wired".to_string()),
+                };
+                if let Err(e) = supersede_res {
                     tracing::warn!(
                         key = %fact_key,
                         error = %e,
@@ -1384,32 +1469,204 @@ impl SessionDistiller {
             }
         }
 
-        self.memory_repo.upsert_memory_fact(&fact)?;
+        match self.memory_store.as_ref() {
+            Some(store) => {
+                let v = serde_json::to_value(&fact).map_err(|e| format!("encode fact: {e}"))?;
+                store.upsert_typed_fact(v, fact.embedding.clone()).await?;
+            }
+            None => return Err("no memory store wired".to_string()),
+        }
 
         Ok(())
+    }
+
+    // =========================================================================
+    // Episode helpers (trait-routed)
+    // =========================================================================
+
+    /// Insert a session episode. Trait-routed when `episode_store` is set;
+    /// falls back to the SQLite `episode_repo`. Returns Err only when both
+    /// are unwired (caller is expected to gate on availability beforehand).
+    async fn insert_episode_internal(&self, episode: &SessionEpisode) -> Result<(), String> {
+        if let Some(store) = &self.episode_store {
+            let v = serde_json::to_value(episode).map_err(|e| format!("encode episode: {e}"))?;
+            let emb = episode.embedding.clone();
+            store.insert_episode(v, emb).await.map(|_| ())
+        } else {
+            Err("no episode store wired".to_string())
+        }
+    }
+
+    /// Vector-similarity search for episodes. Trait-routed when wired,
+    /// falls back to SQLite repo. Returns the canonical
+    /// `Vec<(SessionEpisode, f64)>` shape regardless of backend.
+    async fn search_episodes_by_similarity_internal(
+        &self,
+        agent_id: &str,
+        embedding: &[f32],
+        threshold: f64,
+        limit: usize,
+    ) -> Result<Vec<(SessionEpisode, f64)>, String> {
+        let store = match &self.episode_store {
+            Some(s) => s,
+            None => return Ok(Vec::new()),
+        };
+        let raw = store
+            .search_episodes_by_similarity(agent_id, embedding, threshold as f32, limit)
+            .await?;
+        // Trait emits Value with shape `{ "episode": <SessionEpisode>, "score": <f64> }`.
+        let pairs: Vec<(SessionEpisode, f64)> = raw
+            .into_iter()
+            .filter_map(|v| {
+                let score = v.get("score").and_then(|s| s.as_f64())?;
+                let ep_v = v.get("episode").cloned()?;
+                let ep = serde_json::from_value::<SessionEpisode>(ep_v).ok()?;
+                Some((ep, score))
+            })
+            .collect();
+        Ok(pairs)
+    }
+
+    // =========================================================================
+    // Knowledge graph helpers (trait-routed)
+    // =========================================================================
+
+    /// Find an entity by exact name via the trait `kg_store`
+    /// (case-insensitive name match via `search_entities_by_name`).
+    async fn find_entity_by_name(&self, agent_id: &str, name: &str) -> Option<String> {
+        let store = self.kg_store.as_ref()?;
+        store
+            .get_entity_by_name(agent_id, name)
+            .await
+            .ok()
+            .flatten()
+            .map(|e| e.id)
+    }
+
+    /// Bump an entity's mention counter via the trait.
+    async fn bump_entity_mention(&self, id: &str) -> Result<(), String> {
+        let store = self
+            .kg_store
+            .as_ref()
+            .ok_or_else(|| "no kg store wired".to_string())?;
+        store
+            .bump_entity_mention(&zero_stores::EntityId::from(id.to_string()))
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Persist a single new entity via the trait.
+    async fn store_knowledge_one_entity(
+        &self,
+        agent_id: &str,
+        entity: Entity,
+    ) -> Result<(), String> {
+        let store = self
+            .kg_store
+            .as_ref()
+            .ok_or_else(|| "no kg store wired".to_string())?;
+        let knowledge = zero_stores::ExtractedKnowledge {
+            entities: vec![entity],
+            relationships: vec![],
+        };
+        store
+            .store_knowledge(agent_id, knowledge)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Persist a single new relationship via the trait.
+    async fn store_knowledge_one_relationship(
+        &self,
+        agent_id: &str,
+        rel: Relationship,
+    ) -> Result<(), String> {
+        let store = self
+            .kg_store
+            .as_ref()
+            .ok_or_else(|| "no kg store wired".to_string())?;
+        let knowledge = zero_stores::ExtractedKnowledge {
+            entities: vec![],
+            relationships: vec![rel],
+        };
+        store
+            .store_knowledge(agent_id, knowledge)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Resolve a relationship endpoint (source/target name) to a real
+    /// entity id. Lookup order: cached `entity_map` -> trait
+    /// `find_entity_by_name` -> auto-create a stub of type `custom("unknown")`
+    /// so the FK constraint on `relationship` is satisfied. Never fails;
+    /// stub-insert errors are logged but the stub id is still returned.
+    async fn resolve_relationship_endpoint(
+        &self,
+        agent_id: &str,
+        name: &str,
+        entity_map: &mut std::collections::HashMap<String, String>,
+    ) -> String {
+        if let Some(id) = entity_map.get(name) {
+            return id.clone();
+        }
+        if let Some(existing_id) = self.find_entity_by_name(agent_id, name).await {
+            entity_map.insert(name.to_string(), existing_id.clone());
+            return existing_id;
+        }
+        // Nothing found — create a stub so the relationship can be persisted.
+        let stub = Entity::new(
+            agent_id.to_string(),
+            EntityType::Custom("unknown".to_string()),
+            name.to_string(),
+        );
+        let stub_id = stub.id.clone();
+        if let Err(e) = self
+            .store_knowledge_one_entity(agent_id, stub.clone())
+            .await
+        {
+            tracing::warn!(
+                name = %name,
+                error = %e,
+                "Failed to auto-create stub entity for relationship endpoint"
+            );
+        } else {
+            tracing::debug!(
+                name = %name,
+                id = %stub_id,
+                "Auto-created stub entity for undeclared relationship endpoint"
+            );
+        }
+        entity_map.insert(name.to_string(), stub_id.clone());
+        stub_id
     }
 
     // =========================================================================
     // Embedding
     // =========================================================================
 
-    /// Embed a single text, with caching.
+    /// Embed a single text, with caching via the trait surface.
     async fn embed_text(&self, text: &str) -> Option<Vec<f32>> {
         let client = self.embedding_client.as_ref()?;
         let model_name = client.model_name().to_string();
-
-        // Check cache
         let hash = agent_runtime::content_hash(text);
-        if let Ok(Some(cached)) = self.memory_repo.get_cached_embedding(&hash, &model_name) {
-            return Some(cached);
+
+        // Cache lookup via the trait store (Phase E6c).
+        if let Some(store) = self.memory_store.as_ref() {
+            if let Ok(Some(cached)) = store.get_cached_embedding(&hash, &model_name).await {
+                return Some(cached);
+            }
         }
 
         // Generate embedding
         match client.embed(&[text]).await {
             Ok(mut embeddings) if !embeddings.is_empty() => {
                 let emb = embeddings.remove(0);
-                // Cache it
-                let _ = self.memory_repo.cache_embedding(&hash, &model_name, &emb);
+                // Best-effort cache write — backends without a cache table no-op.
+                if let Some(store) = self.memory_store.as_ref() {
+                    let _ = store.cache_embedding(&hash, &model_name, &emb).await;
+                }
                 Some(emb)
             }
             Ok(_) => None,
@@ -1421,46 +1678,15 @@ impl SessionDistiller {
     }
 }
 
-/// Canonicalize a relationship extracted by the LLM — fix common direction
-/// errors before persisting to the knowledge graph.
-///
-/// The LLM is instructed in the distillation prompt about directional
-/// semantics, but it still makes mistakes. This function applies rule-based
-/// fixes that catch the common patterns:
-///
-/// 1. **Passive voice normalization**: `analyzed_by`, `used_by`, `created_by`
-///    must have the agent entity as TARGET (object of the passive verb), not
-///    source. If the LLM inverts, we swap source and target.
-///
-/// 2. **Agent-ticker confusion**: Agents (ending in `-agent`) don't analyze
-///    tickers or projects directly — wards/workspaces do. If we see
-///    `agent --analyzed_by--> ticker`, we drop it rather than store garbage.
-///
-/// 3. **Bidirectional redundancy**: If a relationship has both `uses` and
-///    `used_by` between the same pair, keep only `uses` (we canonicalize
-///    `used_by` → inverse `uses`).
-///
-/// Returns `None` to drop the relationship, `Some(canonical)` to keep it.
-///
-/// Resolve a relationship endpoint (source or target name) to a real
-/// `kg_entities.id` value. Lookup order:
-///
-/// 1. `entity_map` — entities declared in this turn's `response.entities`
-///    (already stored or reused during step 5 above).
-/// 2. `graph.find_entity_by_name` — the entity may exist from a prior
-///    session. Cheap case-insensitive lookup.
-/// 3. Auto-create a stub entity with type `custom("unknown")` so the
-///    FOREIGN KEY on `kg_relationships` is satisfied and the edge survives.
-///    The LLM clearly surfaced the name in its relationships block; just
-///    because it wasn't in the entity array doesn't mean it's worthless.
-///    A later distillation (or a direct tool call) can refine the type.
-///
-/// Never panics. If the stub insert itself fails, logs and returns the
-/// stub id anyway — at worst we end up in the same bucket as the old
-/// fallback (FK will then fail and `store_knowledge` for the relationship
-/// will log + drop), so this is strictly an improvement.
+/// Test-only synchronous helper that mirrors
+/// `SessionDistiller::resolve_relationship_endpoint` against a concrete
+/// `GraphStorage`. Production calls the trait-routed instance method;
+/// this exists so the FK-survival contract test below can run without
+/// having to construct a full SessionDistiller (provider service +
+/// conversation repo + paths + settings + embedding client).
+#[cfg(test)]
 fn resolve_relationship_endpoint(
-    graph: &GraphStorage,
+    graph: &zero_stores_sqlite::kg::storage::GraphStorage,
     agent_id: &str,
     name: &str,
     entity_map: &mut std::collections::HashMap<String, String>,
@@ -1472,7 +1698,6 @@ fn resolve_relationship_endpoint(
         entity_map.insert(name.to_string(), existing_id.clone());
         return existing_id;
     }
-    // Nothing found — create a stub so the relationship can be persisted.
     let stub = Entity::new(
         agent_id.to_string(),
         EntityType::Custom("unknown".to_string()),
@@ -1483,23 +1708,22 @@ fn resolve_relationship_endpoint(
         entities: vec![stub],
         relationships: vec![],
     };
-    if let Err(e) = graph.store_knowledge(agent_id, knowledge) {
-        tracing::warn!(
-            name = %name,
-            error = %e,
-            "Failed to auto-create stub entity for relationship endpoint"
-        );
-    } else {
-        tracing::debug!(
-            name = %name,
-            id = %stub_id,
-            "Auto-created stub entity for undeclared relationship endpoint"
-        );
-    }
+    let _ = graph.store_knowledge(agent_id, knowledge);
     entity_map.insert(name.to_string(), stub_id.clone());
     stub_id
 }
 
+/// Canonicalize a relationship extracted by the LLM — fix common direction
+/// errors before persisting to the knowledge graph.
+///
+/// 1. Passive voice normalization (`analyzed_by`, `used_by`, `created_by`):
+///    swap source and target if the LLM inverted them.
+/// 2. Agent-ticker confusion: drop nonsensical
+///    `agent --analyzed_by--> ticker` edges rather than store garbage.
+/// 3. Bidirectional redundancy: keep only `uses` when both `uses` and
+///    `used_by` appear between the same pair.
+///
+/// Returns `None` to drop the relationship, `Some(canonical)` to keep it.
 fn canonicalize_relationship(
     er: &ExtractedRelationship,
     entities: &[ExtractedEntity],
@@ -1655,7 +1879,7 @@ fn compute_session_metrics(transcript: &str) -> SessionMetrics {
 }
 
 /// Build a compact transcript from session messages.
-fn build_transcript(messages: &[gateway_database::Message]) -> String {
+fn build_transcript(messages: &[zero_stores_sqlite::Message]) -> String {
     let mut parts = Vec::with_capacity(messages.len());
 
     for msg in messages {
@@ -1928,215 +2152,15 @@ fn extract_json_from_content(content: &str) -> String {
     content.to_string()
 }
 
-/// The distillation prompt sent as a system message.
-/// The default distillation prompt (embedded fallback).
+/// Load the embedded default distillation prompt from `gateway/templates/`.
+///
 /// Can be overridden by creating `config/distillation_prompt.md` in the vault.
-const DEFAULT_DISTILLATION_PROMPT: &str = r#"You are a memory extraction system. Analyze the session transcript and extract durable facts, entities, relationships, an episode assessment, and a reusable procedure worth remembering for FUTURE sessions.
-
-IMPORTANT: Respond with ONLY a valid JSON object. No explanation, no markdown, no text before or after the JSON. Your entire response must be parseable JSON.
-
-Return a JSON object with EXACTLY these five fields:
-
-{
-  "facts": [
-    {"category": "...", "key": "category.subdomain.topic", "content": "1-2 sentence fact", "confidence": 0.0-1.0, "epistemic_class": "archival|current|convention|procedural"}
-  ],
-  "entities": [
-    {"name": "entity name", "type": "person|organization|project|tool|concept|file", "properties": {}}
-  ],
-  "relationships": [
-    {"source": "entity name", "target": "entity name", "type": "relationship_type"}
-  ],
-  "episode": {
-    "task_summary": "What the user was trying to accomplish (1-2 sentences)",
-    "outcome": "success|partial|failed",
-    "strategy_used": "What approach was taken (e.g., 'delegated to data-analyst for technicals')",
-    "key_learnings": "What went well or poorly (1-2 sentences)"
-  },
-  "procedure": {
-    "name": "short_snake_case_name",
-    "description": "what this procedure accomplishes (1-2 sentences)",
-    "steps": [
-      {"action": "delegate|shell|ward|respond|write_file", "agent": "agent-id", "task_template": "...", "note": "..."}
-    ],
-    "parameters": ["param1", "param2"],
-    "trigger_pattern": "when to use this procedure (user request patterns)"
-  }
+fn default_distillation_prompt() -> String {
+    let bytes = gateway_templates::Templates::get("distillation_prompt.md")
+        .expect("distillation_prompt.md must be embedded in gateway/templates/")
+        .data;
+    String::from_utf8_lossy(&bytes).into_owned()
 }
-
-## EXAMPLE procedure (for a multi-step analysis task)
-
-{
-  "procedure": {
-    "name": "build_portfolio_dashboard",
-    "description": "Builds an interactive HTML dashboard for a set of stock tickers with risk analysis.",
-    "steps": [
-      {"action": "ward", "note": "enter portfolio-analysis ward"},
-      {"action": "delegate", "agent": "planner-agent", "task_template": "Plan portfolio risk dashboard for {tickers}"},
-      {"action": "delegate", "agent": "code-agent", "task_template": "Create project structure under task/{project_name}"},
-      {"action": "delegate", "agent": "research-agent", "task_template": "Fetch historical prices for {tickers} via yfinance"},
-      {"action": "delegate", "agent": "code-agent", "task_template": "Build core analysis functions: correlation, VaR, drawdown"},
-      {"action": "delegate", "agent": "code-agent", "task_template": "Generate charts with plotly"},
-      {"action": "delegate", "agent": "code-agent", "task_template": "Assemble HTML dashboard"},
-      {"action": "respond", "note": "provide dashboard link"}
-    ],
-    "parameters": ["tickers", "project_name"],
-    "trigger_pattern": "user requests portfolio risk dashboard, stock analysis report, or multi-asset risk assessment"
-  }
-}
-
-## Episode Assessment
-
-Assess the session as a whole and return an "episode" object:
-- task_summary: What was the user trying to accomplish? (1-2 sentences)
-- outcome: Did the agent complete the goal? One of: success, partial, failed
-- strategy_used: What approach was taken? (e.g., "delegated to data-analyst for technicals", "direct code generation", "multi-step research then implementation")
-- key_learnings: What went well or poorly? (1-2 sentences)
-
-If the session is too short or unclear to assess, omit the episode field.
-
-## Fact Categories (6 types)
-
-- `user` — user preferences, style, capabilities (e.g., coding style, language preferences, expertise areas)
-- `pattern` — how-to knowledge, error workarounds, successful workflows (e.g., build steps, debug techniques)
-- `domain` — domain knowledge with hierarchical keys (e.g., `domain.finance.lmnd.outlook`, `domain.rust.async_patterns`)
-- `instruction` — standing orders, workflow rules (e.g., "always use X", "never do Y", "run tests before commit")
-- `correction` — corrections to agent behavior (e.g., "don't suggest X because Y", mistakes and lessons learned)
-- `strategy` — successful approaches for recurring task types (e.g., "for data analysis tasks, delegate to data-analyst subagent")
-
-## Epistemic Classification (REQUIRED per fact)
-
-Every fact has a lifecycle class that determines how it ages:
-
-- `archival` — Historical record of what happened or was stated in a primary source.
-  NEVER DECAYS. Examples: birthdates, historical events, quotes from documents.
-  Choose this when the fact describes something that happened and won't change
-  (only be corrected if it was wrong).
-
-- `current` — Observed state at a point in time that can change.
-  DECAYS when superseded. Examples: stock prices, API states, "current X".
-
-- `convention` — Standing rules, preferences, standing orders.
-  STABLE, replaced only on explicit policy change. Examples: user preferences,
-  coding standards.
-
-- `procedural` — Reusable action sequences reinforced by outcomes.
-  EVOLVES via success/failure counts.
-
-Default when unsure: `archival` if the fact comes from a document/book/URL,
-otherwise `current`.
-
-## Key Format
-
-Use dot-notation hierarchy: `{category}.{subdomain}.{topic}`
-Examples: `user.preferred_language`, `pattern.rust.error_handling`, `domain.finance.lmnd.outlook`, `instruction.testing.always_run_cargo_check`, `correction.code_style.no_unwrap`
-
-If a fact updates something already known, use the SAME key so it overwrites.
-
-## Entity Types
-
-Choose the most specific type that fits:
-
-- `person` — individuals by name. Properties: {birth_date, death_date, nationality, occupation}
-- `organization` — companies, parties, groups. Properties: {founding_date, dissolution_date, type, location}
-- `location` — countries, cities, regions, coordinates. Properties: {country, region, type}
-- `event` — historical events, meetings, conferences, sessions. Properties: {start_date, end_date, location, outcome}
-- `time_period` — years, eras, date ranges. Properties: {start, end, era}
-- `document` — books, articles, PDFs, URLs. Properties: {author, publisher, publication_date, source_url}
-- `role` — position title held by a person at a time. Properties: {organization, start_date, end_date}
-- `artifact` — generated files, reports, data outputs. Properties: {format, generator}
-- `ward` — workspace/container. Properties: {purpose}
-- `concept` — abstract ideas, methodologies, topics. Properties: {domain}
-- `tool` — libraries, frameworks, technologies. Properties: {version, language}
-- `project` — software projects or initiatives. Properties: {language, framework}
-- `file` — important ward files. Properties: {path, exports, purpose}
-
-Include `properties` populated appropriately for the type. Use ISO 8601 for dates when available.
-
-## Relationship Types (directional — `source --type--> target`)
-
-**Temporal**:
-- `before(A, B)`, `after(A, B)`, `during(A, B)`, `concurrent_with(A, B)`, `succeeded_by(A, B)`, `preceded_by(A, B)`
-
-**Role-based**:
-- `president_of(P, O)` — P is/was president of O
-- `founder_of(P, O)` — P founded O
-- `member_of(P, O)` — P is a member of O
-- `author_of(P, D)` — P authored document D
-- `held_role(P, R)`, `employed_by(P, O)`
-
-**Spatial**:
-- `located_in(X, L)` — X is located in L
-- `held_at(E, L)` — event E was held at L
-- `born_in(P, L)`, `died_in(P, L)`
-
-**Causal**:
-- `caused(A, B)`, `enabled(A, B)`, `prevented(A, B)`, `triggered_by(A, B)`
-
-**Hierarchical**:
-- `part_of(A, B)`, `contains(A, B)`, `instance_of(A, T)`, `subtype_of(T1, T2)`
-
-**Generic** (fallback): `uses, created, related_to, exports, has_module, analyzed_by, prefers, mentions`
-
-## Relationship Rules
-
-- ALWAYS use the most specific relationship type that fits.
-- NEVER use both `A uses B` and `B uses A` for the same pair.
-- For role/presidency: emit `PersonX president_of OrgY`, NOT the reverse.
-- Date-qualified relationships: mention the time range in the entity's properties (Role entity's start_date/end_date).
-
-## Example Extraction (for grounding)
-
-Given this transcript snippet:
-> "Ada Lovelace served as chief researcher at Acme Research from 1843 to 1852, during which time the Cambridge Symposium of 1843 was held."
-
-A high-quality extraction looks like:
-
-{
-  "facts": [
-    {"category": "domain", "key": "acme_research.lovelace.tenure",
-     "content": "Ada Lovelace served as chief researcher at Acme Research from 1843 to 1852",
-     "confidence": 0.95, "epistemic_class": "archival"}
-  ],
-  "entities": [
-    {"name": "Ada Lovelace", "type": "person", "properties": {"role": "Computing pioneer"}},
-    {"name": "Acme Research", "type": "organization", "properties": {"type": "research_lab", "founding_date": "1830"}},
-    {"name": "Cambridge Symposium 1843", "type": "event", "properties": {"start_date": "1843", "location": "Cambridge"}},
-    {"name": "Cambridge", "type": "location", "properties": {"country": "UK", "type": "city"}}
-  ],
-  "relationships": [
-    {"source": "Ada Lovelace", "target": "Acme Research", "type": "member_of"},
-    {"source": "Cambridge Symposium 1843", "target": "Cambridge", "type": "held_at"},
-    {"source": "Cambridge Symposium 1843", "target": "Acme Research", "type": "part_of"}
-  ]
-}
-
-## Ward File Summaries
-
-When a session analyzes or works with files in a ward (workspace), include a `domain.{subdomain}.data_available` fact summarizing what data/files are available (e.g., `domain.finance.portfolio_data_available`).
-
-## Procedure Extraction (REQUIRED)
-
-ALWAYS extract a procedure when the session had 2+ delegations OR 3+ distinct tool actions. Procedures are the most valuable output of this extraction — they let future sessions skip the fumbling and go straight to a proven approach.
-
-- Look at the actual sequence of delegations and tool calls in the transcript.
-- Generalize: replace specific values (ticker names, project names, file paths) with `{parameter}` placeholders.
-- Include ALL significant steps, not just delegations. Ward entry, file writes, and respond calls are all valid steps.
-- Steps should be in execution order.
-- `trigger_pattern`: describe what kinds of user requests would match this procedure (3-5 example phrasings or a pattern description).
-- Set `"procedure": null` ONLY if the session had fewer than 2 tool calls (trivial sessions). A first-time execution is NOT a reason to skip — the WHOLE POINT is to capture it for future reuse.
-
-## Rules
-
-- Maximum 20 facts, 20 entities, 20 relationships per session.
-- Only extract facts useful in FUTURE sessions. Skip ephemeral details (one-off questions, transient errors, session-specific data).
-- Confidence: 0.9+ = explicitly stated, 0.7-0.9 = strongly implied, 0.5-0.7 = inferred from context.
-- If nothing worth remembering, return empty arrays but STILL try to extract a procedure if the session had multiple steps.
-- Prefer fewer high-quality extractions over many low-value ones.
-
-## Output Format
-
-CRITICAL: Your ENTIRE response must be a single valid JSON object. Do NOT include any text, explanation, or markdown formatting. Start your response with { and end with }."#;
 
 // ============================================================================
 // TESTS
@@ -2158,12 +2182,13 @@ mod tests {
     // ------------------------------------------------------------------------
     mod resolve_endpoint {
         use super::*;
-        use gateway_database::KnowledgeDatabase;
         use gateway_services::VaultPaths;
-        use knowledge_graph::{types::ExtractedKnowledge, Entity, EntityType, GraphStorage};
+        use knowledge_graph::{types::ExtractedKnowledge, Entity, EntityType};
         use std::collections::HashMap;
         use std::sync::Arc;
         use tempfile::tempdir;
+        use zero_stores_sqlite::kg::storage::GraphStorage;
+        use zero_stores_sqlite::KnowledgeDatabase;
 
         fn fresh_graph() -> GraphStorage {
             let dir = tempdir().unwrap();
@@ -2282,7 +2307,7 @@ mod tests {
     #[test]
     fn test_build_transcript_truncates() {
         let long_content = "x".repeat(2000);
-        let messages = vec![gateway_database::Message {
+        let messages = vec![zero_stores_sqlite::Message {
             id: "msg-1".to_string(),
             execution_id: Some("exec-1".to_string()),
             session_id: Some("sess-1".to_string()),
@@ -2371,7 +2396,9 @@ mod tests {
     #[test]
     fn test_sanitize_task_type_long_summary() {
         assert_eq!(
-            sanitize_task_type("User asked the agent to analyze their entire stock portfolio and generate a report"),
+            sanitize_task_type(
+                "User asked the agent to analyze their entire stock portfolio and generate a report"
+            ),
             "user_asked_the_agent"
         );
     }

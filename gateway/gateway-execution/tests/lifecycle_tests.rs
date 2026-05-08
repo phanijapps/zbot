@@ -13,7 +13,6 @@ use api_logs::LogService;
 use execution_state::{
     ExecutionStatus, SessionStatus as StateSessionStatus, StateService, TriggerSource,
 };
-use gateway_database::DatabaseManager;
 use gateway_events::EventBus;
 use gateway_execution::lifecycle::{
     complete_execution, crash_execution, get_or_create_session, start_execution, stop_execution,
@@ -22,6 +21,7 @@ use gateway_execution::lifecycle::{
 use gateway_services::VaultPaths;
 #[allow(deprecated)]
 use tempfile::tempdir;
+use zero_stores_sqlite::DatabaseManager;
 
 // ============================================================================
 // HELPERS

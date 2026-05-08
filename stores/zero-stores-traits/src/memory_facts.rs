@@ -5,6 +5,9 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
+// Domain types live in `zero-stores-domain`; re-export here so the
+// trait surface keeps working for callers that import from this crate.
+pub use zero_stores_domain::{MemoryFact, StrategyFactInsert, StrategyFactMatch};
 
 /// Aggregate counts across the memory subsystem. Returned by
 /// `MemoryFactStore::aggregate_stats` for the `GET /api/memory/stats`
@@ -188,6 +191,29 @@ pub trait MemoryFactStore: Send + Sync {
         Ok(serde_json::json!({ "primitives": [] }))
     }
 
+    /// Typed variant of `list_primitives` returning `Vec<MemoryFact>`.
+    /// Used by the ward snapshot builder so it gets the raw key /
+    /// content / source_summary triple without re-decoding the
+    /// rendered JSON. Default returns empty.
+    async fn list_primitives_for_ward(
+        &self,
+        _ward_id: &str,
+    ) -> Result<Vec<MemoryFact>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Recent `ctx.<session_id>.state.<exec_id>` rows for the given
+    /// session, newest-first, capped at `limit`. Used by the ward
+    /// snapshot builder to render the "prior steps this session"
+    /// section. Default returns empty.
+    async fn list_recent_state_handoffs(
+        &self,
+        _session_id: &str,
+        _limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        Ok(Vec::new())
+    }
+
     // =========================================================================
     // SKILL INDEX STATE
     // Per-skill staleness tracker for the incremental skill reindex.
@@ -243,5 +269,250 @@ pub trait MemoryFactStore: Send + Sync {
     /// default returns `0`.
     async fn count_all_facts(&self, _agent_id: Option<&str>) -> Result<i64, String> {
         Ok(0)
+    }
+
+    /// Paginated list of memory facts with optional `agent_id`, `category`,
+    /// and `scope` filters. Returns each row as a `serde_json::Value` so
+    /// that the trait surface stays free of the gateway-database
+    /// `MemoryFact` struct (dep-cycle avoidance). Default returns empty.
+    async fn list_memory_facts(
+        &self,
+        _agent_id: Option<&str>,
+        _category: Option<&str>,
+        _scope: Option<&str>,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<Vec<Value>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Typed variant of `list_memory_facts` returning `Vec<MemoryFact>`
+    /// directly. Default deserialises the Value-based result so backends
+    /// only need to implement `list_memory_facts`.
+    async fn list_memory_facts_typed(
+        &self,
+        agent_id: Option<&str>,
+        category: Option<&str>,
+        scope: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        let rows = self
+            .list_memory_facts(agent_id, category, scope, limit, offset)
+            .await?;
+        rows.into_iter()
+            .map(|v| serde_json::from_value(v).map_err(|e| format!("decode MemoryFact: {e}")))
+            .collect()
+    }
+
+    /// Fetch a single memory fact by id. Returns `None` if the row is
+    /// absent. The shape mirrors the same JSON layout that
+    /// `list_memory_facts` emits per row.
+    async fn get_memory_fact_by_id(&self, _fact_id: &str) -> Result<Option<Value>, String> {
+        Ok(None)
+    }
+
+    /// Delete a single memory fact by id. Returns `true` if a row was
+    /// removed, `false` if the id was absent.
+    async fn delete_memory_fact(&self, _fact_id: &str) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    /// Upsert a fully-shaped memory fact. The `fact` Value must contain the
+    /// gateway-database `MemoryFact` JSON shape (id, agent_id, scope,
+    /// category, key, content, confidence, mention_count, source_summary,
+    /// ward_id, contradicted_by, created_at, updated_at, expires_at,
+    /// valid_from, valid_until, superseded_by, pinned, etc.). The optional
+    /// `embedding` is the L2-normalized name vector to persist alongside.
+    /// Default returns an error so impls that don't support typed upsert
+    /// fail loudly rather than silently dropping writes.
+    async fn upsert_typed_fact(
+        &self,
+        _fact: Value,
+        _embedding: Option<Vec<f32>>,
+    ) -> Result<(), String> {
+        Err("upsert_typed_fact not implemented for this store".to_string())
+    }
+
+    /// Mark a fact as superseded by a newer fact. Both ids should already
+    /// exist. Default returns no-op error so misuse is loud.
+    async fn supersede_fact(&self, _old_id: &str, _new_id: &str) -> Result<(), String> {
+        Err("supersede_fact not implemented for this store".to_string())
+    }
+
+    /// Mark a fact as archived (soft-delete). Used by sleep-time pruning.
+    async fn archive_fact(&self, _fact_id: &str) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    /// Hybrid FTS + vector search across memory facts. `mode` is one of
+    /// `"fts"`, `"semantic"`, or `"hybrid"`. `query_embedding` is supplied
+    /// only for semantic / hybrid modes (caller pre-embeds the query string).
+    /// `ward_id` filters to a specific ward when set.
+    /// Each row in the returned Vec carries a `match_source` field
+    /// (`"fts"`, `"vec"`, `"hybrid"`) for downstream ranking display.
+    async fn search_memory_facts_hybrid(
+        &self,
+        _agent_id: Option<&str>,
+        _query: &str,
+        _mode: &str,
+        _limit: usize,
+        _ward_id: Option<&str>,
+        _query_embedding: Option<&[f32]>,
+    ) -> Result<Vec<Value>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Typed variant of `search_memory_facts_hybrid` returning
+    /// `(MemoryFact, score, match_source)` tuples directly. Default
+    /// deserialises the Value-based result so backends only need to
+    /// implement `search_memory_facts_hybrid` (with `score` and
+    /// `match_source` populated alongside the fact fields).
+    async fn search_memory_facts_hybrid_typed(
+        &self,
+        agent_id: Option<&str>,
+        query: &str,
+        mode: &str,
+        limit: usize,
+        ward_id: Option<&str>,
+        query_embedding: Option<&[f32]>,
+    ) -> Result<Vec<(MemoryFact, f64, String)>, String> {
+        let rows = self
+            .search_memory_facts_hybrid(agent_id, query, mode, limit, ward_id, query_embedding)
+            .await?;
+        rows.into_iter()
+            .map(|mut v| {
+                let score = v
+                    .get("score")
+                    .and_then(|s| s.as_f64())
+                    .unwrap_or(0.0);
+                let match_source = v
+                    .as_object_mut()
+                    .and_then(|o| o.remove("match_source"))
+                    .and_then(|s| s.as_str().map(String::from))
+                    .unwrap_or_else(|| "fts".to_string());
+                let fact: MemoryFact = serde_json::from_value(v)
+                    .map_err(|e| format!("decode MemoryFact: {e}"))?;
+                Ok((fact, score, match_source))
+            })
+            .collect()
+    }
+
+    // ---- Sleep-time synthesis (Phase D4) -------------------------------
+    //
+    // Reads/writes needed by the `Synthesizer` to dedup against
+    // existing strategy facts and persist new ones. Default impls
+    // return None / Err so backends that haven't implemented yet make
+    // the synthesis cycle a quiet no-op rather than corrupting state.
+
+    /// Find an existing strategy fact whose embedding's cosine
+    /// similarity with `embedding` is at or above `threshold`. Scans
+    /// up to `scan_limit` candidate facts in `category = "strategy"`
+    /// for the agent. Default: no match.
+    async fn find_strategy_fact_by_similarity(
+        &self,
+        _agent_id: &str,
+        _embedding: &[f32],
+        _threshold: f32,
+        _scan_limit: usize,
+    ) -> Result<Option<StrategyFactMatch>, String> {
+        Ok(None)
+    }
+
+    /// Bump an existing strategy fact's `mention_count` and replace
+    /// its `source_episode_id` with `merged_source_episode_id`.
+    /// `now_rfc3339` is the timestamp to record under `updated_at`.
+    /// Default: no-op error so misuse is loud.
+    async fn bump_strategy_fact_episodes(
+        &self,
+        _fact_id: &str,
+        _merged_source_episode_id: &str,
+        _now_rfc3339: &str,
+    ) -> Result<(), String> {
+        Err("bump_strategy_fact_episodes not implemented for this store".to_string())
+    }
+
+    /// Insert a synthesised strategy fact. Returns the fact id used.
+    /// The trait crate stays dep-light by taking a purpose-built
+    /// `StrategyFactInsert` rather than a full `MemoryFact` struct
+    /// (which lives in `zero-stores-sqlite`). Default: no-op error.
+    async fn insert_strategy_fact(&self, _req: StrategyFactInsert) -> Result<String, String> {
+        Err("insert_strategy_fact not implemented for this store".to_string())
+    }
+
+    /// Get facts in a specific category for an agent, ordered by
+    /// most-recently-mentioned. Used by the recall path for
+    /// category-weighted augmentation (corrections, strategies, etc.)
+    /// Default: empty.
+    async fn get_facts_by_category(
+        &self,
+        _agent_id: &str,
+        _category: &str,
+        _limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Get all facts above a confidence threshold. Used by the recall
+    /// path to surface "always relevant" durable knowledge regardless
+    /// of query similarity. Default: empty.
+    async fn get_high_confidence_facts(
+        &self,
+        _agent_id: Option<&str>,
+        _threshold: f64,
+        _limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Get a fact by its `(agent_id, scope, ward_id, key)` natural
+    /// key. Used by the distillation pipeline to detect content
+    /// changes and supersede prior facts. Default: None — backends
+    /// without this lookup degrade to "always insert new" semantics.
+    async fn get_fact_by_key(
+        &self,
+        _agent_id: &str,
+        _scope: &str,
+        _ward_id: &str,
+        _key: &str,
+    ) -> Result<Option<MemoryFact>, String> {
+        Ok(None)
+    }
+
+    // ---- Embedding cache (best-effort optimization) ---------------------
+
+    /// Read a cached embedding for `(content_hash, model_name)`.
+    /// Backends may persist these to avoid re-embedding identical text.
+    /// Default: None — caller falls back to live embedding generation.
+    async fn get_cached_embedding(
+        &self,
+        _content_hash: &str,
+        _model_name: &str,
+    ) -> Result<Option<Vec<f32>>, String> {
+        Ok(None)
+    }
+
+    /// Persist an embedding under `(content_hash, model_name)` for
+    /// future lookup. Best-effort; default no-op so backends without
+    /// a cache table still build cleanly.
+    async fn cache_embedding(
+        &self,
+        _content_hash: &str,
+        _model_name: &str,
+        _embedding: &[f32],
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// List memory facts for an agent, optionally filtered by scope.
+    /// Used by the distillation pipeline to dedup against existing
+    /// facts before upserting. Default: empty.
+    async fn get_memory_facts(
+        &self,
+        _agent_id: &str,
+        _scope: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        Ok(Vec::new())
     }
 }

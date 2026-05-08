@@ -8,6 +8,8 @@ async-trait = { workspace = true }
 knowledge-graph = { path = "../../services/knowledge-graph" }
 serde = { workspace = true }
 thiserror = { workspace = true }
+# Pure-data domain types (port request/response shapes).
+zero-stores-domain = { path = "../zero-stores-domain" }
 zero-stores-traits = { path = "../zero-stores-traits" }
 
 [lints]

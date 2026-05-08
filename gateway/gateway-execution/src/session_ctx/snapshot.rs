@@ -21,7 +21,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use gateway_database::MemoryRepository;
+use zero_stores_traits::MemoryFact;
+use zero_stores_traits::MemoryFactStore;
 
 /// Byte caps per section — total preamble stays under ~5 KB.
 const AGENTS_MD_CAP: usize = 2048;
@@ -34,11 +35,11 @@ const MAX_HANDOFFS: usize = 5;
 /// Returns an empty string if the ward doesn't exist — the caller
 /// just prepends nothing in that case. All file reads are non-fatal
 /// (missing files are silently skipped).
-pub fn build(
+pub async fn build(
     ward_id: &str,
     sid: &str,
     wards_dir: &Path,
-    memory_repo: Option<&Arc<MemoryRepository>>,
+    memory_store: Option<&Arc<dyn MemoryFactStore>>,
 ) -> String {
     let ward_root = wards_dir.join(ward_id);
     if !ward_root.exists() {
@@ -64,8 +65,11 @@ pub fn build(
     // 2. Reusable primitives — queried live from memory_facts. Runtime
     //    AST hook populates this when code is written; agents cannot
     //    forget to update it (nothing to forget).
-    if let Some(repo) = memory_repo {
-        let primitives = repo.list_primitives_for_ward(ward_id).unwrap_or_default();
+    if let Some(store) = memory_store {
+        let primitives = store
+            .list_primitives_for_ward(ward_id)
+            .await
+            .unwrap_or_default();
         if !primitives.is_empty() {
             let section = render_primitives(&primitives, PRIMITIVES_CAP);
             out.push_str("\n## Primitives (import these — don't duplicate)\n\n");
@@ -77,8 +81,8 @@ pub fn build(
     }
 
     // 3. Prior step handoffs from this session (runtime memory).
-    if let Some(repo) = memory_repo {
-        match repo.list_recent_state_handoffs(sid, MAX_HANDOFFS) {
+    if let Some(store) = memory_store {
+        match store.list_recent_state_handoffs(sid, MAX_HANDOFFS).await {
             Ok(handoffs) if !handoffs.is_empty() => {
                 out.push_str("\n## Prior steps this session\n\n");
                 // Oldest-first matches reading order.
@@ -119,9 +123,9 @@ pub fn build(
 /// - `calc_wacc(equity, debt, cost_of_equity, cost_of_debt, tax_rate) -> float`
 ///   Weighted average cost of capital.
 /// ```
-fn render_primitives(facts: &[gateway_database::MemoryFact], cap: usize) -> String {
+fn render_primitives(facts: &[MemoryFact], cap: usize) -> String {
     use std::collections::BTreeMap;
-    let mut by_file: BTreeMap<&str, Vec<&gateway_database::MemoryFact>> = BTreeMap::new();
+    let mut by_file: BTreeMap<&str, Vec<&MemoryFact>> = BTreeMap::new();
     for f in facts {
         // Key: primitive.<path>.<symbol> → take the middle part.
         let body = f.key.strip_prefix("primitive.").unwrap_or(&f.key);
@@ -164,14 +168,14 @@ fn render_primitives(facts: &[gateway_database::MemoryFact], cap: usize) -> Stri
 /// Prepend a freshly-built ward snapshot to the existing task text.
 ///
 /// Called from spawn.rs to wrap the task before it reaches the subagent.
-pub fn prepend_to_task(
+pub async fn prepend_to_task(
     ward_id: &str,
     sid: &str,
     wards_dir: &Path,
-    memory_repo: Option<&Arc<MemoryRepository>>,
+    memory_store: Option<&Arc<dyn MemoryFactStore>>,
     task: &str,
 ) -> String {
-    let snapshot = build(ward_id, sid, wards_dir, memory_repo);
+    let snapshot = build(ward_id, sid, wards_dir, memory_store).await;
     if snapshot.is_empty() {
         return task.to_string();
     }
@@ -291,15 +295,15 @@ mod tests {
         std::fs::write(path, content).unwrap();
     }
 
-    #[test]
-    fn test_build_empty_ward_returns_empty_string() {
+    #[tokio::test]
+    async fn test_build_empty_ward_returns_empty_string() {
         let dir = TempDir::new().unwrap();
-        let out = build("does-not-exist", "sess-1", dir.path(), None);
+        let out = build("does-not-exist", "sess-1", dir.path(), None).await;
         assert!(out.is_empty());
     }
 
-    #[test]
-    fn test_build_with_agents_md_only() {
+    #[tokio::test]
+    async fn test_build_with_agents_md_only() {
         let dir = TempDir::new().unwrap();
         let wards = dir.path();
         write(
@@ -307,7 +311,7 @@ mod tests {
             "stock-analysis/AGENTS.md",
             "# stock-analysis\n\nPurpose: value companies.",
         );
-        let out = build("stock-analysis", "sess-1", wards, None);
+        let out = build("stock-analysis", "sess-1", wards, None).await;
         assert!(out.starts_with("<ward_snapshot ward=\"stock-analysis\">"));
         assert!(out.ends_with("</ward_snapshot>"));
         assert!(out.contains("## Doctrine (AGENTS.md)"));
@@ -316,21 +320,21 @@ mod tests {
         assert!(!out.contains("memory-bank"));
     }
 
-    #[test]
-    fn test_build_skips_empty_agents_md() {
+    #[tokio::test]
+    async fn test_build_skips_empty_agents_md() {
         let dir = TempDir::new().unwrap();
         let wards = dir.path();
         write(wards, "w/AGENTS.md", "   \n");
-        // No memory_repo → no primitives or handoffs. An effectively
+        // No memory_store → no primitives or handoffs. An effectively
         // empty AGENTS.md produces a snapshot with no sections.
-        let out = build("w", "sess-1", wards, None);
+        let out = build("w", "sess-1", wards, None).await;
         assert!(out.starts_with("<ward_snapshot"));
         assert!(!out.contains("## Doctrine"));
     }
 
     #[test]
     fn test_render_primitives_groups_by_file() {
-        use gateway_database::MemoryFact;
+        use zero_stores_sqlite::MemoryFact;
         fn mk(key: &str, content: &str) -> MemoryFact {
             MemoryFact {
                 id: String::new(),
@@ -469,19 +473,19 @@ mod tests {
         assert!(out.ends_with("…"));
     }
 
-    #[test]
-    fn test_prepend_to_task_wraps_task_below_snapshot() {
+    #[tokio::test]
+    async fn test_prepend_to_task_wraps_task_below_snapshot() {
         let dir = TempDir::new().unwrap();
         let wards = dir.path();
         write(wards, "w/AGENTS.md", "Ward purpose.");
-        let out = prepend_to_task("w", "sess-1", wards, None, "Do the thing.");
+        let out = prepend_to_task("w", "sess-1", wards, None, "Do the thing.").await;
         assert!(out.starts_with("<ward_snapshot"));
         assert!(out.ends_with("Do the thing."));
         assert!(out.contains("</ward_snapshot>\n\nDo the thing."));
     }
 
-    #[test]
-    fn test_prepend_to_task_empty_ward_passes_task_through() {
+    #[tokio::test]
+    async fn test_prepend_to_task_empty_ward_passes_task_through() {
         let dir = TempDir::new().unwrap();
         let out = prepend_to_task(
             "nonexistent-ward",
@@ -489,7 +493,8 @@ mod tests {
             dir.path(),
             None,
             "Original task.",
-        );
+        )
+        .await;
         assert_eq!(out, "Original task.");
     }
 }

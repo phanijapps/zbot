@@ -872,3 +872,22 @@
   text-overflow: ellipsis;
   max-width: 220px;
 }
+
+/* -----------------------------------------------------------------------------
+ * SessionTurnBlock — multi-turn separators
+ *
+ * Subsequent turns get a thin divider above. Each turn is a flow block;
+ * the divider spans the content column so it reads as "next exchange".
+ * ----------------------------------------------------------------------------- */
+
+.session-turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3, 0.75rem);
+}
+
+.session-turn + .session-turn {
+  border-top: 1px solid var(--border);
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+}

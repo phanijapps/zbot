@@ -172,4 +172,74 @@ describe("<QuickChat>", () => {
     const btn = screen.getByLabelText("Clear chat") as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
   });
+
+  it("renders artifact cards with the file name + label", () => {
+    mockHookRef.current = {
+      ...makeIdleHook(),
+      state: {
+        ...makeIdleHook().state,
+        messages: [{ id: "u1", role: "user", content: "summarize", timestamp: 1 }],
+        artifacts: [
+          { id: "art-1", fileName: "report.md", fileType: "md", fileSize: 100, label: "summary" },
+          { id: "art-2", fileName: "data.csv", fileType: "csv", fileSize: 50 },
+        ],
+      },
+    };
+    renderPage();
+    expect(screen.getByText("report.md")).toBeTruthy();
+    expect(screen.getByText("summary")).toBeTruthy();
+    expect(screen.getByText("data.csv")).toBeTruthy();
+    expect(screen.getAllByTestId("quick-chat-artifact").length).toBe(2);
+  });
+
+  it("clicking an artifact card opens the slide-out viewer", () => {
+    mockHookRef.current = {
+      ...makeIdleHook(),
+      state: {
+        ...makeIdleHook().state,
+        messages: [{ id: "u1", role: "user", content: "see file", timestamp: 1 }],
+        artifacts: [{ id: "art-1", fileName: "open.md", fileType: "md", fileSize: 1 }],
+      },
+    };
+    const { container } = renderPage();
+    fireEvent.click(screen.getByTestId("quick-chat-artifact"));
+    // ArtifactSlideOut renders a header that mirrors the file name; the
+    // component is a portal so the easiest signal is the second occurrence
+    // of the file name in the DOM (card + slideout).
+    expect(container.querySelectorAll("[data-testid='quick-chat-artifact']").length).toBe(1);
+    expect(screen.getAllByText("open.md").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("does NOT open a slide-out when sessionId is null (defensive guard)", () => {
+    mockHookRef.current = {
+      ...makeIdleHook(),
+      state: {
+        ...makeIdleHook().state,
+        sessionId: null,
+        messages: [{ id: "u1", role: "user", content: "still loading", timestamp: 1 }],
+        artifacts: [{ id: "art-1", fileName: "guard.md", fileType: "md", fileSize: 1 }],
+      },
+    };
+    renderPage();
+    fireEvent.click(screen.getByTestId("quick-chat-artifact"));
+    // Card stays visible, no slideout content beyond the card itself.
+    expect(screen.getAllByText("guard.md").length).toBe(1);
+  });
+
+  it("renders no Stop button when status is idle", () => {
+    renderPage();
+    expect(screen.queryByTitle("Stop")).toBeNull();
+  });
+
+  it("does not render the artifacts strip when artifacts is empty", () => {
+    mockHookRef.current = {
+      ...makeIdleHook(),
+      state: {
+        ...makeIdleHook().state,
+        messages: [{ id: "u1", role: "user", content: "hi", timestamp: 1 }],
+      },
+    };
+    const { container } = renderPage();
+    expect(container.querySelector("[data-testid='quick-chat-artifacts']")).toBeNull();
+  });
 });

@@ -8,10 +8,27 @@
 //! Re-exported from `zero-stores` for the design-canonical
 //! `zero_stores::*` import paths.
 
+pub mod auxiliary;
+pub mod compaction;
 pub mod conversation;
+pub mod episodes;
+pub mod kg_episodes;
 pub mod memory_facts;
 pub mod outbox;
+pub mod procedures;
+pub mod wiki;
 
+pub use auxiliary::{DistillationStore, GoalStore, RecallLogStore};
+pub use compaction::{CompactionRunSummary, CompactionStore};
 pub use conversation::ConversationStore;
-pub use memory_facts::{MemoryAggregateStats, MemoryFactStore, MemoryHealthMetrics, SkillIndexRow};
+pub use episodes::{EpisodeStats, EpisodeStore, SessionEpisode, SuccessfulEpisode};
+pub use kg_episodes::{KgEpisodeStatusCounts, KgEpisodeStore};
+pub use memory_facts::{
+    MemoryAggregateStats, MemoryFact, MemoryFactStore, MemoryHealthMetrics, SkillIndexRow,
+    StrategyFactInsert, StrategyFactMatch,
+};
 pub use outbox::OutboxStore;
+pub use procedures::{
+    PatternProcedureInsert, Procedure, ProcedureStats, ProcedureStore, ProcedureSummary,
+};
+pub use wiki::{WikiStats, WikiStore};

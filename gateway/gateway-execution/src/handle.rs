@@ -45,6 +45,17 @@ impl ExecutionHandle {
         self.stop_flag.load(Ordering::SeqCst)
     }
 
+    /// Get a cloned `Arc` to the underlying stop flag.
+    ///
+    /// Exposed so the agent-runtime executor can poll it inside its
+    /// streaming-LLM `select!` loop without depending on the
+    /// `gateway-execution` crate. Plumbing this through `execute_stream`
+    /// lets the executor abort an in-flight LLM stream on stop instead
+    /// of waiting for the call to finish naturally.
+    pub fn stop_signal(&self) -> Arc<AtomicBool> {
+        self.stop_flag.clone()
+    }
+
     /// Request the execution to pause.
     pub fn pause(&self) {
         self.pause_flag.store(true, Ordering::SeqCst);
@@ -137,5 +148,22 @@ mod tests {
 
         handle.add_iterations(5);
         assert_eq!(handle.max_iterations(), 15);
+    }
+
+    #[test]
+    fn stop_signal_returns_clone_of_underlying_flag() {
+        let handle = ExecutionHandle::new(10);
+        let signal = handle.stop_signal();
+
+        // The clone observes the same flag — handle.stop() flips it.
+        assert!(!signal.load(Ordering::SeqCst));
+        handle.stop();
+        assert!(signal.load(Ordering::SeqCst));
+
+        // Conversely, mutating via the signal flips what the handle sees.
+        let handle2 = ExecutionHandle::new(10);
+        let signal2 = handle2.stop_signal();
+        signal2.store(true, Ordering::SeqCst);
+        assert!(handle2.is_stop_requested());
     }
 }

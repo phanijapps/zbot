@@ -446,6 +446,22 @@
   color: var(--muted-foreground);
 }
 
+/* Version badge in the topbar right-side cluster. Same monospace +
+   size as connection-status to read as part of the same metadata
+   row. Hidden on narrow widths to preserve the brand + nav. */
+.topbar__version {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--muted-foreground);
+  user-select: text;
+  white-space: nowrap;
+}
+
+@media (max-width: 1024px) {
+  .topbar__version { display: none; }
+}
+
 .connection-status__dot {
   width: 6px;
   height: 6px;
@@ -840,7 +856,8 @@
   color: var(--foreground);
 }
 
-.form-input {
+.form-input,
+.form-select {
   width: 100%;
   padding: var(--spacing-2) var(--spacing-3);
   font-size: var(--text-sm);
@@ -851,7 +868,8 @@
   transition: all 0.15s ease;
 }
 
-.form-input:focus {
+.form-input:focus,
+.form-select:focus {
   outline: none;
   border-color: var(--primary);
   box-shadow: 0 0 0 2px var(--ring-muted);
@@ -875,6 +893,14 @@
   background-repeat: no-repeat;
   background-position: right 12px center;
   padding-right: 40px;
+}
+
+/* Native <option> elements don't inherit the parent <select>'s
+   background — the browser renders the popup using OS defaults. Style
+   each option explicitly so the open dropdown stays dark. */
+.form-select option {
+  background-color: var(--background);
+  color: var(--foreground);
 }
 
 /* ============================================================================

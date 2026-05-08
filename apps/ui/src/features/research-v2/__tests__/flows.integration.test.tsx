@@ -128,11 +128,12 @@ describe("useResearchSession — full flow integration", () => {
 
     expect(result.current.state.sessionId).toBe(MOCK_SESSION_ID);
     expect(result.current.state.wardName).toBe("stock-analysis");
+    expect(result.current.state.rootExecutionId).toBe("exec-1");
     expect(result.current.state.turns).toHaveLength(1);
     const turn = result.current.state.turns[0];
-    expect(turn.id).toBe("exec-1");
-    expect(turn.agentId).toBe("root");
-    expect(turn.respond).toBe("Q4 revenue was $X");
+    // Root-level events fan out onto the SessionTurn directly:
+    // assistantText / timeline come from the root execution's stream.
+    expect(turn.assistantText).toBe("Q4 revenue was $X");
     expect(turn.timeline.some((e) => e.kind === "thinking")).toBe(true);
     expect(turn.timeline.some((e) => e.kind === "tool_call")).toBe(true);
     expect(turn.timeline.some((e) => e.kind === "tool_result")).toBe(true);
@@ -160,34 +161,21 @@ describe("useResearchSession — full flow integration", () => {
     });
     await flush();
 
-    const turn = result.current.state.turns.find((t) => t.id === "exec-1");
-    expect(turn?.status).toBe("error");
-    expect(turn?.errorMessage ?? "").toMatch(/no output/i);
+    expect(result.current.state.turns).toHaveLength(1);
+    const turn = result.current.state.turns[0];
+    expect(turn.status).toBe("error");
+    // Silent-crash workaround on the SessionTurn surfaces via assistantText.
+    expect(turn.assistantText ?? "").toMatch(/no output/i);
   });
 
   // -------------------------------------------------------------------------
-  // 3. Orphan respond — AgentStarted never arrived
+  // 3. (Removed) Orphan Respond — RESPOND with no rootExecutionId set is a
+  // no-op in the multi-turn shape (the reducer falls into the subagent path,
+  // finds no match, and returns state unchanged). The legacy "creates an
+  // orphan turn" behavior was tied to the per-execution-id turn array; with
+  // the per-user-message SessionTurn array there is no longer a place for
+  // an orphan execution to attach. Documented for clarity.
   // -------------------------------------------------------------------------
-  it("renders a turn from a Respond event even without a preceding AgentStarted", async () => {
-    const transport = installTransport();
-    const { result } = renderHook(() => useResearchSession(), {
-      wrapper: routerWrapper(INITIAL_PATH),
-    });
-
-    await act(async () => {
-      await result.current.sendMessage("q");
-    });
-    await act(async () => {
-      transport.__pushEvent(ev.invokeAccepted());
-      // Skip agent_started — simulating packet loss / reconnect race.
-      transport.__pushEvent(ev.respond("exec-orphan", "late reply"));
-    });
-    await flush();
-
-    const turn = result.current.state.turns.find((t) => t.id === "exec-orphan");
-    expect(turn).toBeTruthy();
-    expect(turn?.respond).toBe("late reply");
-  });
 
   // -------------------------------------------------------------------------
   // 4. Sticky ward — never reverts to null once set
@@ -263,12 +251,12 @@ describe("useResearchSession — full flow integration", () => {
     expect(result.current.state.turns.length).toBe(beforeTurns);
   });
 
-  it("does not crash on tool_call with no tool name (falls back to 'tool')", async () => {
-    // Plan originally grouped this with malformed events, but event-map's
-    // toolNameOf() default means the event still produces a valid TOOL_CALL
-    // action with tool="tool". Assertion narrows to "no crash + turn seeded
-    // with empty timeline entry" so we catch a future regression that makes
-    // the event crash rather than degrade gracefully.
+  it("does not crash on tool_call with no tool name", async () => {
+    // The reducer routes tool_call by execution id. With no rootExecutionId
+    // set and no matching subagent, the action degrades to a no-op rather
+    // than crashing. The event-map fallback (tool_name → "tool") is still
+    // exercised in event-map.test.ts; here we just assert "no crash + state
+    // shape unchanged."
     const transport = installTransport();
     const { result } = renderHook(() => useResearchSession(), {
       wrapper: routerWrapper(INITIAL_PATH),
@@ -276,6 +264,7 @@ describe("useResearchSession — full flow integration", () => {
     await act(async () => {
       await result.current.sendMessage("q");
     });
+    const beforeTurns = result.current.state.turns.length;
     await act(async () => {
       transport.__pushEvent({
         type: "tool_call",
@@ -283,10 +272,7 @@ describe("useResearchSession — full flow integration", () => {
       } as unknown as ConversationEvent);
     });
     await flush();
-    const turn = result.current.state.turns.find((t) => t.id === "e1");
-    expect(turn).toBeTruthy();
-    expect(turn?.timeline.length).toBe(1);
-    expect(turn?.timeline[0].kind).toBe("tool_call");
+    expect(result.current.state.turns.length).toBe(beforeTurns);
   });
 
   // -------------------------------------------------------------------------
@@ -315,13 +301,17 @@ describe("useResearchSession — full flow integration", () => {
     });
     await flush();
 
-    const root = result.current.state.turns.find((t) => t.id === "exec-root");
-    const child = result.current.state.turns.find((t) => t.id === "exec-writer");
-    expect(root).toBeTruthy();
-    expect(child).toBeTruthy();
-    expect(child?.parentExecutionId).toBe("exec-root");
-    expect(root?.respond).toContain("memo");
-    expect(child?.respond).toBe("memo draft");
+    // Root events fan out onto the SessionTurn directly; subagents live in
+    // turn.subagents[]. Locate by execution id.
+    expect(result.current.state.rootExecutionId).toBe("exec-root");
+    expect(result.current.state.turns).toHaveLength(1);
+    const turn = result.current.state.turns[0];
+    expect(turn.assistantText ?? "").toContain("memo");
+    expect(turn.subagents).toHaveLength(1);
+    const writer = turn.subagents[0];
+    expect(writer.id).toBe("exec-writer");
+    expect(writer.parentExecutionId).toBe("exec-root");
+    expect(writer.respond).toBe("memo draft");
   });
 
   // -------------------------------------------------------------------------

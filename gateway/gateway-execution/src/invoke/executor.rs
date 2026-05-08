@@ -41,9 +41,7 @@ use std::sync::Arc;
 use zero_core::{ConnectorResourceProvider, FileSystemContext};
 use zero_stores::MemoryFactStore;
 
-use super::graph_adapter::GraphStorageAdapter;
 use crate::config::GatewayFileSystem;
-use knowledge_graph::GraphStorage;
 
 /// Workspace context cache type — same pattern as SkillService/ConnectorRegistry.
 pub type WorkspaceCache = Arc<tokio::sync::RwLock<Option<HashMap<String, serde_json::Value>>>>;
@@ -88,7 +86,8 @@ pub struct ExecutorBuilder {
     model_registry: Option<Arc<ModelRegistry>>,
     is_delegated: bool,
     subagent_non_streaming: bool,
-    graph_storage: Option<Arc<GraphStorage>>,
+    /// Trait-routed kg store for the `graph_query` tool.
+    kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
@@ -108,7 +107,7 @@ impl ExecutorBuilder {
             model_registry: None,
             is_delegated: false,
             subagent_non_streaming: true,
-            graph_storage: None,
+            kg_store: None,
             ingestion_adapter: None,
             goal_adapter: None,
             extra_initial_state: None,
@@ -161,9 +160,9 @@ impl ExecutorBuilder {
         self
     }
 
-    /// Set the knowledge graph storage for the graph_query tool.
-    pub fn with_graph_storage(mut self, storage: Arc<GraphStorage>) -> Self {
-        self.graph_storage = Some(storage);
+    /// Set the trait-routed kg store for the `graph_query` tool.
+    pub fn with_kg_store(mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) -> Self {
+        self.kg_store = Some(store);
         self
     }
 
@@ -500,15 +499,15 @@ impl ExecutorBuilder {
                 |tool_name, _args, result, succeeded| {
                     if !succeeded && tool_name == "shell" {
                         Some(format!(
-                        "{}\n\n[SYSTEM: Command failed. Read the error. Fix the ROOT CAUSE in your code, \
+                            "{}\n\n[SYSTEM: Command failed. Read the error. Fix the ROOT CAUSE in your code, \
                          not the symptom. Do not retry the same command — fix the file first with edit_file.]",
-                        result
-                    ))
+                            result
+                        ))
                     } else if !succeeded {
                         Some(format!(
-                        "{}\n\n[SYSTEM: Tool failed. Read the error carefully before retrying.]",
-                        result
-                    ))
+                            "{}\n\n[SYSTEM: Tool failed. Read the error carefully before retrying.]",
+                            result
+                        ))
                     } else {
                         None // Pass through unchanged
                     }
@@ -567,9 +566,11 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(RespondTool::new()));
             tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
 
-            // Knowledge graph query (if storage available)
-            if let Some(ref gs) = self.graph_storage {
-                let adapter = Arc::new(GraphStorageAdapter::new(gs.clone()));
+            // Knowledge graph query — fully trait-routed (Phase E6c):
+            // KgStoreAdapter wraps `Arc<dyn KnowledgeGraphStore>` so the
+            // tool runs identically on the configured backend.
+            if let Some(ref ks) = self.kg_store {
+                let adapter = Arc::new(super::kg_store_adapter::KgStoreAdapter::new(ks.clone()));
                 tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
             }
 
@@ -606,9 +607,11 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(DelegateTool::new()));
             tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
 
-            // Knowledge graph query (if storage available)
-            if let Some(ref gs) = self.graph_storage {
-                let adapter = Arc::new(GraphStorageAdapter::new(gs.clone()));
+            // Knowledge graph query — fully trait-routed (Phase E6c):
+            // KgStoreAdapter wraps `Arc<dyn KnowledgeGraphStore>` so the
+            // tool runs identically on the configured backend.
+            if let Some(ref ks) = self.kg_store {
+                let adapter = Arc::new(super::kg_store_adapter::KgStoreAdapter::new(ks.clone()));
                 tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
             }
 

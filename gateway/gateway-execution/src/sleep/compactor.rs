@@ -10,8 +10,10 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use gateway_database::CompactionRepository;
-use knowledge_graph::{Entity, EntityType, GraphStorage};
+use knowledge_graph::{Entity, EntityType};
+use zero_stores::KnowledgeGraphStore;
+use zero_stores::types::EntityId;
+use zero_stores_traits::CompactionStore;
 
 /// Default cosine threshold for considering two entities near-duplicates.
 const DEFAULT_COSINE_THRESHOLD: f32 = 0.92;
@@ -46,9 +48,15 @@ const DEFAULT_TYPES: &[EntityType] = &[
 ];
 
 /// Threshold-based duplicate merger.
+///
+/// Phase D3: trait-routed. Both `kg_store` and `compaction_store` are
+/// Arc<dyn ...> so the compactor runs on both SQLite (and any future alternate backend) —
+/// each backend implements the underlying queries with its own
+/// primitives (SQL transactions on SQLite, RELATE delete+recreate on
+/// Surreal).
 pub struct Compactor {
-    graph: Arc<GraphStorage>,
-    compaction_repo: Arc<CompactionRepository>,
+    kg_store: Arc<dyn KnowledgeGraphStore>,
+    compaction_store: Arc<dyn CompactionStore>,
     verifier: Option<Arc<dyn PairwiseVerifier>>,
     cosine_threshold: f32,
     per_type_limit: usize,
@@ -57,13 +65,13 @@ pub struct Compactor {
 impl Compactor {
     /// Build a compactor with default cosine / limit settings.
     pub fn new(
-        graph: Arc<GraphStorage>,
-        compaction_repo: Arc<CompactionRepository>,
+        kg_store: Arc<dyn KnowledgeGraphStore>,
+        compaction_store: Arc<dyn CompactionStore>,
         verifier: Option<Arc<dyn PairwiseVerifier>>,
     ) -> Self {
         Self {
-            graph,
-            compaction_repo,
+            kg_store,
+            compaction_store,
             verifier,
             cosine_threshold: DEFAULT_COSINE_THRESHOLD,
             per_type_limit: DEFAULT_PER_TYPE_LIMIT,
@@ -100,16 +108,14 @@ impl Compactor {
         ty: &EntityType,
         stats: &mut CompactionStats,
     ) {
-        let type_str = ty.as_str();
-        let candidates = match self.graph.find_duplicate_candidates(
-            agent_id,
-            type_str,
-            self.cosine_threshold,
-            self.per_type_limit,
-        ) {
+        let candidates = match self
+            .kg_store
+            .find_duplicate_candidates(agent_id, ty, self.cosine_threshold, self.per_type_limit)
+            .await
+        {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!(%type_str, error = %e, "find_duplicate_candidates failed");
+                tracing::warn!(entity_type = ty.as_str(), error = %e, "find_duplicate_candidates failed");
                 return;
             }
         };
@@ -118,14 +124,27 @@ impl Compactor {
             return;
         }
 
-        // Load entities once per type; pick_loser_winner and verifier both
-        // need them. The agent_id filter already restricts the set.
-        let entities = self.graph.get_entities(agent_id).unwrap_or_default();
+        // Load entities for this agent once per type; the verifier needs
+        // them and pick_loser_winner reads mention_count. Use the trait's
+        // list_entities with a generous limit (compactor scans are
+        // small per-type by design).
+        let entities = self
+            .kg_store
+            .list_entities(agent_id, Some(ty.as_str()), 1_000, 0)
+            .await
+            .unwrap_or_default();
 
-        for (a_id, b_id, cosine) in candidates {
+        for cand in candidates {
             stats.candidates_considered += 1;
-            self.process_pair(run_id, &entities, a_id, b_id, cosine, stats)
-                .await;
+            self.process_pair(
+                run_id,
+                &entities,
+                cand.loser_entity_id,
+                cand.winner_entity_id,
+                cand.cosine_similarity,
+                stats,
+            )
+            .await;
         }
     }
 
@@ -151,13 +170,20 @@ impl Compactor {
 
         let (loser, winner) = pick_loser_winner(entities, &a_id, &b_id);
 
-        match self.graph.merge_entity_into(&loser, &winner) {
-            Ok(_result) => {
+        let loser_eid = EntityId::from(loser.clone());
+        let winner_eid = EntityId::from(winner.clone());
+        match self
+            .kg_store
+            .merge_entity_into(&loser_eid, &winner_eid)
+            .await
+        {
+            Ok(()) => {
                 stats.merges_performed += 1;
                 let reason = format!("cosine={cosine:.2}");
                 if let Err(e) = self
-                    .compaction_repo
+                    .compaction_store
                     .record_merge(run_id, &loser, &winner, &reason)
+                    .await
                 {
                     tracing::warn!(
                         loser = %loser,
@@ -202,10 +228,13 @@ fn pick_loser_winner(entities: &[Entity], a: &str, b: &str) -> (String, String) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gateway_database::KnowledgeDatabase;
     use gateway_services::VaultPaths;
-    use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, GraphStorage};
+    use knowledge_graph::{Entity, EntityType, ExtractedKnowledge};
     use std::sync::Arc;
+    use zero_stores_sqlite::kg::storage::GraphStorage;
+    use zero_stores_sqlite::{
+        CompactionRepository, GatewayCompactionStore, KnowledgeDatabase, SqliteKgStore,
+    };
 
     fn setup() -> (
         tempfile::TempDir,
@@ -265,7 +294,10 @@ mod tests {
             )
             .expect("store");
 
-        let compactor = Compactor::new(graph.clone(), repo.clone(), None)
+        let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(graph.clone()));
+        let compaction_store: Arc<dyn CompactionStore> =
+            Arc::new(GatewayCompactionStore::new(repo.clone()));
+        let compactor = Compactor::new(kg_store, compaction_store, None)
             .with_cosine_threshold(0.5)
             .with_per_type_limit(10);
 

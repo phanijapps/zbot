@@ -26,7 +26,7 @@
 
 /// Backend-agnostic interface for the conversation message stream.
 ///
-/// Mirrors a subset of `gateway_database::ConversationRepository`'s public
+/// Mirrors a subset of `zero_stores_sqlite::ConversationRepository`'s public
 /// surface. Surface intentionally narrow — see module docs.
 pub trait ConversationStore: Send + Sync {
     /// Get the `ward_id` for a session.
@@ -39,4 +39,14 @@ pub trait ConversationStore: Send + Sync {
     ///
     /// Returns `Ok(None)` if the session doesn't exist.
     fn get_session_agent_id(&self, session_id: &str) -> Result<Option<String>, String>;
+
+    /// Ordered list of tool names called by the assistant in a
+    /// session, parsed from each `messages.tool_calls` blob in
+    /// `created_at ASC` order. Used by the sleep-time
+    /// `PatternExtractor` to detect repeated tool sequences across
+    /// successful sessions. Default: empty so backends that haven't
+    /// implemented yet make pattern extraction a quiet no-op.
+    fn tool_sequence_for_session(&self, _session_id: &str) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
 }

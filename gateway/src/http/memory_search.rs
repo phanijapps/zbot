@@ -13,33 +13,17 @@
 //! The `filters` field is accepted but ignored in v1. `limit` applies
 //! per-type, not globally.
 //!
-//! ## Migration status (TD-023)
-//!
-//! - The episode FTS-fallback path used to inline raw LIKE SQL via
-//!   `state.knowledge_db.with_connection`. It now calls
-//!   `EpisodeRepository::keyword_search`, so the handler no longer
-//!   touches the connection pool directly for that path.
-//! - Wiki / procedure / episode repos are built on demand from
-//!   `state.knowledge_db`. That's still a typed-repo construction
-//!   (not a raw SQL reach-in) — `WardWikiRepository`,
-//!   `ProcedureRepository`, and `EpisodeRepository` haven't been
-//!   migrated to `zero-stores` traits yet. Tracked under TD-023's
-//!   HTTP-handler retirement follow-up.
-//! - Memory-fact search continues to call `MemoryRepository`
-//!   directly because the `MemoryFactStore` trait surface is JSON-
-//!   oriented; converting these handlers requires hoisting `MemoryFact`
-//!   to `zero-stores`, which is a separate workstream.
+//! All four search paths route through the trait stores
+//! (`memory_store`, `wiki_store`, `procedure_store`, `episode_store`)
+//! on `AppState`. Returns `503 Service Unavailable` when a store isn't
+//! wired (stripped-down test fixtures).
 
 use crate::state::AppState;
 use axum::{extract::State, http::StatusCode, Json};
-use gateway_database::{
-    vector_index::VectorIndex, EpisodeRepository, ProcedureRepository, SessionEpisode,
-    SqliteVecIndex, WardWikiRepository,
-};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::Arc;
 use std::time::Instant;
+use zero_stores_domain::{SessionEpisode, WikiHit};
 
 /// Request body for unified search.
 #[derive(Debug, Deserialize)]
@@ -108,55 +92,13 @@ fn err(status: StatusCode, msg: impl Into<String>) -> HandlerError {
     (status, Json(ErrorBody { error: msg.into() }))
 }
 
-fn build_wiki_repo(state: &AppState) -> Result<Arc<WardWikiRepository>, HandlerError> {
-    let idx = SqliteVecIndex::new(
-        state.knowledge_db.clone(),
-        "wiki_articles_index",
-        "article_id",
-    )
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("wiki vec: {e}")))?;
-    let vec: Arc<dyn VectorIndex> = Arc::new(idx);
-    Ok(Arc::new(WardWikiRepository::new(
-        state.knowledge_db.clone(),
-        vec,
-    )))
+/// Error helper: returns 503 when a trait store isn't wired (e.g.
+/// stripped-down test fixtures).
+fn store_unavailable() -> HandlerError {
+    err(StatusCode::SERVICE_UNAVAILABLE, "store unavailable")
 }
 
-fn build_procedure_repo(state: &AppState) -> Result<Arc<ProcedureRepository>, HandlerError> {
-    let idx = SqliteVecIndex::new(
-        state.knowledge_db.clone(),
-        "procedures_index",
-        "procedure_id",
-    )
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("proc vec: {e}")))?;
-    let vec: Arc<dyn VectorIndex> = Arc::new(idx);
-    Ok(Arc::new(ProcedureRepository::new(
-        state.knowledge_db.clone(),
-        vec,
-    )))
-}
-
-fn build_episode_repo(state: &AppState) -> Result<Arc<EpisodeRepository>, HandlerError> {
-    let idx = SqliteVecIndex::new(
-        state.knowledge_db.clone(),
-        "session_episodes_index",
-        "episode_id",
-    )
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("ep vec: {e}")))?;
-    let vec: Arc<dyn VectorIndex> = Arc::new(idx);
-    Ok(Arc::new(EpisodeRepository::new(
-        state.knowledge_db.clone(),
-        vec,
-    )))
-}
-
-// `episodes_like_search` was relocated into
-// `EpisodeRepository::keyword_search` so this handler no longer reaches
-// into `state.knowledge_db` to run raw LIKE SQL. The repo method
-// preserves the historical sanitization (`%`/`_` stripped) and the
-// ward-scoped vs. unscoped variants.
-
-fn wiki_article_to_value(hit: gateway_database::WikiHit) -> Value {
+fn wiki_hit_to_value(hit: WikiHit) -> Value {
     let snippet: String = hit.article.content.chars().take(240).collect();
     json!({
         "id": hit.article.id,
@@ -169,7 +111,7 @@ fn wiki_article_to_value(hit: gateway_database::WikiHit) -> Value {
     })
 }
 
-fn procedure_to_value(proc: gateway_database::Procedure, score: f64) -> Value {
+fn procedure_to_value(proc: zero_stores_domain::Procedure, score: f64) -> Value {
     json!({
         "id": proc.id,
         "agent_id": proc.agent_id,
@@ -206,7 +148,7 @@ fn episode_to_value(ep: SessionEpisode, score: Option<f64>, source: &str) -> Val
     v
 }
 
-fn fact_to_value(fact: gateway_database::MemoryFact, source: &str, score: Option<f64>) -> Value {
+fn fact_to_value(fact: zero_stores_domain::MemoryFact, source: &str, score: Option<f64>) -> Value {
     let mut v = json!({
         "id": fact.id,
         "session_id": fact.session_id,
@@ -243,14 +185,26 @@ pub async fn memory_search(
     State(state): State<AppState>,
     Json(req): Json<SearchBody>,
 ) -> Result<Json<UnifiedResponse>, HandlerError> {
-    let memory_repo = state
-        .memory_repo
+    let memory_store = state
+        .memory_store
         .as_ref()
-        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "memory repo unavailable"))?
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "memory store unavailable"))?
         .clone();
-    let wiki_repo = build_wiki_repo(&state)?;
-    let proc_repo = build_procedure_repo(&state)?;
-    let episode_repo = build_episode_repo(&state)?;
+    let wiki_store = state
+        .wiki_store
+        .as_ref()
+        .ok_or_else(store_unavailable)?
+        .clone();
+    let proc_store = state
+        .procedure_store
+        .as_ref()
+        .ok_or_else(store_unavailable)?
+        .clone();
+    let episode_store = state
+        .episode_store
+        .as_ref()
+        .ok_or_else(store_unavailable)?
+        .clone();
 
     let ward: Option<String> = req.ward_ids.first().cloned();
     let ward_ref: Option<&str> = ward.as_deref();
@@ -301,7 +255,7 @@ pub async fn memory_search(
     let agent_owned = agent.clone();
 
     let facts_fut = {
-        let memory_repo = memory_repo.clone();
+        let memory_store = memory_store.clone();
         let query = query.clone();
         let mode = mode.clone();
         let emb = embedding.clone();
@@ -313,14 +267,15 @@ pub async fn memory_search(
             }
             let t0 = Instant::now();
             let hits = run_facts(
-                &memory_repo,
+                memory_store.as_ref(),
                 &query,
                 &mode,
                 emb.as_deref(),
                 agent.as_deref(),
                 ward.as_deref(),
                 limit,
-            );
+            )
+            .await;
             TypeBlock {
                 hits,
                 latency_ms: t0.elapsed().as_millis() as u64,
@@ -329,7 +284,7 @@ pub async fn memory_search(
     };
 
     let wiki_fut = {
-        let wiki_repo = wiki_repo.clone();
+        let wiki_store = wiki_store.clone();
         let query = query.clone();
         let mode = mode.clone();
         let emb = embedding.clone();
@@ -347,11 +302,12 @@ pub async fn memory_search(
             } else {
                 query.as_str()
             };
-            let hits = wiki_repo
-                .search_hybrid(pass_query, ward.as_deref(), emb.clone(), limit)
+            let hits = wiki_store
+                .search_wiki_hybrid_typed(ward.as_deref(), pass_query, limit, emb.as_deref())
+                .await
                 .unwrap_or_default()
                 .into_iter()
-                .map(wiki_article_to_value)
+                .map(wiki_hit_to_value)
                 .collect();
             TypeBlock {
                 hits,
@@ -361,7 +317,7 @@ pub async fn memory_search(
     };
 
     let proc_fut = {
-        let proc_repo = proc_repo.clone();
+        let proc_store = proc_store.clone();
         let mode = mode.clone();
         let emb = embedding.clone();
         let ward = ward_owned.clone();
@@ -375,8 +331,14 @@ pub async fn memory_search(
             let hits: Vec<Value> = match (mode.as_str(), emb.as_ref()) {
                 // No FTS table for procedures: fts mode returns empty.
                 ("fts", _) => Vec::new(),
-                (_, Some(emb)) => proc_repo
-                    .search_by_similarity(emb, scope_agent, ward.as_deref(), limit)
+                (_, Some(emb)) => proc_store
+                    .search_procedures_by_similarity_typed(
+                        emb,
+                        scope_agent,
+                        ward.as_deref(),
+                        limit,
+                    )
+                    .await
                     .unwrap_or_default()
                     .into_iter()
                     .map(|(p, s)| procedure_to_value(p, s))
@@ -391,7 +353,7 @@ pub async fn memory_search(
     };
 
     let eps_fut = {
-        let episode_repo = episode_repo.clone();
+        let episode_store = episode_store.clone();
         let query = query.clone();
         let mode = mode.clone();
         let emb = embedding.clone();
@@ -405,23 +367,26 @@ pub async fn memory_search(
             let scope_agent = agent.as_deref().unwrap_or(FALLBACK_AGENT);
             let hits: Vec<Value> = match (mode.as_str(), emb.as_ref()) {
                 // Pure FTS path → LIKE fallback (no FTS5 partner table for episodes).
-                ("fts", _) => episode_repo
-                    .keyword_search(&query, ward.as_deref(), limit)
+                ("fts", _) => episode_store
+                    .keyword_search_episodes(&query, ward.as_deref(), limit)
+                    .await
                     .unwrap_or_default()
                     .into_iter()
                     .map(|ep| episode_to_value(ep, None, "fts"))
                     .collect(),
-                (_, Some(emb)) => episode_repo
-                    .search_by_similarity(scope_agent, emb, 0.0, limit)
+                (_, Some(emb)) => episode_store
+                    .search_episodes_by_similarity_typed(scope_agent, emb, 0.0, limit)
+                    .await
                     .unwrap_or_default()
                     .into_iter()
-                    // Ward-scope filter in Rust since repo search_by_similarity
-                    // does not filter by ward.
+                    // Ward-scope filter in Rust since the trait method does
+                    // not filter by ward.
                     .filter(|(ep, _)| ward.as_deref().is_none_or(|w| ep.ward_id == w))
                     .map(|(ep, s)| episode_to_value(ep, Some(s), "vec"))
                     .collect(),
-                (_, None) => episode_repo
-                    .keyword_search(&query, ward.as_deref(), limit)
+                (_, None) => episode_store
+                    .keyword_search_episodes(&query, ward.as_deref(), limit)
+                    .await
                     .unwrap_or_default()
                     .into_iter()
                     .map(|ep| episode_to_value(ep, None, "fts"))
@@ -445,15 +410,15 @@ pub async fn memory_search(
     }))
 }
 
-/// Route a fact search through the memory repo according to mode. Returns
+/// Route a fact search through the memory store according to mode. Returns
 /// JSON-ready hits.
 ///
-/// `agent_id` is threaded straight into the repo methods — `Some(a)` yields
+/// `agent_id` is threaded straight into the trait method — `Some(a)` yields
 /// scope-aware results (agent's private + global), `None` returns the
 /// unfiltered pool (admin/debug).
 #[allow(clippy::too_many_arguments)]
-fn run_facts(
-    memory_repo: &gateway_database::MemoryRepository,
+async fn run_facts(
+    memory_store: &dyn zero_stores_traits::MemoryFactStore,
     query: &str,
     mode: &str,
     embedding: Option<&[f32]>,
@@ -461,36 +426,14 @@ fn run_facts(
     ward: Option<&str>,
     limit: usize,
 ) -> Vec<Value> {
-    match mode {
-        "fts" => memory_repo
-            .search_memory_facts_fts(query, agent_id, limit, ward)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|sf| fact_to_value(sf.fact, "fts", Some(sf.score)))
-            .collect(),
-        "semantic" => {
-            let Some(emb) = embedding else {
-                return Vec::new();
-            };
-            memory_repo
-                .search_similar_facts(emb, agent_id, 0.0, limit, ward)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|sf| fact_to_value(sf.fact, "vec", Some(sf.score)))
-                .collect()
-        }
-        _ => {
-            let (rows, sources) = memory_repo
-                .search_memory_facts_hybrid(query, embedding, agent_id, limit, 0.7, 0.3, ward)
-                .unwrap_or_default();
-            let src_map: std::collections::HashMap<String, &'static str> =
-                sources.into_iter().collect();
-            rows.into_iter()
-                .map(|sf| {
-                    let src = src_map.get(&sf.fact.id).copied().unwrap_or("fts");
-                    fact_to_value(sf.fact, src, Some(sf.score))
-                })
-                .collect()
-        }
+    if mode == "semantic" && embedding.is_none() {
+        return Vec::new();
     }
+    memory_store
+        .search_memory_facts_hybrid_typed(agent_id, query, mode, limit, ward, embedding)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(fact, score, src)| fact_to_value(fact, &src, Some(score)))
+        .collect()
 }

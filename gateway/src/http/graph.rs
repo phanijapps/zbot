@@ -8,12 +8,12 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use gateway_database::{DistillationStats, UndistilledSession};
 use knowledge_graph::{Direction, Entity, GraphStats, Relationship, Subgraph};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use zero_stores::{Direction as StoreDirection, KnowledgeGraphStore};
+use zero_stores_domain::{DistillationStats, UndistilledSession};
 
 // ============================================================================
 // REQUEST/RESPONSE TYPES
@@ -421,7 +421,7 @@ fn store_err_to_http(err: zero_stores::StoreError) -> (StatusCode, Json<ErrorRes
                 error: "Knowledge graph store temporarily unavailable".to_string(),
             }),
         ),
-        StoreError::Schema(msg) | StoreError::Backend(msg) => (
+        StoreError::Schema(msg) | StoreError::Backend(msg) | StoreError::Config(msg) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Knowledge graph error: {}", msg),
@@ -471,19 +471,16 @@ pub struct AggregateGraphStats {
 
 /// GET /api/distillation/status
 /// Get aggregate distillation statistics.
+///
+/// Returns zeroed stats when `distillation_repo` is unavailable
+/// (stripped-down test fixtures) so the Observatory health bar
+/// renders cleanly.
 pub async fn distillation_status(
     State(state): State<AppState>,
 ) -> Result<Json<DistillationStats>, (StatusCode, Json<ErrorResponse>)> {
     let repo = match &state.distillation_repo {
         Some(repo) => repo,
-        None => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    error: "Distillation repository not available".to_string(),
-                }),
-            ));
-        }
+        None => return Ok(Json(DistillationStats::default())),
     };
 
     match repo.get_stats() {
@@ -499,19 +496,14 @@ pub async fn distillation_status(
 
 /// GET /api/distillation/undistilled
 /// Returns undistilled sessions (session_id + agent_id pairs).
+///
+/// Returns an empty list when `distillation_repo` is unavailable.
 pub async fn undistilled_sessions(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<UndistilledSession>>, (StatusCode, Json<ErrorResponse>)> {
     let repo = match &state.distillation_repo {
         Some(repo) => repo,
-        None => {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse {
-                    error: "Distillation repository not available".to_string(),
-                }),
-            ));
-        }
+        None => return Ok(Json(Vec::new())),
     };
 
     match repo.get_undistilled_sessions() {
@@ -624,10 +616,16 @@ pub async fn graph_stats(
         None => 0,
     };
 
-    // Episode count from episode repo
-    let episodes = match &state.episode_repo {
-        Some(repo) => repo.count().unwrap_or(0),
-        None => 0,
+    // Episode count: prefer the trait surface; fall back to the SQLite
+    // repo when only that is available (legacy / minimal AppStates).
+    let episodes = match (&state.episode_store, &state.episode_repo) {
+        (Some(store), _) => store
+            .episode_stats()
+            .await
+            .map(|s| s.total)
+            .unwrap_or(0),
+        (None, Some(repo)) => repo.count().unwrap_or(0),
+        (None, None) => 0,
     };
 
     // Distillation stats
@@ -698,28 +696,22 @@ pub struct ReindexResponse {
 /// POST /api/graph/reindex — force re-indexing of every ward on disk.
 /// Idempotent: relationships upsert via UNIQUE(source, target, type).
 ///
-/// NOTE (TD-023): This handler still reaches into the concrete
-/// `state.graph_service` and `state.kg_episode_repo` because
-/// `gateway_execution::ward_artifact_indexer::index_ward_with_options`
-/// accepts `&Arc<GraphStorage>` and `&KgEpisodeRepository` rather than
-/// trait objects. Migrating this fully requires plumbing
-/// `Arc<dyn KnowledgeGraphStore>` (or a narrower indexer-specific
-/// trait) through `gateway-execution`, which is a separate workstream.
-/// Tracked as a follow-up under TD-023's HTTP-handler retirement.
+/// Trait-routed via `state.kg_episode_store` + `state.kg_store`.
+/// Returns 503 only when neither trait is wired (defensive —
+/// production always has both).
 pub async fn reindex_all_wards(
     State(state): State<AppState>,
 ) -> Result<Json<ReindexResponse>, StatusCode> {
     use gateway_execution::ward_artifact_indexer::{index_ward_with_options, IndexOptions};
 
-    let episode_repo = state
-        .kg_episode_repo
+    let episode_store = state
+        .kg_episode_store
         .clone()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let graph_service = state
-        .graph_service
+    let kg_store = state
+        .kg_store
         .clone()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let graph = graph_service.storage().clone();
 
     let wards_dir = state.paths.wards_dir();
     let Ok(read) = std::fs::read_dir(&wards_dir) else {
@@ -740,8 +732,8 @@ pub async fn reindex_all_wards(
             &path,
             "admin-reindex",
             "root",
-            &episode_repo,
-            &graph,
+            &episode_store,
+            &kg_store,
             IndexOptions {
                 force_reindex: true,
             },

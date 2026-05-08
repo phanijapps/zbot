@@ -1,0 +1,29 @@
+[Unit]
+Description=z-bot daemon (@@VERSION@@)
+After=network-online.target
+Wants=network-online.target
+
+# Circuit breaker: if the unit crashes 3+ times in 60s, systemd stops
+# trying. These directives must live in [Unit], not [Service], on
+# modern systemd — see systemd.unit(5).
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=@@BIN@@ \
+    --log-no-stdout \
+    --log-rotation daily \
+    --log-max-files 4 \
+    --static-dir @@DIST@@
+
+# Belt-and-suspenders: silence anything not routed through tracing
+StandardOutput=null
+StandardError=null
+
+# Auto-restart on crash; circuit-breaker thresholds are in [Unit] above
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

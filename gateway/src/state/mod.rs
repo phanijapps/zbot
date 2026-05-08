@@ -3,10 +3,10 @@
 //! Shared state for the gateway application.
 
 pub(crate) mod persistence_factory;
+mod seeded_defaults;
 
 use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
-use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
 use crate::execution::{
     new_workspace_cache, DelegationRegistry, MemoryRecall, SessionArchiver, SessionDistiller,
@@ -23,16 +23,18 @@ use agent_tools::MemoryStore;
 use api_logs::LogService;
 use chrono::Utc;
 use execution_state::StateService;
-use gateway_database::vector_index::{SqliteVecIndex, VectorIndex};
-use gateway_database::{
-    DistillationRepository, EpisodeRepository, KgEpisodeRepository, KnowledgeDatabase,
-    MemoryRepository, ProcedureRepository, RecallLogRepository, WardWikiRepository,
-};
 use gateway_services::EmbeddingService;
-use knowledge_graph::{GraphService, GraphStorage};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use zero_stores_sqlite::kg::service::GraphService;
+use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+use zero_stores_sqlite::{
+    ConversationRepository, DatabaseManager, DistillationRepository, EpisodeRepository,
+    KgEpisodeRepository, KnowledgeDatabase, MemoryRepository, ProcedureRepository,
+    WardWikiRepository,
+};
 
 /// Shared application state for the gateway.
 #[derive(Clone)]
@@ -65,7 +67,10 @@ pub struct AppState {
     pub conversations: Arc<ConversationRepository>,
 
     /// Knowledge database — memory facts, graph, vec0 indexes.
-    pub knowledge_db: Arc<KnowledgeDatabase>,
+    ///
+    /// Wrapped in `Option` so test fixtures can build a minimal AppState
+    /// without one. Production always carries `Some(...)`.
+    pub knowledge_db: Option<Arc<KnowledgeDatabase>>,
 
     /// Settings service for application configuration.
     pub settings: Arc<SettingsService>,
@@ -88,18 +93,12 @@ pub struct AppState {
     /// Gateway bus for bridge inbound message routing (set during server start).
     pub bridge_bus: Option<Arc<dyn gateway_bus::GatewayBus>>,
 
-    /// Memory repository for accessing agent memory facts.
-    pub memory_repo: Option<Arc<MemoryRepository>>,
-
-    /// Trait-based memory-fact store (relocation of `MemoryFactStore` from
-    /// `zero-core` to `zero-stores`). Coexists with `memory_repo` —
-    /// consumers are migrated incrementally in a follow-up workstream
-    /// (mirrors the `kg_store` / `graph_service` pattern). `None` when
-    /// `memory_repo` itself is `None`.
+    /// Trait-routed memory-fact store. The single read/write surface for
+    /// memory facts.
     pub memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
 
     /// Goal repository — active goals used for intent boost in unified recall.
-    pub goal_repo: Option<Arc<gateway_database::GoalRepository>>,
+    pub goal_repo: Option<Arc<zero_stores_sqlite::GoalRepository>>,
 
     /// Distillation repository for tracking distillation run outcomes.
     pub distillation_repo: Option<Arc<DistillationRepository>>,
@@ -110,8 +109,26 @@ pub struct AppState {
     /// Episode repository for accessing session episodes.
     pub episode_repo: Option<Arc<EpisodeRepository>>,
 
+    /// Trait-routed episode store (Phase D2). Coexists with `episode_repo`
+    /// for now; consumers migrate incrementally per the portability doc.
+    /// `None` when `episode_repo` itself is `None`.
+    pub episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>>,
+
+    /// Trait-routed wiki store (Phase D3). The handler-side migrations
+    /// route through this; legacy callers still build a
+    /// `WardWikiRepository` directly. `None` in minimal AppStates.
+    pub wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>>,
+
+    /// Trait-routed procedure store (Phase D4).
+    pub procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+
     /// Knowledge graph episode repository (Phase 6a+).
     pub kg_episode_repo: Option<Arc<KgEpisodeRepository>>,
+
+    /// Trait-routed kg-ingestion-episode store (Phase B). Wraps the
+    /// SQLite kg_episode_repo. Backend-agnostic — a new backend
+    /// implements the trait without consumers changing.
+    pub kg_episode_store: Option<Arc<dyn zero_stores_traits::KgEpisodeStore>>,
 
     /// Graph service for knowledge graph operations.
     pub graph_service: Option<Arc<GraphService>>,
@@ -144,7 +161,14 @@ pub struct AppState {
 
     /// Compaction repository — read-model for the last compaction run.
     /// Set by server.start() in Phase 4 Task 10; `None` until then.
-    pub compaction_repo: Option<Arc<gateway_database::CompactionRepository>>,
+    pub compaction_repo: Option<Arc<zero_stores_sqlite::CompactionRepository>>,
+
+    /// Trait-routed compaction audit store (Phase D1). Wired in both
+    /// SQLite and SurrealDB modes — the maintenance worker writes
+    /// merge/prune/synthesis events here for Observatory display.
+    /// Backend-agnostic: the trait has default no-op impls so any
+    /// backend that doesn't care can inherit them.
+    pub compaction_store: Option<Arc<dyn zero_stores_traits::CompactionStore>>,
 
     /// Model capabilities registry (bundled + local overrides).
     pub model_registry: Arc<ModelRegistry>,
@@ -160,6 +184,13 @@ pub struct AppState {
 
     /// Configuration directory path (legacy, use paths.vault_dir() instead).
     pub config_dir: PathBuf,
+
+    /// LAN service advertiser. NoopAdvertiser when discovery is disabled.
+    pub advertiser: std::sync::Arc<dyn discovery::Advertiser>,
+
+    /// Active mDNS advertise handle. None until `start()` runs and only
+    /// populated when `network.exposeToLan = true`.
+    pub advertise_handle: std::sync::Arc<std::sync::Mutex<Option<discovery::AdvertiseHandle>>>,
 }
 
 /// Boot-time helper: synchronously reconcile vec0 tables to match the
@@ -172,7 +203,7 @@ pub struct AppState {
 /// reconfigures.
 fn sync_reconcile_vec_dim_at_boot(
     embedding_service: &Arc<EmbeddingService>,
-    knowledge_db: &Arc<gateway_database::KnowledgeDatabase>,
+    knowledge_db: &Arc<zero_stores_sqlite::KnowledgeDatabase>,
 ) {
     let current_dim = embedding_service.dimensions();
     if current_dim == 0 {
@@ -235,10 +266,12 @@ impl AppState {
         );
         let conversation_repo = Arc::new(ConversationRepository::new(db_manager.clone()));
 
-        // Initialize knowledge database (memory facts, graph, vec0 indexes)
-        let knowledge_db = Arc::new(
+        // Initialize knowledge database (memory facts, graph, vec0 indexes).
+        // SQLite is the only backend; the Option-wrapping is retained so
+        // downstream `.as_ref().map(...)` chains stay typecheck-stable.
+        let knowledge_db: Option<Arc<KnowledgeDatabase>> = Some(Arc::new(
             KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
-        );
+        ));
 
         // Create log service for execution tracing
         let log_service = Arc::new(LogService::new(db_manager.clone()));
@@ -259,33 +292,52 @@ impl AppState {
 
         // Initialize memory evolution services — repositories that need vector
         // similarity get a SqliteVecIndex over their vec0 partner table.
-        let memory_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "memory_facts_index", "fact_id")
-                .expect("vec index init"),
-        );
-        let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
-        let goal_repo = Arc::new(gateway_database::GoalRepository::new(knowledge_db.clone()));
-        let distillation_repo = Arc::new(DistillationRepository::new(db_manager.clone()));
-        let episode_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "session_episodes_index", "episode_id")
-                .expect("vec index init"),
-        );
-        let episode_repo = Arc::new(EpisodeRepository::new(knowledge_db.clone(), episode_vec));
-        let kg_episode_repo = Arc::new(KgEpisodeRepository::new(knowledge_db.clone()));
+        let memory_repo: Option<Arc<MemoryRepository>> = knowledge_db.as_ref().map(|kdb| {
+            let memory_vec: Arc<dyn VectorIndex> = Arc::new(
+                SqliteVecIndex::new(kdb.clone(), "memory_facts_index", "fact_id")
+                    .expect("vec index init"),
+            );
+            Arc::new(MemoryRepository::new(kdb.clone(), memory_vec))
+        });
+        let goal_repo: Option<Arc<zero_stores_sqlite::GoalRepository>> = knowledge_db
+            .as_ref()
+            .map(|kdb| Arc::new(zero_stores_sqlite::GoalRepository::new(kdb.clone())));
+        // Phase E6c: distillation_run rows live on the conversation DB
+        // (DatabaseManager), not knowledge.db. Wire unconditionally —
+        // both backends have the conversation DB. This makes
+        // /api/distillation/status report real numbers
+        // too, and the distiller's run-tracking (insert/retry/success)
+        // actually persists.
+        let distillation_repo: Option<Arc<DistillationRepository>> =
+            Some(Arc::new(DistillationRepository::new(db_manager.clone())));
+        let episode_repo: Option<Arc<EpisodeRepository>> = knowledge_db.as_ref().map(|kdb| {
+            let episode_vec: Arc<dyn VectorIndex> = Arc::new(
+                SqliteVecIndex::new(kdb.clone(), "session_episodes_index", "episode_id")
+                    .expect("vec index init"),
+            );
+            Arc::new(EpisodeRepository::new(kdb.clone(), episode_vec))
+        });
+        let kg_episode_repo: Option<Arc<KgEpisodeRepository>> = knowledge_db
+            .as_ref()
+            .map(|kdb| Arc::new(KgEpisodeRepository::new(kdb.clone())));
 
-        // Initialize knowledge graph service and storage
+        // Initialize knowledge graph service and storage. Skipped entirely
+        // when knowledge_db is None.
         let (graph_service, graph_storage): (Option<Arc<GraphService>>, Option<Arc<GraphStorage>>) =
-            match GraphStorage::new(knowledge_db.clone()) {
-                Ok(storage) => {
-                    let storage = Arc::new(storage);
-                    let service = Arc::new(GraphService::new(storage.clone()));
-                    tracing::info!("Knowledge graph service initialized");
-                    (Some(service), Some(storage))
-                }
-                Err(e) => {
-                    tracing::warn!("Knowledge graph initialization failed: {}", e);
-                    (None, None)
-                }
+            match knowledge_db.as_ref() {
+                Some(kdb) => match GraphStorage::new(kdb.clone()) {
+                    Ok(storage) => {
+                        let storage = Arc::new(storage);
+                        let service = Arc::new(GraphService::new(storage.clone()));
+                        tracing::info!("Knowledge graph service initialized");
+                        (Some(service), Some(storage))
+                    }
+                    Err(e) => {
+                        tracing::warn!("Knowledge graph initialization failed: {}", e);
+                        (None, None)
+                    }
+                },
+                None => (None, None),
             };
 
         // EmbeddingService — owns the live EmbeddingClient and supports
@@ -329,7 +381,9 @@ impl AppState {
         // `KnowledgeDatabase::new` is still usable for FTS-only recall)
         // and let the async reconciler reindex once the user reconfigures.
         if embedding_service.needs_reindex() {
-            sync_reconcile_vec_dim_at_boot(&embedding_service, &knowledge_db);
+            if let Some(ref kdb) = knowledge_db {
+                sync_reconcile_vec_dim_at_boot(&embedding_service, kdb);
+            }
         }
         // Hand downstream (distillation, recall, memory_fact_store, etc.) a
         // LiveEmbeddingClient wrapper so they follow ArcSwap backend changes
@@ -354,114 +408,230 @@ impl AppState {
             .join(&recall_config.session_offload.archive_path);
         let session_archiver = Arc::new(SessionArchiver::new(db_manager.clone(), archive_path));
 
-        // Create memory recall with optional graph enrichment and episodic recall
-        let mut memory_recall_inner = match &graph_service {
-            Some(gs) => MemoryRecall::with_graph(
-                embedding_client.clone(),
-                memory_repo.clone(),
-                gs.clone(),
-                recall_config.clone(),
-            ),
-            None => MemoryRecall::new(
-                embedding_client.clone(),
-                memory_repo.clone(),
-                recall_config.clone(),
-            ),
-        };
-        memory_recall_inner.set_episode_repo(episode_repo.clone());
+        // Build the trait-routed memory_store eagerly (before MemoryRecall +
+        // SessionDistiller construction, so they can be wired with it).
+        let early_memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
+            memory_repo.as_ref().map(|mr| {
+                persistence_factory::build_memory_store(mr.clone(), embedding_client.clone())
+            });
 
-        // Wire recall log for tracking recalled facts per session (enables predictive recall)
-        let recall_log = Arc::new(RecallLogRepository::new(db_manager.clone()));
-        memory_recall_inner.set_recall_log(recall_log);
+        // Create memory recall. Builds whenever memory_store is wired,
+        // which is always whenever memory_repo is. Graph enrichment via
+        // GraphService still requires the concrete graph_storage; on
+        // Surreal it's None and recall falls back to non-enriched
+        // hybrid (still finds facts, just no KG-traversal boost).
+        let mut memory_recall_inner: Option<MemoryRecall> =
+            if early_memory_store.is_some() {
+                Some(MemoryRecall::new(
+                    embedding_client.clone(),
+                    recall_config.clone(),
+                ))
+            } else {
+                None
+            };
+        // Wire trait-routed episode_store wrapping the SQLite EpisodeRepository.
+        if let Some(recall) = memory_recall_inner.as_mut() {
+            let store_opt: Option<Arc<dyn zero_stores_traits::EpisodeStore>> =
+                episode_repo.as_ref().map(|r| {
+                    Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(r.clone()))
+                        as Arc<dyn zero_stores_traits::EpisodeStore>
+                });
+            if let Some(store) = store_opt {
+                recall.set_episode_store(store);
+            }
+        }
 
-        // Wire ward wiki repository for wiki-first recall
-        let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "wiki_articles_index", "article_id")
-                .expect("vec index init"),
+        // Ward wiki repository (still concrete; consumed by SessionDistiller
+        // and the trait-store wrapper below).
+        let wiki_repo: Option<Arc<WardWikiRepository>> = knowledge_db.as_ref().map(|kdb| {
+            let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
+                SqliteVecIndex::new(kdb.clone(), "wiki_articles_index", "article_id")
+                    .expect("vec index init"),
+            );
+            Arc::new(WardWikiRepository::new(kdb.clone(), wiki_vec))
+        });
+        // Wire trait-routed wiki_store (Phase E6c).
+        if let Some(recall) = memory_recall_inner.as_mut() {
+            let store_opt: Option<Arc<dyn zero_stores_traits::WikiStore>> =
+                wiki_repo.as_ref().map(|r| {
+                    Arc::new(zero_stores_sqlite::GatewayWikiStore::new(r.clone()))
+                        as Arc<dyn zero_stores_traits::WikiStore>
+                });
+            if let Some(store) = store_opt {
+                recall.set_wiki_store(store);
+            }
+        }
+        // Trait-routed kg ingestion store. GatewayKgEpisodeStore wraps
+        // the SQLite kg_episode_repo. Handlers + queue + adapter all
+        // consume the trait, so a future backend plugs in by
+        // implementing the trait without touching consumers.
+        let kg_episode_store: Option<Arc<dyn zero_stores_traits::KgEpisodeStore>> =
+            kg_episode_repo.as_ref().map(|r| {
+                Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
+                    as Arc<dyn zero_stores_traits::KgEpisodeStore>
+            });
+
+        // Trait-routed wiki store — wraps the SQLite repository
+        // (when wiki_repo exists), else None.
+        let wiki_store_for_state: Option<Arc<dyn zero_stores_traits::WikiStore>> =
+            wiki_repo.as_ref().map(|wr| {
+                Arc::new(zero_stores_sqlite::GatewayWikiStore::new(wr.clone()))
+                    as Arc<dyn zero_stores_traits::WikiStore>
+            });
+
+        // Wire procedure repository for procedure recall during intent analysis.
+        // SQLite-only — None when knowledge_db is None.
+        let procedure_repo: Option<Arc<ProcedureRepository>> = knowledge_db.as_ref().map(|kdb| {
+            let procedure_vec: Arc<dyn VectorIndex> = Arc::new(
+                SqliteVecIndex::new(kdb.clone(), "procedures_index", "procedure_id")
+                    .expect("vec index init"),
+            );
+            Arc::new(ProcedureRepository::new(kdb.clone(), procedure_vec))
+        });
+        let procedure_store_for_state: Option<Arc<dyn zero_stores_traits::ProcedureStore>> =
+            procedure_repo.as_ref().map(|pr| {
+                Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(pr.clone()))
+                    as Arc<dyn zero_stores_traits::ProcedureStore>
+            });
+        // Wire the trait-routed procedure_store on MemoryRecall so
+        // procedure recall runs (Phase E6c).
+        if let (Some(recall), Some(ps)) = (
+            memory_recall_inner.as_mut(),
+            procedure_store_for_state.as_ref(),
+        ) {
+            recall.set_procedure_store(ps.clone());
+        }
+
+        // Trait-routed episode store for downstream consumers (distiller +
+        // sleep worker + AppState). Built once here so the sleep worker
+        // construction below doesn't have to re-derive from the underlying
+        // repo. Wraps `EpisodeRepository` over the same KnowledgeDatabase.
+        let episode_store_for_state: Option<Arc<dyn zero_stores_traits::EpisodeStore>> =
+            knowledge_db.as_ref().and_then(|kdb| {
+                zero_stores_sqlite::vector_index::SqliteVecIndex::new(
+                    kdb.clone(),
+                    "session_episodes_index",
+                    "episode_id",
+                )
+                .ok()
+                .map(|vec_index| {
+                    let repo = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
+                        kdb.clone(),
+                        Arc::new(vec_index),
+                    ));
+                    Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(repo))
+                        as Arc<dyn zero_stores_traits::EpisodeStore>
+                })
+            });
+
+        // Conversation store is always SQLite-backed (per the design doc:
+        // conversations.db is SQLite-only). The sleep worker's
+        // PatternExtractor needs it on both backends.
+        let conversation_store_for_state: Arc<dyn zero_stores_traits::ConversationStore> = Arc::new(
+            zero_stores_sqlite::ConversationRepository::new(db_manager.clone()),
         );
-        let wiki_repo = Arc::new(WardWikiRepository::new(
-            knowledge_db.clone(),
-            wiki_vec.clone(),
-        ));
-        memory_recall_inner.set_wiki_repo(wiki_repo);
+        if let (Some(recall), Some(mem)) =
+            (memory_recall_inner.as_mut(), early_memory_store.as_ref())
+        {
+            recall.set_memory_store(mem.clone());
+        }
 
-        // Wire procedure repository for procedure recall during intent analysis
-        let procedure_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
-                .expect("vec index init"),
-        );
-        let procedure_repo = Arc::new(ProcedureRepository::new(
-            knowledge_db.clone(),
-            procedure_vec,
-        ));
-        memory_recall_inner.set_procedure_repo(procedure_repo.clone());
+        // Build the trait-routed kg_store early enough to wire it on
+        // MemoryRecall before that struct is moved into Arc::new below.
+        // Wraps the SQLite GraphStorage.
+        let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
+            graph_storage.as_ref().map(|gs| {
+                let embedder = embedding_client
+                    .clone()
+                    .expect("embedding_client wired above for distillation/recall");
+                persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
+            });
+        if let (Some(recall), Some(ks)) = (memory_recall_inner.as_mut(), kg_store.as_ref()) {
+            recall.set_kg_store(ks.clone());
+        }
 
-        let memory_recall = Arc::new(memory_recall_inner);
+        let memory_recall: Option<Arc<MemoryRecall>> = memory_recall_inner.map(Arc::new);
 
         // Clone embedding client before it's moved into distiller — the runner
         // also needs it so the memory fact store can generate embeddings.
         let runner_embedding_client = embedding_client.clone();
 
-        // Clone graph_storage before it's moved into the distiller — the runner
-        // also needs it for the graph_query tool.
-        let runner_graph_storage = graph_storage.clone();
-
-        // Build the trait-object KG store from runner_graph_storage.
+        // Build the trait-object KG store from graph_storage.
         // Coexists with graph_service/graph_storage until Phase 5 retirement.
         //
         // Construction is centralized in `persistence_factory` (TD-023):
-        // when SurrealDB support lands, the config-driven branch goes
+        // when alternate-backend support lands, the config-driven branch goes
         // there, and this callsite stays the same. We use the
         // `_from_storage` helper because AppState shares one
         // `Arc<GraphStorage>` between `kg_store` and the legacy
         // `graph_service`; once `graph_service` retires, callers migrate
         // to `build_kg_store(knowledge_db, …)`.
         //
-        // The wired client is the `LiveEmbeddingClient` constructed above,
-        // so it follows ArcSwap backend changes — same client the
-        // gateway-side wrapper at
-        // `gateway-execution::sleep::embedding_reindex` already uses.
-        let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
-            runner_graph_storage.as_ref().map(|gs| {
-                let embedder = embedding_client
-                    .clone()
-                    .expect("embedding_client wired above for distillation/recall");
-                persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
-            });
-
-        // Build the trait-object MemoryFactStore from the same `MemoryRepository`
-        // and `LiveEmbeddingClient` that the gateway-side fact-store callsites
-        // use. Construction is centralized in `persistence_factory` (TD-023):
-        // when SurrealDB support lands, the config-driven branch goes there
-        // and this callsite stays the same.
-        let memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = Some(
-            persistence_factory::build_memory_store(memory_repo.clone(), embedding_client.clone()),
-        );
+        // kg_store was built earlier (before memory_recall_inner moved
+        // into Arc::new) so it could be wired on MemoryRecall. The
+        // duplicate definition here is intentionally absent — both the
+        // distiller and AppState fields below reuse the earlier binding.
+        let memory_store = early_memory_store;
 
         let episode_repo_ref = episode_repo.clone();
 
         // Create settings service (before distiller & runtime, so we can read execution settings)
         let settings = Arc::new(SettingsService::new(paths.clone()));
 
-        let wiki_repo = Arc::new(WardWikiRepository::new(knowledge_db.clone(), wiki_vec));
+        // SessionDistiller (Phase E3): builds in BOTH backends.
+        //
+        // Required: at least one of memory_store (trait) or memory_repo
+        // (concrete) must be wired so fact upsert has a destination.
+        // SQLite-only deps (graph_storage, distillation_repo, episode_repo,
+        // wiki_repo, procedure_repo) flow through as Optional — None in
+        // missing means the corresponding side-effects (KG ingestion,
+        // run-tracking, episode storage, wiki compilation, procedure
+        // upsert) skip gracefully. Fact distillation itself runs.
+        let distiller: Option<Arc<SessionDistiller>> =
+            if memory_store.is_some() {
+                let mut distiller_inner = SessionDistiller::new(
+                    provider_service.clone(),
+                    embedding_client.clone(),
+                    conversation_repo.clone(),
+                    paths.clone(),
+                    Some(settings.clone()),
+                );
+                if let Some(mem) = memory_store.as_ref() {
+                    distiller_inner.set_memory_store(mem.clone());
+                }
+                if let Some(kgs) = kg_store.as_ref() {
+                    distiller_inner.set_kg_store(kgs.clone());
+                }
+                // Phase E6a/E6b: episode/wiki/procedure trait stores reuse the
+                // same Arc<dyn ...> values we built above for the AppState
+                // fields (`episode_store`, `wiki_store_for_state`,
+                // `procedure_store_for_state`) so the distiller and the HTTP
+                // handlers see the same backing store.
+                if let Some(es) = episode_store_for_state.as_ref() {
+                    distiller_inner.set_episode_store(es.clone());
+                }
+                if let Some(ws) = wiki_store_for_state.as_ref() {
+                    distiller_inner.set_wiki_store(ws.clone());
+                }
+                if let Some(ps) = procedure_store_for_state.as_ref() {
+                    distiller_inner.set_procedure_store(ps.clone());
+                }
+                // Phase E6c: trait-routed distillation store. Wraps the
+                // SQLite DistillationRepository for run-tracking writes.
+                if let Some(dr) = distillation_repo.as_ref() {
+                    let store: Arc<dyn zero_stores_traits::DistillationStore> = Arc::new(
+                        zero_stores_sqlite::GatewayDistillationStore::new(dr.clone()),
+                    );
+                    distiller_inner.set_distillation_store(store);
+                }
+                Some(Arc::new(distiller_inner))
+            } else {
+                None
+            };
 
-        let mut distiller_inner = SessionDistiller::new(
-            provider_service.clone(),
-            embedding_client.clone(),
-            conversation_repo.clone(),
-            memory_repo.clone(),
-            graph_storage,
-            Some(distillation_repo.clone()),
-            Some(episode_repo),
-            paths.clone(), // For loading distillation_prompt.md
-            Some(settings.clone()),
-        );
-        distiller_inner.set_wiki_repo(wiki_repo);
-        distiller_inner.set_procedure_repo(procedure_repo.clone());
-        let distiller = Arc::new(distiller_inner);
-
-        // Keep a handle for on-demand distillation (backfill, trigger)
-        let distiller_ref = distiller.clone();
+        // Keep a handle for on-demand distillation (backfill, trigger).
+        // None when the distiller wasn't constructed.
+        let distiller_ref: Option<Arc<SessionDistiller>> = distiller.clone();
         let max_parallel_agents = settings
             .get_execution_settings()
             .map(|s| s.max_parallel_agents)
@@ -470,51 +640,65 @@ impl AppState {
 
         // Create streaming ingestion queue + backpressure BEFORE the runtime so the
         // runner can be wired with an IngestionAdapter.
-        // Requires graph_storage — if the graph failed to initialize, we skip.
-        let (ingestion_queue, ingestion_backpressure) = match runner_graph_storage.as_ref().cloned()
-        {
-            Some(gs) => {
-                let extractor = Arc::new(gateway_execution::ingest::extractor::LlmExtractor::new(
-                    provider_service.clone(),
-                    "root".to_string(),
-                ));
-                let queue = Arc::new(gateway_execution::ingest::IngestionQueue::start(
-                    2,
-                    kg_episode_repo.clone(),
-                    gs,
-                    extractor,
-                ));
-                let bp = Arc::new(gateway_execution::ingest::Backpressure::new(
-                    gateway_execution::ingest::BackpressureConfig::default(),
-                    kg_episode_repo.clone(),
-                ));
-                (
-                    Some(queue) as Option<Arc<gateway_execution::ingest::IngestionQueue>>,
-                    Some(bp) as Option<Arc<gateway_execution::ingest::Backpressure>>,
-                )
-            }
-            None => (None, None),
-        };
+        //
+        // Trait-routed: queue + backpressure consume
+        // Arc<dyn KgEpisodeStore> + Arc<dyn KnowledgeGraphStore>.
+        let (ingestion_queue, ingestion_backpressure) =
+            match (kg_episode_store.as_ref(), kg_store.as_ref()) {
+                (Some(eps), Some(kgs)) => {
+                    let extractor =
+                        Arc::new(gateway_execution::ingest::extractor::LlmExtractor::new(
+                            provider_service.clone(),
+                            "root".to_string(),
+                        ));
+                    let queue = Arc::new(gateway_execution::ingest::IngestionQueue::start(
+                        2,
+                        eps.clone(),
+                        kgs.clone(),
+                        extractor,
+                    ));
+                    let bp = Arc::new(gateway_execution::ingest::Backpressure::new(
+                        gateway_execution::ingest::BackpressureConfig::default(),
+                        eps.clone(),
+                    ));
+                    (
+                        Some(queue) as Option<Arc<gateway_execution::ingest::IngestionQueue>>,
+                        Some(bp) as Option<Arc<gateway_execution::ingest::Backpressure>>,
+                    )
+                }
+                _ => (None, None),
+            };
 
         // Build agent-tool adapters so runner can register `ingest` + `goal` tools.
-        // The adapter needs graph_storage so the structured-ingest path can
-        // call `store_knowledge` directly without going through LLM extraction.
-        let ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>> =
-            match (ingestion_queue.as_ref(), runner_graph_storage.as_ref()) {
-                (Some(q), Some(gs)) => Some(Arc::new(
-                    gateway_execution::invoke::ingest_adapter::IngestionAdapter::new(
-                        q.clone(),
-                        kg_episode_repo.clone(),
-                        gs.clone(),
-                    ),
-                )
-                    as Arc<dyn agent_tools::IngestionAccess>),
-                _ => None,
-            };
-        let goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>> = Some(Arc::new(
-            gateway_execution::invoke::goal_adapter::GoalAdapter::new(goal_repo.clone()),
-        )
-            as Arc<dyn agent_tools::GoalAccess>);
+        // Phase B2: also trait-routed. The IngestionAdapter is migrated
+        // alongside the queue so subagent ingestion works.
+        let ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>> = match (
+            ingestion_queue.as_ref(),
+            kg_store.as_ref(),
+            kg_episode_store.as_ref(),
+        ) {
+            (Some(q), Some(kgs), Some(eps)) => Some(Arc::new(
+                gateway_execution::invoke::ingest_adapter::IngestionAdapter::new(
+                    q.clone(),
+                    eps.clone(),
+                    kgs.clone(),
+                ),
+            )
+                as Arc<dyn agent_tools::IngestionAccess>),
+            _ => None,
+        };
+        // Goal adapter wraps the SQLite GoalRepository.
+        let goal_store_for_adapter: Option<Arc<dyn zero_stores_traits::GoalStore>> =
+            goal_repo.as_ref().map(|gr| {
+                Arc::new(zero_stores_sqlite::GatewayGoalStore::new(gr.clone()))
+                    as Arc<dyn zero_stores_traits::GoalStore>
+            });
+        let goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>> =
+            goal_store_for_adapter.map(|store| {
+                Arc::new(gateway_execution::invoke::goal_adapter::GoalAdapter::new(
+                    store,
+                )) as Arc<dyn agent_tools::GoalAccess>
+            });
 
         // Create runtime with execution runner and connector registry
         let runtime = Arc::new(RuntimeService::with_runner_and_connectors(
@@ -529,31 +713,45 @@ impl AppState {
             state_service.clone(),
             Some(connector_registry.clone()),
             workspace_cache.clone(),
-            Some(memory_repo.clone()),
-            Some(distiller),
-            Some(memory_recall),
+            memory_store.clone(),
+            distiller,
+            memory_recall,
             Some(bridge_registry.clone()),
             Some(bridge_outbox.clone()),
             runner_embedding_client,
             max_parallel_agents,
-            runner_graph_storage.clone(),
-            Some(kg_episode_repo.clone()),
+            kg_store.clone(),
+            kg_episode_repo.clone(),
             ingestion_adapter,
             goal_adapter,
         ));
 
         // Phase 4: CompactionRepository + SleepTimeWorker (background maintenance).
-        let compaction_repo = Arc::new(gateway_database::CompactionRepository::new(
-            knowledge_db.clone(),
-        ));
+        // CompactionRepository is SQLite-tied (kg_compactions table on
+        // knowledge.db). None when knowledge_db is unwired.
+        let compaction_repo: Option<Arc<zero_stores_sqlite::CompactionRepository>> = knowledge_db
+            .as_ref()
+            .map(|kdb| Arc::new(zero_stores_sqlite::CompactionRepository::new(kdb.clone())));
+
+        // Phase D1: trait-routed compaction audit store. Wired in BOTH
+        // backends so the maintenance worker can record merges/prunes
+        // regardless of backend. Surreal uses its own
+        // `kg_compaction_run` table; SQLite delegates to the existing
+        // `CompactionRepository`. Default no-op impls cover edge cases.
+        let compaction_store: Option<Arc<dyn zero_stores_traits::CompactionStore>> =
+            compaction_repo.as_ref().map(|r| {
+                Arc::new(zero_stores_sqlite::GatewayCompactionStore::new(r.clone()))
+                    as Arc<dyn zero_stores_traits::CompactionStore>
+            });
 
         // One-shot backfill: populate legacy kg_entities / kg_relationships
         // rows with the richer metadata introduced in commits b816702,
         // 1bc21f6, 5bf3013. Marker row in kg_compactions gates this so
         // subsequent daemon starts are a no-op. Non-fatal on failure —
         // a backfill bug must never prevent the daemon from booting.
-        {
-            let backfiller = gateway_execution::sleep::KgBackfiller::new(knowledge_db.clone());
+        // Skip entirely when knowledge_db is None.
+        if let Some(ref kdb) = knowledge_db {
+            let backfiller = gateway_execution::sleep::KgBackfiller::new(kdb.clone());
             match backfiller.run_once_blocking() {
                 Ok(stats) if stats.already_done => {
                     tracing::debug!("kg_backfill: marker present, skipping");
@@ -573,72 +771,84 @@ impl AppState {
             }
         }
 
-        let sleep_time_worker = runner_graph_storage.as_ref().cloned().map(|gs| {
-            let verifier: Option<Arc<dyn gateway_execution::sleep::compactor::PairwiseVerifier>> =
-                Some(Arc::new(
+        // Sleep-time worker requires the entire SQLite knowledge cluster.
+        // Build only when ALL of (compaction_repo, memory_repo, knowledge_db,
+        // procedure_repo, kg_store, compaction_store) are present. The
+        // maintenance ops (compactor/decay/pruner/orphan_archiver) take
+        // Sleep-time worker — trait-routed. Gates on the trait stores
+        // (kg_store, episode_store, memory_store, procedure_store,
+        // compaction_store) all wired above from the SQLite repos.
+        // Conversation store is always SQLite-backed (per design) and
+        // built unconditionally above.
+        let sleep_time_worker = match (
+            kg_store.as_ref(),
+            episode_store_for_state.as_ref(),
+            memory_store.as_ref(),
+            procedure_store_for_state.as_ref(),
+            compaction_store.as_ref(),
+        ) {
+            (Some(kgs), Some(eps), Some(mems), Some(prs), Some(compstore)) => {
+                let verifier: Option<
+                    Arc<dyn gateway_execution::sleep::compactor::PairwiseVerifier>,
+                > = Some(Arc::new(
                     gateway_execution::sleep::LlmPairwiseVerifier::new(provider_service.clone()),
                 ));
-            let compactor = Arc::new(gateway_execution::sleep::Compactor::new(
-                gs.clone(),
-                compaction_repo.clone(),
-                verifier,
-            ));
-            let decay = Arc::new(gateway_execution::sleep::DecayEngine::new(
-                gs.clone(),
-                gateway_execution::sleep::DecayConfig::default(),
-            ));
-            let pruner = Arc::new(gateway_execution::sleep::Pruner::new(
-                gs,
-                compaction_repo.clone(),
-            ));
-            // Synthesizer + PatternExtractor — both depend on a default LLM
-            // provider being configured. We construct them unconditionally;
-            // the ops themselves log+skip if provider listing fails at run
-            // time, so a bootless config never aborts the cycle.
-            let synth_llm = Arc::new(gateway_execution::sleep::LlmSynthesizer::new(
-                provider_service.clone(),
-            ));
-            let synthesizer = Arc::new(gateway_execution::sleep::Synthesizer::new(
-                knowledge_db.clone(),
-                memory_repo.clone(),
-                compaction_repo.clone(),
-                synth_llm,
-                embedding_client.clone(),
-            ));
-            let pattern_llm = Arc::new(gateway_execution::sleep::LlmPatternExtractor::new(
-                provider_service.clone(),
-            ));
-            let pattern_extractor = Arc::new(gateway_execution::sleep::PatternExtractor::new(
-                knowledge_db.clone(),
-                db_manager.clone(),
-                procedure_repo.clone(),
-                compaction_repo.clone(),
-                pattern_llm,
-            ));
-            // kg_store is Some whenever runner_graph_storage (and therefore this
-            // closure) is Some — safe to unwrap here.
-            let orphan_kg_store = kg_store
-                .clone()
-                .expect("kg_store is Some when graph_storage is Some");
-            let orphan_archiver = Arc::new(gateway_execution::sleep::OrphanArchiver::new(
-                knowledge_db.clone(),
-                orphan_kg_store,
-                compaction_repo.clone(),
-            ));
-            let ops = gateway_execution::sleep::SleepOps {
-                synthesizer: Some(synthesizer),
-                pattern_extractor: Some(pattern_extractor),
-                orphan_archiver: Some(orphan_archiver),
-            };
-            Arc::new(gateway_execution::sleep::SleepTimeWorker::start_with_ops(
-                compactor,
-                decay,
-                pruner,
-                ops,
-                std::time::Duration::from_secs(60 * 60),
-                "root".to_string(),
-            ))
-        });
+                let compactor = Arc::new(gateway_execution::sleep::Compactor::new(
+                    kgs.clone(),
+                    compstore.clone(),
+                    verifier,
+                ));
+                let decay = Arc::new(gateway_execution::sleep::DecayEngine::new(
+                    kgs.clone(),
+                    gateway_execution::sleep::DecayConfig::default(),
+                ));
+                let pruner = Arc::new(gateway_execution::sleep::Pruner::new(
+                    kgs.clone(),
+                    compstore.clone(),
+                ));
+                let synth_llm = Arc::new(gateway_execution::sleep::LlmSynthesizer::new(
+                    provider_service.clone(),
+                ));
+                let synthesizer = Arc::new(gateway_execution::sleep::Synthesizer::new(
+                    kgs.clone(),
+                    eps.clone(),
+                    mems.clone(),
+                    compstore.clone(),
+                    synth_llm,
+                    embedding_client.clone(),
+                ));
+                let pattern_llm = Arc::new(gateway_execution::sleep::LlmPatternExtractor::new(
+                    provider_service.clone(),
+                ));
+                let pattern_extractor = Arc::new(gateway_execution::sleep::PatternExtractor::new(
+                    eps.clone(),
+                    conversation_store_for_state.clone(),
+                    prs.clone(),
+                    compstore.clone(),
+                    pattern_llm,
+                ));
+                let orphan_archiver = Arc::new(gateway_execution::sleep::OrphanArchiver::new(
+                    kgs.clone(),
+                    compstore.clone(),
+                ));
+                let ops = gateway_execution::sleep::SleepOps {
+                    synthesizer: Some(synthesizer),
+                    pattern_extractor: Some(pattern_extractor),
+                    orphan_archiver: Some(orphan_archiver),
+                };
+                Some(Arc::new(
+                    gateway_execution::sleep::SleepTimeWorker::start_with_ops(
+                        compactor,
+                        decay,
+                        pruner,
+                        ops,
+                        std::time::Duration::from_secs(60 * 60),
+                        "root".to_string(),
+                    ),
+                ))
+            }
+            _ => None,
+        };
 
         // Create hook registry
         let hook_registry = Arc::new(HookRegistry::new(event_bus.clone()));
@@ -675,24 +885,30 @@ impl AppState {
             cron_scheduler: None, // Initialized by server.start()
             session_archiver: Some(session_archiver),
             sleep_time_worker,
-            compaction_repo: Some(compaction_repo),
+            compaction_repo,
+            compaction_store,
             plugin_manager,
             model_registry,
             embedding_service,
             workspace_cache,
             paths,
             config_dir,
-            memory_repo: Some(memory_repo),
             memory_store,
-            goal_repo: Some(goal_repo),
-            distillation_repo: Some(distillation_repo),
-            distiller: Some(distiller_ref),
-            episode_repo: Some(episode_repo_ref),
-            kg_episode_repo: Some(kg_episode_repo),
+            goal_repo,
+            distillation_repo,
+            distiller: distiller_ref,
+            episode_store: episode_store_for_state,
+            wiki_store: wiki_store_for_state,
+            procedure_store: procedure_store_for_state,
+            episode_repo: episode_repo_ref,
+            kg_episode_repo,
+            kg_episode_store,
             graph_service,
             kg_store,
             ingestion_queue,
             ingestion_backpressure,
+            advertiser: discovery::noop(),
+            advertise_handle: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -736,6 +952,53 @@ impl AppState {
             None, // bus is set later by server.start()
         ));
 
+        // Phase B: minimal still wires the trait-routed memory_store
+        // so tests that hit /api/memory/.../search succeed without
+        // needing to construct full AppState. Fallback no-op
+        // embedding client lets save_fact path complete.
+        let memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
+        ));
+
+        // Episode / wiki / procedure trait stores so HTTP handlers reach
+        // these listings without concrete-repo fallbacks. Each wraps the
+        // SQLite repo bound to its own vec0 partner table.
+        let episode_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "session_episodes_index", "episode_id")
+                .expect("episode vec index init"),
+        );
+        let episode_repo_handle = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
+            knowledge_db.clone(),
+            episode_vec,
+        ));
+        let episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo_handle),
+        ));
+
+        let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "wiki_articles_index", "article_id")
+                .expect("wiki vec index init"),
+        );
+        let wiki_repo_handle = Arc::new(zero_stores_sqlite::WardWikiRepository::new(
+            knowledge_db.clone(),
+            wiki_vec,
+        ));
+        let wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayWikiStore::new(wiki_repo_handle),
+        ));
+
+        let proc_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
+                .expect("procedure vec index init"),
+        );
+        let procedure_repo_handle = Arc::new(zero_stores_sqlite::ProcedureRepository::new(
+            knowledge_db.clone(),
+            proc_vec,
+        ));
+        let procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayProcedureStore::new(procedure_repo_handle),
+        ));
+
         Self {
             agents: Arc::new(AgentService::new(agents_dir)),
             skills: Arc::new(SkillService::with_roots(skills_roots)),
@@ -746,7 +1009,7 @@ impl AppState {
             hook_registry: None,
             delegation_registry: Arc::new(DelegationRegistry::new()),
             conversations: conversation_repo,
-            knowledge_db,
+            knowledge_db: Some(knowledge_db),
             settings: Arc::new(SettingsService::new(paths.clone())),
             log_service,
             state_service,
@@ -758,6 +1021,7 @@ impl AppState {
             session_archiver: None,
             sleep_time_worker: None,
             compaction_repo: None,
+            compaction_store: None,
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
             embedding_service: Arc::new(
                 EmbeddingService::with_config(paths.clone(), Default::default())
@@ -767,17 +1031,22 @@ impl AppState {
             workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
-            memory_repo: Some(memory_repo),
-            memory_store: None,
+            memory_store,
             goal_repo: None,
             distillation_repo: None,
             distiller: None,
             episode_repo: None,
+            episode_store,
+            wiki_store,
+            procedure_store,
             kg_episode_repo: None,
+            kg_episode_store: None,
             graph_service: None,
             kg_store: None,
             ingestion_queue: None,
             ingestion_backpressure: None,
+            advertiser: discovery::noop(),
+            advertise_handle: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -805,6 +1074,50 @@ impl AppState {
                 .expect("vec index init"),
         );
         let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
+
+        // Phase B: same trait wrap as `minimal()` so test paths see a
+        // wired memory_store and search/recall handlers don't 503.
+        let memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
+        ));
+
+        // Episode / wiki / procedure trait stores so HTTP handlers reach
+        // these listings without concrete-repo fallbacks.
+        let episode_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "session_episodes_index", "episode_id")
+                .expect("episode vec index init"),
+        );
+        let episode_repo_handle = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
+            knowledge_db.clone(),
+            episode_vec,
+        ));
+        let episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo_handle),
+        ));
+
+        let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "wiki_articles_index", "article_id")
+                .expect("wiki vec index init"),
+        );
+        let wiki_repo_handle = Arc::new(zero_stores_sqlite::WardWikiRepository::new(
+            knowledge_db.clone(),
+            wiki_vec,
+        ));
+        let wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayWikiStore::new(wiki_repo_handle),
+        ));
+
+        let proc_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
+                .expect("procedure vec index init"),
+        );
+        let procedure_repo_handle = Arc::new(zero_stores_sqlite::ProcedureRepository::new(
+            knowledge_db.clone(),
+            proc_vec,
+        ));
+        let procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>> = Some(Arc::new(
+            zero_stores_sqlite::GatewayProcedureStore::new(procedure_repo_handle),
+        ));
 
         // Create bridge registry and outbox
         let bridge_registry = Arc::new(gateway_bridge::BridgeRegistry::new());
@@ -834,7 +1147,7 @@ impl AppState {
             hook_registry: None,
             delegation_registry: Arc::new(DelegationRegistry::new()),
             conversations,
-            knowledge_db,
+            knowledge_db: Some(knowledge_db),
             settings: Arc::new(SettingsService::new(paths.clone())),
             log_service,
             state_service,
@@ -846,6 +1159,7 @@ impl AppState {
             session_archiver: None,
             sleep_time_worker: None,
             compaction_repo: None,
+            compaction_store: None,
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
             embedding_service: Arc::new(
                 EmbeddingService::with_config(paths.clone(), Default::default())
@@ -855,17 +1169,22 @@ impl AppState {
             workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
-            memory_repo: Some(memory_repo),
-            memory_store: None,
+            memory_store,
             goal_repo: None,
             distillation_repo: None,
             distiller: None,
             episode_repo: None,
+            episode_store,
+            wiki_store,
+            procedure_store,
             kg_episode_repo: None,
+            kg_episode_store: None,
             graph_service: None,
             kg_store: None,
             ingestion_queue: None,
             ingestion_backpressure: None,
+            advertiser: discovery::noop(),
+            advertise_handle: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -896,6 +1215,15 @@ impl AppState {
         // 2. Reindex if the marker dim disagrees with the live dim.
         if self.embedding_service.needs_reindex() {
             let current_dim = self.embedding_service.dimensions();
+            let Some(knowledge_db) = self.knowledge_db.as_ref() else {
+                tracing::warn!(
+                    "Embedding marker mismatch but knowledge DB unavailable — skipping reindex"
+                );
+                self.embedding_service
+                    .publish_health(gateway_services::Health::Ready);
+                let _handle = self.embedding_service.clone().start_health_loop();
+                return;
+            };
             tracing::info!(
                 dim = current_dim,
                 "Embedding dim/model mismatch vs marker — reindexing at boot"
@@ -910,7 +1238,7 @@ impl AppState {
                 });
             };
             match gateway_execution::sleep::embedding_reindex::reindex_all(
-                &self.knowledge_db,
+                knowledge_db,
                 client,
                 current_dim,
                 &on_progress,
@@ -998,8 +1326,12 @@ impl AppState {
         // Seed default skills from bundled templates if skills dir is empty
         self.seed_default_skills();
 
+        // Seed default cron jobs (idempotent on job id) so first-run
+        // installs ship with the bundled cleanup schedule wired up.
+        self.seed_default_cron().await;
+
         // Seed default policies from bundled template if no policies exist
-        self.seed_default_policies();
+        self.seed_default_policies().await;
 
         // Preload skills into cache
         if let Err(e) = self.skills.preload().await {
@@ -1082,37 +1414,111 @@ impl AppState {
         tracing::info!("Seeded {} default skills", count);
     }
 
-    /// Seed default policies from bundled template if no policies/corrections exist.
-    fn seed_default_policies(&self) {
-        let memory_repo = match &self.memory_repo {
-            Some(repo) => repo,
-            None => return,
+    /// Seed default cron jobs from bundled `default_cron.json` template.
+    ///
+    /// Each ID is seeded **at most once per vault**: the first time we see
+    /// it, we create the job (or migrate a pre-existing one) and record the
+    /// ID in `<vault>/config/seeded_defaults.json`. Subsequent boots skip
+    /// any ID already in the registry, so deletes the user makes through
+    /// the UI stick across daemon restarts.
+    async fn seed_default_cron(&self) {
+        let template_bytes = match gateway_templates::Templates::get("default_cron.json") {
+            Some(file) => file.data.to_vec(),
+            None => {
+                tracing::debug!(
+                    "seed_default_cron: bundled `default_cron.json` not found, skipping"
+                );
+                return;
+            }
         };
 
-        // Check if any correction facts already exist
-        let existing = memory_repo
-            .get_facts_by_category("root", "correction", 1)
-            .unwrap_or_default();
+        let requests: Vec<gateway_cron::CreateCronJobRequest> =
+            match serde_json::from_slice(&template_bytes) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("seed_default_cron: failed to parse default_cron.json: {e}");
+                    return;
+                }
+            };
+
+        if requests.is_empty() {
+            tracing::debug!("seed_default_cron: no entries in default_cron.json");
+            return;
+        }
+
+        let cron_service = gateway_cron::CronService::new(self.paths.clone());
+        let seeded =
+            seeded_defaults::seed_cron_with_registry(&self.paths, &cron_service, requests).await;
+
+        if seeded > 0 {
+            tracing::info!(seeded, "seed_default_cron: completed");
+        }
+    }
+
+    /// Seed default policies from bundled template if no policies/corrections exist.
+    async fn seed_default_policies(&self) {
+        // Route through the trait surface so the configured backend
+        // backends seed identically. `memory_store` is wired in both
+        // modes (SQLite-wrapper or ).
+        let memory_store = match &self.memory_store {
+            Some(s) => s,
+            None => {
+                tracing::warn!(
+                    "seed_default_policies: memory_store is None — refusing to seed. \
+                     This means neither SQLite memory_repo  \
+                     wired into AppState; check persistence_factory output."
+                );
+                return;
+            }
+        };
+
+        // Check if any correction facts already exist for the root agent.
+        let existing = match memory_store
+            .list_memory_facts(Some("root"), Some("correction"), None, 1, 0)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(
+                    "seed_default_policies: existence check failed ({e}); \
+                     proceeding as if empty (may produce duplicates if policies \
+                     are already present)."
+                );
+                Vec::new()
+            }
+        };
         if !existing.is_empty() {
-            tracing::debug!("Policies already exist, skipping seed");
+            tracing::debug!(
+                existing_count = existing.len(),
+                "seed_default_policies: policies already present for root/correction — skipping"
+            );
             return;
         }
 
         let template = match gateway_templates::Templates::get("default_policies.json") {
             Some(f) => f.data.to_vec(),
-            None => return,
+            None => {
+                tracing::warn!(
+                    "seed_default_policies: bundled `default_policies.json` template \
+                     missing from gateway-templates — nothing to seed."
+                );
+                return;
+            }
         };
 
         let policies: Vec<serde_json::Value> = match serde_json::from_slice(&template) {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!("Failed to parse default_policies.json: {}", e);
+                tracing::warn!("seed_default_policies: failed to parse default_policies.json: {e}");
                 return;
             }
         };
 
+        let total = policies.len();
         let now = chrono::Utc::now().to_rfc3339();
-        let mut count = 0;
+        let mut count = 0usize;
+        let mut skipped_empty = 0usize;
+        let mut errors: Vec<(String, String)> = Vec::new();
 
         for policy in &policies {
             let category = policy["category"].as_str().unwrap_or("correction");
@@ -1122,43 +1528,54 @@ impl AppState {
             let pinned = policy["pinned"].as_bool().unwrap_or(true);
 
             if key.is_empty() || content.is_empty() {
+                skipped_empty += 1;
                 continue;
             }
 
-            let fact = gateway_database::MemoryFact {
-                id: format!("policy-{}", uuid::Uuid::new_v4()),
-                session_id: None,
-                agent_id: "root".to_string(),
-                scope: "agent".to_string(),
-                category: category.to_string(),
-                key: key.to_string(),
-                content: content.to_string(),
-                confidence,
-                mention_count: 5,
-                source_summary: Some("Default policy".to_string()),
-                embedding: None,
-                ward_id: "__global__".to_string(),
-                contradicted_by: None,
-                created_at: now.clone(),
-                updated_at: now.clone(),
-                expires_at: None,
-                valid_from: None,
-                valid_until: None,
-                superseded_by: None,
-                pinned,
-                epistemic_class: Some("current".to_string()),
-                source_episode_id: None,
-                source_ref: None,
-            };
+            let fact_value = serde_json::json!({
+                "id": format!("policy-{}", uuid::Uuid::new_v4()),
+                "session_id": null,
+                "agent_id": "root",
+                "scope": "agent",
+                "category": category,
+                "key": key,
+                "content": content,
+                "confidence": confidence,
+                "mention_count": 5,
+                "source_summary": "Default policy",
+                "ward_id": "__global__",
+                "contradicted_by": null,
+                "created_at": now,
+                "updated_at": now,
+                "expires_at": null,
+                "valid_from": null,
+                "valid_until": null,
+                "superseded_by": null,
+                "pinned": pinned,
+                "epistemic_class": "current",
+                "source_episode_id": null,
+                "source_ref": null,
+            });
 
-            if memory_repo.upsert_memory_fact(&fact).is_ok() {
-                count += 1;
+            match memory_store.upsert_typed_fact(fact_value, None).await {
+                Ok(()) => count += 1,
+                Err(e) => errors.push((key.to_string(), e)),
             }
         }
 
-        if count > 0 {
-            tracing::info!("Seeded {} default policies/instructions", count);
+        if !errors.is_empty() {
+            for (key, e) in &errors {
+                tracing::warn!(policy_key = %key, error = %e, "seed_default_policies: upsert failed");
+            }
         }
+
+        tracing::info!(
+            total = total,
+            seeded = count,
+            skipped_empty = skipped_empty,
+            failed = errors.len(),
+            "seed_default_policies: completed"
+        );
     }
 
     /// Ensure Python venv and Node.js environment exist, then seed workspace memory.

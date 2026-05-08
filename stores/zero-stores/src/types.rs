@@ -122,17 +122,6 @@ impl From<knowledge_graph::types::NeighborInfo> for Neighbor {
     }
 }
 
-impl From<knowledge_graph::traversal::TraversalNode> for TraversalHit {
-    fn from(n: knowledge_graph::traversal::TraversalNode) -> Self {
-        TraversalHit {
-            entity_id: EntityId(n.entity_id),
-            hop: n.hop_distance as usize,
-            path: n.path,
-            mention_count: n.mention_count,
-        }
-    }
-}
-
 /// Snapshot of vector-index table health for the embeddings health
 /// endpoint. `tables_present` and `tables_missing` are backend-defined
 /// labels (e.g. SQLite-vec virtual table names like `memory_facts_index`).

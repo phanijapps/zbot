@@ -74,6 +74,42 @@ export interface ResearchMessage {
 
 export type ResearchStatus = "idle" | "running" | "complete" | "stopped" | "error";
 
+/**
+ * One user→assistant exchange within a session.
+ *
+ * The session's root execution can carry many of these (each follow-up
+ * message reuses the same root execution_id), and we group them by
+ * user-message timestamp boundary. See
+ * `memory-bank/future-state/2026-05-05-research-multi-turn-design.md`
+ * for the full rollup algorithm.
+ */
+export interface SessionTurn {
+  /** Stable id derived from the user message id. */
+  id: string;
+  /** 0..N-1 chronological. */
+  index: number;
+  /** The user message that opens this turn. */
+  userMessage: { id: string; content: string; createdAt: string };
+  /** Subagents whose started_at falls in [startedAt, endedAt). */
+  subagents: AgentTurn[];
+  /** Final assistant text reply. Null while in flight. */
+  assistantText: string | null;
+  /** Streaming buffer; promoted to assistantText on turn end. */
+  assistantStreaming: string;
+  /** Per-turn timeline of root-execution thinking/tool events. Drives the
+   *  live ticker pill while the turn is running. Empty after snapshot;
+   *  filled by the WS reducer for live runs. */
+  timeline: TimelineEntry[];
+  /** Per-turn status (mirrors AgentTurnStatus). */
+  status: AgentTurnStatus;
+  /** ISO timestamp of the user message. */
+  startedAt: string;
+  /** Right edge: next user message's startedAt, root.ended_at, or null while running. */
+  endedAt: string | null;
+  /** End - start in ms (null while running). */
+  durationMs: number | null;
+}
+
 /** Session-summary row used by the sessions drawer. */
 export interface SessionSummary {
   id: string;
@@ -103,10 +139,19 @@ export interface ResearchSessionState {
   wardId: string | null;
   /** STICKY display name for the ward chip. */
   wardName: string | null;
-  /** User-authored prompts only. Assistant content renders via turns[]. */
-  messages: ResearchMessage[];
-  /** Chronological agent turns. Delegations are flat here; nesting via parentExecutionId. */
-  turns: AgentTurn[];
+  /** Root execution id for this session. Set when the first root agent
+   *  AGENT_STARTED arrives (or pre-set by HYDRATE from snapshot). The
+   *  reducer uses it to disambiguate "this event is for the root" vs
+   *  "this event is for a subagent" when routing tokens / respond /
+   *  timeline entries. */
+  rootExecutionId: string | null;
+  /**
+   * Chronological list of user→assistant exchanges. Each turn owns its
+   * own user message, subagents, and assistant reply. The reducer opens
+   * a new turn on each user message and routes subsequent
+   * delegation/token/respond events to the latest open turn.
+   */
+  turns: SessionTurn[];
   /** True between IntentAnalysisStarted and Complete/Skipped. */
   intentAnalyzing: boolean;
   /** From IntentAnalysisComplete. */
@@ -124,7 +169,7 @@ export const EMPTY_RESEARCH_STATE: ResearchSessionState = {
   status: "idle",
   wardId: null,
   wardName: null,
-  messages: [],
+  rootExecutionId: null,
   turns: [],
   intentAnalyzing: false,
   intentClassification: null,

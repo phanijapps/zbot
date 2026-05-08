@@ -1,14 +1,17 @@
 //! Ingestion queue — producers signal "wake up, work exists"; N workers
 //! race to `claim_next_pending`, one wins, others resleep. Work lives in
 //! the DB so worker restarts recover in-flight pending episodes.
+//!
+//! Phase B2: backend-agnostic. `episode_store` is the trait surface,
+//! `kg_store` is the trait surface. SQLite (and any future alternate backend) both work.
 
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Notify};
 
 use crate::ingest::extractor::Extractor;
-use gateway_database::KgEpisodeRepository;
-use knowledge_graph::GraphStorage;
+use zero_stores::KnowledgeGraphStore;
+use zero_stores_traits::KgEpisodeStore;
 
 const WAKE_CHANNEL_CAPACITY: usize = 256;
 const CLAIM_FAILURE_BACKOFF: Duration = Duration::from_millis(500);
@@ -22,8 +25,8 @@ impl IngestionQueue {
     /// to signal new work.
     pub fn start(
         workers: usize,
-        episode_repo: Arc<KgEpisodeRepository>,
-        graph: Arc<GraphStorage>,
+        episode_store: Arc<dyn KgEpisodeStore>,
+        kg_store: Arc<dyn KnowledgeGraphStore>,
         extractor: Arc<dyn Extractor>,
     ) -> Self {
         let (tx, mut rx) = mpsc::channel::<()>(WAKE_CHANNEL_CAPACITY);
@@ -42,12 +45,12 @@ impl IngestionQueue {
         }
 
         for worker_idx in 0..workers {
-            let episode_repo = episode_repo.clone();
-            let graph = graph.clone();
+            let episode_store = episode_store.clone();
+            let kg_store = kg_store.clone();
             let extractor = extractor.clone();
             let notify = notify.clone();
             tokio::spawn(async move {
-                worker_loop(worker_idx, episode_repo, graph, extractor, notify).await;
+                worker_loop(worker_idx, episode_store, kg_store, extractor, notify).await;
             });
         }
 
@@ -61,74 +64,69 @@ impl IngestionQueue {
     }
 }
 
+/// Pull the episode id (string) out of a Value row from the trait.
+/// Both backend impls emit the canonical `KgEpisode` JSON shape with
+/// the id at the top-level `id` key (already prefix-stripped).
+fn episode_id_from_value(v: &serde_json::Value) -> Option<String> {
+    v.get("id").and_then(|s| s.as_str()).map(|s| s.to_string())
+}
+
 async fn worker_loop(
     worker_idx: usize,
-    episode_repo: Arc<KgEpisodeRepository>,
-    graph: Arc<GraphStorage>,
+    episode_store: Arc<dyn KgEpisodeStore>,
+    kg_store: Arc<dyn KnowledgeGraphStore>,
     extractor: Arc<dyn Extractor>,
     notify: Arc<Notify>,
 ) {
     tracing::info!(worker_idx, "ingestion worker started");
     loop {
-        let repo_for_claim = episode_repo.clone();
-        let claim = tokio::task::spawn_blocking(move || repo_for_claim.claim_next_pending()).await;
+        let claim = episode_store.claim_next_pending().await;
 
-        let episode = match claim {
-            Ok(Ok(Some(e))) => e,
-            Ok(Ok(None)) => {
+        let episode_value = match claim {
+            Ok(Some(v)) => v,
+            Ok(None) => {
                 notify.notified().await;
                 continue;
             }
-            Ok(Err(e)) => {
+            Err(e) => {
                 tracing::warn!(worker_idx, error = %e, "claim_next_pending failed");
                 tokio::time::sleep(CLAIM_FAILURE_BACKOFF).await;
                 continue;
             }
-            Err(e) => {
-                tracing::warn!(worker_idx, error = %e, "spawn_blocking join failed");
+        };
+
+        let episode_id = match episode_id_from_value(&episode_value) {
+            Some(id) => id,
+            None => {
+                tracing::warn!(worker_idx, "claimed episode has no id field — skipping");
                 continue;
             }
         };
 
-        let episode_id = episode.id.clone();
-        let payload_fetch = {
-            let repo = episode_repo.clone();
-            let id = episode_id.clone();
-            tokio::task::spawn_blocking(move || repo.get_payload(&id)).await
-        };
-        let chunk_text = match payload_fetch {
-            Ok(Ok(Some(text))) => text,
-            Ok(Ok(None)) => {
+        let chunk_text = match episode_store.get_payload(&episode_id).await {
+            Ok(Some(text)) => text,
+            Ok(None) => {
                 tracing::warn!(
                     worker_idx,
                     episode_id = %episode_id,
                     "episode has no payload — marking failed",
                 );
-                let repo = episode_repo.clone();
-                let id = episode_id.clone();
-                let _ =
-                    tokio::task::spawn_blocking(move || repo.mark_failed(&id, "payload missing"))
-                        .await;
+                let _ = episode_store
+                    .mark_failed(&episode_id, "payload missing")
+                    .await;
                 continue;
             }
-            Ok(Err(e)) => {
+            Err(e) => {
                 tracing::warn!(worker_idx, error = %e, "get_payload failed");
                 tokio::time::sleep(CLAIM_FAILURE_BACKOFF).await;
                 continue;
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "spawn_blocking join on get_payload");
-                continue;
-            }
         };
-        let result = extractor.process(&episode, &chunk_text, &graph).await;
+
+        let result = extractor.process(&episode_id, &chunk_text, &kg_store).await;
 
         let finish = match result {
-            Ok(()) => {
-                let repo = episode_repo.clone();
-                let id = episode_id.clone();
-                tokio::task::spawn_blocking(move || repo.mark_done(&id)).await
-            }
+            Ok(()) => episode_store.mark_done(&episode_id).await,
             Err(err_msg) => {
                 tracing::warn!(
                     worker_idx,
@@ -136,21 +134,12 @@ async fn worker_loop(
                     error = %err_msg,
                     "extractor failed; marking episode failed",
                 );
-                let repo = episode_repo.clone();
-                let id = episode_id.clone();
-                let err = err_msg.clone();
-                tokio::task::spawn_blocking(move || repo.mark_failed(&id, &err)).await
+                episode_store.mark_failed(&episode_id, &err_msg).await
             }
         };
 
-        match finish {
-            Ok(Ok(())) => {}
-            Ok(Err(db_err)) => {
-                tracing::warn!(error = %db_err, "finish status update DB error");
-            }
-            Err(join_err) => {
-                tracing::warn!(error = %join_err, "finish status update join failed");
-            }
+        if let Err(db_err) = finish {
+            tracing::warn!(error = %db_err, "finish status update DB error");
         }
     }
 }

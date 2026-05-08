@@ -83,8 +83,8 @@ export function SearchResults({ data, loading, onDeleteFact }: Props) {
         {data.episodes.hits.map((h) => (
           <Row
             key={h.id}
-            title={h.title}
-            body={h.content?.slice(0, 240) ?? ""}
+            title={h.task_summary}
+            body={h.key_learnings?.slice(0, 240) ?? h.outcome}
             wardId={h.ward_id}
             matchSource={h.match_source}
           />

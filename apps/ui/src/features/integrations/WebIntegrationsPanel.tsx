@@ -22,6 +22,7 @@ import {
 import type { BridgeWorker } from "@/services/transport/types";
 import { TabBar, TabPanel } from "@/components/TabBar";
 import { HelpBox } from "@/components/HelpBox";
+import { usePaths } from "@/hooks/usePaths";
 import { ActionBar, FilterChip } from "@/components/ActionBar";
 import { MetaChip } from "@/components/MetaChip";
 import { Slideover } from "@/components/Slideover";
@@ -1072,11 +1073,13 @@ interface PluginsWorkersTabProps {
 
 function PluginsWorkersTab({ plugins, workers, allWorkers, search, onSearchChange, filter, onFilterChange, onSelect }: PluginsWorkersTabProps) {
   const isEmpty = plugins.length === 0 && workers.length === 0;
+  const paths = usePaths();
+  const pluginsHint = paths?.pluginsDirDisplay ?? "~/Documents/zbot/plugins";
 
   return (
     <>
       <HelpBox icon={<Puzzle style={{ width: 16, height: 16 }} />}>
-        Plugins auto-start when z-Bot launches. Drop a plugin folder into ~/Documents/zbot/plugins/ and restart.
+        Plugins auto-start when z-Bot launches. Drop a plugin folder into {pluginsHint}/ and restart.
       </HelpBox>
 
       <ActionBar
@@ -1096,7 +1099,7 @@ function PluginsWorkersTab({ plugins, workers, allWorkers, search, onSearchChang
         <EmptyState
           icon={Cable}
           title="No plugins or workers connected"
-          description="To install a plugin, drop its folder into ~/Documents/zbot/plugins/ and restart zerod"
+          description={`To install a plugin, drop its folder into ${pluginsHint}/ and restart zerod`}
         />
       ) : (
         <div className="card-grid">

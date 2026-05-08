@@ -341,11 +341,14 @@ pub fn detect_subagent_role(_agent_id: &str, task: &str) -> SubagentRole {
 
 pub fn subagent_rules(role: SubagentRole) -> &'static str {
     match role {
-        SubagentRole::Executor => "\n\n# RULES\n\
+        SubagentRole::Executor => {
+            "\n\n# RULES\n\
             First: enter ward, read AGENTS.md + memory-bank/core_docs.md. Reuse core/ — never recreate.\n\
             Execute with write_file + edit_file + shell. Extract reusable functions to core/ when done.\n\
-            Respond with: files created, commands run, errors.\n",
-        SubagentRole::Reviewer => "\n\n# --- SUBAGENT RULES ---\n\
+            Respond with: files created, commands run, errors.\n"
+        }
+        SubagentRole::Reviewer => {
+            "\n\n# --- SUBAGENT RULES ---\n\
             You are reviewing work produced by another agent. Think critically and independently.\n\
             1. Read the specs and the implementation carefully before forming opinions.\n\
             2. Run the code and examine actual output — don't trust claims.\n\
@@ -356,7 +359,8 @@ pub fn subagent_rules(role: SubagentRole) -> &'static str {
             RESULT: APPROVED\n\
             or\n\
             RESULT: DEFECTS\n\
-            - {file_or_output}: {issue} (severity: high|medium|low)\n",
+            - {file_or_output}: {issue} (severity: high|medium|low)\n"
+        }
     }
 }
 

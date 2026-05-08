@@ -31,11 +31,11 @@ use std::sync::Arc;
 use api_logs::LogService;
 use async_trait::async_trait;
 use execution_state::StateService;
-use gateway_database::{ConversationRepository, DatabaseManager};
 use gateway_events::EventBus;
 use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths};
 use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio::task::JoinHandle;
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use crate::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
 use crate::handle::ExecutionHandle;
@@ -219,15 +219,15 @@ pub(crate) struct RunnerDelegationInvoker {
     pub(crate) log_service: Arc<LogService<DatabaseManager>>,
     pub(crate) state_service: Arc<StateService<DatabaseManager>>,
     pub(crate) workspace_cache: WorkspaceCache,
-    pub(crate) memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
-    pub(crate) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+    pub(crate) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+    pub(crate) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub(crate) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub(crate) rate_limiters: Arc<
         std::sync::RwLock<
             std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
         >,
     >,
-    pub(crate) graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    pub(crate) kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     pub(crate) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(crate) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 }
@@ -255,11 +255,11 @@ impl DelegationSpawner for RunnerDelegationInvoker {
             self.state_service.clone(),
             self.workspace_cache.clone(),
             permit,
-            self.memory_repo.clone(),
-            self.embedding_client.clone(),
+            self.memory_store.clone(),
+            self.distiller.clone(),
             self.memory_recall.clone(),
             self.rate_limiters.clone(),
-            self.graph_storage.clone(),
+            self.kg_store.clone(),
             self.ingestion_adapter.clone(),
             self.goal_adapter.clone(),
         )

@@ -181,9 +181,12 @@ impl WebSocketHandler {
                                     }
                                 }
 
-                                // If no subscribers found, log for debugging
+                                // If no subscribers found, log at debug — this is
+                                // expected for cron-fired sessions (no UI client
+                                // subscribed) and for sessions where the user closed
+                                // the panel mid-execution. Not an error.
                                 if total_sent == 0 && session_id.is_some() {
-                                    warn!(
+                                    debug!(
                                         session_id = ?session_id,
                                         "No subscribers found for event"
                                     );
@@ -1161,6 +1164,10 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
             execution_id,
             seq: None,
         }),
+
+        // Customization file change events are UI-only (delivered via the
+        // /api/customization SSE stream, not the session WebSocket).
+        GatewayEvent::CustomizationFileChanged { .. } => None,
     }
 }
 

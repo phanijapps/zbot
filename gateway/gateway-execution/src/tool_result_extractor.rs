@@ -8,11 +8,12 @@
 //! and `source_ref = tool_call_id`, enabling drill-down from graph to
 //! the exact tool invocation that produced it.
 
-use gateway_database::{EpisodeSource, KgEpisode, KgEpisodeRepository};
-use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, GraphStorage};
+use knowledge_graph::{Entity, EntityType};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
+use zero_stores::{ExtractedKnowledge, KnowledgeGraphStore};
+use zero_stores_domain::EpisodeSource;
+use zero_stores_traits::KgEpisodeStore;
 
 /// Extract entities from a tool result and persist them with episode provenance.
 ///
@@ -27,8 +28,8 @@ pub async fn extract_and_persist(
     result_text: &str,
     session_id: &str,
     agent_id: &str,
-    episode_repo: &KgEpisodeRepository,
-    graph: &Arc<GraphStorage>,
+    episode_store: &dyn KgEpisodeStore,
+    kg: &dyn KnowledgeGraphStore,
 ) {
     let entities = extract_from_tool(tool_name, result_text);
     if entities.is_empty() {
@@ -36,12 +37,14 @@ pub async fn extract_and_persist(
     }
 
     let episode_id = match ensure_episode(
-        episode_repo,
+        episode_store,
         tool_call_id,
         result_text,
         session_id,
         agent_id,
-    ) {
+    )
+    .await
+    {
         Ok(id) => id,
         Err(e) => {
             tracing::warn!(tool = %tool_name, error = %e, "Failed to create tool-result episode");
@@ -58,7 +61,7 @@ pub async fn extract_and_persist(
         entities: stamped,
         relationships: Vec::new(),
     };
-    if let Err(e) = graph.store_knowledge(agent_id, knowledge) {
+    if let Err(e) = kg.store_knowledge(agent_id, knowledge).await {
         tracing::warn!(tool = %tool_name, error = %e, "Failed to persist tool-result entities");
     }
 }
@@ -212,36 +215,36 @@ fn stamp_provenance(mut entity: Entity, episode_id: &str, tool_call_id: &str) ->
     entity
 }
 
-fn ensure_episode(
-    repo: &KgEpisodeRepository,
+async fn ensure_episode(
+    store: &dyn KgEpisodeStore,
     tool_call_id: &str,
     content: &str,
     session_id: &str,
     agent_id: &str,
 ) -> Result<String, String> {
     let content_hash = hash_content(content);
-    // Dedup: if we've seen this exact tool output before, reuse the episode
-    if let Ok(Some(existing)) =
-        repo.get_by_content_hash(&content_hash, EpisodeSource::ToolResult.as_str())
+    // Dedup: if we've seen this exact tool output before, reuse the episode.
+    if let Ok(Some(existing)) = store
+        .get_by_content_hash(EpisodeSource::ToolResult.as_str(), &content_hash)
+        .await
     {
-        return Ok(existing.id);
+        if let Some(id) = existing.get("id").and_then(|v| v.as_str()) {
+            return Ok(id.to_string());
+        }
     }
-    let ep = KgEpisode {
-        id: format!("ep-{}", uuid::Uuid::new_v4()),
-        source_type: EpisodeSource::ToolResult.as_str().to_string(),
-        source_ref: tool_call_id.to_string(),
-        content_hash,
-        session_id: Some(session_id.to_string()),
-        agent_id: agent_id.to_string(),
-        status: "done".to_string(),
-        retry_count: 0,
-        error: None,
-        created_at: chrono::Utc::now().to_rfc3339(),
-        started_at: None,
-        completed_at: None,
-    };
-    repo.upsert_episode(&ep)?;
-    Ok(ep.id)
+    let id = store
+        .upsert_pending(
+            EpisodeSource::ToolResult.as_str(),
+            tool_call_id,
+            &content_hash,
+            Some(session_id),
+            agent_id,
+        )
+        .await?;
+    // Tool-result extraction is synchronous w.r.t. the episode — once the
+    // entities are about to be stored, the extraction is "done."
+    store.mark_done(&id).await?;
+    Ok(id)
 }
 
 fn hash_content(content: &str) -> String {

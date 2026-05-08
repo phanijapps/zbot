@@ -20,7 +20,10 @@ import {
 } from "@/services/transport";
 import { TabBar, TabPanel } from "@/components/TabBar";
 import { HelpBox } from "@/components/HelpBox";
+import { usePaths } from "@/hooks/usePaths";
 import { EmbeddingsCard } from "./EmbeddingsCard";
+import { NetworkSettingsCard } from "./NetworkSettingsCard";
+import { CustomizationTab } from "./customization/CustomizationTab";
 import { ProvidersEmptyState } from "./ProvidersEmptyState";
 import { ProvidersGrid } from "./ProvidersGrid";
 import { ProviderSlideover } from "./ProviderSlideover";
@@ -35,6 +38,7 @@ import { ModelTextInput } from "../shared/modelTextInput";
 export function WebSettingsPanel() {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get("tab") || "providers";
+  const paths = usePaths();
 
   const setActiveTab = useCallback(
     (tab: string) => {
@@ -285,6 +289,7 @@ export function WebSettingsPanel() {
           { id: "general", label: "General" },
           { id: "logging", label: "Logging" },
           { id: "advanced", label: "Advanced" },
+          { id: "customization", label: "Customization" },
         ]}
         activeTab={activeTab}
         onTabChange={setActiveTab}
@@ -388,7 +393,7 @@ export function WebSettingsPanel() {
                 <span style={{ opacity: 0.3 }}>|</span>
                 <span>WS <code style={{ color: "var(--foreground)" }}>localhost:18791/ws</code></span>
                 <span style={{ opacity: 0.3 }}>|</span>
-                <span>Data <code style={{ color: "var(--foreground)" }}>~/Documents/zbot/</code></span>
+                <span>Data <code style={{ color: "var(--foreground)" }}>{paths?.vaultDirDisplay ?? "~/Documents/zbot"}</code></span>
               </div>
             </div>
 
@@ -868,48 +873,21 @@ export function WebSettingsPanel() {
                   </button>
                 </div>
 
-                {/* ── Beta Features Card ── */}
-                <div className="card card__padding--lg">
-                  <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
-                    <div className="card__icon card__icon--primary">
-                      <Sparkles style={{ width: 18, height: 18 }} />
-                    </div>
-                    <div>
-                      <h2 className="settings-section-header">Beta Features</h2>
-                      <p className="page-subtitle">Opt into experimental UI surfaces</p>
-                    </div>
-                  </div>
-
-                  <label
-                    className={`settings-toggle-option ${execSettings.featureFlags?.memory_tab_command_deck ? "settings-toggle-option--active" : ""}`}
-                    aria-label="Memory Tab — Command Deck (beta)"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={execSettings.featureFlags?.memory_tab_command_deck ?? false}
-                      onChange={() => handleExecChange({
-                        featureFlags: {
-                          ...execSettings.featureFlags,
-                          memory_tab_command_deck: !execSettings.featureFlags?.memory_tab_command_deck,
-                        },
-                      })}
-                      disabled={isSavingExec}
-                      className="settings-toggle-option__checkbox"
-                    />
-                    <div className="flex-1">
-                      <div className="settings-toggle-option__title">Memory Tab — Command Deck (beta)</div>
-                      <div className="settings-toggle-option__description">
-                        New ward-first memory view with hybrid search.
-                      </div>
-                    </div>
-                  </label>
-                </div>
-
                 {/* ── Embeddings Card ── */}
                 <EmbeddingsCard />
+
+                {/* ── Network Card ── */}
+                <NetworkSettingsCard />
               </div>
             </>
           ) : null}
+        </TabPanel>
+
+        {/* ═══════════════════════════════════════════════════════════════════
+            CUSTOMIZATION TAB
+           ═══════════════════════════════════════════════════════════════════ */}
+        <TabPanel id="customization" activeTab={activeTab}>
+          <CustomizationTab />
         </TabPanel>
       </div>
 

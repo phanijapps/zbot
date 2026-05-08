@@ -31,10 +31,11 @@ import type {
   AgentTurn,
   AgentTurnStatus,
   ResearchArtifactRef,
-  ResearchMessage,
   ResearchStatus,
+  SessionTurn,
 } from "./types";
 import { toArtifactRef } from "./artifact-poll";
+import { buildSessionTurns } from "./turns";
 
 // -----------------------------------------------------------------------------
 // Constants
@@ -42,10 +43,10 @@ import { toArtifactRef } from "./artifact-poll";
 
 const DEFAULT_AGENT_ID = "root";
 const RESPOND_TOOL_NAME = "respond";
-const DELEGATE_TOOL_NAME = "delegate_to_agent";
-const TOOL_CALLS_PLACEHOLDER = "[tool calls]";
 const ASSISTANT_ROLE = "assistant";
 const USER_ROLE = "user";
+
+const SYSTEM_INJECTED_MARKERS = ["<ward_snapshot", "[Delegation "];
 
 // -----------------------------------------------------------------------------
 // Public surface
@@ -54,14 +55,18 @@ const USER_ROLE = "user";
 export interface ResearchSnapshot {
   title: string;
   status: ResearchStatus;
-  /** Root + children, flat. Children sorted by startedAt ascending. */
-  turns: AgentTurn[];
+  /**
+   * Chronological list of user→assistant exchanges. Each turn carries its
+   * own user message, subagents, and assistant reply — see
+   * memory-bank/future-state/2026-05-05-research-multi-turn-design.md.
+   */
+  turns: SessionTurn[];
   artifacts: ResearchArtifactRef[];
-  /** User bubbles only — assistant content is rendered via turns[].respond. */
-  messages: ResearchMessage[];
   /** Reserved for future log-row field; null today. */
   wardId: string | null;
   wardName: string | null;
+  /** Root execution id, surfaced so the reducer can route WS events. */
+  rootExecutionId: string | null;
   /**
    * Only non-null when the hook can resubscribe with it. For snapshots of
    * pre-existing sessions we don't know the original conv_id — left null so
@@ -101,12 +106,7 @@ export async function snapshotSession(
   if (!rootRow) return null;
 
   const messages = msgsRes.data;
-  const turns = buildTurns(rootRow, sessionRows, messages);
   const artifacts = buildArtifacts(artifactsRes, messages);
-  // Only the root execution's user rows are real prompts; subagents carry
-  // system-injected "user" rows (ward_snapshot context, delegation preambles)
-  // that look like prompts but shouldn't render.
-  const userMessages = buildUserMessages(messages, rootRow.session_id);
   const title = pickTitle(sessionRows);
   // Session-level truth wins over per-execution status on reopen.
   //
@@ -133,19 +133,56 @@ export async function snapshotSession(
     ? stateRes.data.ward.name
     : null;
 
+  // Build per-turn rollup using only root-execution messages (subagent
+  // executions carry their own user-role rows from delegation context).
+  // Filter out system-injected user rows so they don't open spurious turn
+  // boundaries — defense in depth against future schema additions.
+  const rootMessages = messages.filter(
+    (m) => m.execution_id === rootRow.session_id && !isSystemInjectedUserRow(m),
+  );
+  const childRows = sessionRows.filter(
+    (r) => !isRootRow(r) && r.session_id !== rootRow.session_id,
+  );
+  const turns = buildSessionTurns({
+    rootSessionId: rootRow.session_id,
+    rootEndedAt: rootRow.ended_at ?? null,
+    rootStatus: researchStatusToTurnStatus(status),
+    rootMessages,
+    childRows,
+  });
+
   return {
     title,
     status,
     turns,
     artifacts,
-    messages: userMessages,
     // The ward tool identifies a ward by its name; the gateway's
     // /api/wards/:id/open accepts that same name as the :id param.
     // There's no separate numeric ward id surfaced to the UI today.
     wardId: wardName,
     wardName,
+    rootExecutionId: rootRow.session_id,
     conversationId: null,
   };
+}
+
+/** Subagent executions carry user-role rows whose content starts with
+ *  `<ward_snapshot` or `[Delegation `. Defensive: applied even though
+ *  we already filter to root execution_id, in case the schema ever adds
+ *  system-injected rows on the root. */
+function isSystemInjectedUserRow(m: SessionMessage): boolean {
+  if (m.role !== USER_ROLE) return false;
+  const trimmed = m.content?.trimStart() ?? "";
+  return SYSTEM_INJECTED_MARKERS.some((p) => trimmed.startsWith(p));
+}
+
+/** Map the snapshot's `ResearchStatus` to the `AgentTurnStatus` shape
+ *  `buildSessionTurns` expects for its "is the last turn open?" check. */
+function researchStatusToTurnStatus(s: ResearchStatus): AgentTurnStatus {
+  if (s === "running") return "running";
+  if (s === "stopped") return "stopped";
+  if (s === "error") return "error";
+  return "completed";
 }
 
 // -----------------------------------------------------------------------------
@@ -254,54 +291,6 @@ function parseToolCalls(m: SessionMessage): ToolCall[] {
 }
 
 // -----------------------------------------------------------------------------
-// Respond extraction — last respond() per execution_id wins.
-// -----------------------------------------------------------------------------
-
-export function extractRespondByExecId(
-  messages: SessionMessage[],
-): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const m of messages) {
-    if (m.role !== ASSISTANT_ROLE) continue;
-    const calls = parseToolCalls(m);
-    for (const call of calls) {
-      if (call?.tool_name !== RESPOND_TOOL_NAME) continue;
-      const message = call.args?.["message"];
-      if (typeof message !== "string" || message.length === 0) continue;
-      out.set(m.execution_id, message);
-    }
-  }
-  return out;
-}
-
-// -----------------------------------------------------------------------------
-// Delegation tasks — walk ROOT's messages in timestamp order.
-//
-// Order-matching is the trick: we don't need the child's convid from the
-// tool_result row, because subagents are a flat list under root and children
-// are sorted by `startedAt` ascending, matching the order root delegated them.
-// -----------------------------------------------------------------------------
-
-export function extractDelegationTasks(
-  messages: SessionMessage[],
-  rootExecId: string,
-): string[] {
-  const rootMessages = messages
-    .filter((m) => m.execution_id === rootExecId && m.role === ASSISTANT_ROLE)
-    .sort((a, b) => a.created_at.localeCompare(b.created_at));
-
-  const out: string[] = [];
-  for (const m of rootMessages) {
-    for (const call of parseToolCalls(m)) {
-      if (call?.tool_name !== DELEGATE_TOOL_NAME) continue;
-      const task = call.args?.["task"];
-      if (typeof task === "string") out.push(task);
-    }
-  }
-  return out;
-}
-
-// -----------------------------------------------------------------------------
 // Artifact refs from respond tool calls (used as fallback when /artifacts
 // endpoint returned nothing — the file was written but not yet indexed).
 // -----------------------------------------------------------------------------
@@ -331,43 +320,6 @@ function extractArtifactHints(messages: SessionMessage[]): ArtifactHint[] {
     }
   }
   return out;
-}
-
-// -----------------------------------------------------------------------------
-// buildTurns — root + flat children with delegation-task zipping.
-// -----------------------------------------------------------------------------
-
-function buildTurns(
-  rootRow: LogSession,
-  sessionRows: LogSession[],
-  messages: SessionMessage[],
-): AgentTurn[] {
-  const respondByExec = extractRespondByExecId(messages);
-  const rootTurn = applyRespond(turnFromLogRow(rootRow, null), respondByExec);
-
-  const childRows = sessionRows
-    .filter((r) => !isRootRow(r) && r.session_id !== rootRow.session_id)
-    .sort((a, b) => parseTimestamp(a.started_at) - parseTimestamp(b.started_at));
-
-  const tasks = extractDelegationTasks(messages, rootRow.session_id);
-
-  const childTurns = childRows.map((row, idx) => {
-    const base = turnFromLogRow(row, rootRow.session_id);
-    const withRespond = applyRespond(base, respondByExec);
-    const request = idx < tasks.length ? tasks[idx] : null;
-    return { ...withRespond, request };
-  });
-
-  return [rootTurn, ...childTurns];
-}
-
-function applyRespond(
-  turn: AgentTurn,
-  respondByExec: Map<string, string>,
-): AgentTurn {
-  const message = respondByExec.get(turn.id);
-  if (!message) return turn;
-  return { ...turn, respond: message, respondStreaming: "" };
 }
 
 // -----------------------------------------------------------------------------
@@ -410,29 +362,3 @@ function dedupeRefs(refs: ResearchArtifactRef[]): ResearchArtifactRef[] {
   return out;
 }
 
-// -----------------------------------------------------------------------------
-// User messages — role === "user" only; assistants render via turns.respond.
-// -----------------------------------------------------------------------------
-
-const SYSTEM_INJECTED_MARKERS = ["<ward_snapshot", "[Delegation "];
-
-function isRealUserPrompt(m: SessionMessage, rootExecutionId: string): boolean {
-  if (m.role !== USER_ROLE) return false;
-  if (m.content === TOOL_CALLS_PLACEHOLDER) return false;
-  // Subagent executions carry system-injected user-role messages (ward
-  // snapshots, delegation context). Keep only rows from the root execution.
-  if (m.execution_id !== rootExecutionId) return false;
-  const trimmed = m.content.trimStart();
-  return !SYSTEM_INJECTED_MARKERS.some((prefix) => trimmed.startsWith(prefix));
-}
-
-function buildUserMessages(messages: SessionMessage[], rootExecutionId: string): ResearchMessage[] {
-  return messages
-    .filter((m) => isRealUserPrompt(m, rootExecutionId))
-    .map((m) => ({
-      id: m.id,
-      role: "user" as const,
-      content: m.content,
-      timestamp: parseTimestamp(m.created_at),
-    }));
-}

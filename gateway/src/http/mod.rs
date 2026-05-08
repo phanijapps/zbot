@@ -6,9 +6,11 @@ mod agents;
 mod artifacts;
 mod bridge;
 mod chat;
+mod cleanup;
 mod connectors;
 mod conversations;
 mod cron;
+mod customization;
 mod embeddings;
 mod events;
 mod gateway_bus;
@@ -19,7 +21,9 @@ mod mcps;
 mod memory;
 mod memory_search;
 mod models;
+mod network;
 mod openapi;
+mod paths;
 mod plugins;
 mod providers;
 mod sessions;
@@ -76,6 +80,12 @@ pub fn create_http_router(
         // Health endpoints
         .route("/api/health", get(health::health_check))
         .route("/api/status", get(health::status))
+        // Vault path discovery (tells UI where the daemon's data lives)
+        .route("/api/paths", get(paths::get_paths))
+        // Cleanup operations (bounded to vault-owned directories)
+        .route("/api/cleanup/vault-temp", post(cleanup::cleanup_vault_temp))
+        // Network info (LAN discoverability snapshot for Settings UI)
+        .route("/api/network/info", get(network::get_network_info))
         // Agent endpoints
         .route("/api/agents", get(agents::list_agents))
         .route("/api/agents", post(agents::create_agent))
@@ -187,6 +197,15 @@ pub fn create_http_router(
             "/api/settings/execution",
             put(settings::update_execution_settings),
         )
+        .route("/api/settings/network", get(settings::get_network_settings))
+        .route(
+            "/api/settings/network",
+            put(settings::update_network_settings),
+        )
+        // Customization endpoints
+        .route("/api/customization/files", get(customization::list_files))
+        .route("/api/customization/file", get(customization::get_file))
+        .route("/api/customization/file", put(customization::put_file))
         // Setup wizard endpoints
         .route("/api/setup/status", get(setup::get_setup_status))
         .route("/api/setup/mcp-defaults", get(setup::get_mcp_defaults))

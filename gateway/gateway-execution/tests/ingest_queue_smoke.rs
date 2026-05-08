@@ -5,10 +5,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
 
-use gateway_database::{KgEpisodeRepository, KnowledgeDatabase};
 use gateway_execution::ingest::{IngestionQueue, NoopExtractor};
 use gateway_services::VaultPaths;
-use knowledge_graph::GraphStorage;
+use zero_stores::KnowledgeGraphStore;
+use zero_stores_sqlite::kg::storage::GraphStorage;
+use zero_stores_sqlite::{
+    GatewayKgEpisodeStore, KgEpisodeRepository, KnowledgeDatabase, SqliteKgStore,
+};
+use zero_stores_traits::KgEpisodeStore;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn queue_drains_pending_episodes() {
@@ -17,7 +21,10 @@ async fn queue_drains_pending_episodes() {
     std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
     let db = Arc::new(KnowledgeDatabase::new(paths).unwrap());
     let repo = Arc::new(KgEpisodeRepository::new(db.clone()));
-    let graph = Arc::new(GraphStorage::new(db.clone()).unwrap());
+    let graph_storage = Arc::new(GraphStorage::new(db.clone()).unwrap());
+    let episode_store: Arc<dyn KgEpisodeStore> =
+        Arc::new(GatewayKgEpisodeStore::new(repo.clone()));
+    let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(graph_storage));
 
     // Enqueue 5 episodes with payloads.
     for i in 0..5 {
@@ -34,7 +41,7 @@ async fn queue_drains_pending_episodes() {
     }
 
     let extractor = Arc::new(NoopExtractor::new());
-    let queue = IngestionQueue::start(2, repo.clone(), graph, extractor.clone());
+    let queue = IngestionQueue::start(2, episode_store.clone(), kg_store, extractor.clone());
     queue.notify();
 
     // Poll until all 5 are done or timeout.

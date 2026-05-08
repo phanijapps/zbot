@@ -11,6 +11,7 @@ use crate::http::create_http_router;
 use crate::services::{AgentService, RuntimeService};
 use crate::state::AppState;
 use crate::websocket::WebSocketHandler;
+use discovery::InterfaceEnumerator;
 use gateway_services::{FileWatcher, WatchConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -142,6 +143,28 @@ impl GatewayServer {
         // so invokes ran server-side but no tokens reached the UI.
         self.ws_handler.spawn_background_tasks(&shutdown_tx);
 
+        // Read network settings from AppSettings (cached in SettingsService).
+        // If exposeToLan changed since startup, the user must restart — this
+        // read happens at boot so a stale toggle from a prior run is fine.
+        let network_cfg = match self.state.settings.load() {
+            Ok(s) => s.network,
+            Err(e) => {
+                warn!(
+                    "Failed to load settings.json for network config: {}; defaulting to LAN exposure ON",
+                    e
+                );
+                discovery::DiscoveryConfig::default()
+            }
+        };
+        let resolved_host = crate::config::resolve_bind_host(&network_cfg);
+        if resolved_host != self.config.host {
+            info!(
+                "Bind host resolved from network settings: {} (was {})",
+                resolved_host, self.config.host
+            );
+            self.config.host = resolved_host;
+        }
+
         // Start HTTP server. The WebSocket upgrade route (`/ws`) shares
         // this listener — mobile clients and single-port deployments
         // don't need a second firewall hole.
@@ -173,6 +196,91 @@ impl GatewayServer {
                 warn!("HTTP server error: {}", e);
             }
         });
+
+        // Start mDNS advertisement when LAN exposure is enabled.
+        if network_cfg.expose_to_lan {
+            let actual_port = self.config.http_port;
+
+            let instance_name = network_cfg
+                .discovery
+                .instance_name
+                .clone()
+                .unwrap_or_else(default_instance_name);
+
+            let instance_id = match network_cfg.discovery.instance_id.clone() {
+                Some(id) => id,
+                None => {
+                    let new_id = uuid::Uuid::new_v4().to_string();
+                    if let Err(e) = persist_instance_id(&self.state.settings, &new_id) {
+                        warn!("failed to persist generated instance_id: {}", e);
+                    }
+                    new_id
+                }
+            };
+
+            // Same const lives in `http::health` — mDNS TXT and the
+            // `/api/health` body should agree on what version is
+            // running. See that module's `VERSION` for the
+            // `option_env!("BUILD_VERSION")` fallback shape.
+            const VERSION: &str = match option_env!("BUILD_VERSION") {
+                Some(v) => v,
+                None => env!("CARGO_PKG_VERSION"),
+            };
+            let mut txt = std::collections::BTreeMap::new();
+            txt.insert("version".into(), VERSION.to_string());
+            txt.insert("instance".into(), instance_id.clone());
+            txt.insert("name".into(), instance_name.clone());
+            txt.insert("path".into(), "/".into());
+            txt.insert("ws".into(), "1".into());
+            for (k, v) in &network_cfg.discovery.txt_records {
+                txt.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+
+            let enumerator = discovery::RealEnumerator;
+            let interfaces = discovery::filter_interfaces(
+                enumerator.enumerate(),
+                &network_cfg.discovery.exclude_interfaces,
+            );
+            let addrs = discovery::ipv4_only(&interfaces);
+
+            let info = discovery::ServiceInfo {
+                instance_name: instance_name.clone(),
+                service_type: network_cfg.discovery.service_type.clone(),
+                hostname_alias: network_cfg.discovery.hostname_alias.clone(),
+                port: actual_port,
+                txt,
+                addrs,
+            };
+
+            let advertiser: Arc<dyn discovery::Advertiser> = match discovery::MdnsAdvertiser::new()
+            {
+                Ok(a) => Arc::new(a),
+                Err(e) => {
+                    warn!(
+                        "mDNS responder failed to start: {}; daemon reachable via IP only",
+                        e
+                    );
+                    discovery::noop()
+                }
+            };
+
+            match advertiser.advertise(info) {
+                Ok(handle) => {
+                    if let Ok(mut guard) = self.state.advertise_handle.lock() {
+                        *guard = Some(handle);
+                    }
+                    info!("mDNS advertising started for {}", instance_name);
+                }
+                Err(e) => warn!("mDNS advertise failed: {}; daemon reachable via IP only", e),
+            }
+
+            // Decision: AppState.advertiser stays as noop. The live mDNS daemon's
+            // lifetime is rooted in the AdvertiseHandle's boxed AdvertiseInner
+            // (see discovery::advertiser), not in this Arc. /api/network/info
+            // treats advertise_handle.is_some() as the source of truth for "mDNS
+            // is live", not AppState.advertiser's concrete type.
+            drop(advertiser);
+        }
 
         // Legacy standalone WebSocket port. Kept for one release cycle so
         // external integrations that hardcoded `ws://host:18790` have a
@@ -216,6 +324,14 @@ impl GatewayServer {
     /// This pauses all running sessions so they can be resumed on restart,
     /// disconnects bridge workers, and sends the shutdown signal.
     pub async fn shutdown(&mut self) {
+        // Withdraw mDNS advertisement before tearing down the listener.
+        if let Ok(mut guard) = self.state.advertise_handle.lock() {
+            if let Some(handle) = guard.take() {
+                drop(handle); // Drop impl sends goodbye, blocks ~100ms
+                info!("mDNS advertisement withdrawn");
+            }
+        }
+
         // Pause all running sessions before shutting down
         self.pause_running_sessions();
 
@@ -300,6 +416,38 @@ impl GatewayServer {
             });
         });
 
+        let event_bus = self.state.event_bus.clone();
+        let config_dir = self.state.paths.config_dir();
+        let config_dir_for_filter = config_dir.clone();
+        watcher.add_watch(config_dir.clone(), "customization", move |path| {
+            // Compute relative path; reject anything outside the customization allow-list.
+            let rel = match path.strip_prefix(&config_dir_for_filter) {
+                Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
+                Err(_) => return,
+            };
+            if !rel.ends_with(".md") {
+                return;
+            }
+            let parts: Vec<&str> = rel.split('/').collect();
+            let valid = matches!(parts.as_slice(), [_] | ["shards", _]);
+            if !valid {
+                return;
+            }
+            let modified_at = std::fs::metadata(&path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .map(|t| {
+                    let dt: chrono::DateTime<chrono::Utc> = t.into();
+                    dt.to_rfc3339()
+                })
+                .unwrap_or_default();
+            let event = gateway_events::GatewayEvent::CustomizationFileChanged {
+                path: rel,
+                modified_at,
+            };
+            event_bus.publish_sync(event);
+        });
+
         watcher.start();
         self.file_watcher = Some(watcher);
     }
@@ -343,6 +491,25 @@ impl GatewayServer {
             }
         }
     }
+}
+
+pub(crate) fn default_instance_name() -> String {
+    let raw = gethostname::gethostname().to_string_lossy().into_owned();
+    let trimmed = raw.trim_end_matches(".local").to_string();
+    if trimmed.is_empty() {
+        "agentzero".to_string()
+    } else {
+        trimmed
+    }
+}
+
+pub(crate) fn persist_instance_id(
+    settings: &gateway_services::SettingsService,
+    new_id: &str,
+) -> std::result::Result<(), String> {
+    let mut current = settings.load()?;
+    current.network.discovery.instance_id = Some(new_id.to_string());
+    settings.save(&current)
 }
 
 #[cfg(test)]

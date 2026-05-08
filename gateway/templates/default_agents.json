@@ -41,5 +41,16 @@
     "maxTokens": 36000,
     "skills": [],
     "mcps": []
+  },
+
+  {
+    "name": "general-purpose",
+    "displayName": "General Purpose",
+    "description": "Flexible task-runner for ad-hoc and scheduled chores (cleanup, inspection, one-off shell work) that don't fit a specialist agent.",
+    "agentType": "specialist",
+    "temperature": 0.2,
+    "maxTokens": 16384,
+    "skills": [],
+    "mcps": []
   }
 ]

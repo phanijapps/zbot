@@ -25,9 +25,10 @@ agent-tools = { path = "../runtime/agent-tools" }
 zero-core = { path = "../framework/zero-core" }
 zero-app = { path = "../framework/zero-app" }
 zero-stores = { path = "../stores/zero-stores" }
+zero-stores-domain = { path = "../stores/zero-stores-domain" }
+zero-stores-traits = { path = "../stores/zero-stores-traits" }
 zero-stores-sqlite = { path = "../stores/zero-stores-sqlite" }
 gateway-events = { path = "gateway-events" }
-gateway-database = { path = "gateway-database" }
 gateway-templates = { path = "gateway-templates" }
 gateway-connectors = { path = "gateway-connectors" }
 gateway-services = { path = "gateway-services" }
@@ -37,6 +38,7 @@ gateway-cron = { path = "gateway-cron" }
 gateway-bus = { path = "gateway-bus" }
 gateway-ws-protocol = { path = "gateway-ws-protocol" }
 gateway-bridge = { path = "gateway-bridge" }
+discovery = { path = "../discovery" }
 
 # Web framework
 axum = { version = "0.7", features = ["ws", "macros", "multipart"] }
@@ -70,6 +72,7 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = "0.10"
 dirs = "5"
+gethostname = { workspace = true }
 regex = "1"
 reqwest = { version = "0.12", features = ["json"] }
 rust-embed = { workspace = true }
@@ -78,20 +81,21 @@ sha2 = "0.10"
 # Cron scheduling
 tokio-cron-scheduler = "0.13"
 
-# Database
-rusqlite = { version = "0.32", features = ["bundled"] }
-r2d2 = "0.8"
-r2d2_sqlite = "0.25"
+# Database — D9: gateway no longer depends on rusqlite/r2d2 directly.
+# All SQLite-coupled types come through `zero-stores-sqlite` (the trait
+# implementation) and `zero-stores-traits` (the abstract surface). New
+# backends drop in by implementing the same traits in their own crate.
 
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"
+# Used only by the `query_session` debug example. The lib + bin do not
+# depend on rusqlite directly — all SQLite access flows through
+# `zero-stores-sqlite` (the trait impl) per the D-phase architecture.
+rusqlite = { version = "0.32", features = ["bundled"] }
 assert_matches = "1.5"
 tower = { version = "0.5", features = ["util"] }
 axum-test = "16"
-
-[features]
-default = []
 
 [lib]
 name = "gateway"
