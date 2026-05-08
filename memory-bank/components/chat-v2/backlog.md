@@ -1,6 +1,6 @@
 # Chat v2 — Backlog
 
-Items not fixed in the initial `/chat-v2` ship but known gaps. Prioritise before `/chat` retirement.
+Items not fixed in the initial Quick Chat ship but known gaps.
 
 ## High priority
 

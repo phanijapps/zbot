@@ -3,6 +3,8 @@
 **Status:** Living document. Updated as each TD-023 retirement increment lands.
 **Last updated:** 2026-04-28
 
+> **Note (2026-05-03+):** The SurrealDB backend referenced throughout this doc was implemented (commits `f7a0663d`, `1a808a05`, `1915bdcc`, `adea05d8`) and then reverted in commit `d823b7bd: chore: remove SurrealDB backend, keep clean trait-routed SQLite`. The trait-routed abstraction described here is still in effect and shipped against SQLite; the SurrealDB-specific gap analysis, schema sketches, and "How to add a third backend" walkthrough below are now historical reference material rather than active roadmap.
+
 ## Goal
 
 Make every persistence call route through the `KnowledgeGraphStore` /
@@ -212,6 +214,8 @@ next backend doesn't repeat them:
 ---
 
 ## Phase status (as of 2026-04-28)
+
+_Phase status snapshot superseded by the SurrealDB revert (`d823b7bd`); see top-of-doc note. Retained verbatim below for historical reference._
 
 | Phase | Scope | Status |
 |---|---|---|

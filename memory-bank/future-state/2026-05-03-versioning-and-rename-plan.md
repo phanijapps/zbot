@@ -1,8 +1,16 @@
 # Date-based Versioning + Rename to `zbot` — Plan
 
-**Status:** Plan (awaiting review)
+**Status:** [IMPLEMENTED 2026-05-03 — PR D (`scripts/release.sh` automation) deferred per design doc `04eed207`]
 **Date:** 2026-05-03
 **Owner:** phanijapps
+
+PR landing log:
+- PR A1 (Cargo `[[bin]]` rename) — `9b5e3e37` [LANDED]
+- PR A2 (install scripts + Makefile + auto-embed version) — `6a92f91f` [LANDED]
+- PR A3 (UI version badge) — `36ed0cf4` [LANDED]
+- PR B (release `2026.5.3`) — `1744c04f` [LANDED]
+- PR C (user-copy + mDNS rename) — `7adb5efc` [LANDED]
+- PR D (release-on-main workflow) — design doc only at `04eed207` [DEFERRED]
 
 ## Three asks bundled
 
@@ -190,32 +198,32 @@ Pick once and stop drifting:
 
 Each PR builds on the last; don't bundle. Reviewer can ship A1 alone and stop if needed.
 
-**PR A1 — Cargo binary rename ONLY** (~5 lines):
+**PR A1 — Cargo binary rename ONLY** (~5 lines): [LANDED — `9b5e3e37`]
 - `apps/cli/Cargo.toml`: `[[bin]] name = "zero"` → `name = "zbot"`
 - `gateway/Cargo.toml`: `[[bin]] name = "zerod"` → `name = "zbotd"`
 - **Nothing else.** Build artifacts now produce the new names; install scripts still expect old names so this PR alone leaves the system mid-rename. That's intentional — the next PRs make it consistent.
 - **Test:** `cargo build --release` produces `target/release/zbotd` and `target/release/zbot`. CI green.
 
-**PR A2 — Install scripts + Makefile + service template** (~30 lines):
+**PR A2 — Install scripts + Makefile + service template** (~30 lines): [LANDED — `6a92f91f`]
 - `Makefile` references the new binary names; new `VERSION` macro reads `Cargo.toml`; substitutes `@@VERSION@@` into the systemd template.
 - `scripts/install.sh` + `scripts/uninstall.sh`: new binary + service name; migration block; version banner display.
 - `git mv scripts/agentzero.service.in scripts/zbot.service.in`; add `@@VERSION@@` placeholder.
 - mDNS hostname + instance default name.
 - **Test:** fresh install on a Pi produces `zbot.service` with `Description=z-bot daemon (X.Y.Z)` matching `Cargo.toml`'s version. Existing install upgrades cleanly.
 
-**PR B — Versioning bump** (~5 lines):
+**PR B — Versioning bump** (~5 lines): [LANDED — `1744c04f` cut `2026.5.3`]
 - `Cargo.toml [workspace.package].version` → today's date (`2026.5.3` or whenever this lands).
 - `apps/ui/package.json` version → same.
 - Tag `vYYYY.M.D` after merge.
 
-**PR C — Layer 2 (user copy + README)** (~30 files):
+**PR C — Layer 2 (user copy + README)** (~30 files): [LANDED — `7adb5efc` (also did mDNS rename)]
 - README, install docs, CONTRIBUTING.
 - Wizard / settings page strings.
 - HTTP banner / version display.
 - Standardize on `z-bot` (display) / `zbot` (identifier).
 - **Test:** `rg -i "agentzero"` returns only intentional historical references (this plan doc, CHANGELOG entries about the rename).
 
-**PR D — `scripts/release.sh` automation** (later, optional, ~30 lines):
+**PR D — `scripts/release.sh` automation** (later, optional, ~30 lines): [DEFERRED — see design doc commit `04eed207`]
 - The release helper sketched above. Useful once the rhythm of monthly cuts kicks in.
 
 ### What does NOT get renamed

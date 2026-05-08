@@ -17,7 +17,7 @@
                └────────────────┬─────────────────┘
                                 │
 ┌───────────────────────────────┴─────────────────────────────────────────┐
-│                           DAEMON (zerod)                                 │
+│                           DAEMON (zbotd)                                 │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────────────────────────────────────────────┐    │
 │  │                         GATEWAY                                  │    │
@@ -215,16 +215,16 @@ z-Bot supports configurable file logging with automatic rotation and retention m
 
 ```bash
 # Enable file logging with custom directory
-zerod --log-dir /var/log/zbot
+zbotd --log-dir /var/log/zbot
 
 # Configure rotation and retention
-zerod --log-dir ./logs --log-rotation hourly --log-max-files 24
+zbotd --log-dir ./logs --log-rotation hourly --log-max-files 24
 
 # Daemon mode (file only, no stdout)
-zerod --log-dir ./logs --log-no-stdout
+zbotd --log-dir ./logs --log-no-stdout
 
 # Set log level
-zerod --log-level debug
+zbotd --log-level debug
 ```
 
 ### Log File Location
@@ -602,8 +602,9 @@ Runnable applications:
 
 ```
 apps/
-├── daemon/              # Main binary (zerod)
-└── zero-cli/            # CLI tool with TUI
+├── cli/                 # CLI tool with TUI (binary: zbot)
+├── daemon/              # Main binary (zbotd)
+└── ui/                  # React/Vite web dashboard
 ```
 
 ## Core Abstractions
@@ -1968,17 +1969,15 @@ D3-force directed graph visualization of the knowledge graph. Entity detail side
 
 Implementation: `apps/ui/src/features/observatory/`
 
-### Execution Intelligence Dashboard
+### Mission Control
 
-Replaced the flat 845-line log viewer with a visual observability dashboard:
-- **KPI cards** with sparkline trends (success rate, tokens, tool calls, duration)
-- **Session list** with inline mini waterfalls showing execution shape
-- **Expandable full waterfall timelines** with delegation spans and tool dots
-- **Interactive**: hover tooltips on dots/bars, click for slide-out detail panel
-- **Real-time**: auto-refresh when sessions are running
-- **Session titles** derived from first user message
+The flat log viewer and the WebOps/Executions dashboard (KPI cards, mini waterfalls, slide-out panels) were retired in PR #112. The current observability surface lives at the live route `/mission-control`; `/logs` and `/dashboard` redirect there.
 
-Implementation: `apps/ui/src/features/executions/`
+- **KpiStrip** — compact aggregate counters (sessions, tokens, tool calls, duration)
+- **SessionListPanel** — filterable list of root sessions with status badges and real-time updates
+- **SessionDetailPane** — selected session detail with `MessagesPane` (chat narrative) and `ToolsPane` (`AgentToolGroup` + `ToolDetailPopover` for per-tool inspection)
+
+Implementation: `apps/ui/src/features/mission-control/`
 
 ## Extension Points
 
@@ -1998,7 +1997,7 @@ Implementation: `services/knowledge-graph/src/traversal.rs`
 
 ## Runtime Memory Profile
 
-Typical daemon (`zerod`) memory usage: **~150 MB** at idle after first request.
+Typical daemon (`zbotd`) memory usage: **~150 MB** at idle after first request.
 
 ### Breakdown
 

@@ -74,22 +74,28 @@ ExecutionRunner::invoke_with_callback()
 User opens existing session (page load / session switch)
   │
   ▼
-useMissionControl mount effect (mission-hooks.ts)
+useResearchSession mount effect (features/research-v2/useResearchSession.ts)
   │
   ▼
-transport.getLogSession(sessionId)
+snapshotSession(transport, sessionId)  (features/research-v2/session-snapshot.ts)
+  │  fans out in parallel:
+  ├── transport.listLogSessions()
+  ├── transport.getSessionMessages(sessionId, { scope: "all" })
+  ├── transport.listSessionArtifacts(sessionId)   (soft-fail)
+  └── transport.getSessionState(sessionId)        (soft-fail; carries ward)
   │
   ▼
-Iterate execution_logs for this session
-  │
-  ▼  log.category === "intent" && log.metadata exists
+Build ResearchSnapshot { title, status, turns, artifacts, wardName, … }
   │
   ▼
-Parse metadata (handle string JSON or object):
-  ├── snake_case → camelCase field mapping
-  ├── setIntentAnalysis(ia) → populates IntelligenceFeed sidebar
-  ├── setActiveWard() from ia.wardRecommendation.wardName (fallback)
-  └── loadedBlocks.push({ type: "intent_analysis", data: { analysis: ia } })
+dispatch({ type: "HYDRATE", snapshot })  → reduceResearchSession (reducer.ts)
+  │
+  ▼
+Live WS events for the same session continue to flow through
+mapGatewayEventToResearchAction → reducer, including
+`intent_analysis_started` / `intent_analysis_complete` /
+`intent_analysis_skipped` which set `state.intentAnalyzing` and
+`state.intentClassification` (rendered by `IntentLine` in `ResearchPage.tsx`).
 ```
 
 ## OnSessionReady Callback (WS Race Condition Fix)

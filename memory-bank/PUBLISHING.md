@@ -8,8 +8,8 @@ z-Bot consists of two distributable components:
 
 | Component | Binary Name | Description |
 |-----------|-------------|-------------|
-| **Daemon** | `zerod` | HTTP/WebSocket server + static files |
-| **CLI** | `zero` | Terminal UI client |
+| **Daemon** | `zbotd` | HTTP/WebSocket server + static files |
+| **CLI** | `zbot` | Terminal UI client |
 
 The web UI is embedded in the daemon binary at compile time.
 
@@ -63,8 +63,8 @@ cargo build --release -p daemon -p cli
 ```
 
 Binaries are output to:
-- `target/release/zerod` (or `zerod.exe` on Windows)
-- `target/release/zero` (or `zero.exe` on Windows)
+- `target/release/zbotd` (or `zbotd.exe` on Windows)
+- `target/release/zbot` (or `zbot.exe` on Windows)
 
 ---
 
@@ -99,9 +99,9 @@ cargo build --release -p daemon -p cli --target aarch64-apple-darwin
 
 # Universal binary (combine both)
 lipo -create \
-  target/x86_64-apple-darwin/release/zerod \
-  target/aarch64-apple-darwin/release/zerod \
-  -output target/universal/release/zerod
+  target/x86_64-apple-darwin/release/zbotd \
+  target/aarch64-apple-darwin/release/zbotd \
+  -output target/universal/release/zbotd
 ```
 
 ### Windows Targets
@@ -136,8 +136,8 @@ dist/
 Each archive contains:
 ```
 zbot-{version}/
-├── zerod              # Daemon binary
-├── zero               # CLI binary
+├── zbotd              # Daemon binary
+├── zbot               # CLI binary
 ├── README.md
 ├── LICENSE
 └── VERSION
@@ -149,7 +149,7 @@ zbot-{version}/
 #!/bin/bash
 # scripts/package.sh
 
-VERSION=${1:-"0.1.0"}
+VERSION=${1:-"2026.5.3"}
 DIST_DIR="dist/release"
 mkdir -p "$DIST_DIR"
 
@@ -162,8 +162,8 @@ build_package() {
     mkdir -p "$DIST_DIR/$archive_name"
 
     # Copy binaries
-    cp target/release/zerod "$DIST_DIR/$archive_name/"
-    cp target/release/zero "$DIST_DIR/$archive_name/"
+    cp target/release/zbotd "$DIST_DIR/$archive_name/"
+    cp target/release/zbot "$DIST_DIR/$archive_name/"
 
     # Copy docs
     cp README.md "$DIST_DIR/$archive_name/"
@@ -209,7 +209,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g., 0.1.0)'
+        description: 'Version (CalVer YYYY.M.D, e.g., 2026.5.3)'
         required: true
 
 env:
@@ -269,8 +269,8 @@ jobs:
       - name: Package
         run: |
           mkdir -p release
-          cp target/${{ matrix.target }}/release/zerod release/
-          cp target/${{ matrix.target }}/release/zero release/
+          cp target/${{ matrix.target }}/release/zbotd release/
+          cp target/${{ matrix.target }}/release/zbot release/
           chmod +x release/*
 
       - name: Upload artifact
@@ -308,8 +308,8 @@ jobs:
       - name: Package
         run: |
           mkdir -p release
-          cp target/${{ matrix.target }}/release/zerod release/
-          cp target/${{ matrix.target }}/release/zero release/
+          cp target/${{ matrix.target }}/release/zbotd release/
+          cp target/${{ matrix.target }}/release/zbot release/
           chmod +x release/*
 
       - name: Upload artifact
@@ -347,8 +347,8 @@ jobs:
       - name: Package
         run: |
           mkdir release
-          copy target\${{ matrix.target }}\release\zerod.exe release\
-          copy target\${{ matrix.target }}\release\zero.exe release\
+          copy target\${{ matrix.target }}\release\zbotd.exe release\
+          copy target\${{ matrix.target }}\release\zbot.exe release\
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -412,7 +412,7 @@ jobs:
 codesign --sign "Developer ID Application: Your Name" \
   --options runtime \
   --timestamp \
-  release/zerod release/zero
+  release/zbotd release/zbot
 
 # Notarize
 xcrun notarytool submit release/zbot-*.zip \
@@ -433,7 +433,7 @@ Requires a code signing certificate (e.g., from DigiCert, Sectigo):
 # Sign with signtool
 signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
   /f certificate.pfx /p $PASSWORD `
-  release\zerod.exe release\zero.exe
+  release\zbotd.exe release\zbot.exe
 ```
 
 ---
@@ -446,9 +446,9 @@ Users download the archive for their platform, extract, and run:
 
 ```bash
 # Linux/macOS
-tar -xzf zbot-0.1.0-linux-x86_64.tar.gz
-cd zbot-0.1.0
-./zerod --static-dir ./dist
+tar -xzf zbot-2026.5.3-linux-x86_64.tar.gz
+cd zbot-2026.5.3
+./zbotd --static-dir ./dist
 ```
 
 ### Homebrew (macOS)
@@ -460,7 +460,7 @@ Create a Homebrew formula:
 class Zbot < Formula
   desc "Local-first AI agent platform"
   homepage "https://github.com/yourorg/zbot"
-  version "0.1.0"
+  version "2026.5.3"
   sha256 "..." # Calculate from archive
 
   on_macos do
@@ -473,12 +473,12 @@ class Zbot < Formula
   end
 
   def install
-    bin.install "zerod"
-    bin.install "zero"
+    bin.install "zbotd"
+    bin.install "zbot"
   end
 
   test do
-    assert_match "z-Bot", shell_output("#{bin}/zerod --version")
+    assert_match "z-Bot", shell_output("#{bin}/zbotd --version")
   end
 end
 ```
@@ -490,7 +490,7 @@ Create PKGBUILD:
 ```bash
 # Maintainer: Your Name <email>
 pkgname=zbot-bin
-pkgver=0.1.0
+pkgver=2026.5.3
 pkgrel=1
 pkgdesc="Local-first AI agent platform"
 arch=('x86_64' 'aarch64')
@@ -501,8 +501,8 @@ source_x86_64=("${url}/releases/download/v${pkgver}/zbot-${pkgver}-linux-x86_64.
 source_aarch64=("${url}/releases/download/v${pkgver}/zbot-${pkgver}-linux-aarch64.tar.gz")
 
 package() {
-    install -Dm755 zerod "$pkgdir/usr/bin/zerod"
-    install -Dm755 zero "$pkgdir/usr/bin/zero"
+    install -Dm755 zbotd "$pkgdir/usr/bin/zbotd"
+    install -Dm755 zbot "$pkgdir/usr/bin/zbot"
 }
 ```
 
@@ -527,11 +527,11 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists
 
-COPY --from=builder /app/target/release/zerod /usr/local/bin/
+COPY --from=builder /app/target/release/zbotd /usr/local/bin/
 
 EXPOSE 18791 18790
 
-CMD ["zerod"]
+CMD ["zbotd"]
 ```
 
 ```bash
@@ -558,8 +558,8 @@ docker run -p 18791:18791 -p 18790:18790 \
 
 ### Create Release
 
-- [ ] Commit version bump: `git commit -am "chore: release v0.1.0"`
-- [ ] Tag release: `git tag v0.1.0`
+- [ ] Commit version bump: `git commit -am "release: 2026.5.3"`
+- [ ] Tag release: `git tag v2026.5.3`
 - [ ] Push: `git push origin main --tags`
 - [ ] Wait for GitHub Actions to complete
 - [ ] Verify release artifacts on GitHub Releases page
@@ -569,7 +569,7 @@ docker run -p 18791:18791 -p 18790:18790 \
 
 - [ ] Update Homebrew formula (if applicable)
 - [ ] Update AUR package (if applicable)
-- [ ] Update Docker image: `docker build -t zbot:0.1.0 .`
+- [ ] Update Docker image: `docker build -t zbot:2026.5.3 .`
 - [ ] Announce release (Discord, Twitter, etc.)
 - [ ] Update documentation site (if applicable)
 
@@ -599,12 +599,12 @@ sudo apt-get install pkg-config libssl-dev
 # Check what's using the port
 lsof -i :18791
 # Kill process or use different port
-zerod --port 8080
+zbotd --port 8080
 ```
 
 **Permission denied (Linux/macOS)**:
 ```bash
-chmod +x zerod zero
+chmod +x zbotd zbot
 ```
 
 ### Cross-Compilation
@@ -615,15 +615,19 @@ For reliable cross-platform builds, use GitHub Actions runners for each OS rathe
 
 ## Version Scheme
 
-Follow [Semantic Versioning](https://semver.org/):
+Calendar Versioning (`YYYY.M.D`, no zero-padding) — single source of truth in `Cargo.toml [workspace.package].version`. See `memory-bank/future-state/2026-05-03-versioning-and-rename-plan.md` for rationale.
 
-- **MAJOR**: Breaking changes
-- **MINOR**: New features, backward compatible
-- **PATCH**: Bug fixes
+- **YYYY**: Four-digit year
+- **M**: Month, no leading zero (`5`, not `05`)
+- **D**: Day, no leading zero (`3`, not `03`)
+
+Rules:
+- One release per calendar day. Tag is `v$VERSION` (e.g., `v2026.5.3`).
+- Same-day re-cuts: bump the day component or wait. No 4th segment.
+- Hotfix on a prior tag: cut a fresh date, no separate "patch" track.
+- Lexical sort within a year is broken (`2026.5.3` > `2026.10.3` as strings) — sort by `git tag --sort=creatordate`.
 
 Examples:
-- `0.1.0` → Initial alpha
-- `0.2.0` → New features, may break compatibility
-- `1.0.0` → First stable release
-- `1.1.0` → New features
-- `1.1.1` → Bug fix
+- `2026.5.3` → 2026-05-03
+- `2026.5.4` → 2026-05-04
+- `2026.12.31` → 2026-12-31
