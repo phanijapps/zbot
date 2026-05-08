@@ -8,8 +8,8 @@ The WebSocket system has a two-layer event model:
 2. **ServerMessage** (wire protocol) — defined in `gateway/gateway-ws-protocol/src/messages.rs:111`, converted from GatewayEvent in `gateway/src/websocket/handler.rs:745` and sent to subscribed WebSocket clients
 
 The UI has two primary modes consuming these events:
-- **Research Mode** (`/` route) — `MissionControl` component via `useMissionControl()` hook (`features/chat/mission-hooks.ts`)
-- **Chat Mode** (`/chat` route) — `FastChat` component via `useFastChat()` hook (`features/chat/fast-chat-hooks.ts`)
+- **Research Mode** (`/research` route) — `ResearchPage` component via `useResearchSession()` hook (`features/research-v2/useResearchSession.ts`)
+- **Chat Mode** (`/chat` route) — `QuickChat` component via `useQuickChat()` hook (`features/chat-v2/useQuickChat.ts`)
 
 ### Event Flow
 
@@ -21,8 +21,8 @@ Execution Engine
                  └─> SubscriptionManager.route_event_scoped()
                       └─> WebSocket client receives ServerMessage
                            └─> Transport layer (http.ts:733)
-                                ├─> Research Mode handlers (mission-hooks.ts)
-                                └─> Chat Mode handlers (fast-chat-hooks.ts)
+                                ├─> Research Mode handlers (research-v2/event-map.ts → reducer.ts)
+                                └─> Chat Mode handlers (chat-v2/event-map.ts → reducer.ts)
 ```
 
 ## List of Websocket Events
@@ -123,64 +123,44 @@ These are the messages actually sent to WebSocket clients. Most are converted fr
 
 ## List of WebSocket Events Consumed by UI
 
-### Research Mode (`/` route) — `useMissionControl()` hook
+### Research Mode (`/research` route) — `useResearchSession()` hook
 
-File: `apps/ui/src/features/chat/mission-hooks.ts`
+Files: `apps/ui/src/features/research-v2/event-map.ts`, `apps/ui/src/features/research-v2/reducer.ts`
 
-| Event Type | Handler Function | Description |
-|---|---|---|
-| `invoke_accepted` | `handleInvokeAccepted` | Stores `session_id` for subsequent messages |
-| `agent_started` | `handleAgentStarted` | Sets status="running", starts duration timer, stores session/model, starts fallback title timer |
-| `token` | `handleTokenEvent` | Appends `delta` to streaming buffer (rAF-batched), tracks token count |
-| `thinking` | `handleThinkingEvent` | Appends thinking content to reasoning block (rAF-batched) |
-| `tool_call` | `handleToolCallEvent` | Dispatches by tool name: `set_session_title`→title, `memory`+recall→recall block, `update_plan`→plan block, `respond`→response block+phase="responding", `delegate_to_agent`→delegation block, generic→tool block |
-| `tool_result` | `handleToolResultEvent` | Correlates `tool_call_id` to block; updates recall/tool/delegation/plan blocks with result |
-| `delegation_started` | `handleDelegationStarted` | Creates delegation block, adds subagent to tracking list |
-| `delegation_completed` | `handleDelegationCompleted` | Updates delegation block to "completed" with result |
-| `session_title_changed` | `handleSessionTitleChanged` | Sets session title, cancels fallback timer |
-| `ward_changed` | `handleWardChanged` | Sets active ward in state |
-| `intent_analysis_started` | `handleIntentAnalysisStarted` | Creates streaming `intent_analysis` block |
-| `intent_analysis_complete` | `handleIntentAnalysisComplete` | Parses intent analysis (primary/hidden intents, skills, agents, ward recommendation, execution strategy), sets phase="planning" |
-| `intent_analysis_skipped` | inline | Sets phase="executing" (prior turn already analyzed) |
-| `turn_complete` | `handleTurnComplete` | Flushes streaming buffer, finalizes response block with `final_message` |
-| `agent_completed` | `handleAgentCompleted` | Flushes buffer, creates response block if needed, sets status="completed", phase="completed", stops timer |
-| `error` | `handleErrorEvent` | Flushes buffer, sets status="error", phase="error", stops timer |
-| `system_message` / `message` | `handleSystemOrMessage` | Creates response block from content |
+The hook subscribes to the WS stream and pipes each `ConversationEvent` through
+`mapGatewayEventToResearchAction()` (event-map) into a `ResearchAction` that the
+reducer applies to `ResearchSessionState` (turns, subagents, intent flags,
+status). Pill events are mapped separately via `mapGatewayEventToPillEvent()`
+and fed to the shared `useStatusPill` aggregator (`features/shared/statusPill`).
 
-### Chat Mode (`/chat` route) — `useFastChat()` hook
+Event coverage at a glance: `agent_started`, `agent_completed`, `agent_stopped`,
+`delegation_started`, `delegation_completed`, `ward_changed`, `thinking`,
+`tool_call`, `tool_result`, `token`, `respond`, `turn_complete`,
+`session_title_changed`, `intent_analysis_started`,
+`intent_analysis_complete`, `intent_analysis_skipped`, `plan_update`,
+`invoke_accepted` / `session_initialized` (session-bound), `error`. See
+`event-map.ts` for the full case list and `reducer.ts` for the action handlers.
 
-File: `apps/ui/src/features/chat/fast-chat-hooks.ts`
+### Chat Mode (`/chat` route) — `useQuickChat()` hook
 
-| Event Type | Handler Function | Description |
-|---|---|---|
-| `invoke_accepted` | `fastHandleInvokeAccepted` | Stores `session_id` |
-| `agent_started` | `fastHandleAgentStarted` | Sets status="running", stores `session_id` |
-| `token` | `fastHandleTokenEvent` | Appends `delta` to streaming buffer (rAF-batched) |
-| `thinking` | `fastHandleThinkingEvent` | Appends thinking content (rAF-batched); also handles `"reasoning"` alias |
-| `tool_call` | `fastHandleToolCallEvent` | Creates tool message (skips `set_session_title` and `respond` tools), maps `tool_call_id` |
-| `tool_result` | `fastHandleToolResultEvent` | Updates tool message with result, tracks error state |
-| `turn_complete` | `fastHandleTurnComplete` | Flushes all buffers, finalizes assistant message |
-| `agent_completed` | `fastHandleAgentCompleted` | Flushes buffers, creates response if needed, sets status="completed", fetches artifacts |
-| `error` | `fastHandleErrorEvent` | Flushes buffers, sets status="error" |
-| `delegation_started` | `fastHandleDelegationStarted` | Creates delegation message with child agent/task |
-| `delegation_completed` | `fastHandleDelegationCompleted` | Updates delegation message with result/status |
+Files: `apps/ui/src/features/chat-v2/event-map.ts`, `apps/ui/src/features/chat-v2/reducer.ts`
 
-### Session Chat Viewer (Logs slide-out)
+Same shape as Research Mode: WS events pass through
+`mapGatewayEventToQuickChatAction()` and get reduced by `reduceQuickChat()` into
+`QuickChatState` (assistant message stream, inline activity chips). Pill state
+is driven by `mapGatewayEventToPillEvent()` feeding the shared `useStatusPill`
+aggregator. Token deltas, respond events, ward changes, session-init events,
+and tool_call dispatches (`delegate_to_agent`, `load_skill`, `memory`) all map
+to actions consumed by the reducer.
 
-File: `apps/ui/src/components/SessionChatViewer.tsx`
+### Past-turn Replay (Research)
 
-| Event Type | Description |
-|---|---|
-| `invoke_accepted` | No-op (break) |
-| `agent_started` | Sets `isProcessing=true`, resets tool counters |
-| `token` | Appends `delta` to last assistant message or creates new |
-| `tool_call` | Rolling tool activity message (counts calls) |
-| `tool_result` | Updates tool activity with truncated result |
-| `delegation_started` | Creates delegation message |
-| `delegation_completed` | Updates delegation message with completion result |
-| `turn_complete` | Filters tool messages, adds `final_message` |
-| `agent_completed` | Sets `isProcessing=false`, reloads from DB |
-| `error` | Sets `isProcessing=false`, reloads from DB |
+Past sessions in `/research` are rendered as a chronological list of
+`SessionTurnBlock` components, hydrated from the `/api/sessions/:id/state` +
+`/api/logs/sessions` + `/api/sessions/:id/messages` snapshot built by
+`features/research-v2/session-snapshot.ts` and dispatched via the reducer's
+`HYDRATE` action. (The previous `apps/ui/src/components/SessionChatViewer.tsx`
+slide-out was deleted in PR #112.)
 
 ### Transport Layer (Internal Routing)
 
@@ -276,5 +256,9 @@ These ServerMessage types are defined in the protocol but not currently consumed
 | `gateway/gateway-execution/src/runner.rs` | Intent analysis events, delegation events |
 | `apps/ui/src/services/transport/http.ts` | WebSocket client, message parsing, event routing |
 | `apps/ui/src/services/transport/types.ts` | Transport type definitions |
-| `apps/ui/src/features/chat/mission-hooks.ts` | Research Mode event handlers (17 events) |
-| `apps/ui/src/features/chat/fast-chat-hooks.ts` | Chat Mode event handlers (11 events) |
+| `apps/ui/src/features/research-v2/event-map.ts` | Research Mode: WS event → reducer action mapper |
+| `apps/ui/src/features/research-v2/reducer.ts` | Research Mode: state reducer (turns, subagents, intent) |
+| `apps/ui/src/features/research-v2/useResearchSession.ts` | Research Mode hook: subscribe + dispatch |
+| `apps/ui/src/features/chat-v2/event-map.ts` | Chat Mode: WS event → reducer action mapper |
+| `apps/ui/src/features/chat-v2/reducer.ts` | Chat Mode: state reducer (assistant stream, chips) |
+| `apps/ui/src/features/chat-v2/useQuickChat.ts` | Chat Mode hook: subscribe + dispatch |

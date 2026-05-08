@@ -1,11 +1,11 @@
-# Chat v2 (`/chat-v2`)
+# Chat v2 (`/chat`)
 
-Ephemeral, single-session, memory-aware chat surface that shares the reserved chat session with legacy `/chat` but uses a cleaner UI built for the Quick Chat workflow.
+Ephemeral, single-session, memory-aware chat surface served at `/chat` (the live route; `/chat-v2` is a legacy bookmark redirect). Built for the Quick Chat workflow.
 
 ## Purpose
 
 - Fast single-turn / few-turn conversations anchored in memory recall.
-- One persistent server-owned session (not per-message). Shares `settings.chat.{sessionId, conversationId}` with `/chat`.
+- One persistent server-owned session (not per-message). Backed by the reserved `settings.chat.{sessionId, conversationId}` slot.
 - Uses `mode=fast` (`SessionMode::Chat`) so sends skip intent-analysis / planning / research delegation — they do NOT pollute Research sessions.
 
 ## Location

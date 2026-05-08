@@ -1,5 +1,7 @@
 # Persistence Layer Tech Debt — Registry & Fix Plan
 
+> **Note (2026-05-03+):** The SurrealDB backend referenced as a future target throughout this doc was implemented in 2026-04-28 and reverted in commit `d823b7bd: chore: remove SurrealDB backend, keep clean trait-routed SQLite`. The trait abstraction work captured below (TD-010, TD-011, TD-012, TD-014, TD-021, TD-022, TD-023, TD-030–033, TD-042) is still load-bearing for the SQLite impl — only the SurrealDB-specific framing is now historical. The phased fix plan that mentions SurrealDB as the destination should be read as "the abstraction shipped; the SurrealDB sidecar did not."
+
 ## Why this doc exists
 
 The medium-term plan is to replace `knowledge.db` (currently SQLite + `sqlite-vec` + FTS5) with **SurrealDB** (memory + knowledge graph in one embedded store). `conversations.db` will stay on SQLite indefinitely.
@@ -140,7 +142,7 @@ Scope tags:
 #### TD-032 ✅ [K] Schema bootstrap is per-impl, idempotent, no cross-version migration in scope
 - **Locations:** `gateway/gateway-database/migrations/{v23_wiki_fts.sql, v24_global_scope_backfill.sql}`, plus inline schema strings in `gateway/gateway-database/src/schema.rs` and `knowledge_schema.rs`.
 - **Resolution direction (per design doc):** Each impl crate has a private `bootstrap_schema()` function called once at startup. SQLite impl runs idempotent `CREATE TABLE IF NOT EXISTS …`. SurrealDB impl runs idempotent `DEFINE TABLE … IF NOT EXISTS`. **No `Migrator` trait in `zero-stores`.** Cross-version data migration and SQLite→SurrealDB data migration are explicitly out of this design's scope — those become a future `zero-stores-migrate` crate when actually needed.
-- **Phase 4 outcome:** Added `stores/zero-stores-sqlite/src/bootstrap.rs` with `bootstrap_schema()` as the canonical hook point for the SQLite backend. Today it delegates to `gateway-database`'s `KnowledgeDatabase::new` (which runs the bootstrap as a constructor side effect) — pattern established without churning 1000+ lines of schema DDL. When SurrealDB lands, its bootstrap mirrors this in `stores/zero-stores-surreal/src/bootstrap.rs`. Full DDL relocation deferred until shapes need to diverge between backends.
+- **Phase 4 outcome:** Added `stores/zero-stores-sqlite/src/bootstrap.rs` with `bootstrap_schema()` as the canonical hook point for the SQLite backend. Today it delegates to `gateway-database`'s `KnowledgeDatabase::new` (which runs the bootstrap as a constructor side effect) — pattern established without churning 1000+ lines of schema DDL. (Historical: a `stores/zero-stores-surreal/src/bootstrap.rs` mirror was implemented in 2026-04-28 and reverted in commit `d823b7bd`; that crate no longer exists. The SQLite-side bootstrap pattern stays load-bearing.) Full DDL relocation deferred until shapes need to diverge between backends.
 - **Status:** ✅ done (Phase 4) — pattern established, full schema relocation deferred until proven necessary
 
 #### TD-033 ✅ [Both] Hardcoded table-name string literals removed from HTTP layer
@@ -201,14 +203,14 @@ Each phase produces value standalone — none of them require finishing the next
 ### Phase 4 — Schema bootstrap per impl (no migration system)
 **Closes:** TD-032
 - Move existing SQLite inline migrations into `zero-stores-sqlite/src/bootstrap.rs` (idempotent `CREATE TABLE IF NOT EXISTS …`).
-- SurrealDB impl ships `zero-stores-surreal/src/bootstrap.rs` (idempotent `DEFINE TABLE … IF NOT EXISTS`).
+- SurrealDB impl ships `zero-stores-surreal/src/bootstrap.rs` (idempotent `DEFINE TABLE … IF NOT EXISTS`). _(Historical: implemented 2026-04-28, reverted in `d823b7bd`. The SQLite-side bootstrap is what remains.)_
 - **No `Migrator` trait in `zero-stores`.** Cross-version migration is explicitly out of scope — when actually needed, build a separate `zero-stores-migrate` crate.
 
 ### Phase 5 — Switch wiring
 **Closes:** TD-023
 - `AppState` fields become `Arc<dyn …>`.
 - `PersistenceFactory::new(config) -> AppStores` reads config and constructs the chosen knowledge-store impl.
-- After this lands, adding SurrealDB is a new crate plus a config switch.
+- After this lands, adding SurrealDB is a new crate plus a config switch. _(Historical: the SurrealDB sidecar crate was added and then reverted in `d823b7bd`; the factory pattern stayed for cleanliness.)_
 
 ### Phase 6 (optional, deferred) — Conversations-side hygiene
 **Closed:** TD-021, TD-022

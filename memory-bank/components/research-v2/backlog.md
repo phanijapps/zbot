@@ -15,13 +15,11 @@ Known gaps and UX items deferred from the R1–R20 ship.
 
 **Data path is intact** — `turn.timeline` has all entries.
 
-### B2. `memory_facts_index` missing causes silent recall degradation
+### B2. `memory_facts_index` missing causes silent recall degradation — RESOLVED
 
-**Cross-reference:** `memory-bank/defects/memory_facts_index_missing.md`.
+Every `memory.recall` tool call used to fail with `no such table: memory_facts_index`. Agents continued but without the recall context. Tool error surfaced once per call in the StatusPill (R14e behaved correctly).
 
-Every `memory.recall` tool call fails with `no such table: memory_facts_index`. Agents continue but without the recall context. Tool error surfaces once per call in the StatusPill (R14e behaves correctly).
-
-**Fix owners:** gateway-database migration or `SqliteVecIndex::new` setup at startup. Not a UI bug.
+Fixed; defect note retired. Kept here only for traceability.
 
 ### B3. E2E mock-LLM test harness
 
@@ -53,19 +51,7 @@ Every `memory.recall` tool call fails with `no such table: memory_facts_index`. 
 
 **Fix:** extend `delete_session_cascade` to also delete rows whose `parent_session_id` matches the target. Needs a second pass or `WHERE session_id = ? OR parent_session_id = ?`. Schema-check before writing.
 
-### B7. Full-project coverage blocked by `WebOpsDashboard.tsx:439`
-
-**Symptom:** `npm run test:coverage` crashes v8 workers with `config.color` on undefined in `tests/integration/dashboard.test.tsx`. Unrelated to research-v2.
-
-**Workaround:** scope the coverage run — `npx vitest run --coverage src/features/research-v2/` emits `coverage/lcov.info` cleanly for SonarQube.
-
-**Fix owners:** ops dashboard maintainer.
-
 ## Low priority / polish
-
-### B8. Retire the old `/` MissionControl page
-
-Both pages coexist today per original brief (parallel, not replacement). Once `/research-v2` has 2–4 weeks of production use and no regressions, retire MissionControl and redirect `/` to `/research-v2`. Check before deletion: `WebChatPanel`, `ChatSlider`, `mission-hooks`, and `fast-chat-hooks` may have transitive consumers.
 
 ### B9. Persist per-subagent expansion state across reloads
 

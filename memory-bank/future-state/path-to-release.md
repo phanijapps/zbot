@@ -1,8 +1,8 @@
 # Path to Release — Cross-Platform Packaging & Distribution
 
 **Date:** 2026-04-27
-**Status:** Plan approved, awaiting implementation
-**Depends on:** Embedded UI (Phase 1), rustls migration (Phase 2)
+**Status:** Partial implementation — Phase 2 (ARM64 + rustls) and Phase 3 (`curl|sh` installer) landed; Phase 1 (embed UI) and Phase 4 (CalVer release.yml) still pending. CalVer scheme has shifted from `vYYYY.MM.DD` (zero-padded) to `vYYYY.M.D` (no zero-padding) per PR #102/#106 — see `2026-05-03-versioning-and-rename-plan.md`. Binary names are now `zbotd`/`zbot` (PR #103/#104/#107).
+**Depends on:** Embedded UI (Phase 1), rustls migration (Phase 2 — done)
 
 ---
 
@@ -11,7 +11,7 @@
 Package zbot as a downloadable, verifiable binary for **Linux (x86_64 + ARM64/Pi 5), macOS (Intel + Apple Silicon), and Windows (x86_64)** with:
 
 - `curl | sh` one-command install
-- CalVer versioning (`vYYYY.MM.DD`)
+- CalVer versioning (`vYYYY.M.D`, no zero-padding)
 - Cryptographic signing and provenance
 - Security scanning (CVE + malware + secrets)
 - Automated license attribution and SBOM
@@ -33,16 +33,16 @@ Package zbot as a downloadable, verifiable binary for **Linux (x86_64 + ARM64/Pi
 | Channel | Source | Version | Trigger |
 |---------|--------|---------|---------|
 | **GHCR Docker** | `main` branch | `latest` + `:sha-<short>` | Every push to `main` |
-| **GitHub Releases** | Git tags (`vYYYY.MM.DD`) | CalVer date stamp | `scripts/release.sh` |
+| **GitHub Releases** | Git tags (`vYYYY.M.D`) | CalVer date stamp | `scripts/release.sh` |
 | **Native install** | GitHub Releases (latest) | Resolved from API | `curl | sh` / PowerShell |
 
 ---
 
 ## 4. Phases
 
-### Phase 1: Embed Frontend in Binary
+### Phase 1: Embed Frontend in Binary [PENDING]
 
-Single binary deployment — eliminate the need for a separate `dist/` directory.
+Single binary deployment — eliminate the need for a separate `dist/` directory. Not yet implemented as of 2026-05-08 — `apps/daemon/Cargo.toml` does not pull in `rust-embed`; only `gateway/gateway-templates/` uses `RustEmbed` for prompt templates.
 
 **Changes:**
 - Add `rust-embed` to `apps/daemon/Cargo.toml` with `embedded-ui` feature
@@ -56,9 +56,9 @@ Single binary deployment — eliminate the need for a separate `dist/` directory
 
 ---
 
-### Phase 2: Add ARM64 Linux + rustls Migration
+### Phase 2: Add ARM64 Linux + rustls Migration [LANDED — PR #90]
 
-Build for 5 targets. Eliminate OpenSSL cross-compilation dependency.
+Build for 5 targets. Eliminate OpenSSL cross-compilation dependency. `rustls` is in `Cargo.lock`; ARM64/Pi packaging shipped in PR #90.
 
 **Changes:**
 - Switch reqwest to `rustls` backend:
@@ -84,15 +84,15 @@ Build for 5 targets. Eliminate OpenSSL cross-compilation dependency.
 
 ---
 
-### Phase 3: `curl | sh` Installer
+### Phase 3: `curl | sh` Installer [LANDED]
 
-One-command install from GitHub Releases.
+One-command install from GitHub Releases. `scripts/install.sh` and `scripts/uninstall.sh` exist; service template substitutes `@@VERSION@@` from `Cargo.toml` per PR A2 (`6a92f91f`). PowerShell installer for Windows is still pending.
 
 **`install.sh`** (Linux / macOS / Pi):
 1. Detect OS (`linux`/`macos`) and architecture (`x86_64`/`aarch64`)
 2. Fetch latest release from `https://api.github.com/repos/phanijapps/zbot/releases/latest`
 3. Download and extract the matching tarball
-4. Install `zerod` + `zero` to `~/.local/bin/`
+4. Install `zbotd` + `zbot` to `~/.local/bin/`
 5. Add `~/.local/bin` to PATH via `.bashrc`/`.zshrc` (idempotent)
 6. Create data directory `~/Documents/zbot/`
 7. Check for Python 3 and Node.js — print warnings if missing
@@ -114,23 +114,23 @@ irm https://raw.githubusercontent.com/phanijapps/zbot/main/install.ps1 | iex
 
 ---
 
-### Phase 4: Release Management (CalVer `vYYYY.MM.DD`)
+### Phase 4: Release Management (CalVer `vYYYY.M.D`) [PENDING — release.sh helper not yet implemented; manual cuts in use]
 
-Version from date, one release per day, Docker handles bleeding edge.
+Version from date, one release per day, Docker handles bleeding edge. CalVer scheme is `YYYY.M.D` with **no zero-padding** (semver forbids leading zeros in numeric identifiers — see `2026-05-03-versioning-and-rename-plan.md`).
 
 **`scripts/release.sh`:**
-1. Generate version: `v$(date +%Y.%m.%d)`
+1. Generate version: `v$(date +%Y.%-m.%-d)` — `%-m`/`%-d` strip leading zeros (GNU date)
 2. Fail if git tag already exists — no same-day releases
-3. Update `version` in `[workspace.package]` of root `Cargo.toml`
-4. Update `version` in `apps/ui/package.json`
+3. Update `version` in `[workspace.package]` of root `Cargo.toml` (`cargo set-version --workspace`)
+4. Update `version` in `apps/ui/package.json` (`npm version --no-git-tag-version`)
 5. Generate `CHANGELOG.md` from `git log LAST_TAG..HEAD --oneline`
-6. Commit: `chore: release vYYYY.MM.DD`
-7. Tag: `git tag -a vYYYY.MM.DD -m "Release vYYYY.MM.DD"`
+6. Commit: `release: YYYY.M.D`
+7. Tag: `git tag -a vYYYY.M.D -m "Release YYYY.M.D"`
 8. Push tag → triggers `release.yml`
 
 **Flags:**
 - `--dry-run` — show what would happen without making changes
-- `--version v2026.04.25-2` — manual override for same-day exceptional releases
+- `--version v2026.5.4` — manual override for same-day exceptional releases (bump the day)
 
 **Files created:** `scripts/release.sh`, `CHANGELOG.md`
 
@@ -186,11 +186,11 @@ All binaries are:
 - Attested with SLSA provenance (built by GitHub Actions from source)
 
 Verify a binary:
-  cosign verify-blob --certificate zerod.sig \
-    --signature zerod.sig \
+  cosign verify-blob --certificate zbotd.sig \
+    --signature zbotd.sig \
     --certificate-identity https://github.com/phanijapps/zbot/.github/workflows/release.yml \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    zerod
+    zbotd
 ```
 
 **Files modified:** `.github/workflows/security.yaml`, `.github/workflows/test.yml`
@@ -209,7 +209,7 @@ Automated license attribution, shipped with every release.
 **CI step in `release.yml`:**
 - `cargo about generate about.hbs -o THIRD-PARTY-LICENSES.html` — Rust dependency licenses
 - `npx license-checker --json > npm-licenses.json` — Node dependency licenses
-- Include both in release tarball alongside `zerod`, `zero`, `README.md`, `VERSION`, `LICENSE`
+- Include both in release tarball alongside `zbotd`, `zbot`, `README.md`, `VERSION`, `LICENSE`
 
 **SBOM generation:**
 - Rust: `cargo cyclonedx` → `bom.cdx.json`
@@ -282,7 +282,7 @@ Push to main:
   security.yaml       audit + deny + clippy + gitleaks + npm audit + CodeQL
   docker.yml          build image → Trivy scan → push GHCR (:latest, :sha)
 
-Push tag vYYYY.MM.DD:
+Push tag vYYYY.M.D:
   release.yml
     ├── Security gate (cargo audit + cargo deny)
     ├── Build frontend (once, share as artifact)
@@ -305,8 +305,8 @@ Weekly schedule:
 Each release tarball/zip contains:
 
 ```
-zerod                          # Daemon binary
-zero                           # CLI binary (not on Windows if TUI issues)
+zbotd                          # Daemon binary
+zbot                           # CLI binary (not on Windows if TUI issues)
 README.md                      # Project readme
 LICENSE                        # MIT license
 VERSION                        # CalVer tag string
