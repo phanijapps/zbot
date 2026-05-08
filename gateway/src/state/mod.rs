@@ -3,6 +3,7 @@
 //! Shared state for the gateway application.
 
 pub(crate) mod persistence_factory;
+mod seeded_defaults;
 
 use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
@@ -1415,10 +1416,11 @@ impl AppState {
 
     /// Seed default cron jobs from bundled `default_cron.json` template.
     ///
-    /// Idempotent: any job whose `id` already exists on disk is left
-    /// alone, so users can edit or delete the seeded jobs without them
-    /// reappearing on every restart (until they delete and we re-seed
-    /// after that — same property the agent seeder has).
+    /// Each ID is seeded **at most once per vault**: the first time we see
+    /// it, we create the job (or migrate a pre-existing one) and record the
+    /// ID in `<vault>/config/seeded_defaults.json`. Subsequent boots skip
+    /// any ID already in the registry, so deletes the user makes through
+    /// the UI stick across daemon restarts.
     async fn seed_default_cron(&self) {
         let template_bytes = match gateway_templates::Templates::get("default_cron.json") {
             Some(file) => file.data.to_vec(),
@@ -1445,31 +1447,8 @@ impl AppState {
         }
 
         let cron_service = gateway_cron::CronService::new(self.paths.clone());
-        let mut seeded = 0usize;
-        for request in requests {
-            if cron_service.get(&request.id).await.is_ok() {
-                tracing::debug!(
-                    job_id = %request.id,
-                    "seed_default_cron: job already exists, skipping"
-                );
-                continue;
-            }
-
-            let job_id = request.id.clone();
-            match cron_service.create(request).await {
-                Ok(_) => {
-                    seeded += 1;
-                    tracing::info!(job_id = %job_id, "Seeded default cron job");
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        job_id = %job_id,
-                        error = %e,
-                        "seed_default_cron: failed to create job"
-                    );
-                }
-            }
-        }
+        let seeded =
+            seeded_defaults::seed_cron_with_registry(&self.paths, &cron_service, requests).await;
 
         if seeded > 0 {
             tracing::info!(seeded, "seed_default_cron: completed");
