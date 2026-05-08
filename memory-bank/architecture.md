@@ -21,14 +21,15 @@
 ├─────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────────────────────────────────────────────┐    │
 │  │                         GATEWAY                                  │    │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │    │
-│  │  │  HTTP API   │  │  WebSocket  │  │   Static    │              │    │
-│  │  │   :18791    │  │   :18790    │  │   Files     │              │    │
-│  │  │   (Axum)    │  │  (tokio-    │  │  (tower)    │              │    │
-│  │  │             │  │  tungstenite)│  │             │              │    │
-│  │  └──────┬──────┘  └──────┬──────┘  └─────────────┘              │    │
-│  │         │                │                                       │    │
-│  │         └────────┬───────┘                                       │    │
+│  │  ┌──────────────────────────┐   ┌─────────────┐                  │    │
+│  │  │   HTTP + WebSocket       │   │   Static    │                  │    │
+│  │  │   :18791                 │   │   Files     │                  │    │
+│  │  │   (Axum + axum-ws)       │   │  (tower)    │                  │    │
+│  │  │   `/ws` upgrade route    │   │             │                  │    │
+│  │  └──────────────┬───────────┘   └─────────────┘                  │    │
+│  │                 │                                                 │    │
+│  │                 │   (legacy standalone WS :18790, off by default; │    │
+│  │                 │    flip `legacy_ws_port_enabled` to bind it)    │    │
 │  │                  │                                               │    │
 │  │         ┌────────┴────────┐                                      │    │
 │  │         │    Event Bus    │ ◄─── Broadcast streaming events      │    │
@@ -996,7 +997,9 @@ User Message
 | GET | `/api/gateway/status/:session_id` | Get session status |
 | POST | `/api/gateway/cancel/:session_id` | Cancel running session |
 
-### WebSocket Protocol (port 18790)
+### WebSocket Protocol (`ws://host:18791/ws`)
+
+Served on the HTTP port via the `/ws` upgrade route — no second firewall hole. A legacy standalone WebSocket bind on port 18790 still exists for external integrations that hardcoded `ws://host:18790`; it is **off by default** and lit by setting `legacy_ws_port_enabled: true` in `gateway/src/config.rs`. Slated for removal.
 
 **Client Commands:**
 ```typescript

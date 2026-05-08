@@ -529,17 +529,19 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 
 COPY --from=builder /app/target/release/zbotd /usr/local/bin/
 
-EXPOSE 18791 18790
+EXPOSE 18791
 
 CMD ["zbotd"]
 ```
 
 ```bash
 docker build -t zbot:latest .
-docker run -p 18791:18791 -p 18790:18790 \
+docker run -p 18791:18791 \
   -v ~/Documents/zbot:/root/Documents/zbot \
   zbot:latest
 ```
+
+> WebSocket traffic shares the HTTP port at `/ws`. The legacy standalone WebSocket port (18790) is off by default; if you need it for old integrations, also `EXPOSE 18790` and add `-p 18790:18790` to the `docker run` line.
 
 ---
 
