@@ -31,6 +31,7 @@ use crate::bus::{GatewayBus, SessionRequest};
 use execution_state::TriggerSource;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Mutex, RwLock};
 use tokio_cron_scheduler::{Job, JobScheduler, JobSchedulerError};
 use tracing::{debug, error, info, warn};
@@ -58,6 +59,11 @@ pub struct CronScheduler {
     scheduler: Mutex<JobScheduler>,
     /// Maps job ID to scheduler UUID for management
     job_uuids: RwLock<HashMap<String, Uuid>>,
+    /// Per-job cancel flag captured by the scheduled closure. Set on
+    /// unschedule so a tick that fires while delete is in flight (or that
+    /// was already queued by `tokio-cron-scheduler`'s 500ms tick loop)
+    /// returns without submitting a new session.
+    job_cancels: RwLock<HashMap<String, Arc<AtomicBool>>>,
     /// Gateway bus for submitting sessions
     bus: Arc<dyn GatewayBus>,
 }
@@ -74,6 +80,7 @@ impl CronScheduler {
             service,
             scheduler: Mutex::new(scheduler),
             job_uuids: RwLock::new(HashMap::new()),
+            job_cancels: RwLock::new(HashMap::new()),
             bus,
         })
     }
@@ -131,6 +138,11 @@ impl CronScheduler {
         let respond_to = job_config.respond_to.clone();
         let bus = self.bus.clone();
         let service = self.service.clone();
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        self.job_cancels
+            .write()
+            .await
+            .insert(job_id.clone(), cancel_flag.clone());
 
         debug!(
             job_id = %job_id,
@@ -146,8 +158,17 @@ impl CronScheduler {
             let respond_to = respond_to.clone();
             let bus = bus.clone();
             let service = service.clone();
+            let cancel_flag = cancel_flag.clone();
 
             Box::pin(async move {
+                if cancel_flag.load(Ordering::Acquire) {
+                    debug!(
+                        job_id = %job_id,
+                        "Cron tick fired but job is cancelled; skipping submission"
+                    );
+                    return;
+                }
+
                 let target_agent = resolve_cron_agent_id(&agent_id).to_string();
                 info!(
                     job_id = %job_id,
@@ -212,13 +233,32 @@ impl CronScheduler {
     }
 
     /// Unschedule a job.
+    ///
+    /// Flips the per-job cancel flag first so any tick already queued by
+    /// `tokio-cron-scheduler`'s 500ms tick loop short-circuits without
+    /// submitting a session, then removes the job from the live scheduler
+    /// and the UUID map. Logs a `warn` (not silent success) if the UUID is
+    /// missing — that means the live scheduler may still hold the job and
+    /// we want it visible in logs rather than masked.
     async fn unschedule_job(&self, job_id: &str) -> Result<(), CronSchedulerError> {
+        if let Some(flag) = self.job_cancels.write().await.remove(job_id) {
+            flag.store(true, Ordering::Release);
+        }
+
         let uuid = self.job_uuids.write().await.remove(job_id);
 
-        if let Some(uuid) = uuid {
-            let scheduler = self.scheduler.lock().await;
-            scheduler.remove(&uuid).await?;
-            info!(job_id = %job_id, "Cron job unscheduled");
+        match uuid {
+            Some(uuid) => {
+                let scheduler = self.scheduler.lock().await;
+                scheduler.remove(&uuid).await?;
+                info!(job_id = %job_id, "Cron job unscheduled");
+            }
+            None => {
+                warn!(
+                    job_id = %job_id,
+                    "unschedule_job: no UUID found in job_uuids; live scheduler entry may be orphaned"
+                );
+            }
         }
 
         Ok(())
@@ -432,5 +472,205 @@ mod tests {
         assert_eq!(cleanup.agent_id, "general-purpose");
         assert_eq!(cleanup.schedule, "0 0 */4 * * *");
         assert!(cleanup.enabled);
+    }
+
+    mod scheduler {
+        use super::super::*;
+        use crate::bus::{GatewayBus, SessionRequest};
+        use async_trait::async_trait;
+        use execution_state::SessionStatus;
+        use gateway_bus::{BusError, SessionHandle};
+        use gateway_cron::{CreateCronJobRequest, CronJobConfig, CronService};
+        use gateway_services::VaultPaths;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tempfile::TempDir;
+
+        /// Test bus that records `submit` calls without doing real work.
+        struct CountingBus {
+            calls: AtomicUsize,
+        }
+
+        impl CountingBus {
+            fn new() -> Arc<Self> {
+                Arc::new(Self {
+                    calls: AtomicUsize::new(0),
+                })
+            }
+        }
+
+        #[async_trait]
+        impl GatewayBus for CountingBus {
+            async fn submit(&self, _request: SessionRequest) -> Result<SessionHandle, BusError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(SessionHandle::new(
+                    "sess-test".to_string(),
+                    "exec-test".to_string(),
+                    "conv-test".to_string(),
+                ))
+            }
+            async fn status(&self, _session_id: &str) -> Result<SessionStatus, BusError> {
+                Err(BusError::SessionNotFound("test".to_string()))
+            }
+            async fn cancel(&self, _session_id: &str) -> Result<(), BusError> {
+                Ok(())
+            }
+            async fn pause(&self, _session_id: &str) -> Result<(), BusError> {
+                Ok(())
+            }
+            async fn resume(&self, _session_id: &str) -> Result<(), BusError> {
+                Ok(())
+            }
+        }
+
+        async fn build_scheduler() -> (CronScheduler, Arc<CountingBus>, TempDir) {
+            let temp = TempDir::new().unwrap();
+            let paths = Arc::new(VaultPaths::new(temp.path().to_path_buf()));
+            let service = CronService::new(paths);
+            let bus = CountingBus::new();
+            let scheduler = CronScheduler::new(service, bus.clone()).await.unwrap();
+            (scheduler, bus, temp)
+        }
+
+        fn sample_config(id: &str) -> CronJobConfig {
+            CronJobConfig {
+                id: id.to_string(),
+                name: format!("{id} display"),
+                schedule: "0 0 */4 * * *".to_string(),
+                agent_id: "general-purpose".to_string(),
+                message: "noop".to_string(),
+                respond_to: vec![],
+                enabled: true,
+                timezone: None,
+                metadata: None,
+                last_run: None,
+                next_run: None,
+                created_at: None,
+                updated_at: None,
+            }
+        }
+
+        #[tokio::test]
+        async fn schedule_populates_uuid_and_cancel_maps() {
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            scheduler.schedule_job(&sample_config("j1")).await.unwrap();
+
+            assert!(scheduler.job_uuids.read().await.contains_key("j1"));
+            assert!(scheduler.job_cancels.read().await.contains_key("j1"));
+        }
+
+        #[tokio::test]
+        async fn unschedule_sets_cancel_flag_and_clears_maps() {
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            scheduler.schedule_job(&sample_config("j1")).await.unwrap();
+
+            // Snapshot the cancel flag before unscheduling so we can verify
+            // it was flipped (the entry itself is removed from the map).
+            let cancel_arc = scheduler
+                .job_cancels
+                .read()
+                .await
+                .get("j1")
+                .cloned()
+                .expect("cancel flag present after schedule");
+            assert!(!cancel_arc.load(Ordering::Acquire));
+
+            scheduler.unschedule_job("j1").await.unwrap();
+
+            assert!(
+                cancel_arc.load(Ordering::Acquire),
+                "cancel flag must be set so a queued tick short-circuits"
+            );
+            assert!(!scheduler.job_uuids.read().await.contains_key("j1"));
+            assert!(!scheduler.job_cancels.read().await.contains_key("j1"));
+        }
+
+        #[tokio::test]
+        async fn unschedule_unknown_id_is_ok() {
+            // Returns Ok even when the id was never scheduled — but emits a
+            // warn (covered by tracing tests in the wider workspace, not
+            // here). The caller's invariant is just "did delete succeed".
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            scheduler.unschedule_job("missing").await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn delete_job_unschedules_then_removes_from_disk() {
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            let request = CreateCronJobRequest {
+                id: "j1".to_string(),
+                name: "j1".to_string(),
+                schedule: "0 0 */4 * * *".to_string(),
+                agent_id: "general-purpose".to_string(),
+                message: "noop".to_string(),
+                respond_to: vec![],
+                enabled: true,
+                timezone: None,
+                metadata: None,
+            };
+            let job = scheduler.create_job(request).await.unwrap();
+            assert_eq!(job.id, "j1");
+
+            let cancel_arc = scheduler
+                .job_cancels
+                .read()
+                .await
+                .get("j1")
+                .cloned()
+                .expect("cancel flag set on create");
+
+            scheduler.delete_job("j1").await.unwrap();
+
+            assert!(cancel_arc.load(Ordering::Acquire));
+            assert!(!scheduler.job_uuids.read().await.contains_key("j1"));
+            assert!(!scheduler.job_cancels.read().await.contains_key("j1"));
+            assert!(scheduler.get_job("j1").await.is_err());
+        }
+
+        #[tokio::test]
+        async fn reschedule_replaces_cancel_flag() {
+            // After update→reschedule, the closure for the old schedule
+            // must see a cancelled flag (so any in-flight tick is dropped),
+            // and the new closure must hold a fresh, un-cancelled flag.
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            let request = CreateCronJobRequest {
+                id: "j1".to_string(),
+                name: "j1".to_string(),
+                schedule: "0 0 */4 * * *".to_string(),
+                agent_id: "general-purpose".to_string(),
+                message: "noop".to_string(),
+                respond_to: vec![],
+                enabled: true,
+                timezone: None,
+                metadata: None,
+            };
+            scheduler.create_job(request).await.unwrap();
+            let original = scheduler
+                .job_cancels
+                .read()
+                .await
+                .get("j1")
+                .cloned()
+                .unwrap();
+
+            scheduler.reschedule_job("j1").await.unwrap();
+
+            let replacement = scheduler
+                .job_cancels
+                .read()
+                .await
+                .get("j1")
+                .cloned()
+                .unwrap();
+            assert!(
+                original.load(Ordering::Acquire),
+                "old cancel flag must fire so queued ticks abort"
+            );
+            assert!(
+                !replacement.load(Ordering::Acquire),
+                "new cancel flag must start un-cancelled"
+            );
+            assert!(!Arc::ptr_eq(&original, &replacement));
+        }
     }
 }
