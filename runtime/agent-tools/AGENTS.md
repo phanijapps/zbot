@@ -80,7 +80,6 @@ Tools receive `ToolContext` which provides:
 - `get_state("ward_id")` — Current code ward (set by ward tool)
 - `get_state("session_id")` — Current session ID
 - `get_state("app:agent_id")` — Current agent ID
-- `get_state("workspace")` — Workspace context from shared memory
 - `get_state("available_agents")` — For list_agents tool
 - `get_state("available_skills")` — For list_skills tool
 

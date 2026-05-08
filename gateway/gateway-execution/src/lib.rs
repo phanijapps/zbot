@@ -56,7 +56,6 @@ pub use delegation::{
 pub use distillation::SessionDistiller;
 pub use events::convert_stream_event;
 pub use handle::ExecutionHandle;
-pub use invoke::{new_workspace_cache, WorkspaceCache};
 pub use lifecycle::{
     complete_execution, crash_execution, emit_agent_started, emit_delegation_completed,
     emit_delegation_started, get_or_create_session, start_execution, stop_execution, SessionSetup,

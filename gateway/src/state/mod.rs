@@ -9,8 +9,7 @@ use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
 use crate::events::EventBus;
 use crate::execution::{
-    new_workspace_cache, DelegationRegistry, MemoryRecall, SessionArchiver, SessionDistiller,
-    WorkspaceCache,
+    DelegationRegistry, MemoryRecall, SessionArchiver, SessionDistiller,
 };
 use crate::hooks::HookRegistry;
 use crate::services::{
@@ -18,13 +17,9 @@ use crate::services::{
     SharedVaultPaths, SkillService, VaultPaths,
 };
 use agent_runtime::llm::EmbeddingClient;
-use agent_tools::MemoryEntry;
-use agent_tools::MemoryStore;
 use api_logs::LogService;
-use chrono::Utc;
 use execution_state::StateService;
 use gateway_services::EmbeddingService;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use zero_stores_sqlite::kg::service::GraphService;
@@ -176,9 +171,6 @@ pub struct AppState {
     /// Embedding service — owns live EmbeddingClient, supports backend swap.
     pub embedding_service: Arc<EmbeddingService>,
 
-    /// Cached workspace context (shared with ExecutionRunner).
-    workspace_cache: WorkspaceCache,
-
     /// Vault paths for accessing configuration and data directories.
     pub paths: SharedVaultPaths,
 
@@ -282,9 +274,6 @@ impl AppState {
         // Create connector registry
         let connector_service = ConnectorService::new(paths.clone());
         let connector_registry = Arc::new(ConnectorRegistry::new(connector_service));
-
-        // Create workspace cache (shared between AppState and ExecutionRunner)
-        let workspace_cache = new_workspace_cache();
 
         // Create bridge registry and outbox for WebSocket workers
         let bridge_registry = Arc::new(gateway_bridge::BridgeRegistry::new());
@@ -712,7 +701,6 @@ impl AppState {
             log_service.clone(),
             state_service.clone(),
             Some(connector_registry.clone()),
-            workspace_cache.clone(),
             memory_store.clone(),
             distiller,
             memory_recall,
@@ -890,7 +878,6 @@ impl AppState {
             plugin_manager,
             model_registry,
             embedding_service,
-            workspace_cache,
             paths,
             config_dir,
             memory_store,
@@ -1028,7 +1015,6 @@ impl AppState {
                     .expect("default EmbeddingService must build"),
             ),
             plugin_manager,
-            workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
             memory_store,
@@ -1166,7 +1152,6 @@ impl AppState {
                     .expect("default EmbeddingService must build"),
             ),
             plugin_manager,
-            workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
             memory_store,
@@ -1578,15 +1563,14 @@ impl AppState {
         );
     }
 
-    /// Ensure Python venv and Node.js environment exist, then seed workspace memory.
+    /// Ensure Python venv and Node.js environment exist.
     async fn ensure_runtime_environments(&self) {
         // Create wards directory structure
         self.ensure_wards_dir();
 
-        let venv_ok = self.ensure_python_venv().await;
-        let node_ok = self.ensure_node_env();
-        self.seed_workspace_env_status(venv_ok, node_ok);
-        self.populate_workspace_cache().await;
+        // Side-effects: create .venv / .node_env directories used by the shell tool.
+        let _ = self.ensure_python_venv().await;
+        let _ = self.ensure_node_env();
     }
 
     /// Create the wards directory with scratch ward + wiki vault ward.
@@ -1727,40 +1711,6 @@ impl AppState {
         tracing::info!("Wiki vault ward ready at {}", wiki_dir.display());
     }
 
-    /// Populate the in-memory workspace cache from workspace.json.
-    ///
-    /// This is called once at startup after seeding. The same Arc is shared
-    /// with ExecutionRunner, so all executors see the cached data without
-    /// reading from disk on every invocation.
-    async fn populate_workspace_cache(&self) {
-        let workspace_path = self.paths.ward_dir("shared").join("workspace.json");
-
-        let workspace = match std::fs::read_to_string(&workspace_path) {
-            Ok(content) => match serde_json::from_str::<MemoryStore>(&content) {
-                Ok(store) => {
-                    let map: HashMap<String, serde_json::Value> = store
-                        .entries
-                        .iter()
-                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.value.clone())))
-                        .collect();
-                    if map.is_empty() {
-                        None
-                    } else {
-                        Some(map)
-                    }
-                }
-                Err(_) => None,
-            },
-            Err(_) => None,
-        };
-
-        if let Some(ws) = workspace {
-            let count = ws.len();
-            *self.workspace_cache.write().await = Some(ws);
-            tracing::info!("Populated workspace cache with {} entries", count);
-        }
-    }
-
     /// Create Python venv at `{config_dir}/wards/.venv` if it doesn't exist.
     /// Falls back to legacy `{config_dir}/venv` if it exists there.
     /// Returns true if the venv exists (either already existed or was created).
@@ -1845,99 +1795,4 @@ impl AppState {
         true
     }
 
-    /// Seed workspace.json with python_env and node_env status.
-    /// Only writes entries that don't already exist (preserves user state).
-    /// Uses the same MemoryStore type as the memory tool to avoid format mismatch.
-    fn seed_workspace_env_status(&self, venv_ok: bool, node_ok: bool) {
-        let workspace_path = self.paths.ward_dir("shared").join("workspace.json");
-
-        // Ensure parent directory exists
-        if let Some(parent) = workspace_path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                tracing::warn!("Failed to create workspace directory: {}", e);
-                return;
-            }
-        }
-
-        // Load existing store using the same type as the memory tool
-        let mut store: MemoryStore = if let Ok(content) = std::fs::read_to_string(&workspace_path) {
-            serde_json::from_str(&content).unwrap_or_default()
-        } else {
-            MemoryStore::default()
-        };
-
-        let now = Utc::now().to_rfc3339();
-
-        // Seed python_env if not already present
-        if !store.entries.contains_key("python_env") {
-            store.entries.insert(
-                "python_env".to_string(),
-                self.build_python_env_entry(venv_ok, &now),
-            );
-        }
-
-        // Seed node_env if not already present
-        if !store.entries.contains_key("node_env") {
-            let node_env_dir = self.config_dir.join("node_env");
-            let node_modules = node_env_dir.join("node_modules");
-
-            let value = serde_json::json!({
-                "exists": node_ok,
-                "env_path": node_env_dir.display().to_string(),
-                "node_modules": node_modules.display().to_string(),
-            });
-
-            store.entries.insert(
-                "node_env".to_string(),
-                MemoryEntry {
-                    value: value.to_string(),
-                    tags: vec!["system".to_string(), "node".to_string(), "env".to_string()],
-                    created_at: now.clone(),
-                    updated_at: now,
-                },
-            );
-        }
-
-        // Write back using the same format as the memory tool
-        match serde_json::to_string_pretty(&store) {
-            Ok(content) => {
-                if let Err(e) = std::fs::write(&workspace_path, content) {
-                    tracing::warn!("Failed to write workspace.json: {}", e);
-                } else {
-                    tracing::info!("Seeded workspace.json with environment status");
-                }
-            }
-            Err(e) => tracing::warn!("Failed to serialize workspace.json: {}", e),
-        }
-    }
-
-    fn build_python_env_entry(&self, venv_ok: bool, now: &str) -> MemoryEntry {
-        let venv_path = self.config_dir.join("venv");
-        let python_exe = if cfg!(windows) {
-            venv_path.join("Scripts").join("python.exe")
-        } else {
-            venv_path.join("bin").join("python")
-        };
-        let pip_exe = if cfg!(windows) {
-            venv_path.join("Scripts").join("pip.exe")
-        } else {
-            venv_path.join("bin").join("pip")
-        };
-        let value = serde_json::json!({
-            "exists": venv_ok,
-            "venv_path": venv_path.display().to_string(),
-            "executable": python_exe.display().to_string(),
-            "pip": pip_exe.display().to_string(),
-        });
-        MemoryEntry {
-            value: value.to_string(),
-            tags: vec![
-                "system".to_string(),
-                "python".to_string(),
-                "env".to_string(),
-            ],
-            created_at: now.to_string(),
-            updated_at: now.to_string(),
-        }
-    }
 }

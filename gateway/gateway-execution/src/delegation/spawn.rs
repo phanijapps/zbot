@@ -22,7 +22,7 @@ use crate::handle::ExecutionHandle;
 use crate::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, detect_subagent_role,
     process_stream_event, spawn_batch_writer_with_repo, subagent_rules, AgentLoader,
-    ExecutorBuilder, ResponseAccumulator, StreamContext, WorkspaceCache,
+    ExecutorBuilder, ResponseAccumulator, StreamContext,
 };
 use crate::lifecycle::{
     complete_execution, crash_execution, emit_delegation_completed, emit_delegation_started,
@@ -57,7 +57,6 @@ pub async fn spawn_delegated_agent(
     delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
     log_service: Arc<LogService<DatabaseManager>>,
     state_service: Arc<StateService<DatabaseManager>>,
-    workspace_cache: WorkspaceCache,
     delegation_permit: Option<OwnedSemaphorePermit>,
     memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     distiller: Option<Arc<crate::distillation::SessionDistiller>>,
@@ -279,7 +278,6 @@ pub async fn spawn_delegated_agent(
 
     // Build executor using ExecutorBuilder
     let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
-        .with_workspace_cache(workspace_cache)
         .with_model_registry(model_registry)
         .with_delegated(true);
 

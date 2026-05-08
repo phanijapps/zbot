@@ -33,7 +33,7 @@ pub use crate::handle::ExecutionHandle;
 use crate::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
     spawn_batch_writer_with_repo, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
-    ToolCallAccumulator, WorkspaceCache,
+    ToolCallAccumulator,
 };
 use crate::lifecycle::{
     complete_execution, crash_execution, emit_agent_started, stop_execution, CompleteExecution,
@@ -82,8 +82,6 @@ pub struct ExecutionRunner {
     bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
     /// Bridge outbox for reliable message delivery
     bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
-    /// Cached workspace context (avoids reading workspace.json per execution)
-    workspace_cache: WorkspaceCache,
     /// Trait-routed memory store.
     memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     /// Session distiller for automatic fact extraction after sessions
@@ -151,7 +149,6 @@ pub struct ExecutionRunnerConfig {
 
     // --- Optional integrations ---
     pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
-    pub workspace_cache: WorkspaceCache,
     /// Trait-routed memory store — wired.
     pub memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub distiller: Option<Arc<crate::distillation::SessionDistiller>>,
@@ -186,7 +183,6 @@ pub(super) struct ContinuationArgs<'a> {
     pub(super) delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
     pub(super) log_service: Arc<LogService<DatabaseManager>>,
     pub(super) state_service: Arc<StateService<DatabaseManager>>,
-    pub(super) workspace_cache: WorkspaceCache,
     pub(super) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub(super) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     pub(super) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
@@ -372,7 +368,6 @@ impl ExecutionRunner {
             log_service,
             state_service,
             connector_registry,
-            workspace_cache,
             memory_store,
             distiller,
             memory_recall,
@@ -423,7 +418,6 @@ impl ExecutionRunner {
             goal_adapter: None,
             event_bus: event_bus.clone(),
             handles: handles.clone(),
-            workspace_cache: workspace_cache.clone(),
         };
 
         let runner = Self {
@@ -442,7 +436,6 @@ impl ExecutionRunner {
             connector_registry,
             bridge_registry,
             bridge_outbox,
-            workspace_cache,
             memory_store,
             distiller,
             memory_recall,
@@ -538,7 +531,6 @@ impl ExecutionRunner {
             delegation_tx: self.delegation_tx.clone(),
             log_service: self.log_service.clone(),
             state_service: self.state_service.clone(),
-            workspace_cache: self.workspace_cache.clone(),
             memory_store: self.memory_store.clone(),
             embedding_client: self.embedding_client.clone(),
             distiller: self.distiller.clone(),
@@ -572,7 +564,6 @@ impl ExecutionRunner {
             delegation_tx: self.delegation_tx.clone(),
             log_service: self.log_service.clone(),
             state_service: self.state_service.clone(),
-            workspace_cache: self.workspace_cache.clone(),
             memory_store: self.memory_store.clone(),
             distiller: self.distiller.clone(),
             memory_recall: self.memory_recall.clone(),
@@ -872,7 +863,6 @@ impl ExecutionRunner {
             self.delegation_tx.clone(),
             self.log_service.clone(),
             self.state_service.clone(),
-            self.workspace_cache.clone(),
             None, // No delegation permit needed for resume
             self.memory_store.clone(),
             self.distiller.clone(),
@@ -1051,7 +1041,6 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         delegation_tx,
         log_service,
         state_service,
-        workspace_cache,
         memory_store,
         embedding_client: _embedding_client,
         distiller,
@@ -1155,8 +1144,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
     // the runtime no longer rewrites them before continuation.
 
     // Build executor
-    let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
-        .with_workspace_cache(workspace_cache);
+    let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings);
     if let Some(registry) = model_registry {
         builder = builder.with_model_registry(registry);
     }

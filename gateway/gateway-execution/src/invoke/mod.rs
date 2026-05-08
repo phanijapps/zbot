@@ -18,8 +18,7 @@ pub mod working_memory_middleware;
 
 pub use batch_writer::{BatchWriterHandle, spawn_batch_writer, spawn_batch_writer_with_repo};
 pub use executor::{
-    ExecutorBuilder, WorkspaceCache, collect_agents_summary, collect_skills_summary,
-    new_workspace_cache, resolve_thinking_flag,
+    ExecutorBuilder, collect_agents_summary, collect_skills_summary, resolve_thinking_flag,
 };
 pub use micro_recall::{
     MicroRecallContext, MicroRecallTrigger, detect_triggers, execute_micro_recall,
