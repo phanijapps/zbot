@@ -3,13 +3,18 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { SessionsList, groupSessions } from "./SessionsList";
 import type { SessionSummary } from "./types";
 
-const now = Date.now();
 const ONE_DAY = 24 * 60 * 60 * 1000;
+const now = Date.now();
+// Compute local midnight the same way groupSessions does so fixture dates
+// land in the right bucket regardless of timezone or time-of-day.
+const _today = new Date(now);
+_today.setHours(0, 0, 0, 0);
+const startOfTodayMs = _today.getTime();
 
 const fixture: SessionSummary[] = [
   { id: "s1", title: "Running one",   status: "running",  wardName: "stock-analysis", updatedAt: now - 1000 },
-  { id: "s2", title: "Today done",    status: "complete", wardName: "stock-analysis", updatedAt: now - 30 * 60 * 1000 },
-  { id: "s3", title: "Yesterday",     status: "complete", wardName: "maritime",       updatedAt: now - 1.5 * ONE_DAY },
+  { id: "s2", title: "Today done",    status: "complete", wardName: "stock-analysis", updatedAt: startOfTodayMs + 30 * 60 * 1000 },
+  { id: "s3", title: "Yesterday",     status: "complete", wardName: "maritime",       updatedAt: startOfTodayMs - 12 * 60 * 60 * 1000 },
   { id: "s4", title: "Last week",     status: "complete", wardName: null,             updatedAt: now - 5 * ONE_DAY },
   { id: "s5", title: "Older",         status: "crashed",  wardName: null,             updatedAt: now - 30 * ONE_DAY },
 ];
