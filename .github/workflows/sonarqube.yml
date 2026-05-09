@@ -24,7 +24,20 @@ jobs:
         run: cargo llvm-cov --version || cargo install cargo-llvm-cov --locked
 
       - name: Generate Rust coverage (LCOV)
-        run: cargo llvm-cov --workspace --lcov --output-path rust-lcov.info
+        # Excludes: agent-runtime MCP transports (stdio/http/sse/manager) drive real
+        # subprocesses and HTTP — only covered by integration tests, not unit tests.
+        # logging.rs registers a global tracing subscriber and is not unit-testable.
+        # Gateway excludes: server.rs (daemon bootstrap), services/runtime.rs
+        # (full AppState wiring), websocket/** (real-client lifecycle), and the
+        # thin axum HTTP handler files (http/{artifacts,bridge,chat,…}.rs)
+        # whose business logic lives in the services they delegate to. End-to-
+        # end coverage for those handlers comes from gateway/tests/api_tests.rs
+        # and friends, not per-handler unit tests.
+        # Same regex is mirrored in `.github/workflows/test.yml` and
+        # `sonar-project.properties` (sonar.coverage.exclusions).
+        run: |
+          cargo llvm-cov --workspace --lcov --output-path rust-lcov.info \
+            --ignore-filename-regex '(runtime/agent-runtime/src/(mcp/(stdio|http|sse|manager)\.rs|logging\.rs)|gateway/src/(server\.rs|services/runtime\.rs|websocket/.*\.rs|http/(artifacts|bridge|chat|connectors|cron|embeddings|events|graph|ingest|mcps|memory|models|network|openapi|plugins|providers|sessions|settings|setup|skills|tools|upload|ward_actions|webhooks)\.rs))'
 
       - name: Install UI dependencies
         working-directory: apps/ui
