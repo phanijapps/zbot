@@ -2,7 +2,7 @@ name: SonarQube Analysis
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
 
 jobs:
   sonarqube:
@@ -30,12 +30,13 @@ jobs:
         working-directory: apps/ui
         run: npm ci
 
-      # 24 pre-existing UI test failures live in dashboard.test.tsx,
-      # http.test.ts, and SessionsList.test.tsx (tracked in
-      # memory-bank/defects/ui_test_suite_broken_on_main.md). Vitest emits
-      # coverage for the passing tests regardless (via reportOnFailure: true
-      # in vitest.config.ts), but the process exits 1 — `continue-on-error`
-      # keeps the Sonar scan from being skipped. Remove once the defect is fixed.
+      # A small set of UI tests is still flaky/broken (currently
+      # App.test.tsx connection-pill assertion and a Connector-Inbound-Log
+      # test in services/transport/http.test.ts). Vitest emits coverage
+      # for passing tests regardless (`reportOnFailure: true` in
+      # vitest.config.ts), but the process exits 1 — `continue-on-error`
+      # keeps the Sonar scan from being skipped. Remove this once the
+      # remaining failures are fixed.
       - name: Generate UI coverage (LCOV)
         working-directory: apps/ui
         continue-on-error: true

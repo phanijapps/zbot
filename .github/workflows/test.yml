@@ -1,12 +1,11 @@
 name: Tests
 
-# DISABLED: Uncomment the triggers below to enable automatic test runs
 on:
-  workflow_dispatch:  # Manual trigger only (enabled)
-  # push:
-  #   branches: [main, v*]
-  # pull_request:
-  #   branches: [main]
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [develop]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -108,7 +107,9 @@ jobs:
           path: apps/ui/playwright-report/
           retention-days: 7
 
-  # Coverage report - optional, runs in parallel with integration tests
+  # Coverage report - optional, runs in parallel with integration tests.
+  # Uses cargo-llvm-cov for consistency with sonarqube.yml and faster
+  # installs vs tarpaulin (llvm-cov bundles with rustup llvm-tools).
   coverage:
     runs-on: ubuntu-latest
     needs: unit-tests
@@ -119,20 +120,23 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Install tarpaulin
-        run: cargo install cargo-tarpaulin --locked
+      - name: Install cargo-llvm-cov
+        run: cargo llvm-cov --version || cargo install cargo-llvm-cov --locked
 
-      - name: Run coverage
-        run: cargo tarpaulin --workspace --out Xml --skip-clean
+      - name: Generate Rust coverage (LCOV)
+        run: cargo llvm-cov --workspace --lcov --output-path rust-lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
-          files: cobertura.xml
+          files: rust-lcov.info
+          flags: rust
           fail_ci_if_error: false
 
   # Frontend coverage
@@ -154,11 +158,18 @@ jobs:
       - name: Install deps
         run: cd apps/ui && npm ci
 
+      # 5 known-flaky frontend tests (App.test.tsx connection-pill,
+      # Connector-Inbound-Log in http.test.ts) still exit non-zero even
+      # though vitest emits coverage for the passing tests via
+      # reportOnFailure: true. continue-on-error keeps Codecov from being
+      # skipped. Drop once those tests are fixed.
       - name: Run coverage
+        continue-on-error: true
         run: cd apps/ui && npm run test:coverage
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           files: apps/ui/coverage/lcov.info
+          flags: frontend
           fail_ci_if_error: false
