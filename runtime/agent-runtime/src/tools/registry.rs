@@ -67,3 +67,91 @@ impl Default for ToolRegistry {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use serde_json::Value;
+    use zero_core::ToolContext as ZcToolContext;
+
+    struct DummyTool {
+        n: &'static str,
+    }
+
+    #[async_trait]
+    impl Tool for DummyTool {
+        fn name(&self) -> &'static str {
+            self.n
+        }
+        fn description(&self) -> &'static str {
+            "dummy"
+        }
+        fn parameters_schema(&self) -> Option<Value> {
+            None
+        }
+        async fn execute(
+            &self,
+            _ctx: Arc<dyn ZcToolContext>,
+            _args: Value,
+        ) -> zero_core::Result<Value> {
+            Ok(Value::Null)
+        }
+    }
+
+    fn tool(n: &'static str) -> Arc<dyn Tool> {
+        Arc::new(DummyTool { n })
+    }
+
+    #[test]
+    fn empty_registry_state() {
+        let r = ToolRegistry::new();
+        assert_eq!(r.len(), 0);
+        assert!(r.is_empty());
+        assert!(r.get_all().is_empty());
+        assert!(r.find("any").is_none());
+        assert!(!r.contains("any"));
+    }
+
+    #[test]
+    fn default_is_empty() {
+        let r = ToolRegistry::default();
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn register_one_then_lookup() {
+        let mut r = ToolRegistry::new();
+        r.register(tool("alpha"));
+        assert_eq!(r.len(), 1);
+        assert!(!r.is_empty());
+        assert!(r.contains("alpha"));
+        assert!(r.find("alpha").is_some());
+        assert!(r.find("missing").is_none());
+        assert_eq!(r.get_all().len(), 1);
+    }
+
+    #[test]
+    fn register_all_appends_in_order() {
+        let mut r = ToolRegistry::new();
+        r.register(tool("first"));
+        r.register_all(vec![tool("second"), tool("third")]);
+        assert_eq!(r.len(), 3);
+        assert!(r.contains("first"));
+        assert!(r.contains("second"));
+        assert!(r.contains("third"));
+        assert_eq!(r.get_all()[0].name(), "first");
+        assert_eq!(r.get_all()[2].name(), "third");
+    }
+
+    #[test]
+    fn find_returns_first_match_clone() {
+        let mut r = ToolRegistry::new();
+        r.register(tool("dup"));
+        r.register(tool("dup"));
+        let got = r.find("dup").expect("present");
+        assert_eq!(got.name(), "dup");
+        // The registry still has both entries
+        assert_eq!(r.len(), 2);
+    }
+}

@@ -357,4 +357,125 @@ summary_max_tokens: 16000
         assert_eq!(config.trigger.tokens, Some(8000));
         assert_eq!(config.keep.messages, Some(10));
     }
+
+    #[test]
+    fn trigger_condition_messages_only() {
+        let t = TriggerCondition {
+            tokens: None,
+            messages: Some(5),
+            fraction: None,
+        };
+        assert!(t.is_valid());
+        assert!(t.should_trigger(0, 5, 1000));
+        assert!(!t.should_trigger(100, 4, 1000));
+    }
+
+    #[test]
+    fn trigger_condition_fraction_only() {
+        let t = TriggerCondition {
+            tokens: None,
+            messages: None,
+            fraction: Some(0.25),
+        };
+        assert!(t.is_valid());
+        assert!(t.should_trigger(250, 0, 1000)); // 25%
+        assert!(!t.should_trigger(100, 0, 1000)); // 10%
+    }
+
+    #[test]
+    fn trigger_condition_zero_window_does_not_panic() {
+        let t = TriggerCondition {
+            tokens: None,
+            messages: None,
+            fraction: Some(0.5),
+        };
+        // Window 0 → max(1) avoids div by zero. 1 >= 0.5 → triggers.
+        assert!(t.should_trigger(1, 0, 0));
+    }
+
+    #[test]
+    fn trigger_condition_invalid_when_empty() {
+        let t = TriggerCondition::default();
+        assert!(!t.is_valid());
+        assert!(!t.should_trigger(0, 0, 1000));
+    }
+
+    #[test]
+    fn keep_policy_tokens_branch() {
+        let k = KeepPolicy {
+            messages: None,
+            tokens: Some(500),
+            fraction: None,
+        };
+        // 500 / 100 = 5, capped by total
+        assert_eq!(k.to_keep_count(20, 100_000), 5);
+        assert_eq!(k.to_keep_count(3, 100_000), 3);
+        assert!(k.is_valid());
+    }
+
+    #[test]
+    fn keep_policy_fraction_branch() {
+        let k = KeepPolicy {
+            messages: None,
+            tokens: None,
+            fraction: Some(0.25),
+        };
+        assert_eq!(k.to_keep_count(20, 100_000), 5);
+        assert!(k.is_valid());
+    }
+
+    #[test]
+    fn keep_policy_default_is_20_or_total() {
+        let k = KeepPolicy {
+            messages: None,
+            tokens: None,
+            fraction: None,
+        };
+        assert_eq!(k.to_keep_count(50, 100_000), 20);
+        assert_eq!(k.to_keep_count(5, 100_000), 5);
+        assert!(!k.is_valid());
+    }
+
+    #[test]
+    fn defaults_for_summarization_and_context_editing() {
+        let s = SummarizationConfig::default();
+        assert!(!s.enabled);
+        assert_eq!(s.summary_max_tokens, 16000);
+        assert_eq!(s.summary_prefix, "[Previous conversation summarized]");
+        assert!(s.model.is_none());
+        assert!(s.provider.is_none());
+
+        let c = ContextEditingConfig::default();
+        assert!(!c.enabled);
+        assert_eq!(c.trigger_tokens, 10000);
+        assert_eq!(c.keep_tool_results, 3);
+        assert_eq!(c.placeholder, "[cleared]");
+        assert!(c.skill_aware_placeholders);
+        assert!(c.cascade_unload);
+    }
+
+    #[test]
+    fn middleware_config_default_is_all_none() {
+        let m = MiddlewareConfig::default();
+        assert!(m.summarization.is_none());
+        assert!(m.context_editing.is_none());
+        assert!(m.custom.is_empty());
+    }
+
+    #[test]
+    fn deserialize_context_editing_config() {
+        let yaml = r"
+enabled: true
+trigger_tokens: 5000
+keep_tool_results: 5
+clear_tool_inputs: true
+exclude_tools: [search]
+";
+        let cfg: ContextEditingConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.trigger_tokens, 5000);
+        assert_eq!(cfg.keep_tool_results, 5);
+        assert!(cfg.clear_tool_inputs);
+        assert_eq!(cfg.exclude_tools, vec!["search".to_string()]);
+    }
 }

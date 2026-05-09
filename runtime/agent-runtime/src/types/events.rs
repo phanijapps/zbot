@@ -294,4 +294,134 @@ mod tests {
         }
         .is_terminal());
     }
+
+    #[test]
+    fn timestamp_returns_for_every_variant() {
+        let cases: Vec<StreamEvent> = vec![
+            StreamEvent::Metadata {
+                timestamp: 1,
+                agent_id: "a".into(),
+                model: "m".into(),
+                provider: "p".into(),
+            },
+            StreamEvent::Token {
+                timestamp: 2,
+                content: "t".into(),
+            },
+            StreamEvent::Reasoning {
+                timestamp: 3,
+                content: "r".into(),
+            },
+            StreamEvent::ToolCallStart {
+                timestamp: 4,
+                tool_id: "id".into(),
+                tool_name: "n".into(),
+                args: Value::Null,
+            },
+            StreamEvent::ToolCallEnd {
+                timestamp: 5,
+                tool_id: "id".into(),
+                tool_name: "n".into(),
+                args: Value::Null,
+            },
+            StreamEvent::ToolResult {
+                timestamp: 6,
+                tool_id: "id".into(),
+                result: "r".into(),
+                error: None,
+            },
+            StreamEvent::Done {
+                timestamp: 7,
+                final_message: "f".into(),
+                token_count: 0,
+            },
+            StreamEvent::Error {
+                timestamp: 8,
+                error: "e".into(),
+                recoverable: true,
+            },
+            StreamEvent::ShowContent {
+                timestamp: 9,
+                content_type: "ct".into(),
+                title: "t".into(),
+                content: "c".into(),
+                metadata: None,
+                file_path: None,
+                is_attachment: None,
+                base64: None,
+            },
+            StreamEvent::RequestInput {
+                timestamp: 10,
+                form_id: "f".into(),
+                form_type: "t".into(),
+                title: "t".into(),
+                description: None,
+                schema: Value::Null,
+                submit_button: None,
+            },
+            StreamEvent::ActionRespond {
+                timestamp: 11,
+                message: "m".into(),
+                format: "text".into(),
+                conversation_id: None,
+                session_id: None,
+                artifacts: vec![],
+            },
+            StreamEvent::ActionDelegate {
+                timestamp: 12,
+                agent_id: "a".into(),
+                task: "t".into(),
+                context: None,
+                wait_for_result: false,
+                max_iterations: None,
+                output_schema: None,
+                skills: vec![],
+                complexity: None,
+                parallel: false,
+            },
+            StreamEvent::ActionPlanUpdate {
+                timestamp: 13,
+                plan: Value::Null,
+                explanation: None,
+            },
+            StreamEvent::TokenUpdate {
+                timestamp: 14,
+                tokens_in: 0,
+                tokens_out: 0,
+            },
+            StreamEvent::Heartbeat { timestamp: 15 },
+            StreamEvent::ContextState {
+                timestamp: 16,
+                state: Value::Null,
+            },
+            StreamEvent::WardChanged {
+                timestamp: 17,
+                ward_id: "w".into(),
+            },
+            StreamEvent::IterationsExtended {
+                timestamp: 18,
+                iterations_used: 1,
+                iterations_added: 1,
+                reason: "r".into(),
+            },
+            StreamEvent::SessionTitleChanged {
+                timestamp: 19,
+                title: "t".into(),
+            },
+        ];
+        for (expected, ev) in cases.iter().enumerate() {
+            // expected starts at 0 but we used 1.. — adjust
+            assert_eq!(ev.timestamp(), (expected + 1) as u64);
+            assert_eq!(
+                ev.is_terminal(),
+                matches!(ev, StreamEvent::Done { .. } | StreamEvent::Error { .. })
+            );
+        }
+    }
+
+    #[test]
+    fn current_timestamp_is_nonzero() {
+        let t = current_timestamp();
+        assert!(t > 0);
+    }
 }

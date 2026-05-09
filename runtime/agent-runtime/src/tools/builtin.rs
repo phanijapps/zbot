@@ -82,3 +82,48 @@ impl ToolContextWithFs {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_fs_returns_none_for_every_path() {
+        let fs = NoFileSystemContext;
+        assert!(fs.conversation_dir("any-conv").is_none());
+        assert!(fs.outputs_dir().is_none());
+        assert!(fs.skills_dir().is_none());
+        assert!(fs.python_executable().is_none());
+    }
+
+    #[test]
+    fn no_fs_default_works_via_trait() {
+        let fs: Arc<dyn FileSystemContext> = Arc::new(NoFileSystemContext);
+        assert!(fs.conversation_dir("c1").is_none());
+        assert!(fs.outputs_dir().is_none());
+        assert!(fs.skills_dir().is_none());
+        assert!(fs.python_executable().is_none());
+    }
+
+    #[test]
+    fn no_fs_default_constructor() {
+        // Exercise the derived Default impl
+        let fs: NoFileSystemContext = NoFileSystemContext;
+        let _ = fs.clone();
+    }
+
+    #[test]
+    fn tool_context_with_fs_new_has_no_conversation() {
+        let fs: Arc<dyn FileSystemContext> = Arc::new(NoFileSystemContext);
+        let ctx = ToolContextWithFs::new(fs);
+        assert!(ctx.base.conversation_id.is_none());
+        assert!(ctx.fs.conversation_dir("c").is_none());
+    }
+
+    #[test]
+    fn tool_context_with_fs_with_conversation_propagates() {
+        let fs: Arc<dyn FileSystemContext> = Arc::new(NoFileSystemContext);
+        let ctx = ToolContextWithFs::with_conversation(fs, "conv-42".to_string());
+        assert_eq!(ctx.base.conversation_id.as_deref(), Some("conv-42"));
+    }
+}

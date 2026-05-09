@@ -434,6 +434,143 @@ mod tests {
     }
 
     #[test]
+    fn with_conversation_sets_id() {
+        let ctx = ToolContext::with_conversation("c1".to_string());
+        assert_eq!(ctx.conversation_id.as_deref(), Some("c1"));
+        assert!(ctx.available_skills.is_empty());
+        assert!(ctx.agent_id.is_none());
+    }
+
+    #[test]
+    fn with_skills_sets_skill_list() {
+        let ctx = ToolContext::with_skills(vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(ctx.available_skills, vec!["a".to_string(), "b".to_string()]);
+        assert!(ctx.conversation_id.is_none());
+    }
+
+    #[test]
+    fn with_conversation_and_skills_sets_both() {
+        let ctx =
+            ToolContext::with_conversation_and_skills("conv".to_string(), vec!["s".to_string()]);
+        assert_eq!(ctx.conversation_id.as_deref(), Some("conv"));
+        assert_eq!(ctx.available_skills.len(), 1);
+    }
+
+    #[test]
+    fn with_agent_id_seeds_state() {
+        let ctx = ToolContext::with_agent_id("agent-x".to_string());
+        assert_eq!(ctx.agent_id.as_deref(), Some("agent-x"));
+        // app:agent_id should be present in state
+        let v = ctx.get_state("app:agent_id").unwrap();
+        assert_eq!(v.as_str(), Some("agent-x"));
+    }
+
+    #[test]
+    fn full_constructor_seeds_state_keys() {
+        let ctx = ToolContext::full(
+            "agent".to_string(),
+            Some("conv".to_string()),
+            vec!["sk".to_string()],
+        );
+        assert_eq!(ctx.get_state("app:agent_id").unwrap(), "agent");
+        assert_eq!(ctx.get_state("app:conversation_id").unwrap(), "conv");
+        assert_eq!(ctx.get_state("agent_id").unwrap(), "agent");
+        assert_eq!(ctx.get_state("conversation_id").unwrap(), "conv");
+    }
+
+    #[test]
+    fn full_with_state_no_conversation_omits_conv_keys() {
+        let ctx = ToolContext::full("agent".to_string(), None, vec![]);
+        assert!(ctx.get_state("app:conversation_id").is_none());
+        assert!(ctx.get_state("conversation_id").is_none());
+        assert_eq!(ctx.get_state("app:agent_id").unwrap(), "agent");
+    }
+
+    #[test]
+    fn function_call_id_setter_getter_roundtrip() {
+        let ctx = ToolContext::new();
+        assert!(ctx.get_function_call_id().is_empty());
+        ctx.set_function_call_id("call-42".to_string());
+        assert_eq!(ctx.get_function_call_id(), "call-42");
+    }
+
+    #[test]
+    fn with_function_call_id_builder() {
+        let ctx = ToolContext::new().with_function_call_id("c1".to_string());
+        assert_eq!(ctx.get_function_call_id(), "c1");
+    }
+
+    #[test]
+    fn conversation_dir_synthesizes_from_id() {
+        let ctx = ToolContext::with_conversation("conv-7".to_string());
+        let dir = ctx.conversation_dir().expect("path");
+        assert!(dir.to_string_lossy().contains("conv-7"));
+        let none_ctx = ToolContext::new();
+        assert!(none_ctx.conversation_dir().is_none());
+    }
+
+    #[test]
+    fn try_claim_atomic() {
+        use zero_core::CallbackContext;
+        let ctx = ToolContext::new();
+        // First claim succeeds
+        assert!(ctx.try_claim("delegate"));
+        // Second claim of the same key fails
+        assert!(!ctx.try_claim("delegate"));
+        // Different key still works
+        assert!(ctx.try_claim("other"));
+    }
+
+    #[test]
+    fn readonly_context_defaults() {
+        use zero_core::ReadonlyContext;
+        let ctx = ToolContext::new();
+        assert_eq!(ctx.invocation_id(), "unknown");
+        assert_eq!(ctx.agent_name(), "root");
+        assert_eq!(ctx.user_id(), "default");
+        assert_eq!(ctx.app_name(), "zbot");
+        assert_eq!(ctx.session_id(), "unknown");
+        assert_eq!(ctx.branch(), "main");
+        let content = ctx.user_content();
+        assert_eq!(content.role, "user");
+    }
+
+    #[test]
+    fn readonly_context_uses_set_values() {
+        use zero_core::ReadonlyContext;
+        let ctx = ToolContext::full("a".to_string(), Some("c".to_string()), vec![]);
+        assert_eq!(ctx.invocation_id(), "c");
+        assert_eq!(ctx.agent_name(), "a");
+        assert_eq!(ctx.session_id(), "c");
+    }
+
+    #[test]
+    fn actions_round_trip_and_take() {
+        use zero_core::ToolContext as ZcToolContext;
+        let ctx = ToolContext::new();
+        // Default actions
+        let mut a = ctx.actions();
+        a.transfer_to_agent = Some("X".to_string());
+        ctx.set_actions(a);
+        // Round-trip
+        let stored = ctx.actions();
+        assert_eq!(stored.transfer_to_agent.as_deref(), Some("X"));
+        // Take clears them
+        let taken = ctx.take_actions();
+        assert_eq!(taken.transfer_to_agent.as_deref(), Some("X"));
+        let after = ctx.actions();
+        assert!(after.transfer_to_agent.is_none());
+    }
+
+    #[test]
+    fn function_call_id_via_zero_core_trait() {
+        use zero_core::ToolContext as ZcToolContext;
+        let ctx = ToolContext::new();
+        ctx.set_function_call_id("zid".to_string());
+        assert_eq!(ZcToolContext::function_call_id(&ctx), "zid");
+    }
+
+    #[test]
     fn test_full_with_state_restores_checkpoint() {
         // This tests the flow: checkpoint.context_state -> initial_state -> ToolContext
         let initial_state = {
