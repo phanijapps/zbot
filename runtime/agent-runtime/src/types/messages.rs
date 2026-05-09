@@ -325,4 +325,80 @@ mod tests {
         let msg: ChatMessage = serde_json::from_str(json).unwrap();
         assert_eq!(msg.text_content(), "Hello");
     }
+
+    #[test]
+    fn assistant_and_system_constructors() {
+        let a = ChatMessage::assistant("yo".to_string());
+        assert_eq!(a.role, "assistant");
+        assert_eq!(a.text_content(), "yo");
+        assert!(a.tool_call_id.is_none());
+
+        let s = ChatMessage::system("be nice".to_string());
+        assert_eq!(s.role, "system");
+        assert_eq!(s.text_content(), "be nice");
+        assert!(!s.is_summary);
+    }
+
+    #[test]
+    fn tool_result_constructor() {
+        let m = ChatMessage::tool_result("c1".to_string(), "ok".to_string());
+        assert_eq!(m.role, "tool");
+        assert_eq!(m.tool_call_id.as_deref(), Some("c1"));
+        assert_eq!(m.text_content(), "ok");
+    }
+
+    #[test]
+    fn deserialization_handles_null_content() {
+        let json = r#"{"role":"assistant","content":null}"#;
+        let msg: ChatMessage = serde_json::from_str(json).unwrap();
+        assert!(msg.content.is_empty());
+        assert_eq!(msg.role, "assistant");
+    }
+
+    #[test]
+    fn deserialization_rejects_invalid_content_type() {
+        // A number is neither string nor array nor null
+        let json = r#"{"role":"user","content":42}"#;
+        let res: Result<ChatMessage, _> = serde_json::from_str(json);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn serialization_includes_tool_calls_and_id() {
+        let mut tc = vec![ToolCall::new(
+            "call-1".to_string(),
+            "search".to_string(),
+            serde_json::json!({"q": "rust"}),
+        )];
+        // Set a second one for variety
+        tc.push(ToolCall::new(
+            "call-2".to_string(),
+            "calc".to_string(),
+            serde_json::json!({}),
+        ));
+        let msg = ChatMessage {
+            role: "assistant".to_string(),
+            content: vec![Part::Text {
+                text: "hi".to_string(),
+            }],
+            tool_calls: Some(tc),
+            tool_call_id: Some("parent".to_string()),
+            is_summary: false,
+        };
+        let v = serde_json::to_value(&msg).unwrap();
+        assert_eq!(v["role"], "assistant");
+        assert_eq!(v["content"], "hi");
+        assert!(v["tool_calls"].is_array());
+        assert_eq!(v["tool_call_id"], "parent");
+
+        // Check ToolCall openai-style serialization
+        let first_tc = &v["tool_calls"][0];
+        assert_eq!(first_tc["type"], "function");
+        assert_eq!(first_tc["function"]["name"], "search");
+        // arguments is stringified JSON (OpenAI format)
+        assert!(first_tc["function"]["arguments"].is_string());
+        let args_str = first_tc["function"]["arguments"].as_str().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(args_str).unwrap();
+        assert_eq!(parsed["q"], "rust");
+    }
 }

@@ -181,4 +181,44 @@ mod tests {
         assert_eq!(usage.total_tokens, 0);
         assert_eq!(usage.cached_prompt_tokens, None);
     }
+
+    #[test]
+    fn llm_error_display_messages() {
+        let parse = LlmError::ParseError("bad json".to_string());
+        assert_eq!(format!("{parse}"), "Parse error: bad json");
+        let api = LlmError::ApiError("no".to_string());
+        assert_eq!(format!("{api}"), "API error: no");
+        let invalid = LlmError::InvalidRequest("oops".to_string());
+        assert_eq!(format!("{invalid}"), "Invalid request: oops");
+        let rate = LlmError::RateLimited;
+        assert_eq!(format!("{rate}"), "Rate limited");
+        let auth = LlmError::AuthenticationFailed;
+        assert_eq!(format!("{auth}"), "Authentication failed");
+        let model = LlmError::ModelNotFound("x".to_string());
+        assert_eq!(format!("{model}"), "Model not found: x");
+    }
+
+    // Cover LlmModel default trait methods (supports_vision, supports_function_calling).
+    struct DummyModel;
+    impl LlmModel for DummyModel {
+        fn model_name(&self) -> &str {
+            "dummy"
+        }
+        fn max_context_tokens(&self) -> u32 {
+            1024
+        }
+        fn max_output_tokens(&self) -> u32 {
+            512
+        }
+    }
+
+    #[test]
+    fn llm_model_defaults() {
+        let m = DummyModel;
+        assert_eq!(m.model_name(), "dummy");
+        assert_eq!(m.max_context_tokens(), 1024);
+        assert_eq!(m.max_output_tokens(), 512);
+        assert!(!m.supports_vision());
+        assert!(m.supports_function_calling());
+    }
 }

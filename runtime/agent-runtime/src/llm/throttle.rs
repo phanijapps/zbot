@@ -171,4 +171,69 @@ mod tests {
             max_seen.load(Ordering::SeqCst)
         );
     }
+
+    #[tokio::test]
+    async fn model_and_provider_passthrough() {
+        let inner = Arc::new(CountingClient {
+            concurrent: Arc::new(AtomicU32::new(0)),
+            max_seen: Arc::new(AtomicU32::new(0)),
+        });
+        let throttled = ThrottledLlmClient::with_limit(inner, 1);
+        assert_eq!(throttled.model(), "test");
+        assert_eq!(throttled.provider(), "test");
+    }
+
+    #[tokio::test]
+    async fn chat_stream_acquires_permit_and_returns_response() {
+        let inner = Arc::new(CountingClient {
+            concurrent: Arc::new(AtomicU32::new(0)),
+            max_seen: Arc::new(AtomicU32::new(0)),
+        });
+        let throttled = ThrottledLlmClient::with_limit(inner, 1);
+        let resp = throttled
+            .chat_stream(vec![], None, Box::new(|_| {}))
+            .await
+            .unwrap();
+        assert_eq!(resp.content, "ok");
+    }
+
+    #[tokio::test]
+    async fn shared_semaphore_constructor() {
+        let inner = Arc::new(CountingClient {
+            concurrent: Arc::new(AtomicU32::new(0)),
+            max_seen: Arc::new(AtomicU32::new(0)),
+        });
+        let sem = Arc::new(Semaphore::new(3));
+        let throttled = ThrottledLlmClient::new(inner, Arc::clone(&sem));
+        let resp = throttled.chat(vec![], None).await.unwrap();
+        assert_eq!(resp.content, "ok");
+        // Permit was released
+        assert_eq!(sem.available_permits(), 3);
+    }
+
+    #[tokio::test]
+    async fn closed_semaphore_returns_api_error() {
+        let inner = Arc::new(CountingClient {
+            concurrent: Arc::new(AtomicU32::new(0)),
+            max_seen: Arc::new(AtomicU32::new(0)),
+        });
+        let sem = Arc::new(Semaphore::new(1));
+        sem.close();
+        let throttled = ThrottledLlmClient::new(inner, sem);
+        let err = throttled.chat(vec![], None).await.unwrap_err();
+        assert!(matches!(err, LlmError::ApiError(ref m) if m.contains("Throttle")));
+
+        let inner2 = Arc::new(CountingClient {
+            concurrent: Arc::new(AtomicU32::new(0)),
+            max_seen: Arc::new(AtomicU32::new(0)),
+        });
+        let sem2 = Arc::new(Semaphore::new(1));
+        sem2.close();
+        let throttled2 = ThrottledLlmClient::new(inner2, sem2);
+        let err = throttled2
+            .chat_stream(vec![], None, Box::new(|_| {}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, LlmError::ApiError(ref m) if m.contains("Throttle")));
+    }
 }
