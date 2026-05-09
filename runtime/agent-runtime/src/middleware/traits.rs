@@ -324,3 +324,256 @@ impl Clone for Box<dyn EventMiddleware> {
         self.clone_box()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::ToolCall;
+    use serde_json::json;
+    use zero_core::types::Part;
+
+    fn user_msg(s: &str) -> ChatMessage {
+        ChatMessage::user(s.to_string())
+    }
+
+    fn assistant_with_tool_calls(calls: Vec<ToolCall>) -> ChatMessage {
+        ChatMessage {
+            role: "assistant".to_string(),
+            content: vec![Part::Text {
+                text: String::new(),
+            }],
+            tool_calls: Some(calls),
+            tool_call_id: None,
+            is_summary: false,
+        }
+    }
+
+    #[test]
+    fn execution_state_default_has_no_skills() {
+        let state = ExecutionState::default();
+        assert!(state.loaded_skills.is_empty());
+    }
+
+    #[test]
+    fn execution_state_from_empty_messages_is_empty() {
+        let state = ExecutionState::from_messages(&[]);
+        assert!(state.loaded_skills.is_empty());
+
+        let only_user = vec![user_msg("hi")];
+        let state2 = ExecutionState::from_messages(&only_user);
+        assert!(state2.loaded_skills.is_empty());
+    }
+
+    #[test]
+    fn execution_state_picks_up_load_skill_call() {
+        let messages = vec![
+            user_msg("please load"),
+            assistant_with_tool_calls(vec![ToolCall::new(
+                "call-load-1".to_string(),
+                "load_skill".to_string(),
+                json!({"skill": "my-skill"}),
+            )]),
+        ];
+        let state = ExecutionState::from_messages(&messages);
+        let info = state.loaded_skills.get("my-skill").expect("skill present");
+        assert_eq!(info.name, "my-skill");
+        assert_eq!(info.tool_call_id, "call-load-1");
+        assert!(info.resource_tool_call_ids.is_empty());
+    }
+
+    #[test]
+    fn execution_state_updates_tool_call_id_on_relead() {
+        let messages = vec![
+            assistant_with_tool_calls(vec![ToolCall::new(
+                "first".to_string(),
+                "load_skill".to_string(),
+                json!({"skill": "alpha"}),
+            )]),
+            assistant_with_tool_calls(vec![ToolCall::new(
+                "second".to_string(),
+                "load_skill".to_string(),
+                json!({"skill": "alpha"}),
+            )]),
+        ];
+        let state = ExecutionState::from_messages(&messages);
+        let info = state.loaded_skills.get("alpha").unwrap();
+        assert_eq!(info.tool_call_id, "second"); // newer load overrides id
+    }
+
+    #[test]
+    fn execution_state_resource_load_via_at_skill_path() {
+        let messages = vec![assistant_with_tool_calls(vec![ToolCall::new(
+            "resource-1".to_string(),
+            "load_skill".to_string(),
+            json!({"file": "@skill:beta/docs.md"}),
+        )])];
+        let state = ExecutionState::from_messages(&messages);
+        let info = state.loaded_skills.get("beta").unwrap();
+        assert_eq!(info.resource_tool_call_ids, vec!["resource-1".to_string()]);
+        // tool_call_id stays empty when only a resource was loaded
+        assert!(info.tool_call_id.is_empty());
+    }
+
+    #[test]
+    fn execution_state_resource_load_via_at_skill_no_path() {
+        let messages = vec![assistant_with_tool_calls(vec![ToolCall::new(
+            "r".to_string(),
+            "load_skill".to_string(),
+            json!({"file": "@skill:gamma"}),
+        )])];
+        let state = ExecutionState::from_messages(&messages);
+        assert!(state.loaded_skills.contains_key("gamma"));
+    }
+
+    #[test]
+    fn execution_state_resource_load_with_extension_is_ignored() {
+        // No "/" and ends with ".md" — extract_skill returns None, no entry created.
+        let messages = vec![assistant_with_tool_calls(vec![ToolCall::new(
+            "r".to_string(),
+            "load_skill".to_string(),
+            json!({"file": "@skill:something.md"}),
+        )])];
+        let state = ExecutionState::from_messages(&messages);
+        assert!(state.loaded_skills.is_empty());
+    }
+
+    #[test]
+    fn execution_state_ignores_non_load_skill_tool_calls() {
+        let messages = vec![assistant_with_tool_calls(vec![ToolCall::new(
+            "x".to_string(),
+            "search".to_string(),
+            json!({"skill": "ignored"}),
+        )])];
+        let state = ExecutionState::from_messages(&messages);
+        assert!(state.loaded_skills.is_empty());
+    }
+
+    #[test]
+    fn middleware_context_new_has_empty_metadata_and_default_state() {
+        let ctx = MiddlewareContext::new(
+            "agent-x".to_string(),
+            Some("conv-1".to_string()),
+            "openai".to_string(),
+            "gpt-4o-mini".to_string(),
+        );
+        assert_eq!(ctx.agent_id, "agent-x");
+        assert_eq!(ctx.conversation_id.as_deref(), Some("conv-1"));
+        assert_eq!(ctx.provider_id, "openai");
+        assert_eq!(ctx.model, "gpt-4o-mini");
+        assert_eq!(ctx.message_count, 0);
+        assert_eq!(ctx.estimated_tokens, 0);
+        assert!(ctx.plan_state.is_none());
+        assert!(ctx.execution_state.loaded_skills.is_empty());
+    }
+
+    #[test]
+    fn middleware_context_builders_set_fields() {
+        let mut state = ExecutionState::default();
+        state.loaded_skills.insert(
+            "s".to_string(),
+            SkillInfo {
+                name: "s".to_string(),
+                tool_call_id: "c".to_string(),
+                resource_tool_call_ids: vec![],
+            },
+        );
+        let ctx =
+            MiddlewareContext::new("agent".to_string(), None, "p".to_string(), "m".to_string())
+                .with_counts(7, 1234)
+                .with_metadata(json!({"k": "v"}))
+                .with_execution_state(state)
+                .with_plan_state(Some(json!({"plan": []})));
+
+        assert_eq!(ctx.message_count, 7);
+        assert_eq!(ctx.estimated_tokens, 1234);
+        assert_eq!(ctx.metadata.get("k").and_then(|v| v.as_str()), Some("v"));
+        assert!(ctx.execution_state.loaded_skills.contains_key("s"));
+        assert!(ctx.plan_state.is_some());
+    }
+
+    #[test]
+    fn skill_info_default_is_empty() {
+        let info = SkillInfo::default();
+        assert!(info.name.is_empty());
+        assert!(info.tool_call_id.is_empty());
+        assert!(info.resource_tool_call_ids.is_empty());
+    }
+
+    // Exercise PreProcessMiddleware/EventMiddleware default `enabled()` and
+    // Box<dyn ...>::clone via trivial concrete impls.
+
+    struct Trivial;
+
+    #[async_trait]
+    impl PreProcessMiddleware for Trivial {
+        fn name(&self) -> &'static str {
+            "trivial"
+        }
+        fn clone_box(&self) -> Box<dyn PreProcessMiddleware> {
+            Box::new(Trivial)
+        }
+        async fn process(
+            &self,
+            _msgs: Vec<ChatMessage>,
+            _ctx: &MiddlewareContext,
+        ) -> Result<MiddlewareEffect, String> {
+            Ok(MiddlewareEffect::Proceed)
+        }
+    }
+
+    struct TrivialEvent;
+
+    #[async_trait]
+    impl EventMiddleware for TrivialEvent {
+        fn name(&self) -> &'static str {
+            "evt"
+        }
+        fn clone_box(&self) -> Box<dyn EventMiddleware> {
+            Box::new(TrivialEvent)
+        }
+        async fn on_event(&self, _e: &StreamEvent, _c: &MiddlewareContext) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn default_enabled_true_for_trivial() {
+        let p: Box<dyn PreProcessMiddleware> = Box::new(Trivial);
+        assert!(p.enabled());
+        assert_eq!(p.name(), "trivial");
+        let cloned = p.clone();
+        assert_eq!(cloned.name(), "trivial");
+
+        let e: Box<dyn EventMiddleware> = Box::new(TrivialEvent);
+        assert!(e.enabled());
+        let cloned_e = e.clone();
+        assert_eq!(cloned_e.name(), "evt");
+    }
+
+    // StatefulMiddleware helper trait
+    struct Stateful {
+        counter: u32,
+    }
+
+    impl StatefulMiddleware for Stateful {
+        fn get_state(&self) -> Result<Value, String> {
+            Ok(json!({"counter": self.counter}))
+        }
+        fn reset(&mut self) -> Result<(), String> {
+            self.counter = 0;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn stateful_middleware_get_and_reset() {
+        let mut s = Stateful { counter: 5 };
+        let state = s.get_state().unwrap();
+        assert_eq!(state.get("counter").and_then(|v| v.as_u64()), Some(5));
+        s.reset().unwrap();
+        assert_eq!(
+            s.get_state().unwrap().get("counter").unwrap().as_u64(),
+            Some(0)
+        );
+    }
+}
