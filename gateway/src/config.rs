@@ -184,3 +184,75 @@ mod resolve_bind_tests {
         assert_eq!(resolve_bind_host(&cfg), IpAddr::V4(Ipv4Addr::LOCALHOST));
     }
 }
+
+#[cfg(test)]
+mod gateway_config_tests {
+    use super::*;
+
+    #[test]
+    fn default_serves_dashboard_with_dev_origins() {
+        let cfg = GatewayConfig::default();
+        assert!(cfg.serve_dashboard);
+        assert!(cfg.cors_enabled);
+        assert!(!cfg.legacy_ws_port_enabled);
+        assert!(cfg
+            .cors_origins
+            .contains(&"http://localhost:1420".to_string()));
+        assert!(cfg
+            .cors_origins
+            .contains(&"http://localhost:3000".to_string()));
+        assert!(cfg.static_dir.is_none());
+        assert_eq!(cfg.host, default_host());
+    }
+
+    #[test]
+    fn with_ports_overrides_only_ports() {
+        let cfg = GatewayConfig::with_ports(9001, 9002);
+        assert_eq!(cfg.websocket_port, 9001);
+        assert_eq!(cfg.http_port, 9002);
+        assert!(cfg.serve_dashboard);
+        assert!(cfg.cors_enabled);
+    }
+
+    #[test]
+    fn ws_addr_and_http_addr_format() {
+        let cfg = GatewayConfig::with_ports(11111, 22222);
+        assert_eq!(cfg.ws_addr(), format!("{}:11111", cfg.host));
+        assert_eq!(cfg.http_addr(), format!("{}:22222", cfg.host));
+    }
+
+    #[test]
+    fn default_helpers_match_consts() {
+        assert_eq!(default_ws_port(), crate::DEFAULT_WS_PORT);
+        assert_eq!(default_http_port(), crate::DEFAULT_HTTP_PORT);
+        assert!(default_serve_dashboard());
+    }
+
+    #[test]
+    fn default_host_is_loopback() {
+        assert!(default_host().is_loopback());
+    }
+
+    #[test]
+    fn json_round_trip_preserves_fields() {
+        let cfg = GatewayConfig::with_ports(40001, 40002);
+        let json = serde_json::to_string(&cfg).unwrap();
+        let parsed: GatewayConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.websocket_port, cfg.websocket_port);
+        assert_eq!(parsed.http_port, cfg.http_port);
+        assert_eq!(parsed.serve_dashboard, cfg.serve_dashboard);
+    }
+
+    #[test]
+    fn json_with_missing_fields_uses_serde_defaults() {
+        let cfg: GatewayConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.host, default_host());
+        assert_eq!(cfg.websocket_port, default_ws_port());
+        assert_eq!(cfg.http_port, default_http_port());
+        assert!(cfg.serve_dashboard);
+        assert!(!cfg.cors_enabled);
+        assert!(cfg.cors_origins.is_empty());
+        assert!(cfg.static_dir.is_none());
+        assert!(!cfg.legacy_ws_port_enabled);
+    }
+}

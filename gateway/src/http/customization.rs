@@ -538,4 +538,272 @@ mod tests {
             other => panic!("expected Conflict, got {:?}", other),
         }
     }
+
+    #[test]
+    fn save_file_returns_not_found_for_missing_file() {
+        let tmp = tempdir().unwrap();
+        let result = save_file_with_check(tmp.path(), "missing.md", "x", "v");
+        assert!(matches!(result, SaveOutcome::NotFound));
+    }
+
+    #[test]
+    fn save_file_returns_io_for_invalid_path() {
+        let tmp = tempdir().unwrap();
+        let result = save_file_with_check(tmp.path(), "../escape.md", "x", "v");
+        match result {
+            SaveOutcome::Io(msg) => assert!(msg.contains("invalid path")),
+            other => panic!("expected Io, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn save_file_returns_io_for_non_md_extension() {
+        let tmp = tempdir().unwrap();
+        let result = save_file_with_check(tmp.path(), "foo.txt", "x", "v");
+        match result {
+            SaveOutcome::Io(msg) => assert!(msg.contains("invalid path")),
+            other => panic!("expected Io, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn enumerate_returns_empty_when_no_md_files() {
+        let tmp = tempdir().unwrap();
+        let entries = enumerate_customization_files(tmp.path()).expect("ok");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn enumerate_skips_when_shards_dir_missing() {
+        let tmp = tempdir().unwrap();
+        fs::write(tmp.path().join("SOUL.md"), "x").unwrap();
+        let entries = enumerate_customization_files(tmp.path()).expect("ok");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "SOUL.md");
+    }
+
+    #[test]
+    fn enumerate_sorts_root_before_shards_then_alphabetic() {
+        let tmp = tempdir().unwrap();
+        let config = tmp.path();
+        fs::write(config.join("ZZZ.md"), "z").unwrap();
+        fs::write(config.join("AAA.md"), "a").unwrap();
+        fs::create_dir_all(config.join("shards")).unwrap();
+        fs::write(config.join("shards").join("z_shard.md"), "z").unwrap();
+        fs::write(config.join("shards").join("a_shard.md"), "a").unwrap();
+
+        let entries = enumerate_customization_files(config).expect("ok");
+        let order: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["AAA.md", "ZZZ.md", "shards/a_shard.md", "shards/z_shard.md"]
+        );
+    }
+
+    #[test]
+    fn file_kind_serialization_matches_lowercase() {
+        let entry = FileEntry {
+            path: "x.md".into(),
+            kind: FileKind::Root,
+            size: 0,
+            modified_at: "2026-04-01T00:00:00Z".into(),
+            auto_generated: false,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"kind\":\"root\""));
+        let entry2 = FileEntry {
+            kind: FileKind::Shard,
+            ..entry
+        };
+        let json = serde_json::to_string(&entry2).unwrap();
+        assert!(json.contains("\"kind\":\"shard\""));
+    }
+
+    #[test]
+    fn save_outcome_ok_carries_new_version() {
+        let tmp = tempdir().unwrap();
+        let file = tmp.path().join("SOUL.md");
+        touch(&file, "v1");
+        let initial = file_version(&file).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        let outcome = save_file_with_check(tmp.path(), "SOUL.md", "v2", &initial);
+        match outcome {
+            SaveOutcome::Ok(new_version) => assert_ne!(new_version, initial),
+            other => panic!("expected Ok, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resolve_path_joins_to_config_dir() {
+        let tmp = tempdir().unwrap();
+        let resolved = resolve_path(tmp.path(), "shards/foo.md").expect("ok");
+        assert_eq!(resolved, tmp.path().join("shards/foo.md"));
+    }
+}
+
+#[cfg(test)]
+mod handler_tests {
+    use super::*;
+    use crate::AppState;
+    use axum::extract::{Query, State};
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn make_state() -> (TempDir, AppState) {
+        let dir = TempDir::new().expect("temp dir");
+        std::fs::create_dir_all(dir.path().join("agents")).unwrap();
+        std::fs::create_dir_all(dir.path().join("skills")).unwrap();
+        let state = AppState::minimal(dir.path().to_path_buf());
+        (dir, state)
+    }
+
+    #[tokio::test]
+    async fn list_files_returns_ok_with_existing_files() {
+        let (_dir, state) = make_state();
+        let cfg = state.paths.config_dir();
+        std::fs::create_dir_all(&cfg).unwrap();
+        fs::write(cfg.join("SOUL.md"), "soul body").unwrap();
+
+        let (status, body) = list_files(State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.0.success);
+        let files = body.0.files.unwrap();
+        assert!(files.iter().any(|f| f.path == "SOUL.md"));
+    }
+
+    #[tokio::test]
+    async fn get_file_returns_400_for_invalid_path() {
+        let (_dir, state) = make_state();
+        let q = Query(PathQuery {
+            path: "../escape.md".to_string(),
+        });
+        let (status, body) = get_file(State(state), q).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.0.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn get_file_returns_404_when_file_missing() {
+        let (_dir, state) = make_state();
+        let q = Query(PathQuery {
+            path: "MISSING.md".to_string(),
+        });
+        let (status, body) = get_file(State(state), q).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body.0.error.as_deref(), Some("file not found"));
+    }
+
+    #[tokio::test]
+    async fn get_file_returns_content_with_version_for_existing_file() {
+        let (_dir, state) = make_state();
+        let cfg = state.paths.config_dir();
+        std::fs::create_dir_all(&cfg).unwrap();
+        fs::write(cfg.join("SOUL.md"), "soul body").unwrap();
+
+        let q = Query(PathQuery {
+            path: "SOUL.md".to_string(),
+        });
+        let (status, body) = get_file(State(state), q).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.0.success);
+        assert_eq!(body.0.content.as_deref(), Some("soul body"));
+        assert!(body.0.version.is_some());
+        assert_eq!(body.0.auto_generated, Some(false));
+    }
+
+    #[tokio::test]
+    async fn get_file_marks_os_md_as_auto_generated() {
+        let (_dir, state) = make_state();
+        let cfg = state.paths.config_dir();
+        std::fs::create_dir_all(&cfg).unwrap();
+        fs::write(cfg.join("OS.md"), "os body").unwrap();
+
+        let q = Query(PathQuery {
+            path: "OS.md".to_string(),
+        });
+        let (_status, body) = get_file(State(state), q).await;
+        assert_eq!(body.0.auto_generated, Some(true));
+    }
+
+    #[tokio::test]
+    async fn put_file_returns_413_when_content_too_large() {
+        let (_dir, state) = make_state();
+        let body = SaveRequest {
+            path: "SOUL.md".to_string(),
+            content: "x".repeat(MAX_CONTENT_BYTES + 1),
+            expected_version: "v".to_string(),
+        };
+        let (status, response) = put_file(State(state), Json(body)).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(response.0.error.unwrap().contains("too large"));
+    }
+
+    #[tokio::test]
+    async fn put_file_returns_404_when_file_missing() {
+        let (_dir, state) = make_state();
+        let body = SaveRequest {
+            path: "MISSING.md".to_string(),
+            content: "x".to_string(),
+            expected_version: "v".to_string(),
+        };
+        let (status, response) = put_file(State(state), Json(body)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(response.0.error.as_deref(), Some("file not found"));
+    }
+
+    #[tokio::test]
+    async fn put_file_returns_400_for_invalid_path() {
+        let (_dir, state) = make_state();
+        let body = SaveRequest {
+            path: "../escape.md".to_string(),
+            content: "x".to_string(),
+            expected_version: "v".to_string(),
+        };
+        let (status, response) = put_file(State(state), Json(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(response.0.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn put_file_succeeds_when_version_matches() {
+        let (_dir, state) = make_state();
+        let cfg = state.paths.config_dir();
+        std::fs::create_dir_all(&cfg).unwrap();
+        let file_path = cfg.join("SOUL.md");
+        fs::write(&file_path, "v1").unwrap();
+        let initial = file_version(&file_path).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        let body = SaveRequest {
+            path: "SOUL.md".to_string(),
+            content: "v2".to_string(),
+            expected_version: initial,
+        };
+        let (status, response) = put_file(State(state), Json(body)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(response.0.success);
+        assert_eq!(fs::read_to_string(&file_path).unwrap(), "v2");
+    }
+
+    #[tokio::test]
+    async fn put_file_returns_409_on_version_conflict() {
+        let (_dir, state) = make_state();
+        let cfg = state.paths.config_dir();
+        std::fs::create_dir_all(&cfg).unwrap();
+        let file_path = cfg.join("SOUL.md");
+        fs::write(&file_path, "v1").unwrap();
+        let stale = file_version(&file_path).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&file_path, "v_external").unwrap();
+
+        let body = SaveRequest {
+            path: "SOUL.md".to_string(),
+            content: "v_ours".to_string(),
+            expected_version: stale,
+        };
+        let (status, response) = put_file(State(state), Json(body)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(response.0.current_content.as_deref(), Some("v_external"));
+        assert!(response.0.current_version.is_some());
+    }
 }

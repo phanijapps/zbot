@@ -31,7 +31,7 @@ function makeIdleHook(): MockHookReturn {
     pillState: { visible: false, narration: "", suffix: "", category: "neutral", starting: false, swapCounter: 0 },
     sendMessage: vi.fn(),
     stopAgent: vi.fn(),
-    clearSession: vi.fn(),
+    clearSession: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -142,7 +142,7 @@ describe("<QuickChat>", () => {
   });
 
   it("renders a Clear button in the top-right that fires clearSession on confirm", () => {
-    const clearSpy = vi.fn();
+    const clearSpy = vi.fn().mockResolvedValue(undefined);
     mockHookRef.current = { ...makeIdleHook(), clearSession: clearSpy };
     const confirmStub = vi.spyOn(window, "confirm").mockReturnValue(true);
     renderPage();
@@ -154,7 +154,7 @@ describe("<QuickChat>", () => {
   });
 
   it("Clear button does nothing when the confirm is declined", () => {
-    const clearSpy = vi.fn();
+    const clearSpy = vi.fn().mockResolvedValue(undefined);
     mockHookRef.current = { ...makeIdleHook(), clearSession: clearSpy };
     const confirmStub = vi.spyOn(window, "confirm").mockReturnValue(false);
     renderPage();
