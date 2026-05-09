@@ -189,4 +189,60 @@ mod tests {
         let sequential = SequentialAgent::new("empty", vec![]);
         assert_eq!(sequential.sub_agents().len(), 0);
     }
+
+    // ============================================================================
+    // RUNTIME TESTS
+    // ============================================================================
+
+    use crate::workflow::test_support::make_ctx;
+    use futures::StreamExt;
+
+    #[tokio::test]
+    async fn test_sequential_agent_runs_all_in_order_with_lifecycle() {
+        let agent1: Arc<dyn Agent> = Arc::new(MockAgent {
+            name: "a1".to_string(),
+            description: "".to_string(),
+        });
+        let agent2: Arc<dyn Agent> = Arc::new(MockAgent {
+            name: "a2".to_string(),
+            description: "".to_string(),
+        });
+        let seq = SequentialAgent::new("seq", vec![Arc::clone(&agent1), Arc::clone(&agent2)]);
+        let ctx = make_ctx(Arc::clone(&agent1));
+        let mut stream = seq.run(ctx).await.unwrap();
+        let mut events = Vec::new();
+        while let Some(e) = stream.next().await {
+            events.push(e.unwrap());
+        }
+        // Each agent emits: start lifecycle event, MockAgent's own event, end lifecycle event = 3
+        // For 2 agents: 6 events total
+        assert_eq!(events.len(), 6);
+        // Agent order preserved: first three events for a1, last three for a2
+        assert!(events[0].author.contains("a1"));
+        assert!(events[3].author.contains("a2"));
+    }
+
+    #[test]
+    fn test_sequential_agent_callbacks() {
+        let agent: Arc<dyn Agent> = Arc::new(MockAgent {
+            name: "a".to_string(),
+            description: "".to_string(),
+        });
+        let seq = SequentialAgent::new("seq", vec![agent])
+            .with_description("d")
+            .before_callback(Arc::new(|_| Box::pin(async { None })))
+            .after_callback(Arc::new(|_| Box::pin(async { None })));
+        assert_eq!(seq.description(), "d");
+    }
+
+    #[test]
+    fn test_mock_agent_metadata() {
+        let m = MockAgent {
+            name: "n".to_string(),
+            description: "d".to_string(),
+        };
+        assert_eq!(m.name(), "n");
+        assert_eq!(m.description(), "d");
+        assert!(m.sub_agents().is_empty());
+    }
 }

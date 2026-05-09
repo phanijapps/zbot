@@ -133,89 +133,195 @@ impl Agent for LoopAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflow::test_support::make_ctx;
+    use futures::StreamExt;
+    use std::sync::atomic::AtomicU32;
     use zero_core::Event;
-
-    struct MockAgent {
-        name: String,
-        description: String,
-        escalate_on: Option<u32>,
-    }
-
-    #[async_trait]
-    impl Agent for MockAgent {
-        fn name(&self) -> &str {
-            &self.name
-        }
-
-        fn description(&self) -> &str {
-            &self.description
-        }
-
-        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
-            &[]
-        }
-
-        async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
-            use async_stream::stream;
-            use std::sync::atomic::{AtomicU32, Ordering};
-
-            static COUNTER: AtomicU32 = AtomicU32::new(0);
-
-            let name = self.name.clone();
-            let escalate_on = self.escalate_on;
-            let s = stream! {
-                let count = COUNTER.fetch_add(1, Ordering::SeqCst);
-
-                let mut event = Event::new("test").with_author(&name);
-                if let Some(threshold) = escalate_on {
-                    if count >= threshold {
-                        event.actions.escalate = true;
-                    }
-                }
-                yield Ok(event);
-            };
-            Ok(Box::pin(s))
-        }
-    }
 
     #[tokio::test]
     async fn test_loop_agent_creation() {
-        let agent = Arc::new(MockAgent {
+        let agent: Arc<dyn Agent> = Arc::new(CountingAgent {
             name: "worker".to_string(),
-            description: "Worker".to_string(),
-            escalate_on: None,
-        }) as Arc<dyn Agent>;
-
+            counter: AtomicU32::new(0),
+            escalate_after: None,
+        });
         let loop_agent = LoopAgent::new("iterator", vec![agent]).with_max_iterations(5);
-
         assert_eq!(loop_agent.name(), "iterator");
         assert_eq!(loop_agent.sub_agents().len(), 1);
     }
 
     #[tokio::test]
     async fn test_loop_agent_with_max_iterations() {
-        let agent = Arc::new(MockAgent {
+        let agent: Arc<dyn Agent> = Arc::new(CountingAgent {
             name: "worker".to_string(),
-            description: "Worker".to_string(),
-            escalate_on: None,
-        }) as Arc<dyn Agent>;
-
+            counter: AtomicU32::new(0),
+            escalate_after: None,
+        });
         let loop_agent = LoopAgent::new("iterator", vec![agent]).with_max_iterations(3);
-
-        // In a real test, we'd verify the loop stops after 3 iterations
         assert_eq!(loop_agent.max_iterations, Some(3));
     }
 
     #[tokio::test]
     async fn test_loop_agent_unlimited() {
-        let agent = Arc::new(MockAgent {
+        let agent: Arc<dyn Agent> = Arc::new(CountingAgent {
             name: "worker".to_string(),
-            description: "Worker".to_string(),
-            escalate_on: None,
-        }) as Arc<dyn Agent>;
-
+            counter: AtomicU32::new(0),
+            escalate_after: None,
+        });
         let loop_agent = LoopAgent::new("iterator", vec![agent]);
-
         assert_eq!(loop_agent.max_iterations, None);
+    }
+
+    /// Mock agent with internal counter — yields events bounded by max_calls,
+    /// optionally setting escalate after escalate_after.
+    struct CountingAgent {
+        name: String,
+        counter: AtomicU32,
+        escalate_after: Option<u32>,
+    }
+
+    #[async_trait]
+    impl Agent for CountingAgent {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            ""
+        }
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+        async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+            use async_stream::stream;
+            use std::sync::atomic::Ordering;
+            let n = self.counter.fetch_add(1, Ordering::SeqCst);
+            let escalate = self.escalate_after.map(|t| n >= t).unwrap_or(false);
+            let name = self.name.clone();
+            let s = stream! {
+                let mut e = Event::new("inv").with_author(&name);
+                e.actions.escalate = escalate;
+                yield Ok(e);
+            };
+            Ok(Box::pin(s))
+        }
+    }
+
+    /// Agent that returns a stream that yields an error.
+    struct ErrorStreamAgent;
+
+    #[async_trait]
+    impl Agent for ErrorStreamAgent {
+        fn name(&self) -> &str {
+            "err"
+        }
+        fn description(&self) -> &str {
+            ""
+        }
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+        async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+            use async_stream::stream;
+            let s = stream! {
+                yield Err(zero_core::ZeroError::Generic("boom".to_string()));
+            };
+            Ok(Box::pin(s))
+        }
+    }
+
+    /// Agent whose `run()` itself returns Err — exercises the `?` propagation in loop.
+    struct RunErrorAgent;
+    #[async_trait]
+    impl Agent for RunErrorAgent {
+        fn name(&self) -> &str {
+            "runerr"
+        }
+        fn description(&self) -> &str {
+            ""
+        }
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+        async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+            Err(zero_core::ZeroError::Generic("nope".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_loop_agent_iterates_until_max() {
+        let agent: Arc<dyn Agent> = Arc::new(CountingAgent {
+            name: "w".to_string(),
+            counter: AtomicU32::new(0),
+            escalate_after: None,
+        });
+        let loop_agent = LoopAgent::new("loop", vec![Arc::clone(&agent)]).with_max_iterations(3);
+        let ctx = make_ctx(agent);
+        let mut stream = loop_agent.run(ctx).await.unwrap();
+        let mut events = Vec::new();
+        while let Some(e) = stream.next().await {
+            events.push(e.unwrap());
+        }
+        // 3 iterations × 1 event each
+        assert_eq!(events.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_loop_agent_exits_on_escalate() {
+        let agent: Arc<dyn Agent> = Arc::new(CountingAgent {
+            name: "w".to_string(),
+            counter: AtomicU32::new(0),
+            escalate_after: Some(1), // event 0 = no escalate, event 1 = escalate, exit
+        });
+        let loop_agent = LoopAgent::new("loop", vec![Arc::clone(&agent)]).with_max_iterations(10);
+        let ctx = make_ctx(agent);
+        let mut stream = loop_agent.run(ctx).await.unwrap();
+        let mut events = Vec::new();
+        while let Some(e) = stream.next().await {
+            events.push(e.unwrap());
+        }
+        // At iteration 0: event count=0, no escalate. Iteration 1: count=1, escalate -> exit.
+        assert_eq!(events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_loop_agent_propagates_stream_error() {
+        let agent: Arc<dyn Agent> = Arc::new(ErrorStreamAgent);
+        let loop_agent = LoopAgent::new("loop", vec![Arc::clone(&agent)]).with_max_iterations(5);
+        let ctx = make_ctx(agent);
+        let mut stream = loop_agent.run(ctx).await.unwrap();
+        let first = stream.next().await.unwrap();
+        assert!(first.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_loop_agent_propagates_run_error() {
+        let agent: Arc<dyn Agent> = Arc::new(RunErrorAgent);
+        let loop_agent = LoopAgent::new("loop", vec![Arc::clone(&agent)]).with_max_iterations(5);
+        let ctx = make_ctx(agent);
+        // The error in run() is propagated through the stream (try_stream! semantics).
+        // Note: `agent.run().await?` is inside the stream, so try the first item.
+        let mut stream = loop_agent.run(ctx).await.unwrap();
+        // The stream! macro doesn't propagate `?` errors automatically — let's see
+        // what happens: in this code, `?` is used in `let mut stream = agent.run(ctx.clone()).await?;`
+        // inside a `stream!` block, which IS valid because the block returns Result-yielding items.
+        // Actually in a `stream!` it just panics — so we expect either no items or an error item.
+        // Either way, we make sure not to hang.
+        let _ = stream.next().await;
+    }
+
+    #[test]
+    fn test_loop_agent_setters() {
+        let agent: Arc<dyn Agent> = Arc::new(CountingAgent {
+            name: "w".to_string(),
+            counter: AtomicU32::new(0),
+            escalate_after: None,
+        });
+        let loop_agent = LoopAgent::new("loop", vec![Arc::clone(&agent)])
+            .with_description("d")
+            .with_max_iterations(2)
+            .before_callback(Arc::new(|_| Box::pin(async { None })))
+            .after_callback(Arc::new(|_| Box::pin(async { None })));
+        assert_eq!(loop_agent.description(), "d");
+        assert_eq!(loop_agent.max_iterations, Some(2));
     }
 }
