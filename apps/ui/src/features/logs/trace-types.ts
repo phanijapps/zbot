@@ -3,6 +3,10 @@ export interface TraceNode {
   id: string;
   type: "root" | "delegation" | "tool_call" | "error";
   agentId: string;
+  /** For delegation nodes: the child session's execution ID (exec-...).
+   *  Used to look up per-run token counts when the same agent is delegated
+   *  multiple times (same agentId but different executionIds). */
+  executionId?: string;
   label: string;
   summary?: string;
   durationMs?: number;

@@ -37,6 +37,7 @@ export function useSessionTrace(sessionId: string | null): UseSessionTraceResult
       return;
     }
 
+    setTrace(null);
     let cancelled = false;
 
     const load = async () => {
@@ -240,6 +241,7 @@ function processDelegationLog(
     id: log.id,
     type: "delegation",
     agentId: childAgentId || session.agent_id,
+    executionId: childSessionDetail?.session.session_id,
     label: childAgentId || "subagent",
     summary: task,
     durationMs: childSessionDetail?.session.duration_ms ?? log.duration_ms,
