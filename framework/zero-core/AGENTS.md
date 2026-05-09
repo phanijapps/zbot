@@ -14,7 +14,7 @@ This crate provides the foundational abstractions that all other Zero crates bui
 pub trait Agent: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
-    fn sub_agents(&self) -> Option<Vec<Arc<dyn Agent>>>;
+    fn sub_agents(&self) -> &[Arc<dyn Agent>];
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream>;
 }
 ```

@@ -1,60 +1,60 @@
 # zero-session
 
-Session management for the Zero framework.
+Session and state management for the Zero framework.
 
-## Setup
+## What It Provides
 
-```bash
-# Build
-cargo build
+Concrete implementations of the `Session` and `State` traits defined in `zero-core::context`.
 
-# Run tests
-cargo test
-```
-
-## Code Style
-
-- Sessions are append-only logs of events
-- Use `MutexSession` wrapper for thread safety
-- Clone sessions for read-only operations
-
-## Session Trait
+## Key Exports
 
 ```rust
-#[async_trait]
+pub use zero_core::context::{Session, State};         // re-exported traits
+
+pub use service::{InMemorySessionService, SessionService};
+pub use session::{InMemorySession, MutexSession};
+pub use state::{validate_key, InMemoryState};
+```
+
+## Session Trait (defined in zero-core)
+
+```rust
 pub trait Session: Send + Sync {
-    async fn append(&self, event: Event) -> Result<()>;
-    async fn events(&self) -> Result<Vec<Event>>;
+    fn id(&self) -> &str;
+    fn app_name(&self) -> &str;
+    fn user_id(&self) -> &str;
+    fn state(&self) -> &dyn State;
+    fn conversation_history(&self) -> Vec<Content>;  // message history
 }
 ```
 
 ## Implementations
 
-### InMemorySession
+| Type | Purpose |
+|------|---------|
+| `InMemorySession` | In-memory session: ID, app name, user ID, state, `Vec<Content>` history |
+| `MutexSession` | Thread-safe wrapper around any `Session` impl (interior-mutable) |
+| `InMemoryState` | `HashMap<String, Value>` state store implementing `State` |
 
-Simple in-memory session storing events in a `Vec<Event>` wrapped in `Mutex`.
+## SessionService
 
-### MutexSession
+```rust
+pub trait SessionService: Send + Sync {
+    async fn create_session(app_name, user_id) -> Result<Arc<dyn Session>>;
+    async fn get_session(session_id) -> Result<Option<Arc<dyn Session>>>;
+    async fn delete_session(session_id) -> Result<bool>;
+    async fn list_sessions(user_id) -> Result<Vec<Arc<dyn Session>>>;
+}
+```
 
-Thread-safe wrapper around any session implementation.
+`InMemorySessionService` implements this with an `RwLock<HashMap>`.
 
-## Events
+## Intra-Repo Dependencies
 
-Events represent conversation state changes:
-- User messages
-- Assistant messages
-- Tool calls
-- Tool responses
-- Error events
+- `zero-core` — `Session`, `State`, `Content` traits and types
 
-Events are immutable - create new events for updates.
+## Notes
 
-## Testing
-
-Use `tokio::test` for async session operations.
-
-## Important Notes
-
-- Sessions are the source of truth for conversation history
-- Agents should append every exchange to the session
-- Clone sessions when you need read-only access
+- Sessions hold conversation history as `Vec<Content>` (role + parts), not event logs.
+- State is a key-value store; use the `KEY_PREFIX_*` constants from `zero-core` for scoping.
+- Use `validate_key()` before setting state keys to enforce naming conventions.

@@ -1,43 +1,47 @@
 # zero-prompt
 
-Prompt template and management for the Zero framework.
+Prompt template rendering with session state injection for the Zero framework.
 
-## Setup
-
-```bash
-# Build
-cargo build
-
-# Run tests
-cargo test
-```
-
-## Code Style
-
-- Use `{{ variable }}` syntax for template variables
-- Templates are compiled to regex for efficient substitution
-- Keep templates simple and focused
-
-## Prompt Templates
-
-Templates allow variable substitution:
+## Key Exports
 
 ```rust
-let template = PromptTemplate::new("Hello, {{ name }}!");
-let result = template.render(vec![("name", "World")])?;
-// Result: "Hello, World!"
+pub use template::{inject_session_state, Template, TemplateRenderer};
+pub use error::{PromptError, Result};
 ```
 
-## Usage
+## Placeholder Syntax
 
-Used primarily for system instructions and reusable prompt fragments.
+Templates use `{variable}` (single braces, not double):
+- `{var_name}` — required variable; error if not found in context state
+- `{var_name?}` — optional variable; replaced with empty string if missing
+- `{artifact.file_name}` — artifact reference (optional, resolves to empty if absent)
+- State-scoped vars: `{app:key}`, `{user:key}`, `{temp:key}`
 
-## Testing
+## Core Functions
 
-Test variable substitution, missing variables, and complex templates.
+```rust
+// Inject session state values into a template string
+pub async fn inject_session_state(
+    template: &str,
+    ctx: &dyn CallbackContext,
+) -> Result<String>;
+```
 
-## Important Notes
+`Template` and `TemplateRenderer` wrap this for reuse across multiple renders.
 
-- Variables are replaced sequentially
-- Use descriptive variable names
-- Templates should be immutable after creation
+## Modules
+
+| File | Purpose |
+|------|---------|
+| `template.rs` | `Template`, `TemplateRenderer`, `inject_session_state()` |
+| `error.rs` | `PromptError` (VariableNotFound, InvalidName), `Result` |
+
+## Intra-Repo Dependencies
+
+- `zero-core` — `CallbackContext` for state lookup
+
+## Notes
+
+- Placeholder regex: `\{[^{}]*\??\}` — matches `{...}` with optional trailing `?`
+- Variable names must be valid identifiers (letters/digits/underscore, start with letter or `_`).
+- Used by the gateway to inject state into system prompt templates.
