@@ -183,6 +183,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_custom_agent_builder() {
+        use crate::workflow::test_support::make_ctx;
+        use futures::StreamExt;
+
         let agent = CustomAgent::builder("test")
             .description("Test agent")
             .handler(|_ctx| {
@@ -200,6 +203,13 @@ mod tests {
 
         assert_eq!(agent.name(), "test");
         assert_eq!(agent.description(), "Test agent");
+
+        // Drive the handler to cover the inner closure.
+        let stub: Arc<dyn Agent> = Arc::new(MockAgent {
+            name: "stub".to_string(),
+        });
+        let mut stream = agent.run(make_ctx(stub)).await.unwrap();
+        let _ = stream.next().await.unwrap().unwrap();
     }
 
     #[tokio::test]
@@ -219,20 +229,28 @@ mod tests {
         }) as Arc<dyn Agent>;
 
         let result = CustomAgent::builder("test")
-            .handler(|_ctx| {
-                Box::pin(async move {
-                    let s = stream! { yield Ok(Event::new("test")); };
-                    StdResult::Ok(Box::pin(s) as EventStream)
-                })
-            })
+            .handler(noop_handler)
             .sub_agents(vec![mock1, mock2])
             .build();
 
         assert!(result.is_err());
     }
 
+    /// Shared no-op handler — keeps test closure body tiny and reusable.
+    fn noop_handler(
+        _ctx: Arc<dyn InvocationContext>,
+    ) -> Pin<Box<dyn Future<Output = Result<EventStream>> + Send>> {
+        Box::pin(async move {
+            let s = stream! { yield Ok(Event::new("test")); };
+            StdResult::Ok(Box::pin(s) as EventStream)
+        })
+    }
+
     #[tokio::test]
     async fn test_custom_agent_execution() {
+        use crate::workflow::test_support::make_ctx;
+        use futures::StreamExt;
+
         let agent = CustomAgent::builder("test")
             .handler(|_ctx| {
                 Box::pin(async move {
@@ -247,8 +265,105 @@ mod tests {
             .build()
             .unwrap();
 
-        // In a real test, we'd create a mock InvocationContext and run the agent
         assert_eq!(agent.name(), "test");
+        let stub: Arc<dyn Agent> = Arc::new(MockAgent {
+            name: "stub".to_string(),
+        });
+        let mut stream = agent.run(make_ctx(stub)).await.unwrap();
+        let _ = stream.next().await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_custom_agent_run_invokes_handler() {
+        use crate::workflow::test_support::make_ctx;
+        use futures::StreamExt;
+
+        let agent = CustomAgent::builder("custom")
+            .description("d")
+            .handler(|_ctx| {
+                Box::pin(async move {
+                    let s = stream! {
+                        yield Ok(Event::new("x").with_content(Content::assistant("hi")));
+                    };
+                    StdResult::Ok(Box::pin(s) as EventStream)
+                })
+            })
+            .build()
+            .unwrap();
+
+        let stub: Arc<dyn Agent> = Arc::new(MockAgent {
+            name: "stub".to_string(),
+        });
+        let ctx = make_ctx(stub);
+        let mut stream = agent.run(ctx).await.unwrap();
+        let event = stream.next().await.unwrap().unwrap();
+        assert!(event.content.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_custom_agent_with_sub_agents() {
+        use crate::workflow::test_support::make_ctx;
+        use futures::StreamExt;
+
+        let mock1 = Arc::new(MockAgent {
+            name: "a1".to_string(),
+        }) as Arc<dyn Agent>;
+        let mock2 = Arc::new(MockAgent {
+            name: "a2".to_string(),
+        }) as Arc<dyn Agent>;
+
+        let agent = CustomAgent::builder("test")
+            .sub_agent(Arc::clone(&mock1))
+            .sub_agent(Arc::clone(&mock2))
+            .handler(|_ctx| {
+                Box::pin(async move {
+                    let s = stream! { yield Ok(Event::new("test")); };
+                    StdResult::Ok(Box::pin(s) as EventStream)
+                })
+            })
+            .build()
+            .unwrap();
+        assert_eq!(agent.sub_agents().len(), 2);
+        assert_eq!(agent.description(), "");
+
+        // Drive run() to cover handler closure.
+        let mut stream = agent.run(make_ctx(Arc::clone(&mock1))).await.unwrap();
+        let _ = stream.next().await.unwrap().unwrap();
+
+        // Also exercise MockAgent.run/name/description directly.
+        assert_eq!(mock1.name(), "a1");
+        assert_eq!(mock1.description(), "Mock");
+        assert!(mock1.sub_agents().is_empty());
+        let mut s = mock1.run(make_ctx(Arc::clone(&mock1))).await.unwrap();
+        let _ = s.next().await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_custom_agent_builder_default_and_callbacks() {
+        use crate::workflow::test_support::make_ctx;
+        use futures::StreamExt;
+
+        let builder = CustomAgentBuilder::default();
+        assert!(builder.handler.is_none());
+        // Add callbacks
+        let agent = CustomAgent::builder("name")
+            .description("desc")
+            .before_callback(Arc::new(|_| Box::pin(async { None })))
+            .after_callback(Arc::new(|_| Box::pin(async { None })))
+            .handler(|_ctx| {
+                Box::pin(async move {
+                    let s = stream! { yield Ok(Event::new("test")); };
+                    StdResult::Ok(Box::pin(s) as EventStream)
+                })
+            })
+            .build()
+            .unwrap();
+
+        let stub: Arc<dyn Agent> = Arc::new(MockAgent {
+            name: "stub".to_string(),
+        });
+        let mut stream = agent.run(make_ctx(stub)).await.unwrap();
+        let _ = stream.next().await.unwrap().unwrap();
     }
 
     // Mock Agent for testing

@@ -899,4 +899,579 @@ mod tests {
 
         assert_eq!(trace.outcome, TraceOutcome::Success);
     }
+
+    // ============================================================================
+    // ADDITIONAL TESTS
+    // ============================================================================
+
+    use async_stream::stream;
+
+    /// Mock agent that always fails.
+    struct FailingAgent {
+        name: String,
+    }
+
+    #[async_trait]
+    impl Agent for FailingAgent {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "fails"
+        }
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+        async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+            Err(ZeroError::Generic("agent boom".to_string()))
+        }
+    }
+
+    /// Mock agent whose stream yields one error.
+    struct StreamErrorAgent {
+        name: String,
+    }
+
+    #[async_trait]
+    impl Agent for StreamErrorAgent {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "stream error"
+        }
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+        async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+            let s = stream! {
+                yield Err(ZeroError::Generic("stream blew up".to_string()));
+            };
+            Ok(Box::pin(s))
+        }
+    }
+
+    /// Mock agent that yields a text-content event (exercise content extraction loop).
+    struct TextEmittingAgent {
+        name: String,
+    }
+
+    #[async_trait]
+    impl Agent for TextEmittingAgent {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "emits text"
+        }
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+        async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+            let name = self.name.clone();
+            let s = stream! {
+                let mut e = Event::new("inv");
+                e.author = name;
+                e.content = Some(Content::assistant("hello from text agent"));
+                yield Ok(e);
+            };
+            Ok(Box::pin(s))
+        }
+    }
+
+    fn mock_orch_ctx() -> Arc<dyn InvocationContext> {
+        struct MockOrch;
+        #[async_trait]
+        impl Agent for MockOrch {
+            fn name(&self) -> &str {
+                "orchestrator"
+            }
+            fn description(&self) -> &str {
+                ""
+            }
+            fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+                &[]
+            }
+            async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+                let s = stream! { yield Ok(Event::new("orch")); };
+                Ok(Box::pin(s))
+            }
+        }
+        let mock_orch: Arc<dyn Agent> = Arc::new(MockOrch);
+        Arc::new(TaskInvocationContext::new(mock_orch, "test", "Test"))
+    }
+
+    // ----------------------------------------------------------------------
+    // OrchestratorConfig
+    // ----------------------------------------------------------------------
+
+    #[test]
+    fn test_orchestrator_config_default() {
+        let cfg = OrchestratorConfig::default();
+        assert_eq!(cfg.max_parallel_tasks, 4);
+        assert_eq!(cfg.max_retries, 3);
+        assert!(!cfg.continue_on_failure);
+        assert!(cfg.enable_tracing);
+        assert_eq!(cfg.task_timeout_secs, Some(300));
+    }
+
+    #[test]
+    fn test_orchestrator_config_serde_defaults() {
+        // Empty JSON object should populate defaults via serde defaults.
+        let cfg: OrchestratorConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.max_parallel_tasks, 4);
+        assert_eq!(cfg.max_retries, 3);
+        assert!(cfg.enable_tracing);
+    }
+
+    #[test]
+    fn test_orchestrator_with_name_description() {
+        let registry = setup_registry();
+        let orchestrator = OrchestratorAgent::new(registry)
+            .with_name("custom")
+            .with_description("custom desc");
+        assert_eq!(orchestrator.name(), "custom");
+        assert_eq!(orchestrator.description(), "custom desc");
+    }
+
+    #[test]
+    fn test_orchestrator_with_config() {
+        let registry = setup_registry();
+        let cfg = OrchestratorConfig {
+            max_parallel_tasks: 8,
+            continue_on_failure: true,
+            ..Default::default()
+        };
+        let orch = OrchestratorAgent::new(registry).with_config(cfg);
+        assert_eq!(orch.config.max_parallel_tasks, 8);
+        assert!(orch.config.continue_on_failure);
+    }
+
+    #[test]
+    fn test_orchestrator_with_agent_composition() {
+        let registry = setup_registry();
+        let agent: Arc<dyn Agent> = Arc::new(FailingAgent {
+            name: "x".to_string(),
+        });
+        let orch = OrchestratorAgent::new(registry).with_agent(agent);
+        assert_eq!(orch.sub_agents().len(), 1);
+        // get_agent should find by name
+        assert!(orch.get_agent("x").is_some());
+        // unknown name returns None
+        assert!(orch.get_agent("none").is_none());
+    }
+
+    #[test]
+    fn test_orchestrator_registry_and_router_accessors() {
+        let registry = setup_registry();
+        let orch = OrchestratorAgent::new(registry);
+        let _: &Arc<CapabilityRegistry> = orch.registry();
+        let _: &CapabilityRouter = orch.router();
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_run_emits_ready_event() {
+        let registry = setup_registry();
+        let orch = OrchestratorAgent::new(registry);
+        let ctx = mock_orch_ctx();
+        let mut stream = orch.run(ctx).await.unwrap();
+        let event = stream.next().await.unwrap().unwrap();
+        assert!(event.turn_complete);
+        assert!(event
+            .content
+            .unwrap()
+            .text()
+            .unwrap()
+            .contains("Orchestrator ready"));
+    }
+
+    // ----------------------------------------------------------------------
+    // TaskInvocationContext / TaskSession / TaskState
+    // ----------------------------------------------------------------------
+
+    #[test]
+    fn test_task_invocation_context_basic_accessors() {
+        struct StubAgent;
+        #[async_trait]
+        impl Agent for StubAgent {
+            fn name(&self) -> &str {
+                "stub"
+            }
+            fn description(&self) -> &str {
+                ""
+            }
+            fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+                &[]
+            }
+            async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+                let s = stream! { yield Ok(Event::new("x")); };
+                Ok(Box::pin(s))
+            }
+        }
+        let agent: Arc<dyn Agent> = Arc::new(StubAgent);
+        let ctx = TaskInvocationContext::new(Arc::clone(&agent), "task-1", "do work");
+        assert_eq!(ctx.invocation_id(), "task-invocation-task-1");
+        assert_eq!(ctx.agent_name(), "stub");
+        assert_eq!(ctx.user_id(), "orchestrator");
+        assert_eq!(ctx.app_name(), "orchestrator");
+        assert_eq!(ctx.branch(), "main");
+        assert_eq!(ctx.session_id(), "task-session-task-1");
+        // user_content should reflect the task description
+        assert_eq!(ctx.user_content().text(), Some("do work"));
+        // initial: not ended
+        assert!(!ctx.ended());
+        ctx.end_invocation();
+        assert!(ctx.ended());
+        // agent / session / run_config accessors
+        let _ = ctx.agent();
+        let _ = ctx.session();
+        let _ = ctx.run_config();
+        // actions get/set roundtrip
+        let act = EventActions {
+            escalate: true,
+            ..Default::default()
+        };
+        ctx.set_actions(act);
+        assert!(ctx.actions().escalate);
+    }
+
+    #[test]
+    fn test_task_invocation_context_state() {
+        struct A;
+        #[async_trait]
+        impl Agent for A {
+            fn name(&self) -> &str {
+                "a"
+            }
+            fn description(&self) -> &str {
+                ""
+            }
+            fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+                &[]
+            }
+            async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+                let s = stream! { yield Ok(Event::new("x")); };
+                Ok(Box::pin(s))
+            }
+        }
+        let agent: Arc<dyn Agent> = Arc::new(A);
+        let ctx = TaskInvocationContext::new(agent, "t", "d");
+        assert!(ctx.get_state("absent").is_none());
+        ctx.set_state("k".to_string(), serde_json::json!(42));
+        assert_eq!(ctx.get_state("k"), Some(serde_json::json!(42)));
+    }
+
+    #[test]
+    fn test_task_invocation_context_add_content() {
+        struct A;
+        #[async_trait]
+        impl Agent for A {
+            fn name(&self) -> &str {
+                "a"
+            }
+            fn description(&self) -> &str {
+                ""
+            }
+            fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+                &[]
+            }
+            async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+                let s = stream! { yield Ok(Event::new("x")); };
+                Ok(Box::pin(s))
+            }
+        }
+        let agent: Arc<dyn Agent> = Arc::new(A);
+        let ctx = TaskInvocationContext::new(agent, "t", "desc");
+        ctx.add_content(Content::assistant("yo"));
+        // Initial: 1 (description) + 1 added = 2
+        assert_eq!(ctx.session().conversation_history().len(), 2);
+    }
+
+    #[test]
+    fn test_task_session_state_set_all() {
+        // Exercise State::set and State::all on TaskState directly.
+        let mut state = TaskState::new();
+        assert!(state.get("a").is_none());
+        state.set("a".to_string(), serde_json::json!(1));
+        assert_eq!(state.get("a"), Some(serde_json::json!(1)));
+        let all = state.all();
+        assert_eq!(all.len(), 1);
+    }
+
+    #[test]
+    fn test_task_session_basic_accessors() {
+        let session = TaskSession::new("abc");
+        assert_eq!(session.id(), "task-session-abc");
+        assert_eq!(session.app_name(), "orchestrator");
+        assert_eq!(session.user_id(), "orchestrator");
+        // empty history initially
+        assert!(session.conversation_history().is_empty());
+        session.add_content(Content::user("hi"));
+        assert_eq!(session.conversation_history().len(), 1);
+        // state() returns a reference to TaskState
+        let _ = session.state();
+    }
+
+    // ----------------------------------------------------------------------
+    // execute_graph error paths
+    // ----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_execute_graph_no_capable_agent() {
+        // Task requires a capability that no registered agent provides.
+        let registry = Arc::new(CapabilityRegistry::new());
+        let orch = OrchestratorAgent::new(registry);
+
+        let mut graph = TaskGraph::new("g");
+        graph.add_task(TaskNode::new("t1", "needs nothing").with_capability("nonexistent"));
+
+        let trace = orch
+            .execute_graph(&mut graph, mock_orch_ctx())
+            .await
+            .unwrap();
+
+        // Should mark task as failed (no capable agent)
+        let task = graph.get_task("t1").unwrap();
+        assert_eq!(task.status, TaskStatus::Failed);
+        // Trace records errors
+        assert!(!trace.errors().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_execute_graph_no_required_capability_uses_first_agent() {
+        // Task with no required_capability uses the first available agent.
+        // Use a fresh registry with only one agent registered, both in store and capabilities,
+        // so available_agents().next() always returns one we have an instance for.
+        let registry = Arc::new(CapabilityRegistry::new());
+        let orch = OrchestratorAgent::new(Arc::clone(&registry));
+        orch.register_agent(
+            Arc::new(TextEmittingAgent {
+                name: "only-agent".to_string(),
+            }),
+            AgentCapabilities::builder("only-agent")
+                .add_capability(zero_core::capability::common::code_review())
+                .build(),
+        );
+
+        let mut graph = TaskGraph::new("g");
+        graph.add_task(TaskNode::new("t1", "no cap"));
+
+        let trace = orch
+            .execute_graph(&mut graph, mock_orch_ctx())
+            .await
+            .unwrap();
+        assert_eq!(trace.outcome, TraceOutcome::Success);
+    }
+
+    #[tokio::test]
+    async fn test_execute_graph_agent_run_error_continue_on_failure() {
+        // Agent's run() returns Err; with continue_on_failure=true we should keep going.
+        let registry = setup_registry();
+        let cfg = OrchestratorConfig {
+            continue_on_failure: true,
+            ..Default::default()
+        };
+        let orch = OrchestratorAgent::new(Arc::clone(&registry)).with_config(cfg);
+        orch.register_agent(
+            Arc::new(FailingAgent {
+                name: "code-agent".to_string(),
+            }),
+            AgentCapabilities::builder("code-agent")
+                .add_capability(zero_core::capability::common::code_review())
+                .build(),
+        );
+
+        let mut graph = TaskGraph::new("g");
+        graph.add_task(TaskNode::new("t1", "do").with_capability("code_review"));
+
+        let trace = orch
+            .execute_graph(&mut graph, mock_orch_ctx())
+            .await
+            .unwrap();
+        // Continue-on-failure: should return Ok with trace marking failures.
+        assert_eq!(trace.outcome, TraceOutcome::Failure);
+        let task = graph.get_task("t1").unwrap();
+        assert_eq!(task.status, TaskStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn test_execute_graph_agent_run_error_no_continue() {
+        // Agent run() error WITHOUT continue_on_failure → the error should propagate.
+        let registry = setup_registry();
+        let orch = OrchestratorAgent::new(Arc::clone(&registry));
+        orch.register_agent(
+            Arc::new(FailingAgent {
+                name: "code-agent".to_string(),
+            }),
+            AgentCapabilities::builder("code-agent")
+                .add_capability(zero_core::capability::common::code_review())
+                .build(),
+        );
+
+        let mut graph = TaskGraph::new("g");
+        graph.add_task(TaskNode::new("t1", "do").with_capability("code_review"));
+
+        let res = orch.execute_graph(&mut graph, mock_orch_ctx()).await;
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_execute_graph_with_input_data() {
+        // Task with input data — exercises the format!("{}\n\nInput data:\n{}") branch.
+        let registry = setup_registry();
+        let orch = OrchestratorAgent::new(Arc::clone(&registry));
+        orch.register_agent(
+            Arc::new(TextEmittingAgent {
+                name: "code-agent".to_string(),
+            }),
+            AgentCapabilities::builder("code-agent")
+                .add_capability(zero_core::capability::common::code_review())
+                .build(),
+        );
+
+        let mut graph = TaskGraph::new("g");
+        graph.add_task(
+            TaskNode::new("t1", "do work")
+                .with_capability("code_review")
+                .with_input(serde_json::json!({"key": "value"})),
+        );
+
+        let trace = orch
+            .execute_graph(&mut graph, mock_orch_ctx())
+            .await
+            .unwrap();
+        assert_eq!(trace.outcome, TraceOutcome::Success);
+        let task = graph.get_task("t1").unwrap();
+        assert_eq!(task.status, TaskStatus::Completed);
+        // Output should contain the text the agent emitted.
+        let out = task.output.as_ref().unwrap();
+        assert!(out["output"]
+            .as_str()
+            .unwrap()
+            .contains("hello from text agent"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_graph_stream_error_path() {
+        // Agent's run() returns a stream that yields an error — this is logged via trace.error,
+        // but should NOT cause the orchestrator to fail (because errors are stream-side).
+        let registry = setup_registry();
+        let orch = OrchestratorAgent::new(Arc::clone(&registry));
+        orch.register_agent(
+            Arc::new(StreamErrorAgent {
+                name: "code-agent".to_string(),
+            }),
+            AgentCapabilities::builder("code-agent")
+                .add_capability(zero_core::capability::common::code_review())
+                .build(),
+        );
+
+        let mut graph = TaskGraph::new("g");
+        graph.add_task(TaskNode::new("t1", "do").with_capability("code_review"));
+        let trace = orch
+            .execute_graph(&mut graph, mock_orch_ctx())
+            .await
+            .unwrap();
+        // Task is "completed" because the run() future returned Ok (the stream had errors but completed).
+        let task = graph.get_task("t1").unwrap();
+        assert_eq!(task.status, TaskStatus::Completed);
+        // Trace should have at least one error from the stream.
+        assert!(!trace.errors().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_execute_graph_agent_capabilities_registered_but_not_in_store() {
+        // Capabilities are registered but the agent itself was never put in agent_store —
+        // exercises the "Agent not found in store" branch.
+        // Approach: register capabilities directly on the registry that the orchestrator wraps,
+        // without going through OrchestratorAgent::register_agent.
+        let registry = Arc::new(CapabilityRegistry::new());
+        registry.register(
+            AgentCapabilities::builder("ghost-agent")
+                .add_capability(zero_core::capability::common::code_review())
+                .build(),
+        );
+        let cfg = OrchestratorConfig {
+            continue_on_failure: true,
+            ..Default::default()
+        };
+        let orch = OrchestratorAgent::new(registry).with_config(cfg);
+
+        let mut graph = TaskGraph::new("g");
+        graph.add_task(TaskNode::new("t1", "do").with_capability("code_review"));
+
+        let trace = orch
+            .execute_graph(&mut graph, mock_orch_ctx())
+            .await
+            .unwrap();
+        let task = graph.get_task("t1").unwrap();
+        assert_eq!(task.status, TaskStatus::Failed);
+        assert!(!trace.errors().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_execute_graph_with_dependencies_creates_groups() {
+        // Two tasks with a dependency — exercises multi-group execution.
+        let registry = setup_registry();
+        let orch = OrchestratorAgent::new(Arc::clone(&registry));
+        orch.register_agent(
+            Arc::new(TextEmittingAgent {
+                name: "code-agent".to_string(),
+            }),
+            AgentCapabilities::builder("code-agent")
+                .add_capability(zero_core::capability::common::code_review())
+                .build(),
+        );
+        orch.register_agent(
+            Arc::new(TextEmittingAgent {
+                name: "research-agent".to_string(),
+            }),
+            AgentCapabilities::builder("research-agent")
+                .add_capability(zero_core::capability::common::web_search())
+                .build(),
+        );
+
+        let mut graph = TaskGraph::new("g");
+        graph.add_task(TaskNode::new("t1", "first").with_capability("code_review"));
+        graph.add_task(TaskNode::new("t2", "second").with_capability("web_search"));
+        graph.add_dependency("t2", "t1").unwrap();
+
+        let trace = orch
+            .execute_graph(&mut graph, mock_orch_ctx())
+            .await
+            .unwrap();
+        assert_eq!(trace.outcome, TraceOutcome::Success);
+    }
+
+    // ----------------------------------------------------------------------
+    // OrchestratorBuilder
+    // ----------------------------------------------------------------------
+
+    #[test]
+    fn test_orchestrator_builder_full() {
+        let registry = setup_registry();
+        let agent: Arc<dyn Agent> = Arc::new(FailingAgent {
+            name: "x".to_string(),
+        });
+        let orch = OrchestratorBuilder::new(Arc::clone(&registry))
+            .name("custom")
+            .description("d")
+            .config(OrchestratorConfig {
+                max_parallel_tasks: 2,
+                ..Default::default()
+            })
+            .agent(Arc::clone(&agent))
+            .register_agent(
+                agent,
+                AgentCapabilities::builder("x-cap")
+                    .add_capability(zero_core::capability::common::code_review())
+                    .build(),
+            )
+            .build();
+        assert_eq!(orch.name(), "custom");
+        assert_eq!(orch.description(), "d");
+        assert_eq!(orch.sub_agents().len(), 1);
+        // Registered via builder — should be in agent_store
+        assert!(orch.get_agent("x-cap").is_some());
+    }
 }

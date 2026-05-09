@@ -120,9 +120,10 @@ impl Agent for ConditionalAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflow::test_support::{make_ctx, make_ctx_with_state};
     use futures::StreamExt;
     use serde_json::Value;
-    use zero_core::{context::Session, CallbackContext, Content, Event, ReadonlyContext};
+    use zero_core::Event;
 
     struct MockAgent {
         name: String,
@@ -153,113 +154,7 @@ mod tests {
         }
     }
 
-    struct TestContext {
-        is_premium: bool,
-    }
-
-    impl ReadonlyContext for TestContext {
-        fn invocation_id(&self) -> &str {
-            "test"
-        }
-        fn agent_name(&self) -> &str {
-            "test"
-        }
-        fn user_id(&self) -> &str {
-            "test"
-        }
-        fn app_name(&self) -> &str {
-            "test"
-        }
-        fn session_id(&self) -> &str {
-            "test"
-        }
-        fn branch(&self) -> &str {
-            "test"
-        }
-        fn user_content(&self) -> &Content {
-            static CONTENT: Content = Content {
-                role: String::new(),
-                parts: Vec::new(),
-            };
-            &CONTENT
-        }
-    }
-
-    impl CallbackContext for TestContext {
-        fn get_state(&self, key: &str) -> Option<Value> {
-            if key == "is_premium" {
-                Some(Value::Bool(self.is_premium))
-            } else {
-                None
-            }
-        }
-        fn set_state(&self, _key: String, _value: Value) {}
-    }
-
-    // Mock InvocationContext that implements both InvocationContext and TestContext
-    struct MockInvocationContext {
-        agent: Arc<dyn Agent>,
-        test_ctx: TestContext,
-    }
-
-    impl ReadonlyContext for MockInvocationContext {
-        fn invocation_id(&self) -> &str {
-            self.test_ctx.invocation_id()
-        }
-        fn agent_name(&self) -> &str {
-            self.test_ctx.agent_name()
-        }
-        fn user_id(&self) -> &str {
-            self.test_ctx.user_id()
-        }
-        fn app_name(&self) -> &str {
-            self.test_ctx.app_name()
-        }
-        fn session_id(&self) -> &str {
-            self.test_ctx.session_id()
-        }
-        fn branch(&self) -> &str {
-            self.test_ctx.branch()
-        }
-        fn user_content(&self) -> &Content {
-            self.test_ctx.user_content()
-        }
-    }
-
-    impl CallbackContext for MockInvocationContext {
-        fn get_state(&self, key: &str) -> Option<Value> {
-            self.test_ctx.get_state(key)
-        }
-        fn set_state(&self, key: String, value: Value) {
-            self.test_ctx.set_state(key, value)
-        }
-    }
-
-    impl zero_core::InvocationContext for MockInvocationContext {
-        fn agent(&self) -> Arc<dyn Agent> {
-            self.agent.clone()
-        }
-        fn session(&self) -> Arc<dyn Session> {
-            unimplemented!()
-        }
-        fn run_config(&self) -> &zero_core::RunConfig {
-            unimplemented!()
-        }
-        fn actions(&self) -> zero_core::EventActions {
-            zero_core::EventActions::default()
-        }
-        fn set_actions(&self, _actions: zero_core::EventActions) {}
-        fn end_invocation(&self) {}
-        fn ended(&self) -> bool {
-            false
-        }
-        fn add_content(&self, _content: zero_core::Content) {
-            // Mock implementation - does nothing
-        }
-    }
-
-    #[tokio::test]
-    async fn test_conditional_agent_true() {
+    fn premium_basic() -> (Arc<dyn Agent>, Arc<dyn Agent>) {
         let premium = Arc::new(MockAgent {
             name: "premium".to_string(),
             description: "Premium agent".to_string(),
@@ -268,7 +163,12 @@ mod tests {
             name: "basic".to_string(),
             description: "Basic agent".to_string(),
         }) as Arc<dyn Agent>;
+        (premium, basic)
+    }
 
+    #[tokio::test]
+    async fn test_conditional_agent_true() {
+        let (premium, basic) = premium_basic();
         let router = Arc::new(
             ConditionalAgent::new(
                 "router",
@@ -281,29 +181,17 @@ mod tests {
             )
             .with_else(basic.clone()),
         );
-
-        let test_ctx = TestContext { is_premium: true };
-        let inv_ctx = Arc::new(MockInvocationContext {
-            agent: router.clone() as Arc<dyn Agent>,
-            test_ctx,
-        }) as Arc<dyn zero_core::InvocationContext>;
-
-        let mut stream = router.run(inv_ctx).await.unwrap();
+        let mut state = std::collections::HashMap::new();
+        state.insert("is_premium".to_string(), Value::Bool(true));
+        let ctx = make_ctx_with_state(router.clone() as Arc<dyn Agent>, state);
+        let mut stream = router.run(ctx).await.unwrap();
         let first_event = stream.next().await.unwrap().unwrap();
         assert_eq!(first_event.author, "premium");
     }
 
     #[tokio::test]
     async fn test_conditional_agent_false() {
-        let premium = Arc::new(MockAgent {
-            name: "premium".to_string(),
-            description: "Premium agent".to_string(),
-        }) as Arc<dyn Agent>;
-        let basic = Arc::new(MockAgent {
-            name: "basic".to_string(),
-            description: "Basic agent".to_string(),
-        }) as Arc<dyn Agent>;
-
+        let (premium, basic) = premium_basic();
         let router = Arc::new(
             ConditionalAgent::new(
                 "router",
@@ -316,15 +204,44 @@ mod tests {
             )
             .with_else(basic.clone()),
         );
-
-        let test_ctx = TestContext { is_premium: false };
-        let inv_ctx = Arc::new(MockInvocationContext {
-            agent: router.clone() as Arc<dyn Agent>,
-            test_ctx,
-        }) as Arc<dyn zero_core::InvocationContext>;
-
-        let mut stream = router.run(inv_ctx).await.unwrap();
+        // No state set → defaults to false.
+        let ctx = make_ctx(router.clone() as Arc<dyn Agent>);
+        let mut stream = router.run(ctx).await.unwrap();
         let first_event = stream.next().await.unwrap().unwrap();
         assert_eq!(first_event.author, "basic");
+    }
+
+    #[tokio::test]
+    async fn test_conditional_agent_no_else_returns_empty_stream() {
+        // Condition is false and no else agent set — should yield empty stream.
+        let if_agent = Arc::new(MockAgent {
+            name: "if".to_string(),
+            description: "if".to_string(),
+        }) as Arc<dyn Agent>;
+
+        let router = Arc::new(ConditionalAgent::new(
+            "router",
+            |_ctx| false,
+            if_agent.clone(),
+        ));
+        let ctx = make_ctx(router.clone() as Arc<dyn Agent>);
+        let mut stream = router.run(ctx).await.unwrap();
+        assert!(stream.next().await.is_none());
+    }
+
+    #[test]
+    fn test_conditional_agent_metadata_setters() {
+        let if_agent = Arc::new(MockAgent {
+            name: "if".to_string(),
+            description: "if".to_string(),
+        }) as Arc<dyn Agent>;
+
+        let router = ConditionalAgent::new("r", |_| true, if_agent)
+            .with_description("desc")
+            .before_callback(Arc::new(|_| Box::pin(async { None })))
+            .after_callback(Arc::new(|_| Box::pin(async { None })));
+        assert_eq!(router.name(), "r");
+        assert_eq!(router.description(), "desc");
+        assert!(router.sub_agents().is_empty());
     }
 }
