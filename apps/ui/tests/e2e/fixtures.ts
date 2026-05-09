@@ -135,11 +135,99 @@ export class SettingsPage {
   }
 }
 
+/**
+ * Page Object: Mission Control
+ * Encapsulates Mission Control page interactions.
+ */
+export class MissionControlPage {
+  constructor(private page: Page) {}
+
+  async goto() {
+    await this.page.goto('/mission-control');
+    await this.page.waitForSelector('.kpi-strip', { state: 'visible', timeout: 15_000 });
+    // Wait until the session list has settled: either rows appear OR the list
+    // shows a non-loading empty state ("No sessions match these filters.").
+    // We can't just wait for the "Loading" text to disappear because it may
+    // not have appeared yet when this check runs.
+    await this.page.waitForFunction(
+      () => {
+        const rows = document.querySelectorAll('.session-list-panel__row');
+        if (rows.length > 0) return true;
+        const empties = document.querySelectorAll('.session-list-panel__empty');
+        for (const el of empties) {
+          if (el.textContent && !el.textContent.includes('Loading')) return true;
+        }
+        return false;
+      },
+      { timeout: 15_000 },
+    );
+  }
+
+  /** Find and click a session row by partial title text. Returns false if not found. */
+  async selectSession(titleFragment: string): Promise<boolean> {
+    const row = this.page.locator('.session-list-panel__row', { hasText: titleFragment }).first();
+    if (!(await row.isVisible().catch(() => false))) return false;
+    await row.click();
+    await this.page.waitForSelector('.session-detail-pane:not(.session-detail-pane--empty)', {
+      state: 'visible',
+      timeout: 10_000,
+    });
+    return true;
+  }
+
+  /** Find any session row that has multiple subagents (shows N↳ in its meta). */
+  async selectFirstMultiSubagentSession(): Promise<boolean> {
+    // Rows with 2+ subagents show "N ↳" in the meta span
+    // Match "N ↳" or "N↳" (space may be collapsed in the accessible name)
+    const rows = this.page.locator('.session-list-panel__row').filter({ hasText: /\d+ ?↳/ });
+    const count = await rows.count();
+    if (count === 0) return false;
+    await rows.first().click();
+    await this.page.waitForSelector('.session-detail-pane:not(.session-detail-pane--empty)', {
+      state: 'visible',
+      timeout: 10_000,
+    });
+    return true;
+  }
+
+  /** Wait for the tools pane trace tree to finish loading. */
+  async waitForTrace() {
+    await this.page.waitForSelector('.agent-tool-tree', { state: 'visible', timeout: 15_000 });
+  }
+
+  /** All depth-1 subagent group headers (direct delegations of root). */
+  subagentTokens() {
+    return this.page.locator('.agent-tool-group--depth-1 .agent-tool-group__tokens');
+  }
+
+  /** Toggle a status filter chip (RUNNING, QUEUED, DONE, FAILED, PAUSED). */
+  async toggleFilter(label: string) {
+    await this.page.getByRole('button', { name: label }).click();
+  }
+
+  kpiStrip() {
+    return this.page.locator('.kpi-strip');
+  }
+
+  sessionList() {
+    return this.page.locator('.session-list-panel__list');
+  }
+
+  detailPane() {
+    return this.page.locator('.session-detail-pane:not(.session-detail-pane--empty)');
+  }
+
+  searchBox() {
+    return this.page.locator('.session-list-panel__search');
+  }
+}
+
 // Extend base test with custom fixtures
 export const test = base.extend<{
   dashboardPage: DashboardPage;
   chatPage: ChatPage;
   settingsPage: SettingsPage;
+  mcPage: MissionControlPage;
 }>({
   dashboardPage: async ({ page }, use) => {
     const dashboard = new DashboardPage(page);
@@ -152,6 +240,9 @@ export const test = base.extend<{
   settingsPage: async ({ page }, use) => {
     const settings = new SettingsPage(page);
     await use(settings);
+  },
+  mcPage: async ({ page }, use) => {
+    await use(new MissionControlPage(page));
   },
 });
 

@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildIndex,
   sumExecutionTokensByAgent,
+  executionTokensById,
   normalizeV2Status,
   applyV2Status,
 } from "./useSessionTokens";
@@ -217,5 +218,33 @@ describe("sumExecutionTokensByAgent", () => {
     ]);
     expect(out.size).toBe(1);
     expect(out.get("builder-agent")).toEqual({ in: 3500, out: 350 });
+  });
+});
+
+describe("executionTokensById", () => {
+  it("returns empty map when entries is undefined", () => {
+    expect(executionTokensById(undefined).size).toBe(0);
+  });
+
+  it("maps each execution to its own token counts (no summing)", () => {
+    const out = executionTokensById([
+      { executionId: "exec-a", agentId: "builder-agent", in: 1000, out: 100 },
+      { executionId: "exec-b", agentId: "builder-agent", in: 2000, out: 200 },
+      { executionId: "exec-c", agentId: "builder-agent", in: 500, out: 50 },
+    ]);
+    // Three separate entries — the same agentId does NOT collapse them
+    expect(out.size).toBe(3);
+    expect(out.get("exec-a")).toEqual({ in: 1000, out: 100 });
+    expect(out.get("exec-b")).toEqual({ in: 2000, out: 200 });
+    expect(out.get("exec-c")).toEqual({ in: 500, out: 50 });
+  });
+
+  it("works when agents differ", () => {
+    const out = executionTokensById([
+      { executionId: "exec-root", agentId: "root", in: 500, out: 50 },
+      { executionId: "exec-plan", agentId: "planner-agent", in: 1200, out: 80 },
+    ]);
+    expect(out.get("exec-root")).toEqual({ in: 500, out: 50 });
+    expect(out.get("exec-plan")).toEqual({ in: 1200, out: 80 });
   });
 });

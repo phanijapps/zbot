@@ -13,7 +13,7 @@ import { useSessionTrace } from "../logs/useSessionTrace";
 import { useTraceSubscription } from "../logs/useTraceSubscription";
 import { AgentToolGroup } from "./AgentToolGroup";
 import { ToolDetailPopover } from "./ToolDetailPopover";
-import { sumExecutionTokensByAgent, type SessionTokenIndex } from "./useSessionTokens";
+import { sumExecutionTokensByAgent, executionTokensById, type SessionTokenIndex } from "./useSessionTokens";
 
 interface ToolsPaneProps {
   session: LogSession | null;
@@ -25,12 +25,21 @@ export function ToolsPane({ session, tokenIndex }: ToolsPaneProps) {
   const { trace, loading, refetch } = useSessionTrace(sessionId);
   const [openTool, setOpenTool] = useState<TraceNode | null>(null);
 
-  // Per-agent token totals for the agent_id keys appearing in the trace tree.
-  // When an agent runs multiple times (delegated repeatedly), we sum.
+  // Per-agent token totals (agent_id → combined tokens across all runs of that agent).
+  // Used as fallback for the root node which has no executionId.
   const tokensByAgent = useMemo(() => {
     if (!sessionId || !tokenIndex) return new Map<string, { in: number; out: number }>();
     const entries = tokenIndex.executionsByRootExecId.get(sessionId);
     return sumExecutionTokensByAgent(entries);
+  }, [sessionId, tokenIndex]);
+
+  // Per-execution token lookup (executionId → individual run tokens).
+  // This is the primary lookup for delegation nodes: when the same agent is
+  // delegated multiple times, each card shows its own run's counts, not the sum.
+  const tokensByExecution = useMemo(() => {
+    if (!sessionId || !tokenIndex) return new Map<string, { in: number; out: number }>();
+    const entries = tokenIndex.executionsByRootExecId.get(sessionId);
+    return executionTokensById(entries);
   }, [sessionId, tokenIndex]);
 
   // Live: refetch trace whenever a tool_call/tool_result event arrives on
@@ -55,6 +64,7 @@ export function ToolsPane({ session, tokenIndex }: ToolsPaneProps) {
               depth={0}
               onToolClick={setOpenTool}
               tokensByAgent={tokensByAgent}
+              tokensByExecution={tokensByExecution}
             />
           </div>
         )}
