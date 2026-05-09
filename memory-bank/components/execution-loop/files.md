@@ -6,15 +6,13 @@ Every file involved in the execution loop with key functions and line references
 
 | File | Function / Export | Purpose |
 |------|-------------------|---------|
-| `apps/ui/src/features/chat/mission-hooks.ts` | `useMissionControl()` | Main hook: state management, event handling, sendMessage |
-| | `sendMessage()` ~line 1189 | Sends message via transport, sets phase |
-| | `handleStreamEvent()` ~line 940 | Routes WS events to handlers |
-| | `getSessionId()` line 101 | Reads session_id from localStorage |
-| | `setSessionId()` line 105 | Persists session_id to localStorage |
-| | `switchToSession()` line 1327 | Switches to existing session |
-| `apps/ui/src/features/chat/fast-chat-hooks.ts` | `useFastChat()` | Fast mode: no intent analysis UI |
-| `apps/ui/src/features/chat/PhaseIndicators.tsx` | `PhaseIndicators` | 4-phase progress display |
-| `apps/ui/src/services/transport/http.ts` | `executeAgent()` line 621 | Sends invoke command via WebSocket |
+| `apps/ui/src/features/research-v2/useResearchSession.ts` | `useResearchSession()` | Research hook: snapshot hydrate + WS subscribe + dispatch |
+| `apps/ui/src/features/research-v2/event-map.ts` | `mapGatewayEventToResearchAction()` | WS event → `ResearchAction` mapper |
+| `apps/ui/src/features/research-v2/reducer.ts` | `reduceResearchSession()` | Reduces actions over per-turn state (turns, subagents, intent) |
+| `apps/ui/src/features/research-v2/SessionTurnBlock.tsx` | `SessionTurnBlock` | Renders one user-prompt + assistant-response turn |
+| `apps/ui/src/features/chat-v2/useQuickChat.ts` | `useQuickChat()` | Chat hook: WS subscribe + dispatch (no intent analysis UI) |
+| `apps/ui/src/features/chat/mission-hooks.ts` | `useRecentSessions()`, `switchToSession()`, `timeAgo()` | Recent-sessions list + session switching helpers |
+| `apps/ui/src/services/transport/http.ts` | `executeAgent()` | Sends invoke command via WebSocket |
 
 ## Gateway — WebSocket & Routing
 

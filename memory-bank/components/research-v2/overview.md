@@ -1,6 +1,6 @@
-# Research v2 (`/research-v2`)
+# Research v2 (`/research`)
 
-Multi-session research surface. One session per user request. Renders root agent + subagent delegations + live streaming + artifacts. Parallel to the old `/` MissionControl page — both coexist.
+Multi-session research surface served at `/research` (the live route; `/research-v2` is a legacy bookmark redirect). One session per user request. Renders root agent + subagent delegations + live streaming + artifacts. Replaced the old `/` MissionControl page; legacy MissionControl still reachable via `/mission-control`.
 
 ## Purpose
 
@@ -9,11 +9,11 @@ Multi-session research surface. One session per user request. Renders root agent
 - Live streaming of tool activity (top StatusPill + per-turn inline LiveTicker).
 - Hydrate any completed session from REST; re-attach live streaming to running sessions via dual WS subscription.
 
-## When it runs vs `/chat-v2`
+## When it runs vs `/chat`
 
-| Axis | `/chat-v2` (Quick Chat) | `/research-v2` (Research) |
+| Axis | `/chat` (Quick Chat) | `/research` (Research) |
 |---|---|---|
-| Session model | One reserved session, persistent, shared with `/chat` | One per user prompt, new on send |
+| Session model | One reserved session, persistent | One per user prompt, new on send |
 | Mode flag | `mode="fast"` (SessionMode::Chat) | default (SessionMode::Research) |
 | Subagents | Typically none | Usually delegates (planner → builder → writer) |
 | Ward | No | Agent can call `ward` tool → sets sticky ward |
@@ -70,7 +70,7 @@ Intentionally NOT used:
 
 ## Session lifecycle — two entry points
 
-**A. New session (`sendMessage` from a fresh `/research-v2`)**:
+**A. New session (`sendMessage` from a fresh `/research`)**:
 
 ```
 sendMessage(text)
@@ -90,7 +90,7 @@ sendMessage(text)
  → on root agent_completed → re-snapshot (R14f) to pull final title + artifacts
 ```
 
-**B. Opening a session via URL `/research-v2/:sessionId`** (second tab, reload, drawer navigation):
+**B. Opening a session via URL `/research/:sessionId`** (second tab, reload, drawer navigation):
 
 ```
 urlSessionId from useParams

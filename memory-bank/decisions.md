@@ -265,7 +265,7 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 
 ### Session Offload to JSONL.gz
 **Problem**: Session transcripts are the largest data in SQLite. After distillation, raw transcripts are dead weight.
-**Decision**: `zero sessions archive --older-than N` compresses transcripts to JSONL.gz files. `sessions.archived` column tracks state. `zero sessions restore <id>` reverses the process.
+**Decision**: `zbot sessions archive --older-than N` compresses transcripts to JSONL.gz files. `sessions.archived` column tracks state. `zbot sessions restore <id>` reverses the process.
 **Rationale**: Keeps SQLite lean for Pi 4. Transcripts are already distilled — the extracted facts, episodes, and entities survive independently. Restorable if needed.
 
 ### Entity Dedup as __global__
@@ -275,8 +275,9 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 
 ### Execution Intelligence Dashboard Over Flat Logs
 **Problem**: The log viewer was 845 lines of flat session/log rendering. No visual structure, no execution shape, no interactivity.
-**Decision**: Visual observability dashboard with KPI sparkline cards, inline mini waterfalls in the session list, expandable full waterfall timelines with delegation spans and tool dots, hover tooltips, click-through detail panels, and auto-refresh for running sessions.
+**Decision**: A visual observability surface focused on execution shape — aggregate KPIs, a filterable session list, and a per-session detail pane that shows the message narrative alongside the tool calls each agent issued. Auto-refresh while sessions are running.
 **Rationale**: Operators need to see execution shape at a glance — which delegations happened, where time was spent, what tools were called. Flat logs require scrolling and mental reconstruction.
+**Implementation refs**: `apps/ui/src/features/mission-control/` — `MissionControlPage`, `KpiStrip`, `SessionListPanel`, `SessionDetailPane`, `MessagesPane`, `ToolsPane`. The earlier WebOps/Executions implementation (KPI sparkline cards, mini waterfalls, `WaterfallSlideOut`) was retired in PR #112 — same decision, simpler surface.
 
 ## Patterns We Did NOT Adopt
 
@@ -418,11 +419,12 @@ Distilled patterns from building z-Bot:
 **Decision**: Fixed the backend API to persist distillation config. Promoted Distillation to its own card in a 2x2 grid layout on the Advanced tab, alongside Orchestrator, Multimodal, and Execution.
 **Rationale**: Distillation (memory extraction) is a distinct subsystem from the orchestrator. Users may want a cheaper model for distillation while keeping a powerful orchestrator model. Separate card makes it discoverable and independently configurable.
 
-### Observability Dashboard Replaces Logs Page (2026-04-08)
+### Observability Dashboard Replaces Logs Page (2026-04-08, surface superseded 2026-05 by PR #112)
 **Problem**: The Logs page used a waterfall visualization that didn't show subagent tool calls. Users couldn't see the full execution narrative (root → subagent → tool calls).
-**Decision**: Replace `/logs` with a List+Detail split layout. Left panel: filterable session list. Right panel: Timeline Tree showing root → delegation → tool call hierarchy with lucide icons per tool type. Real-time updates via 3-second polling for running sessions.
+**Decision**: Replace `/logs` with a session-list + detail layout. Left panel: filterable session list. Right panel: hierarchical narrative showing root → delegation → tool calls with lucide icons per tool type. Real-time updates via polling for running sessions.
 **Rationale**: All data already existed in `execution_logs` table and the `/api/logs/sessions` API. The gap was purely presentation. WebSocket `scope: "all"` delivers subagent events with `execution_id` for tagging. Polling chosen over WebSocket subscription because the subscription API uses `conversationId` (not `sessionId`) and the dashboard doesn't need sub-second latency.
 **Key detail**: Delegation logs in `stream.rs` use metadata key `"child_agent"` (not `"child_agent_id"` as in `service.rs`). The trace builder checks both keys with a fallback to parsing the message text.
+**Current implementation**: `/logs` (and `/dashboard`) now redirect to `/mission-control`. The list+detail split survives in `apps/ui/src/features/mission-control/` (`SessionListPanel` + `SessionDetailPane` with `MessagesPane`/`ToolsPane`). The original Timeline Tree component family (waterfall slide-outs, KPI sparkline cards) was retired in PR #112.
 
 ### Tool Result Offloading Already Exists (2026-04-08)
 **Problem**: Investigated whether to build JS/shell hooks for intercepting large tool call responses.

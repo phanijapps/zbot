@@ -16,16 +16,17 @@ long-term durability:
 - **`conversations.db`** — operational state (sessions, agent executions,
   messages, execution logs, artifacts, bridge outbox, recall log,
   distillation runs). Pruned aggressively as sessions complete.
-  Schema: `gateway/gateway-database/src/schema.rs:357`.
+  Schema: `stores/zero-stores-sqlite/src/schema.rs:357`.
 - **`knowledge.db`** — long-term memory (facts, KG entities/aliases/
   relationships, wiki, procedures, session episodes, goals, compactions,
   ingestion episodes + payloads, embedding cache). `sqlite-vec` loaded;
   contains all five `vec0` virtual tables. Portable — back it up without
   touching `conversations.db`.
-  Schema: `gateway/gateway-database/src/knowledge_schema.rs:24`.
+  Schema: `stores/zero-stores-sqlite/src/knowledge_schema.rs:25`.
 
-Both DBs carry schema version 22 (`SCHEMA_VERSION` constants in the same
-files). `knowledge_schema.rs` is applied idempotently on daemon boot: there
+`conversations.db` is at schema version 22 and `knowledge.db` is at schema
+version 24 (`SCHEMA_VERSION` constants in the same files).
+`knowledge_schema.rs` is applied idempotently on daemon boot: there
 are no migrations, only `CREATE TABLE IF NOT EXISTS`. Routing to
 `KnowledgeDatabase` vs the conversations pool is enforced by the repository
 layer.
@@ -38,7 +39,7 @@ Atomic propositions keyed by `(agent_id, scope, ward_id, key)`. Stored in
 three triggers, and embeddings in the `memory_facts_index` vec0 table.
 Hybrid recall = BM25 (FTS) + cosine (vec0) merged per configured weights
 (`MemoryRepository::search_memory_facts_hybrid`,
-`gateway/gateway-database/src/memory_repository.rs:634`).
+`stores/zero-stores-sqlite/src/memory_repository.rs:893`).
 Contradicted facts are tombstoned via `contradicted_by`/`superseded_by`;
 archival facts are copied to `memory_facts_archive` by
 `MemoryRepository::archive_fact`.
@@ -56,7 +57,7 @@ schedule.
 Compiled per-ward articles unique on `(ward_id, title)` with a vec0
 index (`wiki_articles_index`) for similarity search. Written by the
 wiki compiler, queried via `WikiRepository::search_by_similarity`
-(`gateway/gateway-database/src/wiki_repository.rs`).
+(`stores/zero-stores-sqlite/src/wiki_repository.rs`).
 
 ### Layer 3 — Procedures
 Reusable multi-step workflows with JSON `steps`, success/failure
@@ -69,7 +70,7 @@ Intent lifecycle with slot tracking: `kg_goals(state, slots,
 filled_slots, parent_goal_id)`. Active goals drive intent-boost in
 recall (1.3× multiplier when a recalled item's content contains an
 unfilled slot name). See `GoalRepository::list_active`
-(`gateway/gateway-database/src/goal_repository.rs:116`) and
+(`stores/zero-stores-sqlite/src/goal_repository.rs:102`) and
 `scored_item::intent_boost`
 (`gateway/gateway-execution/src/recall/scored_item.rs:81`).
 
@@ -84,7 +85,7 @@ in `kg_compactions`. See `SleepTimeWorker::start`
 Every vector search goes through a `vec0` virtual table. No hand-rolled
 cosine loops in the recall path, no BLOB columns duplicating embeddings
 on base rows (see the structural assertion at
-`gateway/gateway-database/src/knowledge_schema.rs:434`). The five vec0
+`stores/zero-stores-sqlite/src/knowledge_schema.rs:655`). The five vec0
 tables, all 384-dim:
 
 | Table | Partner table |
@@ -96,7 +97,7 @@ tables, all 384-dim:
 | `session_episodes_index` | `session_episodes` |
 
 Five `AFTER DELETE` triggers
-(`gateway/gateway-database/src/knowledge_schema.rs:315`) keep vec0 in
+(`stores/zero-stores-sqlite/src/knowledge_schema.rs:368`) keep vec0 in
 lockstep with the base rows.
 
 ## Streaming ingestion pipeline

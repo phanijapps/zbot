@@ -141,7 +141,7 @@ The `__index__` article is a special record listing all titles with one-line sum
 ### Key Files
 
 - `gateway/gateway-execution/src/ward_wiki.rs` — `compile_ward_wiki()` + prompt + dedup
-- `gateway/gateway-database/src/wiki_repository.rs` — CRUD + vector search
+- `stores/zero-stores-sqlite/src/wiki_repository.rs` — CRUD + vector search
 - `gateway/gateway-execution/src/recall.rs` — wiki-first recall integration
 
 ---
@@ -225,7 +225,7 @@ In `middleware/intent_analysis.rs`:
 ### Key Files
 
 - `gateway/gateway-execution/src/distillation.rs` — procedure extraction in LLM response
-- `gateway/gateway-database/src/procedure_repository.rs` — CRUD + embedding search
+- `stores/zero-stores-sqlite/src/procedure_repository.rs` — CRUD + embedding search
 - `gateway/gateway-execution/src/middleware/intent_analysis.rs` — recall during intent
 
 ---

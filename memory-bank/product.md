@@ -7,7 +7,7 @@ z-Bot is a goal-oriented AI agent that lives on your desktop. It analyzes intent
 ### Web Dashboard
 Browser-based interface served by the daemon at `http://localhost:18791`. Full-featured management of agents, providers, skills, conversations, and observability.
 
-### CLI (zero)
+### CLI (zbot)
 Command-line interface for scripting, automation, and terminal-based workflows. Connects to the same daemon as the web dashboard.
 
 ## Core Features
@@ -116,22 +116,23 @@ Agent-managed persistent project directories. The agent autonomously creates, na
 - `scratch` ward for quick one-off tasks
 
 ### 8. Observability Dashboard
-Full execution visibility via a List + Detail split layout:
+Full execution visibility at `/mission-control` (`/logs` and `/dashboard` redirect there). Implementation: `apps/ui/src/features/mission-control/`.
+
+**KPI strip (top):**
+- Aggregate counters across the visible sessions
 
 **Session List (left panel):**
 - Filterable list of root sessions with status badges
 - Agent count, duration, token usage per session
-- Real-time polling for running sessions
+- Real-time updates for running sessions
 
-**Timeline Tree (right panel):**
-- Hierarchical narrative: root → subagent → tool calls
-- Contextual icons per tool type (Terminal, FileEdit, Brain, Globe, etc.)
-- Click to expand nodes and see full arguments/results
-- Subagent delegations collapsible with task description
-- Error nodes highlighted in red
+**Session Detail (right panel):**
+- Messages pane: chat narrative for the selected session
+- Tools pane: per-agent tool calls with detail popover
+- Subagent delegations grouped under their parent
+- Errors highlighted
 
-**Operations Dashboard:**
-- Real-time session monitoring and management
+**Session controls:**
 - Pause, resume, cancel running sessions
 - Resume crashed sessions at the subagent level (smart resume)
 

@@ -8,8 +8,7 @@
 use crate::connectors::ConnectorRegistry;
 use crate::events::{EventBus, GatewayEvent};
 use crate::execution::{
-    new_workspace_cache, ExecutionConfig, ExecutionHandle, ExecutionRunner, MemoryRecall,
-    SessionDistiller, WorkspaceCache,
+    ExecutionConfig, ExecutionHandle, ExecutionRunner, MemoryRecall, SessionDistiller,
 };
 use crate::hooks::HookContext;
 use crate::services::{AgentService, McpService, ProviderService, SharedVaultPaths, SkillService};
@@ -75,7 +74,6 @@ impl RuntimeService {
             log_service,
             state_service,
             None,
-            new_workspace_cache(),
             None, // memory_store
             None, // distiller
             None, // memory_recall
@@ -103,7 +101,6 @@ impl RuntimeService {
         log_service: Arc<LogService<DatabaseManager>>,
         state_service: Arc<StateService<DatabaseManager>>,
         connector_registry: Option<Arc<ConnectorRegistry>>,
-        workspace_cache: WorkspaceCache,
         memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
         distiller: Option<Arc<SessionDistiller>>,
         memory_recall: Option<Arc<MemoryRecall>>,
@@ -127,7 +124,6 @@ impl RuntimeService {
             log_service,
             state_service,
             connector_registry,
-            workspace_cache,
             memory_store,
             distiller,
             memory_recall,

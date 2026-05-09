@@ -636,4 +636,132 @@ mod tests {
         assert_eq!(trace.metrics.tasks_failed, 1);
         assert!((trace.metrics.success_rate() - 0.8).abs() < 0.01);
     }
+
+    // ============================================================================
+    // ADDITIONAL TESTS
+    // ============================================================================
+
+    #[test]
+    fn test_trace_event_kind_predicates() {
+        assert!(TraceEventKind::TaskFailed.is_error());
+        assert!(TraceEventKind::ExecutionFailed.is_error());
+        assert!(TraceEventKind::RoutingFailed.is_error());
+        assert!(TraceEventKind::ErrorOccurred.is_error());
+        assert!(!TraceEventKind::TaskStarted.is_error());
+
+        assert!(TraceEventKind::ExecutionStarted.is_lifecycle());
+        assert!(TraceEventKind::ExecutionCompleted.is_lifecycle());
+        assert!(TraceEventKind::ExecutionFailed.is_lifecycle());
+        assert!(TraceEventKind::ExecutionCancelled.is_lifecycle());
+        assert!(!TraceEventKind::TaskStarted.is_lifecycle());
+    }
+
+    #[test]
+    fn test_trace_event_with_helpers() {
+        let event = TraceEvent::new(TraceEventKind::AgentInvoked, "msg")
+            .with_task("t-1")
+            .with_agent("a-1")
+            .with_duration(123)
+            .with_data("k", serde_json::json!("v"))
+            .with_parent("p-1")
+            .with_span("s-1");
+        assert_eq!(event.task_id.as_deref(), Some("t-1"));
+        assert_eq!(event.agent_id.as_deref(), Some("a-1"));
+        assert_eq!(event.duration_ms, Some(123));
+        assert_eq!(event.parent_id.as_deref(), Some("p-1"));
+        assert_eq!(event.span_id.as_deref(), Some("s-1"));
+    }
+
+    #[test]
+    fn test_execution_trace_cancel() {
+        let mut trace = ExecutionTrace::new("exec");
+        trace.start();
+        trace.cancel("user cancelled");
+        assert_eq!(trace.outcome, TraceOutcome::Cancelled);
+        assert!(trace.ended_at.is_some());
+    }
+
+    #[test]
+    fn test_execution_trace_fail() {
+        let mut trace = ExecutionTrace::new("exec");
+        trace.start();
+        trace.fail("oops");
+        assert_eq!(trace.outcome, TraceOutcome::Failure);
+    }
+
+    #[test]
+    fn test_execution_trace_events_for_agent_and_timeline() {
+        let mut trace = ExecutionTrace::new("exec");
+        trace.start();
+        trace.record(TraceEvent::new(TraceEventKind::AgentInvoked, "invoke").with_agent("a-1"));
+        trace.record(TraceEvent::new(TraceEventKind::TaskStarted, "task"));
+
+        let agent_events = trace.events_for_agent("a-1");
+        assert_eq!(agent_events.len(), 1);
+
+        let timeline = trace.timeline();
+        assert!(timeline.len() >= 2);
+
+        // is_in_progress is true until complete/fail/cancel is called
+        assert!(trace.is_in_progress());
+
+        // duration_ms before ending uses now - start
+        assert!(trace.duration_ms() >= 0);
+
+        trace.complete("done");
+        assert!(!trace.is_in_progress());
+        // After ending, duration is end-start
+        assert!(trace.duration_ms() >= 0);
+    }
+
+    #[test]
+    fn test_trace_metrics_tracks_more_kinds() {
+        let mut trace = ExecutionTrace::new("exec");
+        trace.start();
+        trace.record(TraceEvent::new(TraceEventKind::AgentInvoked, "i"));
+        trace.record(TraceEvent::new(TraceEventKind::ToolCalled, "t"));
+        trace.record(TraceEvent::new(TraceEventKind::TaskRetrying, "r"));
+        trace.record(TraceEvent::new(TraceEventKind::ErrorOccurred, "e"));
+        trace.record(TraceEvent::new(TraceEventKind::AgentInvoked, "i2").with_duration(99));
+        assert_eq!(trace.metrics.agent_invocations, 2);
+        assert_eq!(trace.metrics.tool_calls, 1);
+        assert_eq!(trace.metrics.retries, 1);
+        assert_eq!(trace.metrics.errors, 1);
+        // Duration should accumulate from the .with_duration(99) event
+        assert!(trace.metrics.total_duration_ms >= 99);
+    }
+
+    #[test]
+    fn test_trace_metrics_success_rate_no_tasks() {
+        let metrics = TraceMetrics::default();
+        // No completed and no failed tasks → returns 1.0.
+        assert_eq!(metrics.success_rate(), 1.0);
+    }
+
+    #[test]
+    fn test_trace_builder_task_failed_and_agent_selected() {
+        let mut builder = TraceBuilder::new("exec");
+        builder.begin_span("span1");
+        builder.task_failed("t-1", "fail msg");
+        builder.agent_selected("a-1", "selected");
+        builder.error("oops");
+        builder.end_span("span1");
+        let trace = builder.fail("done with failures");
+        assert_eq!(trace.outcome, TraceOutcome::Failure);
+    }
+
+    #[test]
+    fn test_trace_builder_methods_outside_span() {
+        let mut builder = TraceBuilder::new("exec");
+        // No span begun — exercises the `if let Some(ref span)` None branch.
+        builder.task_started("t", "msg");
+        builder.task_completed("t", "done", 10);
+        builder.task_failed("t2", "fail");
+        builder.agent_selected("a", "why");
+        builder.error("err");
+        builder.end_span("s"); // end_span when no span started — should be a no-op
+        let _trace_ref = builder.trace();
+        let trace = builder.complete("done");
+        assert_eq!(trace.outcome, TraceOutcome::Success);
+    }
 }

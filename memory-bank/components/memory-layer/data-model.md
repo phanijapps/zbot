@@ -2,18 +2,18 @@
 
 Every table across both SQLite databases, every column, every index and
 trigger. Copy-verbatim from
-`gateway/gateway-database/src/schema.rs` (conversations.db) and
-`gateway/gateway-database/src/knowledge_schema.rs` (knowledge.db) at the
+`stores/zero-stores-sqlite/src/schema.rs` (conversations.db) and
+`stores/zero-stores-sqlite/src/knowledge_schema.rs` (knowledge.db) at the
 time of writing — when in doubt, grep those files.
 
-Default location: `~/Documents/zbot/data/`. `SCHEMA_VERSION = 22` in both
-files.
+Default location: `~/Documents/zbot/data/`. `SCHEMA_VERSION = 22` in
+`schema.rs` and `SCHEMA_VERSION = 24` in `knowledge_schema.rs`.
 
 ---
 
 ## `conversations.db`
 
-Operational state. Source: `gateway/gateway-database/src/schema.rs`.
+Operational state. Source: `stores/zero-stores-sqlite/src/schema.rs`.
 
 ### `sessions`
 
@@ -204,7 +204,7 @@ workers.
 ## `knowledge.db`
 
 Long-term memory. Source:
-`gateway/gateway-database/src/knowledge_schema.rs`.
+`stores/zero-stores-sqlite/src/knowledge_schema.rs`.
 
 ### `kg_entities`
 
@@ -427,7 +427,7 @@ generic relationships.
 `idx_facts_ward`, `idx_facts_epistemic`.
 **No `embedding` BLOB column** — the vec0 partner `memory_facts_index`
 holds the vectors. Asserted at
-`gateway/gateway-database/src/knowledge_schema.rs:434`.
+`stores/zero-stores-sqlite/src/knowledge_schema.rs:655`.
 **Writes/Reads:** `MemoryRepository` (`memory_repository.rs`).
 
 ### `memory_facts_fts` (virtual, FTS5)

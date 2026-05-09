@@ -20,7 +20,7 @@ src-tauri/target/
 .ref/
 .serena/
 *.wix
-# Tauri specific
+# Tauri removed; rule kept defensively in case the dir reappears.
 src-tauri/Cargo.lock
 
 # -----------------------------------------------------------------------------
@@ -111,7 +111,8 @@ temp_*.py
 # -----------------------------------------------------------------------------
 **/*.rs.bk
 *.pdb
-Cargo.lock
+# Cargo.lock — committed at the workspace root for reproducible builds
+# (zbot ships binaries; SonarQube S8570 / supply-chain best practice).
 
 # -----------------------------------------------------------------------------
 # ML model caches (fastembed ONNX models)

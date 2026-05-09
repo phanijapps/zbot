@@ -18,6 +18,9 @@ mod loop_agent;
 mod parallel_agent;
 mod sequential_agent;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use conditional_agent::ConditionalAgent;
 pub use custom_agent::{CustomAgent, CustomAgentBuilder};
 pub use llm_conditional_agent::{LlmConditionalAgent, LlmConditionalAgentBuilder};

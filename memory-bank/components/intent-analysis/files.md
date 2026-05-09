@@ -54,14 +54,17 @@
 ### Hook & State
 | File | What |
 |------|------|
-| `apps/ui/src/features/chat/mission-hooks.ts` | `IntentAnalysis` type, event handlers (`intent_analysis_started`, `intent_analysis_complete`, `ward_changed`), session replay loading, `setActiveWard` from intent |
+| `apps/ui/src/features/research-v2/useResearchSession.ts` | Subscribes to WS, hydrates from snapshot, drives reducer |
+| `apps/ui/src/features/research-v2/event-map.ts` | Maps `intent_analysis_started` / `intent_analysis_complete` / `intent_analysis_skipped` (and `ward_changed`) into `ResearchAction`s |
+| `apps/ui/src/features/research-v2/reducer.ts` | Applies actions; sets `intentAnalyzing` flag and `intentClassification` |
+| `apps/ui/src/features/research-v2/session-snapshot.ts` | Builds replay snapshot (incl. ward name from `/api/sessions/:id/state`) |
 
 ### UI Components
 | File | What |
 |------|------|
-| `apps/ui/src/features/chat/IntentAnalysisBlock.tsx` | Streaming skeleton + complete render in narrative |
-| `apps/ui/src/features/chat/IntelligenceFeed.tsx` | Sidebar: collapsible intent section with badge |
-| `apps/ui/src/features/chat/ExecutionNarrative.tsx` | Routes `"intent_analysis"` blocks to `IntentAnalysisBlock` |
+| `apps/ui/src/features/research-v2/ResearchPage.tsx` | Renders `IntentLine` (analyzing… / classification chip) and the `IntentInfoButton` next to the title |
+| `apps/ui/src/features/research-v2/IntentInfoButton.tsx` | Popover button that surfaces full intent metadata for the active session |
+| `apps/ui/src/features/research-v2/SessionTurnBlock.tsx` | Per-turn renderer used for both live and replayed turns |
 
 ### Styling
 | File | What |

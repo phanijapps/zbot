@@ -4,6 +4,8 @@
 **Branch:** `feature/persistence-readiness`
 **Related:** [`memory-bank/tech-debt.md`](../tech-debt.md) — fix plan and item registry
 
+> **Note (2026-05-03+):** The SurrealDB sidecar narrative this doc opens with is obsolete — the backend was implemented (commits `f7a0663d`, `1a808a05`, `1915bdcc`, `adea05d8`) and then reverted in commit `d823b7bd: chore: remove SurrealDB backend, keep clean trait-routed SQLite`. The trait-abstraction content (the work captured under TD-010, TD-011, etc. in `tech-debt.md`) is still load-bearing and shipped against SQLite; the supervisor lifecycle, SurrealDB schema sketches, and SurrealDB-specific testing/CI guidance below are historical.
+
 ---
 
 ## Goal

@@ -33,7 +33,6 @@ use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use crate::delegation::{DelegationRegistry, DelegationRequest};
 use crate::handle::ExecutionHandle;
-use crate::invoke::WorkspaceCache;
 
 // ============================================================================
 // RunnerContinuationInvoker
@@ -64,7 +63,6 @@ pub(crate) struct RunnerContinuationInvoker {
     pub(crate) delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
     pub(crate) log_service: Arc<LogService<DatabaseManager>>,
     pub(crate) state_service: Arc<StateService<DatabaseManager>>,
-    pub(crate) workspace_cache: WorkspaceCache,
     pub(crate) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub(crate) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     pub(crate) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
@@ -106,7 +104,6 @@ impl ContinuationSpawner for RunnerContinuationInvoker {
             delegation_tx: self.delegation_tx.clone(),
             log_service: self.log_service.clone(),
             state_service: self.state_service.clone(),
-            workspace_cache: self.workspace_cache.clone(),
             memory_store: self.memory_store.clone(),
             embedding_client: self.embedding_client.clone(),
             distiller: self.distiller.clone(),

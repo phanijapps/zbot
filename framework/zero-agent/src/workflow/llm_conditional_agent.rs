@@ -317,6 +317,238 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[test]
+    fn test_builder_with_description_and_default() {
+        let mock_model = Arc::new(MockLlm) as Arc<dyn Llm>;
+        let agent = Arc::new(MockAgent) as Arc<dyn Agent>;
+        let default_agent = Arc::new(MockAgent) as Arc<dyn Agent>;
+        let result = LlmConditionalAgent::builder("test", mock_model)
+            .description("desc")
+            .instruction("classify")
+            .route("a", agent)
+            .default_route(default_agent)
+            .build()
+            .unwrap();
+        assert_eq!(result.description(), "desc");
+        assert_eq!(result.name(), "test");
+        assert!(result.sub_agents().is_empty());
+    }
+
+    // ----------------------------------------------------------------------
+    // Run-path tests
+    // ----------------------------------------------------------------------
+
+    /// LLM that emits a classification (one delta) then completes.
+    struct ClassifyingLlm {
+        category: &'static str,
+    }
+
+    #[async_trait]
+    impl zero_llm::Llm for ClassifyingLlm {
+        async fn generate(
+            &self,
+            _request: zero_llm::LlmRequest,
+        ) -> zero_core::Result<zero_llm::LlmResponse> {
+            Ok(zero_llm::LlmResponse {
+                content: Some(Content::assistant(self.category)),
+                turn_complete: true,
+                usage: None,
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: zero_llm::LlmRequest,
+        ) -> zero_core::Result<zero_llm::LlmResponseStream> {
+            use async_stream::stream;
+            use zero_llm::LlmResponseChunk;
+            let cat = self.category.to_string();
+            let s = stream! {
+                yield Ok(LlmResponseChunk {
+                    delta: Some(cat),
+                    tool_call: None,
+                    turn_complete: true,
+                    usage: None,
+                });
+            };
+            Ok(Box::pin(s))
+        }
+    }
+
+    /// LLM whose stream yields an Err — exercises classification error branch.
+    struct StreamErrLlm;
+
+    #[async_trait]
+    impl zero_llm::Llm for StreamErrLlm {
+        async fn generate(
+            &self,
+            _request: zero_llm::LlmRequest,
+        ) -> zero_core::Result<zero_llm::LlmResponse> {
+            Ok(zero_llm::LlmResponse {
+                content: None,
+                turn_complete: true,
+                usage: None,
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: zero_llm::LlmRequest,
+        ) -> zero_core::Result<zero_llm::LlmResponseStream> {
+            use async_stream::stream;
+            let s = stream! {
+                yield Err(zero_core::ZeroError::Llm("boom".to_string()));
+            };
+            Ok(Box::pin(s))
+        }
+    }
+
+    /// Agent that always errors when run.
+    struct FailingAgent;
+    #[async_trait]
+    impl Agent for FailingAgent {
+        fn name(&self) -> &str {
+            "fail"
+        }
+        fn description(&self) -> &str {
+            ""
+        }
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+        async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+            Err(zero_core::ZeroError::Generic("nope".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_routes_to_matching_agent() {
+        use crate::workflow::test_support::make_ctx;
+        use futures::StreamExt;
+
+        let model = Arc::new(ClassifyingLlm { category: "tech" }) as Arc<dyn zero_llm::Llm>;
+        let tech_agent = Arc::new(MockAgent) as Arc<dyn Agent>;
+        let agent = LlmConditionalAgent::builder("router", model)
+            .instruction("classify")
+            .route("tech", tech_agent)
+            .build()
+            .unwrap();
+
+        let stub_agent: Arc<dyn Agent> = Arc::new(MockAgent);
+        let ctx = make_ctx(stub_agent);
+        let mut stream = agent.run(ctx).await.unwrap();
+        let mut events = Vec::new();
+        while let Some(e) = stream.next().await {
+            events.push(e.unwrap());
+        }
+        // routing event + downstream agent event
+        assert!(events.len() >= 2);
+        // First event is routing message
+        assert!(events[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .text()
+            .unwrap()
+            .contains("Routing"));
+    }
+
+    #[tokio::test]
+    async fn test_run_falls_back_to_default_when_no_match() {
+        use crate::workflow::test_support::make_ctx;
+        use futures::StreamExt;
+
+        let model = Arc::new(ClassifyingLlm { category: "weird" }) as Arc<dyn zero_llm::Llm>;
+        let tech_agent = Arc::new(MockAgent) as Arc<dyn Agent>;
+        let default_agent = Arc::new(MockAgent) as Arc<dyn Agent>;
+        let agent = LlmConditionalAgent::builder("router", model)
+            .instruction("classify")
+            .route("tech", tech_agent)
+            .default_route(default_agent)
+            .build()
+            .unwrap();
+
+        let stub: Arc<dyn Agent> = Arc::new(MockAgent);
+        let ctx = make_ctx(stub);
+        let mut stream = agent.run(ctx).await.unwrap();
+        let mut events = Vec::new();
+        while let Some(e) = stream.next().await {
+            events.push(e.unwrap());
+        }
+        assert!(events.len() >= 2);
+    }
+
+    #[tokio::test]
+    async fn test_run_no_match_no_default_emits_error() {
+        use crate::workflow::test_support::make_ctx;
+        use futures::StreamExt;
+
+        let model = Arc::new(ClassifyingLlm { category: "weird" }) as Arc<dyn zero_llm::Llm>;
+        let tech_agent = Arc::new(MockAgent) as Arc<dyn Agent>;
+        let agent = LlmConditionalAgent::builder("router", model)
+            .instruction("classify")
+            .route("tech", tech_agent)
+            .build()
+            .unwrap();
+
+        let stub: Arc<dyn Agent> = Arc::new(MockAgent);
+        let ctx = make_ctx(stub);
+        let mut stream = agent.run(ctx).await.unwrap();
+        let mut events = Vec::new();
+        while let Some(e) = stream.next().await {
+            events.push(e.unwrap());
+        }
+        // routing event + "no route found" message
+        assert!(events.len() >= 2);
+        let last = events.last().unwrap();
+        let text = last.content.as_ref().unwrap().text().unwrap();
+        assert!(text.contains("No route found"));
+    }
+
+    #[tokio::test]
+    async fn test_run_classification_stream_error() {
+        use crate::workflow::test_support::make_ctx;
+        use futures::StreamExt;
+
+        let model = Arc::new(StreamErrLlm) as Arc<dyn zero_llm::Llm>;
+        let tech_agent = Arc::new(MockAgent) as Arc<dyn Agent>;
+        let agent = LlmConditionalAgent::builder("router", model)
+            .instruction("classify")
+            .route("tech", tech_agent)
+            .build()
+            .unwrap();
+
+        let stub: Arc<dyn Agent> = Arc::new(MockAgent);
+        let ctx = make_ctx(stub);
+        let mut stream = agent.run(ctx).await.unwrap();
+        let event = stream.next().await.unwrap().unwrap();
+        // Should be a classification error event with error text
+        let text = event.content.as_ref().unwrap().text().unwrap();
+        assert!(text.contains("Classification error"));
+    }
+
+    #[tokio::test]
+    async fn test_run_target_agent_error_propagates() {
+        use crate::workflow::test_support::make_ctx;
+        use futures::StreamExt;
+
+        let model = Arc::new(ClassifyingLlm { category: "tech" }) as Arc<dyn zero_llm::Llm>;
+        let agent = LlmConditionalAgent::builder("router", model)
+            .instruction("classify")
+            .route("tech", Arc::new(FailingAgent) as Arc<dyn Agent>)
+            .build()
+            .unwrap();
+
+        let stub: Arc<dyn Agent> = Arc::new(MockAgent);
+        let ctx = make_ctx(stub);
+        let mut stream = agent.run(ctx).await.unwrap();
+        // First event is routing message (Ok), then the agent's run error.
+        let routing = stream.next().await.unwrap();
+        assert!(routing.is_ok());
+        let err_event = stream.next().await.unwrap();
+        assert!(err_event.is_err());
+    }
+
     // Mock LLM for testing
     struct MockLlm;
 

@@ -163,7 +163,7 @@ If you'd rather keep the daemon loopback-only, toggle **Expose to LAN** off in S
 ┌──────────────────────────┴──────────────────────────────┐
 │                     DAEMON (zbotd)                      │
 │  ┌────────────────────────────────────────────────────┐ │
-│  │  HTTP API :18791  │  WebSocket :18790  │  Static   │ │
+│  │  HTTP + WebSocket :18791  │  /ws upgrade  │ Static │ │
 │  └────────────────────────────────────────────────────┘ │
 │  ┌────────────────────────────────────────────────────┐ │
 │  │  Agent Runtime  │  Tool Registry  │  MCP Manager  │ │
@@ -184,7 +184,7 @@ If you'd rather keep the daemon loopback-only, toggle **Expose to LAN** off in S
 │  │   └── INSTRUCTIONS.md  # Root agent instructions     │
 │  ├── data/                                              │
 │  │   ├── conversations.db # Sessions, messages, memory  │
-│  │   └── knowledge_graph.db # Entities & relationships  │
+│  │   └── knowledge.db     # Entities & relationships    │
 │  ├── agents/{name}/       # Agent configurations        │
 │  ├── skills/{name}/       # Skill definitions           │
 │  ├── wards/{name}/        # Persistent project dirs     │
