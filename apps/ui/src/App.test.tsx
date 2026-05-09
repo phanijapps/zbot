@@ -57,7 +57,7 @@ describe("WebAppShell — top-bar shell", () => {
         <div>x</div>
       </WebAppShell>
     );
-    expect(screen.getByText(/connected · zerod/i)).toBeInTheDocument();
+    expect(screen.getByText(/connected · zbotd/i)).toBeInTheDocument();
   });
 
   it("renders the disconnected pill when not connected", () => {
