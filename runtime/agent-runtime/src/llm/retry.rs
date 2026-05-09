@@ -250,4 +250,194 @@ mod tests {
         assert!(!policy.should_retry(&LlmError::ParseError("bad json".to_string())));
         assert!(!policy.should_retry(&LlmError::ModelNotFound("gpt-5".to_string())));
     }
+
+    #[test]
+    fn should_retry_glm_disguised_codes() {
+        let policy = RetryPolicy::default();
+        assert!(policy.should_retry(&LlmError::ApiError("network error code 1234".to_string())));
+        assert!(policy.should_retry(&LlmError::ApiError("rate limit 1302 reached".to_string())));
+        assert!(policy.should_retry(&LlmError::ApiError("frequency 1303 hit".to_string())));
+    }
+
+    #[test]
+    fn should_retry_disabled_flags() {
+        let policy = RetryPolicy {
+            retry_on_rate_limit: false,
+            retry_on_server_error: false,
+            retry_on_transport: false,
+            ..RetryPolicy::default()
+        };
+        assert!(!policy.should_retry(&LlmError::RateLimited));
+        assert!(!policy.should_retry(&LlmError::ApiError("(500)".to_string())));
+        assert!(!policy.should_retry(&LlmError::ApiError("429 too many".to_string())));
+    }
+
+    #[test]
+    fn pseudo_random_in_unit_interval() {
+        for _ in 0..32 {
+            let v = pseudo_random();
+            assert!((0.0..1.0).contains(&v));
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // chat() retry behaviour with a programmable mock client
+    // ----------------------------------------------------------------------
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    struct ProgrammableClient {
+        // Outcomes (in order). Each call dequeues one. After exhausted, returns Ok.
+        outcomes: Mutex<Vec<Result<ChatResponse, LlmError>>>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ProgrammableClient {
+        fn new(outcomes: Vec<Result<ChatResponse, LlmError>>) -> (Arc<Self>, Arc<AtomicUsize>) {
+            let calls = Arc::new(AtomicUsize::new(0));
+            (
+                Arc::new(Self {
+                    outcomes: Mutex::new(outcomes),
+                    calls: Arc::clone(&calls),
+                }),
+                calls,
+            )
+        }
+    }
+
+    #[async_trait]
+    impl LlmClient for ProgrammableClient {
+        fn model(&self) -> &str {
+            "test-model"
+        }
+        fn provider(&self) -> &str {
+            "test-provider"
+        }
+        async fn chat(
+            &self,
+            _messages: Vec<ChatMessage>,
+            _tools: Option<Value>,
+        ) -> Result<ChatResponse, LlmError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let mut q = self.outcomes.lock().unwrap();
+            if q.is_empty() {
+                Ok(ChatResponse {
+                    content: "ok".to_string(),
+                    tool_calls: None,
+                    reasoning: None,
+                    usage: None,
+                })
+            } else {
+                q.remove(0)
+            }
+        }
+        async fn chat_stream(
+            &self,
+            _msgs: Vec<ChatMessage>,
+            _tools: Option<Value>,
+            _cb: StreamCallback,
+        ) -> Result<ChatResponse, LlmError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ChatResponse {
+                content: "stream-ok".to_string(),
+                tool_calls: None,
+                reasoning: None,
+                usage: None,
+            })
+        }
+        fn supports_tools(&self) -> bool {
+            true
+        }
+        fn supports_reasoning(&self) -> bool {
+            true
+        }
+    }
+
+    fn fast_policy(max_retries: u32) -> RetryPolicy {
+        RetryPolicy {
+            max_retries,
+            base_delay: Duration::from_millis(0),
+            max_delay: Duration::from_millis(0),
+            ..RetryPolicy::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_succeeds_first_try_no_retry() {
+        let (client, calls) = ProgrammableClient::new(vec![Ok(ChatResponse {
+            content: "first-call".to_string(),
+            tool_calls: None,
+            reasoning: None,
+            usage: None,
+        })]);
+        let retrying = RetryingLlmClient::new(client, fast_policy(3));
+        let resp = retrying.chat(vec![], None).await.unwrap();
+        assert_eq!(resp.content, "first-call");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn chat_retries_on_transient_then_succeeds() {
+        let (client, calls) = ProgrammableClient::new(vec![
+            Err(LlmError::RateLimited),
+            Err(LlmError::ApiError("(500): server error".to_string())),
+            Ok(ChatResponse {
+                content: "third".to_string(),
+                tool_calls: None,
+                reasoning: None,
+                usage: None,
+            }),
+        ]);
+        let retrying = RetryingLlmClient::new(client, fast_policy(5));
+        let resp = retrying.chat(vec![], None).await.unwrap();
+        assert_eq!(resp.content, "third");
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn chat_does_not_retry_non_retryable_error() {
+        let (client, calls) = ProgrammableClient::new(vec![Err(LlmError::AuthenticationFailed)]);
+        let retrying = RetryingLlmClient::new(client, fast_policy(3));
+        let err = retrying.chat(vec![], None).await.unwrap_err();
+        assert!(matches!(err, LlmError::AuthenticationFailed));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn chat_exhausts_retries_then_returns_last_error() {
+        // Always rate-limited
+        let (client, calls) = ProgrammableClient::new(vec![
+            Err(LlmError::RateLimited),
+            Err(LlmError::RateLimited),
+            Err(LlmError::RateLimited),
+        ]);
+        let retrying = RetryingLlmClient::new(client, fast_policy(2));
+        let err = retrying.chat(vec![], None).await.unwrap_err();
+        assert!(matches!(err, LlmError::RateLimited));
+        // 1 initial + 2 retries
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn chat_stream_passes_through_no_retry() {
+        let (client, calls) = ProgrammableClient::new(vec![]);
+        let retrying = RetryingLlmClient::new(client, fast_policy(5));
+        let resp = retrying
+            .chat_stream(vec![], None, Box::new(|_| {}))
+            .await
+            .unwrap();
+        assert_eq!(resp.content, "stream-ok");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn forwarding_methods_match_inner() {
+        let (client, _) = ProgrammableClient::new(vec![]);
+        let retrying = RetryingLlmClient::new(client, fast_policy(0));
+        assert_eq!(retrying.model(), "test-model");
+        assert_eq!(retrying.provider(), "test-provider");
+        assert!(retrying.supports_tools());
+        assert!(retrying.supports_reasoning());
+    }
 }

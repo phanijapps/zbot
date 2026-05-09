@@ -161,4 +161,92 @@ mod tests {
         assert!(schema.get("properties").is_some());
         assert!(schema.get("properties").unwrap().get("message").is_some());
     }
+
+    #[test]
+    fn default_constructor_matches_new() {
+        // Compare via tool name to avoid clippy::default_constructed_unit_structs
+        // when calling Default on a unit struct directly.
+        fn make_default<T: Default + Tool>() -> T {
+            T::default()
+        }
+        let d: RespondTool = make_default();
+        assert_eq!(d.name(), RespondTool::new().name());
+    }
+
+    #[test]
+    fn description_is_non_empty() {
+        let t = RespondTool::new();
+        assert!(!t.description().is_empty());
+    }
+
+    #[tokio::test]
+    async fn execute_missing_message_returns_error() {
+        let tool = RespondTool::new();
+        let ctx: Arc<dyn ToolContext> = Arc::new(crate::tools::context::ToolContext::new());
+        let result = tool.execute(ctx, json!({})).await;
+        let err = result.expect_err("must error");
+        assert!(matches!(err, zero_core::ZeroError::Tool(_)));
+        assert!(format!("{err}").contains("message is required"));
+    }
+
+    #[tokio::test]
+    async fn execute_with_minimal_message_returns_status_sent() {
+        let tool = RespondTool::new();
+        let ctx: Arc<dyn ToolContext> = Arc::new(crate::tools::context::ToolContext::new());
+        let res = tool
+            .execute(ctx, json!({"message": "hello"}))
+            .await
+            .unwrap();
+        assert_eq!(res.get("status").and_then(|v| v.as_str()), Some("sent"));
+        assert_eq!(
+            res.get("hook_type").and_then(|v| v.as_str()),
+            Some("unknown")
+        );
+        assert_eq!(res.get("message_length").and_then(|v| v.as_u64()), Some(5));
+    }
+
+    #[tokio::test]
+    async fn execute_writes_action_with_artifacts_and_hook_context() {
+        use zero_core::CallbackContext;
+        let tool = RespondTool::new();
+        let inner = crate::tools::context::ToolContext::full(
+            "agent".to_string(),
+            Some("conv-1".to_string()),
+            vec![],
+        );
+        // Set hook_context state for routing
+        inner.set_state(
+            "hook_context".to_string(),
+            json!({
+                "hook_type": {
+                    "type": "websocket",
+                    "session_id": "session-7"
+                }
+            }),
+        );
+        let ctx: Arc<dyn ToolContext> = Arc::new(inner);
+        let result = tool
+            .execute(
+                Arc::clone(&ctx),
+                json!({
+                    "message": "done!",
+                    "format": "markdown",
+                    "artifacts": [{"path": "out.txt", "label": "report"}]
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["status"], "sent");
+        assert_eq!(result["hook_type"], "websocket");
+        assert_eq!(result["session_id"], "session-7");
+        assert_eq!(result["conversation_id"], "conv-1");
+
+        // Verify the action was set on the context
+        let actions = ctx.actions();
+        let respond = actions.respond.expect("respond action set");
+        assert_eq!(respond.message, "done!");
+        assert_eq!(respond.format, "markdown");
+        assert_eq!(respond.session_id.as_deref(), Some("session-7"));
+        assert_eq!(respond.artifacts.len(), 1);
+    }
 }

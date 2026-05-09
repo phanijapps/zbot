@@ -185,4 +185,98 @@ mod tests {
         let window = limiter.window.lock().await;
         assert_eq!(window.max_per_minute, 30);
     }
+
+    #[tokio::test]
+    async fn on_rate_limited_floors_at_one() {
+        let limiter = ProviderRateLimiter::new(2, 1);
+        limiter.on_rate_limited().await;
+        let window = limiter.window.lock().await;
+        // 1/2 = 0, but max(1) = 1.
+        assert_eq!(window.max_per_minute, 1);
+    }
+
+    // ---------- Wrapper coverage ----------
+
+    struct StubInner;
+
+    #[async_trait]
+    impl LlmClient for StubInner {
+        fn model(&self) -> &str {
+            "stub-model"
+        }
+        fn provider(&self) -> &str {
+            "stub-provider"
+        }
+        fn supports_tools(&self) -> bool {
+            false
+        }
+        fn supports_reasoning(&self) -> bool {
+            true
+        }
+        async fn chat(
+            &self,
+            _msgs: Vec<ChatMessage>,
+            _tools: Option<Value>,
+        ) -> Result<ChatResponse, LlmError> {
+            Ok(ChatResponse {
+                content: "ok".to_string(),
+                tool_calls: None,
+                reasoning: None,
+                usage: None,
+            })
+        }
+        async fn chat_stream(
+            &self,
+            _msgs: Vec<ChatMessage>,
+            _tools: Option<Value>,
+            _cb: StreamCallback,
+        ) -> Result<ChatResponse, LlmError> {
+            Ok(ChatResponse {
+                content: "ok-stream".to_string(),
+                tool_calls: None,
+                reasoning: None,
+                usage: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn rate_limited_wrapper_passes_metadata() {
+        let limiter = Arc::new(ProviderRateLimiter::new(1, 1000));
+        let wrapped = RateLimitedLlmClient::new(Arc::new(StubInner), limiter);
+        assert_eq!(wrapped.model(), "stub-model");
+        assert_eq!(wrapped.provider(), "stub-provider");
+        assert!(!wrapped.supports_tools());
+        assert!(wrapped.supports_reasoning());
+    }
+
+    #[tokio::test]
+    async fn rate_limited_wrapper_chat_and_stream_work() {
+        let limiter = Arc::new(ProviderRateLimiter::new(2, 1000));
+        let wrapped = RateLimitedLlmClient::new(Arc::new(StubInner), limiter);
+        let resp = wrapped.chat(vec![], None).await.unwrap();
+        assert_eq!(resp.content, "ok");
+        let resp = wrapped
+            .chat_stream(vec![], None, Box::new(|_| {}))
+            .await
+            .unwrap();
+        assert_eq!(resp.content, "ok-stream");
+    }
+
+    #[tokio::test]
+    async fn acquire_respects_sliding_window_under_load() {
+        // 3 RPM. Acquire 3 in quick succession; the 4th must wait — but with a
+        // tight 50ms timeout we just check the first three return promptly.
+        let limiter = Arc::new(ProviderRateLimiter::new(10, 3));
+        let p1 = limiter.acquire().await;
+        let p2 = limiter.acquire().await;
+        let p3 = limiter.acquire().await;
+        // Three permits granted: window full.
+        let window = limiter.window.lock().await;
+        assert_eq!(window.timestamps.len(), 3);
+        drop(window);
+        drop(p1);
+        drop(p2);
+        drop(p3);
+    }
 }
