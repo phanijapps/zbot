@@ -90,8 +90,7 @@ fn format_structured_envelope(agent_id: &str, data: &Value, schema_valid: bool) 
 ///
 /// Returns `Some(Value)` when the message begins with `<!-- structured-result ... -->`.
 /// Returns `None` for plain-text callback messages.
-#[allow(dead_code)]
-pub(crate) fn extract_structured_result(message: &str) -> Option<Value> {
+pub fn extract_structured_result(message: &str) -> Option<Value> {
     let prefix = "<!-- structured-result ";
     let suffix = " -->";
     let trimmed = message.trim_start();

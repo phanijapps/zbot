@@ -258,6 +258,9 @@ impl Tool for DelegateTool {
             "execution_id": child_execution_id,
             "convid": child_conversation_id,
             "status": "delegated",
+            "agent_id": target_agent_id,
+            "task": task,
+            "parallel": parallel,
             "message": format!("Task delegated to {}. Use execution_id with steer_agent to send mid-run instructions.", target_agent_id)
         }))
     }

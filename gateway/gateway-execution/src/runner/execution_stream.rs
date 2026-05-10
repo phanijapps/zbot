@@ -20,6 +20,7 @@ use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 use crate::delegation::{DelegationRegistry, DelegationRequest};
 use crate::handle::ExecutionHandle;
 use crate::invoke::micro_recall::MicroRecallContext;
+use crate::delegation::extract_structured_result;
 use crate::invoke::working_memory_middleware;
 use crate::invoke::{
     broadcast_event, process_stream_event, spawn_batch_writer_with_repo, BatchWriterHandle,
@@ -277,18 +278,79 @@ impl ExecutionStream {
             current_tool_name: String::new(),
         };
 
-        // Seed working memory from recalled corrections (system messages)
+        // Reconstruct delegation state from history so working memory accurately
+        // reflects which agents have been delegated to and which have completed.
+        //
+        // Pass 1: scan tool messages for delegate_to_agent results → mark as "running"
+        // Pass 2: scan system messages for callbacks → mark as "completed" + decrement pending
+        // Also seed corrections from recalled system messages.
         for msg in &history {
-            if msg.role == "system" {
-                let content = msg.text_content();
-                if content.contains("Recalled") || content.contains("correction") {
-                    for line in content.lines() {
-                        let trimmed = line.trim().trim_start_matches("- ");
-                        if trimmed.starts_with("[correction]") || trimmed.starts_with("[pattern]") {
-                            acc.working_memory.add_correction(trimmed);
+            match msg.role.as_str() {
+                "tool" => {
+                    let content = msg.text_content();
+                    // Detect delegate_to_agent returns — sentinel is "status":"delegated"
+                    if content.contains("\"status\":\"delegated\"") || content.contains("\"status\": \"delegated\"") {
+                        working_memory_middleware::process_tool_result(
+                            &mut acc.working_memory,
+                            "delegate_to_agent",
+                            &content,
+                            None,
+                            0,
+                        );
+                    }
+                }
+                "system" => {
+                    let content = msg.text_content();
+                    // Seed corrections from recall messages
+                    if content.contains("Recalled") || content.contains("correction") {
+                        for line in content.lines() {
+                            let trimmed = line.trim().trim_start_matches("- ");
+                            if trimmed.starts_with("[correction]") || trimmed.starts_with("[pattern]") {
+                                acc.working_memory.add_correction(trimmed);
+                            }
+                        }
+                    }
+                    // Detect delegation callbacks and mark agents as completed.
+                    // Structured path: <!-- structured-result {"agent":"...", ...} -->
+                    if let Some(envelope) = extract_structured_result(&content) {
+                        if let Some(agent_id) = envelope.get("agent").and_then(|v: &serde_json::Value| v.as_str()) {
+                            let result_str = envelope
+                                .get("data")
+                                .map(|d: &serde_json::Value| d.to_string())
+                                .unwrap_or_default();
+                            working_memory_middleware::process_callback_message(
+                                &mut acc.working_memory,
+                                agent_id,
+                                &result_str,
+                            );
+                        }
+                    } else if content.contains("## From ") || content.starts_with("## Delegation Failed") {
+                        // Plain-text callback: "## From Research Agent\n..."
+                        // Error callback: "## Delegation Failed\n**Agent:** Research Agent\n..."
+                        let agent_id = if let Some(line) =
+                            content.lines().find(|l| l.starts_with("## From "))
+                        {
+                            let display = line.trim_start_matches("## From ").trim();
+                            // Reverse format_agent_display_name: "Research Agent" → "research-agent"
+                            display.to_lowercase().replace(' ', "-")
+                        } else if let Some(line) =
+                            content.lines().find(|l| l.starts_with("**Agent:**"))
+                        {
+                            let display = line.trim_start_matches("**Agent:**").trim();
+                            display.to_lowercase().replace(' ', "-")
+                        } else {
+                            String::new()
+                        };
+                        if !agent_id.is_empty() {
+                            working_memory_middleware::process_callback_message(
+                                &mut acc.working_memory,
+                                &agent_id,
+                                &content,
+                            );
                         }
                     }
                 }
+                _ => {}
             }
         }
 
