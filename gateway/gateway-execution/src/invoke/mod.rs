@@ -6,6 +6,7 @@
 //! invocation and delegated subagent spawning.
 
 mod batch_writer;
+mod delegation_handler;
 mod event_logging;
 mod executor;
 pub mod goal_adapter;
@@ -16,6 +17,7 @@ mod response_accumulator;
 pub mod setup;
 pub mod stream;
 mod stream_context;
+mod token_tracking;
 mod tool_call_accumulator;
 pub mod working_memory;
 pub mod working_memory_middleware;
