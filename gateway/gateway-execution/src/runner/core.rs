@@ -418,6 +418,7 @@ impl ExecutionRunner {
             kg_store: None,
             ingestion_adapter: None,
             goal_adapter: None,
+            steering_registry: Some(steering_registry.clone()),
             event_bus: event_bus.clone(),
             handles: handles.clone(),
         };
