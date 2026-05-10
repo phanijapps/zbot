@@ -228,6 +228,7 @@ pub(crate) struct RunnerDelegationInvoker {
     pub(crate) kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     pub(crate) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(crate) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+    pub(crate) steering_registry: Arc<agent_runtime::SteeringRegistry>,
 }
 
 #[async_trait]
@@ -259,6 +260,7 @@ impl DelegationSpawner for RunnerDelegationInvoker {
             self.kg_store.clone(),
             self.ingestion_adapter.clone(),
             self.goal_adapter.clone(),
+            self.steering_registry.clone(),
         )
         .await
         .map(|_| ())

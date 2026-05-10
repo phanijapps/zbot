@@ -117,6 +117,7 @@ pub struct ExecutionRunner {
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     /// Adapter for the `goal` agent tool. Wired via [`Self::set_goal_adapter`].
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+    steering_registry: Arc<agent_runtime::SteeringRegistry>,
     /// Pre-session setup delegate. Holds the dependency set needed by
     /// `invoke_with_callback`'s bootstrap phase, extracted here so
     /// `setup()` can be tested and read independently of the full runner.
@@ -396,6 +397,7 @@ impl ExecutionRunner {
                 >,
             >,
         > = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+        let steering_registry = Arc::new(agent_runtime::SteeringRegistry::new());
 
         let bootstrap = super::invoke_bootstrap::InvokeBootstrap {
             agent_service: agent_service.clone(),
@@ -447,6 +449,7 @@ impl ExecutionRunner {
             kg_episode_repo: None,
             ingestion_adapter: None,
             goal_adapter: None,
+            steering_registry,
             bootstrap,
         };
 
@@ -571,6 +574,7 @@ impl ExecutionRunner {
             kg_store: self.kg_store.clone(),
             ingestion_adapter: self.ingestion_adapter.clone(),
             goal_adapter: self.goal_adapter.clone(),
+            steering_registry: self.steering_registry.clone(),
         }
     }
 
@@ -871,6 +875,7 @@ impl ExecutionRunner {
             self.kg_store.clone(),
             self.ingestion_adapter.clone(),
             self.goal_adapter.clone(),
+            self.steering_registry.clone(),
         )
         .await?;
 
@@ -1436,11 +1441,12 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                     // re-use whatever trait impl is wired). graph_storage
                     // -> kg_store is already on the runner via
                     // set_kg_store, so we pass that directly.
-                    let kg_episode_store_for_indexer: Option<Arc<dyn zero_stores_traits::KgEpisodeStore>> =
-                        kg_episode_repo.as_ref().map(|r| {
-                            Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
-                                as Arc<dyn zero_stores_traits::KgEpisodeStore>
-                        });
+                    let kg_episode_store_for_indexer: Option<
+                        Arc<dyn zero_stores_traits::KgEpisodeStore>,
+                    > = kg_episode_repo.as_ref().map(|r| {
+                        Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
+                            as Arc<dyn zero_stores_traits::KgEpisodeStore>
+                    });
                     let kg_store_for_indexer = kg_store.clone();
                     let paths_for_indexer = paths.clone();
                     tokio::spawn(async move {
@@ -1579,14 +1585,9 @@ pub(super) async fn run_ward_artifact_indexer(
     if !ward_path.exists() {
         return;
     }
-    let n = crate::ward_artifact_indexer::index_ward(
-        &ward_path,
-        session_id,
-        agent_id,
-        ep_store,
-        kg,
-    )
-    .await;
+    let n =
+        crate::ward_artifact_indexer::index_ward(&ward_path, session_id, agent_id, ep_store, kg)
+            .await;
     tracing::info!(
         ward = %wid,
         indexed_entities = n,
