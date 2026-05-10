@@ -1119,6 +1119,7 @@ impl AgentExecutor {
                                     skills: delegate.skills.clone(),
                                     complexity: delegate.complexity.clone(),
                                     parallel: delegate.parallel,
+                                    child_execution_id: delegate.child_execution_id.clone(),
                                 });
                                 // Delegation claim is set atomically by the delegate tool via try_claim
                                 // Stop executor loop — continuation callback will resume root
