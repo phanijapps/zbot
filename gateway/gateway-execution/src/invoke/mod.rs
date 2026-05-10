@@ -19,6 +19,7 @@ pub mod stream;
 mod stream_context;
 mod token_tracking;
 mod tool_call_accumulator;
+mod ward_scaffolding;
 pub mod working_memory;
 pub mod working_memory_middleware;
 
@@ -35,6 +36,7 @@ pub use setup::{
 };
 pub use response_accumulator::ResponseAccumulator;
 pub use stream::{broadcast_event, process_stream_event};
+pub use ward_scaffolding::{collect_ward_setup_for_skill, collect_ward_setups_for_skills};
 pub use tool_call_accumulator::{ToolCallAccumulator, ToolCallRecord};
 pub use stream_context::StreamContext;
 pub use working_memory::WorkingMemory;
