@@ -6,6 +6,7 @@
 //! invocation and delegated subagent spawning.
 
 mod batch_writer;
+mod event_logging;
 mod executor;
 pub mod goal_adapter;
 pub mod ingest_adapter;

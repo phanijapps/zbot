@@ -3,7 +3,6 @@
 //! Stream event processing and logging for agent execution.
 
 use agent_runtime::StreamEvent;
-use api_logs::{ExecutionLog, LogCategory, LogLevel};
 use execution_state::{AgentExecution, DelegationType};
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::skills::{SkillFrontmatter, WardSetup};
@@ -29,114 +28,7 @@ pub use super::response_accumulator::{ResponseAccumulator, TURN_COMPLETE_MARKER}
 // EVENT LOGGING
 // ============================================================================
 
-/// Log a delegation event.
-pub fn log_delegation(ctx: &StreamContext, child_agent: &str, task: &str) {
-    let entry = ExecutionLog::new(
-        &ctx.execution_id,
-        &ctx.session_id,
-        &ctx.agent_id,
-        LogLevel::Info,
-        LogCategory::Delegation,
-        format!("Delegating to {}", child_agent),
-    )
-    .with_metadata(serde_json::json!({
-        "child_agent": child_agent,
-        "task": task,
-    }));
-
-    if let Some(writer) = &ctx.batch_writer {
-        writer.log(entry);
-    } else {
-        let _ = ctx.log_service.log(entry);
-    }
-}
-
-/// Log a tool call start event.
-pub fn log_tool_call(
-    ctx: &StreamContext,
-    tool_id: &str,
-    tool_name: &str,
-    args: &serde_json::Value,
-) {
-    let entry = ExecutionLog::new(
-        &ctx.execution_id,
-        &ctx.session_id,
-        &ctx.agent_id,
-        LogLevel::Info,
-        LogCategory::ToolCall,
-        format!("Calling tool: {}", tool_name),
-    )
-    .with_metadata(serde_json::json!({
-        "tool_id": tool_id,
-        "tool_name": tool_name,
-        "args": args,
-    }));
-
-    if let Some(writer) = &ctx.batch_writer {
-        writer.log(entry);
-    } else {
-        let _ = ctx.log_service.log(entry);
-    }
-}
-
-/// Log a tool result event.
-pub fn log_tool_result(ctx: &StreamContext, tool_id: &str, result: &str, error: &Option<String>) {
-    // Tool failures are expected behavior, use Warn not Error
-    let level = if error.is_some() {
-        LogLevel::Warn
-    } else {
-        LogLevel::Info
-    };
-
-    // Truncate result for logging
-    let truncated = if result.len() > 500 {
-        format!("{}...", zero_core::truncate_str(result, 500))
-    } else {
-        result.to_string()
-    };
-
-    let entry = ExecutionLog::new(
-        &ctx.execution_id,
-        &ctx.session_id,
-        &ctx.agent_id,
-        level,
-        LogCategory::ToolResult,
-        if error.is_some() {
-            "Tool returned error"
-        } else {
-            "Tool completed"
-        },
-    )
-    .with_metadata(serde_json::json!({
-        "tool_id": tool_id,
-        "result": truncated,
-        "error": error,
-    }));
-
-    if let Some(writer) = &ctx.batch_writer {
-        writer.log(entry);
-    } else {
-        let _ = ctx.log_service.log(entry);
-    }
-}
-
-/// Log an error event.
-pub fn log_error(ctx: &StreamContext, error: &str) {
-    let entry = ExecutionLog::new(
-        &ctx.execution_id,
-        &ctx.session_id,
-        &ctx.agent_id,
-        LogLevel::Error,
-        LogCategory::Error,
-        error,
-    );
-
-    if let Some(writer) = &ctx.batch_writer {
-        writer.log(entry);
-    } else {
-        let _ = ctx.log_service.log(entry);
-    }
-}
+pub(crate) use super::event_logging::{log_delegation, log_error, log_tool_call, log_tool_result};
 
 // ============================================================================
 // TOKEN TRACKING
