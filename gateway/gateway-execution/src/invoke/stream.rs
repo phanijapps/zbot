@@ -259,6 +259,7 @@ pub fn handle_delegation(
     skills: &[String],
     complexity: &Option<String>,
     parallel: bool,
+    child_execution_id: Option<&str>,
 ) {
     let delegation_type = if parallel {
         DelegationType::Parallel
@@ -268,38 +269,77 @@ pub fn handle_delegation(
 
     // Create the delegated execution immediately (status=QUEUED)
     // This ensures try_complete_session() sees it as pending
-    let child_execution_id = match ctx.state_service.create_delegated_execution(
-        &ctx.session_id,
-        child_agent,
-        &ctx.execution_id,
-        delegation_type,
-        task,
-    ) {
-        Ok(exec) => {
-            tracing::debug!(
-                session_id = %ctx.session_id,
-                child_execution_id = %exec.id,
-                child_agent = %child_agent,
-                "Created delegated execution synchronously"
-            );
-            exec.id
+    let child_execution_id = if let Some(id) = child_execution_id {
+        // Use the pre-generated ID from DelegateTool — keeps parent's execution_id consistent
+        match ctx.state_service.create_delegated_execution_with_id(
+            id,
+            &ctx.session_id,
+            child_agent,
+            &ctx.execution_id,
+            delegation_type,
+            task,
+        ) {
+            Ok(exec) => {
+                tracing::debug!(
+                    session_id = %ctx.session_id,
+                    child_execution_id = %exec.id,
+                    child_agent = %child_agent,
+                    "Created delegated execution synchronously with pre-generated id"
+                );
+                exec.id
+            }
+            Err(e) => {
+                tracing::error!(
+                    session_id = %ctx.session_id,
+                    child_agent = %child_agent,
+                    error = %e,
+                    "Failed to create delegated execution with provided id, using fallback"
+                );
+                AgentExecution::new_delegated(
+                    &ctx.session_id,
+                    child_agent,
+                    &ctx.execution_id,
+                    delegation_type,
+                    task,
+                )
+                .id
+            }
         }
-        Err(e) => {
-            tracing::error!(
-                session_id = %ctx.session_id,
-                child_agent = %child_agent,
-                error = %e,
-                "Failed to create delegated execution, using fallback"
-            );
-            // Fallback: create in-memory execution ID (handler will create record)
-            AgentExecution::new_delegated(
-                &ctx.session_id,
-                child_agent,
-                &ctx.execution_id,
-                delegation_type,
-                task,
-            )
-            .id
+    } else {
+        // Legacy path (no pre-generated ID)
+        match ctx.state_service.create_delegated_execution(
+            &ctx.session_id,
+            child_agent,
+            &ctx.execution_id,
+            delegation_type,
+            task,
+        ) {
+            Ok(exec) => {
+                tracing::debug!(
+                    session_id = %ctx.session_id,
+                    child_execution_id = %exec.id,
+                    child_agent = %child_agent,
+                    "Created delegated execution synchronously"
+                );
+                exec.id
+            }
+            Err(e) => {
+                tracing::error!(
+                    session_id = %ctx.session_id,
+                    child_agent = %child_agent,
+                    error = %e,
+                    "Failed to create delegated execution, using fallback"
+                );
+                // Fallback: create in-memory execution ID (handler will create record)
+                AgentExecution::new_delegated(
+                    &ctx.session_id,
+                    child_agent,
+                    &ctx.execution_id,
+                    delegation_type,
+                    task,
+                )
+                .id
+            }
         }
     };
 
@@ -375,6 +415,7 @@ pub fn process_stream_event(
         skills,
         complexity,
         parallel,
+        child_execution_id,
         ..
     } = event
     {
@@ -388,6 +429,7 @@ pub fn process_stream_event(
             skills,
             complexity,
             *parallel,
+            child_execution_id.as_deref(),
         );
     }
 
