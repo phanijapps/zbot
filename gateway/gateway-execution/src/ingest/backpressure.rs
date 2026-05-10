@@ -44,11 +44,7 @@ impl Backpressure {
     /// Returns Err(String) with a human-readable reason if either gate
     /// rejects the source. The HTTP caller maps this to 429 Too Many Requests.
     pub async fn check(&self, source_ref_prefix: &str) -> Result<(), String> {
-        let global_pending = self
-            .episode_store
-            .count_pending_global()
-            .await
-            .unwrap_or(0);
+        let global_pending = self.episode_store.count_pending_global().await.unwrap_or(0);
         if global_pending >= self.config.max_queue_depth {
             return Err(format!(
                 "ingestion queue full ({global_pending} pending+running, limit {})",
@@ -74,18 +70,19 @@ impl Backpressure {
 mod tests {
     use super::*;
     use gateway_services::VaultPaths;
-    use zero_stores_sqlite::{
-        GatewayKgEpisodeStore, KgEpisodeRepository, KnowledgeDatabase,
-    };
+    use zero_stores_sqlite::{GatewayKgEpisodeStore, KgEpisodeRepository, KnowledgeDatabase};
 
-    fn setup() -> (tempfile::TempDir, Arc<KgEpisodeRepository>, Arc<dyn KgEpisodeStore>) {
+    fn setup() -> (
+        tempfile::TempDir,
+        Arc<KgEpisodeRepository>,
+        Arc<dyn KgEpisodeStore>,
+    ) {
         let tmp = tempfile::tempdir().unwrap();
         let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
         std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
         let db = Arc::new(KnowledgeDatabase::new(paths).unwrap());
         let repo = Arc::new(KgEpisodeRepository::new(db));
-        let store: Arc<dyn KgEpisodeStore> =
-            Arc::new(GatewayKgEpisodeStore::new(repo.clone()));
+        let store: Arc<dyn KgEpisodeStore> = Arc::new(GatewayKgEpisodeStore::new(repo.clone()));
         (tmp, repo, store)
     }
 

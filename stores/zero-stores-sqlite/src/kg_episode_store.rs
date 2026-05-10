@@ -89,10 +89,7 @@ impl KgEpisodeStore for GatewayKgEpisodeStore {
         self.repo.count_pending_global()
     }
 
-    async fn count_pending_for_source(
-        &self,
-        source_ref_prefix: &str,
-    ) -> Result<u64, String> {
+    async fn count_pending_for_source(&self, source_ref_prefix: &str) -> Result<u64, String> {
         self.repo.count_pending_for_source(source_ref_prefix)
     }
 

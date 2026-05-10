@@ -619,11 +619,7 @@ pub async fn graph_stats(
     // Episode count: prefer the trait surface; fall back to the SQLite
     // repo when only that is available (legacy / minimal AppStates).
     let episodes = match (&state.episode_store, &state.episode_repo) {
-        (Some(store), _) => store
-            .episode_stats()
-            .await
-            .map(|s| s.total)
-            .unwrap_or(0),
+        (Some(store), _) => store.episode_stats().await.map(|s| s.total).unwrap_or(0),
         (None, Some(repo)) => repo.count().unwrap_or(0),
         (None, None) => 0,
     };

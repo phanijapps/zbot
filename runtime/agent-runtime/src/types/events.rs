@@ -132,6 +132,7 @@ pub enum StreamEvent {
         skills: Vec<String>,
         complexity: Option<String>,
         parallel: bool,
+        child_execution_id: Option<String>,
     },
 
     /// Plan update action from the `update_plan` tool.
@@ -378,6 +379,7 @@ mod tests {
                 skills: vec![],
                 complexity: None,
                 parallel: false,
+                child_execution_id: None,
             },
             StreamEvent::ActionPlanUpdate {
                 timestamp: 13,

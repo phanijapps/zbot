@@ -21,8 +21,8 @@ use zero_stores::KnowledgeGraphStore;
 use zero_stores_traits::KgEpisodeStore;
 
 use crate::ingest::{
+    chunker::{chunk_text, ChunkOptions},
     IngestionQueue,
-    chunker::{ChunkOptions, chunk_text},
 };
 
 /// Adapter that implements [`IngestionAccess`] for both text and structured

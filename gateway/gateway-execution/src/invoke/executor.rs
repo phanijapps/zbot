@@ -80,6 +80,7 @@ pub struct ExecutorBuilder {
     kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+    steering_registry: Option<Arc<agent_runtime::SteeringRegistry>>,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
     chat_mode: bool,
 }
@@ -99,6 +100,7 @@ impl ExecutorBuilder {
             kg_store: None,
             ingestion_adapter: None,
             goal_adapter: None,
+            steering_registry: None,
             extra_initial_state: None,
             chat_mode: false,
         }
@@ -161,6 +163,15 @@ impl ExecutorBuilder {
     /// Set the goal access adapter for the `goal` tool.
     pub fn with_goal_adapter(mut self, adapter: Arc<dyn agent_tools::GoalAccess>) -> Self {
         self.goal_adapter = Some(adapter);
+        self
+    }
+
+    /// Set the steering registry for the `steer_agent` tool.
+    pub fn with_steering_registry(
+        mut self,
+        registry: Arc<agent_runtime::SteeringRegistry>,
+    ) -> Self {
+        self.steering_registry = Some(registry);
         self
     }
 
@@ -575,6 +586,11 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(DelegateTool::new()));
             tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
 
+            // Steer running subagent (if steering registry wired)
+            if let Some(ref sr) = self.steering_registry {
+                tool_registry.register(Arc::new(crate::tools::SteerAgentTool::new(sr.clone())));
+            }
+
             // Knowledge graph query — fully trait-routed (Phase E6c):
             // KgStoreAdapter wraps `Arc<dyn KnowledgeGraphStore>` so the
             // tool runs identically on the configured backend.
@@ -662,4 +678,3 @@ pub async fn collect_skills_summary(skill_service: &SkillService) -> Vec<serde_j
         Err(_) => vec![],
     }
 }
-

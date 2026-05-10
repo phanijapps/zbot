@@ -54,6 +54,9 @@ pub mod executor;
 /// Steering queue for mid-execution message injection
 pub mod steering;
 
+/// Registry mapping execution IDs to live SteeringHandles
+pub mod steering_registry;
+
 /// Logging utilities
 pub mod logging;
 
@@ -94,6 +97,8 @@ pub use executor::{
 pub use steering::{
     SteeringHandle, SteeringMessage, SteeringPriority, SteeringQueue, SteeringSource,
 };
+
+pub use steering_registry::{SteerResult, SteeringRegistry};
 
 pub use logging::{init_logging, init_logging_from_env, LogLevel};
 

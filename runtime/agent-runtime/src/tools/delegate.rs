@@ -225,6 +225,9 @@ impl Tool for DelegateTool {
                 .unwrap_or("0")
         );
 
+        // Generate stable execution ID so the parent can steer this child via steer_agent
+        let child_execution_id = format!("exec-{}", uuid::Uuid::new_v4());
+
         // Enrich task with platform hint so subagents use correct shell syntax
         let platform_hint = match std::env::consts::OS {
             "windows" => "\n\n[PLATFORM: Windows / PowerShell. Do NOT use bash syntax (head, &&, cat, heredocs). Use Get-Content, ';', python.]",
@@ -245,13 +248,15 @@ impl Tool for DelegateTool {
             skills,
             complexity: None,
             parallel,
+            child_execution_id: Some(child_execution_id.clone()),
         });
         ctx.set_actions(actions);
 
         Ok(json!({
+            "execution_id": child_execution_id,
             "convid": child_conversation_id,
             "status": "delegated",
-            "message": format!("Task delegated to {}. You will receive a callback with results when complete.", target_agent_id)
+            "message": format!("Task delegated to {}. Use execution_id with steer_agent to send mid-run instructions.", target_agent_id)
         }))
     }
 }
@@ -399,6 +404,32 @@ mod tests {
     // ------------------------------------------------------------------------
     // Happy path: success populates the DelegateAction the executor reads
     // ------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn delegate_returns_execution_id() {
+        let tool = DelegateTool::new();
+        let ctx = ctx_for("root");
+
+        let result = tool
+            .execute(
+                ctx.clone(),
+                json!({ "agent_id": "writer-agent", "task": "do work" }),
+            )
+            .await
+            .expect("must succeed");
+
+        let execution_id = result
+            .get("execution_id")
+            .and_then(|v| v.as_str())
+            .expect("execution_id must be in result");
+        assert!(
+            execution_id.starts_with("exec-"),
+            "must have exec- prefix: {execution_id}"
+        );
+
+        let action = ctx.actions().delegate.expect("delegate action must be set");
+        assert_eq!(action.child_execution_id.as_deref(), Some(execution_id));
+    }
 
     #[tokio::test]
     async fn successful_delegate_sets_actions_and_returns_convid() {

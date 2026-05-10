@@ -436,9 +436,9 @@ mod tests {
     use gateway_services::VaultPaths;
     use rusqlite::params;
     use std::sync::Mutex;
-    use zero_stores_sqlite::EpisodeRepository;
     use zero_stores_sqlite::kg::storage::GraphStorage;
     use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+    use zero_stores_sqlite::EpisodeRepository;
     use zero_stores_sqlite::{
         CompactionRepository, GatewayCompactionStore, GatewayEpisodeStore, GatewayMemoryFactStore,
         KnowledgeDatabase, MemoryRepository, SqliteKgStore,

@@ -28,9 +28,7 @@ use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use crate::config::ExecutionConfig;
 use crate::handle::ExecutionHandle;
-use crate::invoke::{
-    collect_agents_summary, collect_skills_summary, AgentLoader, ExecutorBuilder,
-};
+use crate::invoke::{collect_agents_summary, collect_skills_summary, AgentLoader, ExecutorBuilder};
 use crate::lifecycle::{emit_agent_started, get_or_create_session, start_execution};
 use crate::middleware::intent_analysis::{
     analyze_intent, format_intent_injection, index_resources,
@@ -67,6 +65,7 @@ pub(super) struct InvokeBootstrap {
     pub(super) kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+    pub(super) steering_registry: Option<Arc<agent_runtime::SteeringRegistry>>,
     pub(super) event_bus: Arc<EventBus>,
     pub(super) handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
 }
@@ -478,6 +477,9 @@ impl InvokeBootstrap {
         if let Some(ref a) = self.goal_adapter {
             builder = builder.with_goal_adapter(a.clone());
         }
+        if let Some(ref sr) = self.steering_registry {
+            builder = builder.with_steering_registry(sr.clone());
+        }
 
         // Intent analysis for root agent first turns only.
         // Note: execution_logs stores execution_id in the session_id column,
@@ -847,6 +849,7 @@ mod tests {
             kg_store: None,
             ingestion_adapter: None,
             goal_adapter: None,
+            steering_registry: None,
             event_bus: Arc::new(EventBus::new()),
             handles,
         };

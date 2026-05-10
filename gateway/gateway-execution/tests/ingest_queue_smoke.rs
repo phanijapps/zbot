@@ -22,8 +22,7 @@ async fn queue_drains_pending_episodes() {
     let db = Arc::new(KnowledgeDatabase::new(paths).unwrap());
     let repo = Arc::new(KgEpisodeRepository::new(db.clone()));
     let graph_storage = Arc::new(GraphStorage::new(db.clone()).unwrap());
-    let episode_store: Arc<dyn KgEpisodeStore> =
-        Arc::new(GatewayKgEpisodeStore::new(repo.clone()));
+    let episode_store: Arc<dyn KgEpisodeStore> = Arc::new(GatewayKgEpisodeStore::new(repo.clone()));
     let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(graph_storage));
 
     // Enqueue 5 episodes with payloads.
