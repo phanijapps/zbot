@@ -17,6 +17,7 @@ mod response_accumulator;
 pub mod setup;
 pub mod stream;
 mod stream_context;
+mod stream_event_processor;
 mod token_tracking;
 mod tool_call_accumulator;
 mod ward_scaffolding;
@@ -35,7 +36,7 @@ pub use setup::{
     append_system_context, detect_subagent_role, subagent_rules, AgentLoader, SubagentRole,
 };
 pub use response_accumulator::ResponseAccumulator;
-pub use stream::{broadcast_event, process_stream_event};
+pub use stream_event_processor::{broadcast_event, process_stream_event};
 pub use ward_scaffolding::{collect_ward_setup_for_skill, collect_ward_setups_for_skills};
 pub use tool_call_accumulator::{ToolCallAccumulator, ToolCallRecord};
 pub use stream_context::StreamContext;
