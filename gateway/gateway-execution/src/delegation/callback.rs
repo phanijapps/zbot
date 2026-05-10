@@ -71,8 +71,45 @@ fn format_response_content(response: &str) -> String {
     response.to_string()
 }
 
+/// Build the HTML comment envelope injected at the top of callback messages
+/// when `output_schema` is set and the response is valid JSON.
+fn format_structured_envelope(agent_id: &str, data: &Value, schema_valid: bool) -> String {
+    let envelope = serde_json::json!({
+        "ok": true,
+        "agent": agent_id,
+        "data": data,
+        "schema_valid": schema_valid
+    });
+    format!(
+        "<!-- structured-result {} -->",
+        serde_json::to_string(&envelope).unwrap_or_default()
+    )
+}
+
+/// Extract the structured result envelope from a callback message.
+///
+/// Returns `Some(Value)` when the message begins with `<!-- structured-result ... -->`.
+/// Returns `None` for plain-text callback messages.
+pub fn extract_structured_result(message: &str) -> Option<Value> {
+    let prefix = "<!-- structured-result ";
+    let suffix = " -->";
+    let trimmed = message.trim_start();
+    if !trimmed.starts_with(prefix) {
+        return None;
+    }
+    let after_prefix = &trimmed[prefix.len()..];
+    let end = after_prefix.find(suffix)?;
+    let json_str = &after_prefix[..end];
+    serde_json::from_str(json_str).ok()
+}
+
 /// Format a successful callback message as markdown.
-pub fn format_callback_message(agent_id: &str, response: &str, conversation_id: &str) -> String {
+pub fn format_callback_message(
+    agent_id: &str,
+    response: &str,
+    conversation_id: &str,
+    output_schema: Option<&Value>,
+) -> String {
     let agent_display_name = format_agent_display_name(agent_id);
 
     let response_content = if response.is_empty() {
@@ -99,11 +136,21 @@ pub fn format_callback_message(agent_id: &str, response: &str, conversation_id: 
         String::new()
     };
 
-    format!(
+    let markdown_body = format!(
         "## From {}\n\n{}{}\n\n---\n_Conversation: `{}`_\n\n\
          [Recall] Delegation completed. Consider recalling to absorb any new learnings.",
         agent_display_name, response_content, action_hint, conversation_id
-    )
+    );
+
+    // Prepend structured envelope when schema is set and response is valid JSON
+    if output_schema.is_some() {
+        if let Ok(json_val) = serde_json::from_str::<Value>(response.trim()) {
+            let envelope = format_structured_envelope(agent_id, &json_val, true);
+            return format!("{envelope}\n{markdown_body}");
+        }
+    }
+
+    markdown_body
 }
 
 /// Format an error callback message as markdown.
@@ -216,8 +263,12 @@ pub async fn handle_delegation_success(
         if ctx.callback_on_complete {
             // Validate response against output_schema (if present)
             let validated_response = validate_delegation_response(response, &ctx.output_schema);
-            let callback_msg =
-                format_callback_message(child_agent_id, &validated_response, child_conversation_id);
+            let callback_msg = format_callback_message(
+                child_agent_id,
+                &validated_response,
+                child_conversation_id,
+                ctx.output_schema.as_ref(),
+            );
 
             if send_callback_to_parent(
                 conversation_repo,
@@ -344,6 +395,7 @@ mod tests {
             "code-agent",
             "Code looks clean.\n\nRESULT: APPROVED",
             "conv-123",
+            None,
         );
         assert!(msg.contains("APPROVED"));
         assert!(msg.contains("Proceed to the next node"));
@@ -355,6 +407,7 @@ mod tests {
             "data-analyst",
             "Found issues.\n\nRESULT: DEFECTS\n- output.json: Wrong values (severity: high)",
             "conv-123",
+            None,
         );
         assert!(msg.contains("DEFECTS found"));
         assert!(msg.contains("Re-delegate to coding agent"));
@@ -367,7 +420,59 @@ mod tests {
             "research-agent",
             "Here are the results of my research.",
             "conv-123",
+            None,
         );
         assert!(!msg.contains("Action:"));
+    }
+
+    #[test]
+    fn structured_envelope_present_when_schema_set() {
+        use serde_json::json;
+        let schema = json!({"type": "object"});
+        let response = r#"{"score": 0.9}"#;
+        let msg = format_callback_message("code-agent", response, "conv-123", Some(&schema));
+        assert!(
+            msg.starts_with("<!-- structured-result"),
+            "envelope must be first"
+        );
+        assert!(msg.contains("\"schema_valid\":true"));
+        assert!(msg.contains("\"agent\":\"code-agent\""));
+    }
+
+    #[test]
+    fn no_envelope_when_no_schema() {
+        let msg = format_callback_message("code-agent", "plain text result", "conv-123", None);
+        assert!(!msg.contains("<!-- structured-result"));
+    }
+
+    #[test]
+    fn extract_structured_result_parses_envelope() {
+        use serde_json::json;
+        let schema = json!({"type": "object"});
+        let msg =
+            format_callback_message("code-agent", r#"{"score": 0.9}"#, "conv-123", Some(&schema));
+        let extracted = extract_structured_result(&msg).expect("should parse");
+        assert_eq!(extracted["data"]["score"], json!(0.9));
+        assert_eq!(extracted["schema_valid"], json!(true));
+    }
+
+    #[test]
+    fn no_envelope_for_non_json_response_even_with_schema() {
+        use serde_json::json;
+        let schema = json!({"type": "object"});
+        let msg =
+            format_callback_message("code-agent", "not json at all", "conv-123", Some(&schema));
+        assert!(!msg.contains("<!-- structured-result"));
+    }
+
+    #[test]
+    fn parent_extract_without_markdown_parsing() {
+        use serde_json::json;
+        let schema = json!({"type": "object"});
+        let response = r#"{"score": 0.9, "label": "good"}"#;
+        let msg = format_callback_message("analysis-agent", response, "conv-xyz", Some(&schema));
+        let result = extract_structured_result(&msg).unwrap();
+        assert_eq!(result["data"]["score"].as_f64().unwrap(), 0.9_f64);
+        assert_eq!(result["agent"].as_str().unwrap(), "analysis-agent");
     }
 }

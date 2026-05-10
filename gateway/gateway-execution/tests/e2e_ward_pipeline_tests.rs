@@ -219,6 +219,7 @@ fn test_callback_detects_approved() {
         "code-agent",
         "Code looks good. All tests pass.\n\nRESULT: APPROVED",
         "conv-123",
+        None,
     );
     assert!(msg.contains("APPROVED"), "Should contain APPROVED");
     assert!(
@@ -234,6 +235,7 @@ fn test_callback_detects_defects() {
         "data-analyst",
         "Found issues.\n\nRESULT: DEFECTS\n- output.json: RSI value is -5 (severity: high)\n- data.csv: Only 10 rows (severity: medium)",
         "conv-123",
+        None,
     );
     assert!(msg.contains("DEFECTS found"), "Should mention DEFECTS");
     assert!(
@@ -253,6 +255,7 @@ fn test_callback_without_result_no_action() {
         "code-agent",
         "Here is the analysis of the data.\nIt shows interesting patterns.",
         "conv-123",
+        None,
     );
     assert!(
         !msg.contains("Action:"),
