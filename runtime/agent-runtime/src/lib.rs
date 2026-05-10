@@ -54,6 +54,9 @@ pub mod executor;
 /// Progress tracking for loop detection
 pub(crate) mod progress;
 
+/// Context management helpers (compaction, sanitization, truncation)
+pub(crate) mod context_management;
+
 /// Steering queue for mid-execution message injection
 pub mod steering;
 

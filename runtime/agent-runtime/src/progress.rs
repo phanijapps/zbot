@@ -317,7 +317,8 @@ impl ProgressTracker {
 #[cfg(test)]
 mod progress_tracker_tests {
     use super::*;
-    use crate::executor::{compact_messages, ExecutorConfig};
+    use crate::context_management::compact_messages;
+    use crate::executor::ExecutorConfig;
     use crate::types::ChatMessage;
     use serde_json::json;
     use zero_core::types::Part;
