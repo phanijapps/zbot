@@ -61,7 +61,11 @@ mod tests {
     fn start_and_complete_call() {
         let mut acc = ToolCallAccumulator::new();
         assert!(acc.is_empty());
-        acc.start_call("t1".into(), "shell".into(), serde_json::json!({"cmd": "ls"}));
+        acc.start_call(
+            "t1".into(),
+            "shell".into(),
+            serde_json::json!({"cmd": "ls"}),
+        );
         assert_eq!(acc.len(), 1);
         acc.complete_call("t1", "file.txt".into(), None);
         let json = acc.to_json().expect("should serialize");
@@ -73,7 +77,8 @@ mod tests {
         let mut acc = ToolCallAccumulator::new();
         acc.start_call("t1".into(), "shell".into(), serde_json::json!({}));
         acc.complete_call("t1", String::new(), Some("not found".into()));
-        let record = &serde_json::from_str::<Vec<ToolCallRecord>>(&acc.to_json().unwrap()).unwrap()[0];
+        let record =
+            &serde_json::from_str::<Vec<ToolCallRecord>>(&acc.to_json().unwrap()).unwrap()[0];
         assert_eq!(record.error.as_deref(), Some("not found"));
     }
 

@@ -51,6 +51,15 @@ pub mod middleware;
 /// Executor core
 pub mod executor;
 
+/// Progress tracking for loop detection
+pub(crate) mod progress;
+
+/// Tool schema normalization and hardening helpers
+pub(crate) mod tool_schema;
+
+/// Context management helpers (compaction, sanitization, truncation)
+pub(crate) mod context_management;
+
 /// Steering queue for mid-execution message injection
 pub mod steering;
 
