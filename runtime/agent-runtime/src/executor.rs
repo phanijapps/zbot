@@ -1532,37 +1532,12 @@ impl AgentExecutor {
     /// Harden a tool parameter schema for stricter LLM compliance.
     /// Adds "additionalProperties": false if not already present.
     /// Ensures "required" array exists (empty if missing).
-    fn harden_tool_schema(mut schema: Value) -> Value {
-        if let Some(obj) = schema.as_object_mut() {
-            if obj.get("type").and_then(|v| v.as_str()) == Some("object") {
-                obj.entry("additionalProperties")
-                    .or_insert(Value::Bool(false));
-                obj.entry("required").or_insert_with(|| json!([]));
-            }
-        }
-        schema
+    fn harden_tool_schema(schema: Value) -> Value {
+        crate::tool_schema::harden_tool_schema(schema)
     }
 
-    /// Normalize MCP tool parameters to `OpenAI` format
-    ///
-    /// `OpenAI` requires parameters to have `type: "object"` at the root.
-    /// MCP tools may return parameters without this wrapper.
     fn normalize_mcp_parameters(params: Option<Value>) -> Value {
-        match params {
-            None => json!({"type": "object", "properties": {}}),
-            Some(p) => {
-                // If parameters already has "type: object", use as-is
-                if p.get("type").is_some() {
-                    p
-                } else {
-                    // Otherwise, wrap it with type: object
-                    json!({
-                        "type": "object",
-                        "properties": p
-                    })
-                }
-            }
-        }
+        crate::tool_schema::normalize_mcp_parameters(params)
     }
 
     async fn build_tools_schema(&self) -> Result<Value, ExecutorError> {
