@@ -20,6 +20,12 @@ use super::super::events::convert_stream_event;
 pub use super::stream_context::StreamContext;
 
 // ============================================================================
+// RESPONSE ACCUMULATOR
+// ============================================================================
+
+pub use super::response_accumulator::{ResponseAccumulator, TURN_COMPLETE_MARKER};
+
+// ============================================================================
 // EVENT LOGGING
 // ============================================================================
 
@@ -446,7 +452,7 @@ pub fn process_stream_event(
         Some(GatewayEvent::Respond { message, .. }) => Some(format!("\n\n{}", message)),
         // TurnComplete is handled specially - marked with prefix so accumulator can detect fallback
         Some(GatewayEvent::TurnComplete { message, .. }) if !message.is_empty() => {
-            Some(format!("\x00TURN_COMPLETE\x00{}", message))
+            Some(format!("{}{}", TURN_COMPLETE_MARKER, message))
         }
         _ => None,
     };
@@ -460,68 +466,6 @@ pub fn process_stream_event(
 /// spawning async tasks, which would destroy insertion order between tokens.
 pub fn broadcast_event(event_bus: Arc<EventBus>, event: GatewayEvent) {
     event_bus.publish_sync(event);
-}
-
-// ============================================================================
-// RESPONSE ACCUMULATOR
-// ============================================================================
-
-/// Marker prefix for TurnComplete fallback content.
-const TURN_COMPLETE_MARKER: &str = "\x00TURN_COMPLETE\x00";
-
-/// Accumulator for building the final response from stream events.
-#[derive(Default)]
-pub struct ResponseAccumulator {
-    /// Content accumulated from Token events
-    content: String,
-    /// Fallback content from TurnComplete (used if no Token events received)
-    turn_complete_fallback: Option<String>,
-}
-
-impl ResponseAccumulator {
-    /// Create a new response accumulator.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Append content to the response.
-    pub fn append(&mut self, content: &str) {
-        // Check for TurnComplete marker (fallback for when Token events aren't streamed)
-        if let Some(message) = content.strip_prefix(TURN_COMPLETE_MARKER) {
-            // Store as fallback - only used if no Token events were accumulated
-            self.turn_complete_fallback = Some(message.to_string());
-            return;
-        }
-
-        // Append content (including leading newlines for respond tool messages)
-        self.content.push_str(content);
-    }
-
-    /// Get the accumulated response.
-    ///
-    /// Returns Token-accumulated content if available, otherwise falls back to
-    /// TurnComplete content (for cases where agent made tool calls and Token
-    /// events weren't streamed).
-    pub fn into_response(self) -> String {
-        let trimmed = self.content.trim();
-        if !trimmed.is_empty() {
-            trimmed.to_string()
-        } else if let Some(fallback) = self.turn_complete_fallback {
-            fallback.trim().to_string()
-        } else {
-            String::new()
-        }
-    }
-
-    /// Check if the accumulator has any content (from tokens or fallback).
-    pub fn is_empty(&self) -> bool {
-        self.content.trim().is_empty() && self.turn_complete_fallback.is_none()
-    }
-
-    /// Get a reference to the current token content.
-    pub fn content(&self) -> &str {
-        &self.content
-    }
 }
 
 // ============================================================================
@@ -647,33 +591,3 @@ fn extract_yaml_frontmatter(content: &str) -> Option<&str> {
     Some(after_first[..end].trim())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_response_accumulator() {
-        let mut acc = ResponseAccumulator::new();
-        assert!(acc.is_empty());
-
-        acc.append("Hello");
-        assert!(!acc.is_empty());
-        assert_eq!(acc.content(), "Hello");
-
-        acc.append(" World");
-        assert_eq!(acc.content(), "Hello World");
-
-        let response = acc.into_response();
-        assert_eq!(response, "Hello World");
-    }
-
-    #[test]
-    fn test_response_accumulator_with_respond_tool() {
-        let mut acc = ResponseAccumulator::new();
-        acc.append("Initial response");
-        acc.append("\n\nFrom respond tool");
-
-        let response = acc.into_response();
-        assert_eq!(response, "Initial response\n\nFrom respond tool");
-    }
-}
