@@ -1928,7 +1928,7 @@ mod token_cache_tests {
 // Static-helper and builder coverage tests
 // ============================================================================
 #[cfg(test)]
-mod helper_coverage_tests {
+mod executor_helper_coverage_tests {
     use super::*;
     use crate::llm::client::{ChatResponse, LlmError, StreamCallback};
     use async_trait::async_trait;
