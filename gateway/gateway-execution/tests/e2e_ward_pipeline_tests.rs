@@ -2,14 +2,10 @@
 //!
 //! Tests the infrastructure that keeps breaking:
 //! 1. Ward scaffolding scoped to recommended skills
-//! 2. ralph.py task runner lifecycle
-//! 3. Subagent context construction (lean, not bloated)
-//! 4. Crash report includes ralph.py status
-//! 5. Callback structured result detection
-//! 6. Intent injection SDLC pattern
-//! 7. Loop detector doesn't kill productive agents
+//! 2. Subagent context construction (lean, not bloated)
+//! 3. Callback structured result detection
+//! 4. Intent injection SDLC pattern
 
-use std::path::Path;
 use tempfile::TempDir;
 
 // ============================================================================
@@ -151,167 +147,7 @@ Instructions here
 }
 
 // ============================================================================
-// 2. RALPH.PY TASK RUNNER
-// ============================================================================
-
-/// ralph.py should process tasks in dependency order.
-#[test]
-fn test_ralph_next_respects_dependencies() {
-    let dir = TempDir::new().unwrap();
-
-    // Copy ralph.py from shared ward
-    let ralph_src = Path::new("/home/videogamer/Documents/zbot/wards/shared/ralph.py");
-    if !ralph_src.exists() {
-        eprintln!("Skipping ralph.py test — shared/ralph.py not found");
-        return;
-    }
-    let ralph_dst = dir.path().join("ralph.py");
-    std::fs::copy(ralph_src, &ralph_dst).unwrap();
-
-    // Create tasks.json with dependencies
-    let tasks_json = dir.path().join("tasks.json");
-    std::fs::write(&tasks_json, r#"{
-        "tasks": [
-            {"id": 1, "action": "create", "file": "core/a.py", "description": "Module A", "acceptance": "importable", "depends_on": [], "status": "pending"},
-            {"id": 2, "action": "create", "file": "core/b.py", "description": "Module B", "acceptance": "importable", "depends_on": [1], "status": "pending"},
-            {"id": 3, "action": "run", "command": "python3 test.py", "description": "Run test", "acceptance": "exit 0", "depends_on": [1, 2], "status": "pending"}
-        ]
-    }"#).unwrap();
-
-    // Next should return task 1 (no deps)
-    let output = std::process::Command::new("python3")
-        .args(["ralph.py", "next", "tasks.json"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("\"id\": 1"),
-        "First task should be id 1, got: {}",
-        stdout
-    );
-
-    // Complete task 1
-    let output = std::process::Command::new("python3")
-        .args(["ralph.py", "complete", "tasks.json", "1"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    assert!(String::from_utf8_lossy(&output.stdout).contains("marked complete"));
-
-    // Next should return task 2 (dep on 1 satisfied)
-    let output = std::process::Command::new("python3")
-        .args(["ralph.py", "next", "tasks.json"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("\"id\": 2"),
-        "Second task should be id 2, got: {}",
-        stdout
-    );
-
-    // Complete task 2
-    std::process::Command::new("python3")
-        .args(["ralph.py", "complete", "tasks.json", "2"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-
-    // Next should return task 3 (deps 1,2 satisfied)
-    let output = std::process::Command::new("python3")
-        .args(["ralph.py", "next", "tasks.json"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("\"id\": 3"),
-        "Third task should be id 3, got: {}",
-        stdout
-    );
-
-    // Complete task 3
-    std::process::Command::new("python3")
-        .args(["ralph.py", "complete", "tasks.json", "3"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-
-    // Next should return done
-    let output = std::process::Command::new("python3")
-        .args(["ralph.py", "next", "tasks.json"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("\"done\": true"),
-        "Should be done, got: {}",
-        stdout
-    );
-}
-
-/// Failed task should block dependents.
-#[test]
-fn test_ralph_fail_blocks_dependents() {
-    let dir = TempDir::new().unwrap();
-
-    let ralph_src = Path::new("/home/videogamer/Documents/zbot/wards/shared/ralph.py");
-    if !ralph_src.exists() {
-        return;
-    }
-    std::fs::copy(ralph_src, dir.path().join("ralph.py")).unwrap();
-
-    std::fs::write(dir.path().join("tasks.json"), r#"{
-        "tasks": [
-            {"id": 1, "action": "create", "file": "a.py", "description": "A", "acceptance": "ok", "depends_on": [], "status": "pending"},
-            {"id": 2, "action": "run", "command": "python3 a.py", "description": "Run A", "acceptance": "exit 0", "depends_on": [1], "status": "pending"}
-        ]
-    }"#).unwrap();
-
-    // Fail task 1
-    std::process::Command::new("python3")
-        .args(["ralph.py", "fail", "tasks.json", "1", "syntax error"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-
-    // Next should report blocked
-    let output = std::process::Command::new("python3")
-        .args(["ralph.py", "next", "tasks.json"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("blocked_by_failures"),
-        "Should be blocked, got: {}",
-        stdout
-    );
-
-    // Status should show 1 failed, 1 pending
-    let output = std::process::Command::new("python3")
-        .args(["ralph.py", "status", "tasks.json"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("Failed: 1"),
-        "Should show 1 failed, got: {}",
-        stdout
-    );
-    assert!(
-        stdout.contains("Pending: 1"),
-        "Should show 1 pending, got: {}",
-        stdout
-    );
-}
-
-// ============================================================================
-// 3. SUBAGENT CONTEXT — LEAN, NOT BLOATED
+// 2. SUBAGENT CONTEXT — LEAN, NOT BLOATED
 // ============================================================================
 
 /// Executor subagent rules should be under 300 bytes.
@@ -373,7 +209,7 @@ fn test_role_detection() {
 }
 
 // ============================================================================
-// 4. CALLBACK STRUCTURED RESULT DETECTION
+// 3. CALLBACK STRUCTURED RESULT DETECTION
 // ============================================================================
 
 /// Callback should detect APPROVED and add action hint.
@@ -425,7 +261,7 @@ fn test_callback_without_result_no_action() {
 }
 
 // ============================================================================
-// 5. INTENT INJECTION — SDLC PATTERN
+// 4. INTENT INJECTION — SDLC PATTERN
 // ============================================================================
 
 /// Graph approach should inject SDLC pattern.

@@ -486,15 +486,6 @@ pub fn process_stream_event(
                     tracing::info!(ward = %ward_id, skills = ?ctx.recommended_skills, "Ward scaffolded from recommended skills");
                 }
 
-                // Copy ralph.py (task runner) from shared ward if not already present
-                let ralph_src = ctx.vault_dir.join("wards").join("shared").join("ralph.py");
-                let ralph_dst = ward_dir.join("ralph.py");
-                if ralph_src.exists() && !ralph_dst.exists() {
-                    if let Err(e) = std::fs::copy(&ralph_src, &ralph_dst) {
-                        tracing::warn!("Failed to copy ralph.py to ward: {}", e);
-                    }
-                }
-
                 // AGENTS.md is curated manually by the agent after ward creation;
                 // the runtime no longer auto-rewrites it here.
             }
