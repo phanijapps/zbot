@@ -1,45 +1,37 @@
 # zero-middleware
 
-Middleware and request/response processing for the Zero framework.
+Compatibility re-export shim — not an implementation crate.
 
-## Setup
+## Purpose
 
-```bash
-# Build
-cargo build
+All middleware logic lives in `agent_runtime::middleware` (the canonical implementation).
+This crate re-exports it wholesale so that the `framework/` import path
+(`zero_middleware::MiddlewarePipeline`, etc.) remains stable for future
+`zero-agent-framework` consumers.
 
-# Run tests
-cargo test
+**Do not add middleware logic here.** Add it in `runtime/agent-runtime/src/middleware/` instead.
+
+## Re-exported Types
+
+```rust
+pub use agent_runtime::middleware::{
+    config, context_editing, pipeline, summarization, token_counter, traits,
+    ContextEditingConfig, ContextEditingMiddleware, EventMiddleware, KeepPolicy,
+    MiddlewareConfig, MiddlewareContext, MiddlewareEffect, MiddlewarePipeline,
+    PreProcessMiddleware, SummarizationConfig, SummarizationMiddleware, TriggerCondition,
+};
 ```
 
-## Code Style
+## Intra-Repo Dependencies
 
-- Middleware processes requests/respects in a chain
-- Use `async_trait` for middleware trait
-- Each middleware should pass to the next in chain
+- `agent-runtime` — provides the real middleware implementation
 
-## Middleware Pattern
+## Where the Logic Lives
 
-Middleware wraps agent execution to add cross-cutting concerns:
-- Logging
-- Error handling
-- Request transformation
-- Response filtering
-
-## Implementation
-
-Middleware typically:
-1. Receives the invocation context
-2. Performs pre-processing
-3. Calls the next middleware/agent
-4. Performs post-processing on the result
-
-## Testing
-
-Mock the agent call to test middleware in isolation.
-
-## Important Notes
-
-- Order of middleware matters in the chain
-- Always propagate to next for normal flow
-- Return early to short-circuit (e.g., caching, auth failures)
+| Module | File in agent-runtime |
+|--------|----------------------|
+| `pipeline` | `middleware/pipeline.rs` |
+| `summarization` | `middleware/summarization.rs` |
+| `context_editing` | `middleware/context_editing.rs` |
+| `token_counter` | `middleware/token_counter.rs` |
+| `traits` | `middleware/traits.rs` |

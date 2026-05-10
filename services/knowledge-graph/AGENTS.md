@@ -1,6 +1,6 @@
 # knowledge-graph
 
-Entity extraction and relationship storage from conversations. Uses heuristic + LLM-powered extraction with SQLite full-text search.
+Entity type definitions, extraction logic, and name resolution for the AgentZero knowledge graph. This crate is **types + extraction only** — SQLite storage lives in `zero-stores-sqlite::kg`.
 
 ## Build & Test
 
@@ -8,31 +8,39 @@ Entity extraction and relationship storage from conversations. Uses heuristic + 
 cargo test -p knowledge-graph    # 19 tests
 ```
 
+## Modules
+
+| File | Purpose |
+|------|---------|
+| `types.rs` | `Entity`, `Relationship`, `EntityType`, `RelationshipType`, `ExtractedKnowledge` |
+| `extractor.rs` | `EntityExtractor` — heuristic + LLM-powered extraction |
+| `resolver.rs` | `resolve()`, `normalize_name()`, `ResolveOutcome`, `MatchReason` |
+| `error.rs` | `GraphError`, `GraphResult` |
+
 ## Key Types
 
 | Type | Purpose |
 |------|---------|
 | `Entity` | Named entity with type, properties, timestamps, mention count |
-| `Relationship` | Connection between entities with confidence/context |
+| `Relationship` | Connection between two entities with confidence and context |
 | `EntityType` | Person, Organization, Location, Concept, Tool, Project, Custom |
 | `RelationshipType` | WorksFor, LocatedIn, RelatedTo, Created, Uses, PartOf, Mentions, Custom |
-| `ExtractedKnowledge` | Batch of entities and relationships |
+| `ExtractedKnowledge` | Batch result: `Vec<Entity>` + `Vec<Relationship>` |
+| `ResolveOutcome` | Exact, Alias, Fuzzy, or None — used when upserting |
 
 ## Public API
 
-| Struct | Method | Purpose |
-|--------|--------|---------|
-| `EntityExtractor` | `extract_from_message()` | Extract entities from text |
-| `GraphStorage` | `store_knowledge()` | Persist extracted knowledge |
-| `GraphStorage` | `get_entities()` | Query entities |
-| `GraphStorage` | `get_relationships()` | Query relationships |
+```rust
+pub use extractor::EntityExtractor;
+pub use resolver::{normalize_name, resolve, MatchReason, ResolveOutcome};
+pub use types::{Direction, Entity, EntityType, EntityWithConnections, ExtractedKnowledge,
+    GraphStats, NeighborInfo, Relationship, RelationshipType, Subgraph};
+```
 
-## File Structure
+## Where Storage Lives
 
-| File | Purpose |
-|------|---------|
-| `types.rs` | Entity/Relationship types (~15 tests) |
-| `extractor.rs` | Entity extraction logic (~4 tests) |
-| `storage.rs` | SQLite operations |
-| `error.rs` | GraphError type |
-| `lib.rs` | Public exports |
+SQLite persistence (`GraphStorage`, `KnowledgeDatabase`, traversal, causal) was relocated to `zero-stores-sqlite::kg` during Slice D6b. Consumers should import via `zero_stores_sqlite::SqliteKgStore` or the trait `zero_stores::KnowledgeGraphStore`.
+
+## Intra-Repo Dependencies
+
+- None (this crate is a leaf — no internal crate dependencies)

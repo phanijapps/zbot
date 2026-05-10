@@ -1,6 +1,6 @@
 # gateway-templates
 
-System prompt assembly from embedded templates and shard injection into custom INSTRUCTIONS.md.
+System prompt assembly for AgentZero agents. Assembles SOUL.md + INSTRUCTIONS.md + OS.md + shards from `config/` (user customizable), falling back to embedded defaults.
 
 ## Build & Test
 
@@ -8,35 +8,51 @@ System prompt assembly from embedded templates and shard injection into custom I
 cargo test -p gateway-templates    # 10 tests
 ```
 
-## Key Types
-
-| Type | Purpose |
-|------|---------|
-| `Templates` | Rust-embed struct for compile-time embedded template files |
-
 ## Public API
 
-| Function | Purpose |
-|----------|---------|
-| `load_system_prompt()` | Load or create INSTRUCTIONS.md, append shards |
-| `default_system_prompt()` | Fallback embedded prompt |
-| `load_required_shards()` | Load all required shard files |
-| `load_shard()` | Load a single template shard |
+```rust
+pub fn load_system_prompt_from_paths(paths: &Arc<VaultPaths>) -> String;
+pub fn load_system_prompt(data_dir: &Path) -> String;          // legacy path-based
+pub fn load_chat_prompt_from_paths(paths: &Arc<VaultPaths>) -> String;
+pub fn default_system_prompt() -> String;                      // fallback
+```
+
+`Templates` — `rust-embed` struct giving access to all embedded template files.
+
+## Assembly Order (full prompt)
+
+1. `config/SOUL.md` — identity/personality (created from `soul_starter.md` if missing)
+2. `config/INSTRUCTIONS.md` — execution rules (created from `instructions_starter.md` if missing)
+3. `config/OS.md` — platform commands (auto-generated for current OS if missing)
+4. Required shards (`config/shards/` override embedded defaults): `first_turn_protocol`, `tooling_skills`, `memory_learning`, `planning_autonomy`
+5. Extra user shards (any additional `.md` in `config/shards/`)
+6. Runtime environment info (vault path, venv status)
+
+**Fast chat prompt** uses: SOUL.md + `chat_instructions.md` + OS.md + `chat_protocol` + `tooling_skills` shards only.
 
 ## Embedded Templates
 
 ```
 templates/
-├── instructions_starter.md        # Default INSTRUCTIONS.md content
+├── soul_starter.md              # Default SOUL.md
+├── instructions_starter.md      # Default INSTRUCTIONS.md
+├── chat_instructions.md         # Default chat-mode instructions
+├── system_prompt.md             # Emergency fallback
+├── os_linux.md / os_macos.md / os_windows.md
+├── models_registry.json         # Bundled model registry
+├── distillation_prompt.md       # Session distillation prompt
 └── shards/
-    ├── tooling_skills.md           # Tools + skills + ward instructions
-    └── memory_learning.md          # Memory system usage
+    ├── first_turn_protocol.md
+    ├── tooling_skills.md
+    ├── memory_learning.md
+    ├── planning_autonomy.md
+    ├── chat_protocol.md
+    ├── safety.md
+    └── session_ctx.md
 ```
 
-Shards are appended to the user's custom INSTRUCTIONS.md at prompt assembly time.
+## Notes
 
-## File Structure
-
-| File | Purpose |
-|------|---------|
-| `lib.rs` | All functionality (10 tests) |
+- User files in `config/` take priority over embedded defaults.
+- Embedded shards are written to `config/shards/` on first run so users can edit them.
+- Extra user `.md` files in `config/shards/` are appended after required shards.

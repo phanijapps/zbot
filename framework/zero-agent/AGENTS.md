@@ -2,71 +2,58 @@
 
 Agent implementations for the Zero framework.
 
-## Setup
+## Modules
 
-```bash
-# Build
-cargo build
+| Module | Purpose |
+|--------|---------|
+| `llm_agent` | `LlmAgent` — primary LLM loop agent |
+| `workflow` | Composable workflow agents |
+| `orchestrator` | `OrchestratorAgent` — task-graph based multi-agent orchestration |
 
-# Run tests
-cargo test
+## Key Types
 
-# Run with logging
-RUST_LOG=debug cargo test
+```rust
+pub use llm_agent::{LlmAgent, LlmAgentBuilder};
+pub use workflow::{ConditionalAgent, CustomAgent, CustomAgentBuilder, LlmConditionalAgent,
+    LlmConditionalAgentBuilder, LoopAgent, ParallelAgent, SequentialAgent};
+pub use orchestrator::{ExecutionTrace, OrchestratorAgent, OrchestratorBuilder, OrchestratorConfig,
+    TaskGraph, TaskNode, TaskStatus, TraceEvent, TraceEventKind};
 ```
 
-## Code Style
+## LlmAgent
 
-- Use builder pattern for agent configuration
-- Loop on tool calls until `turn_complete == true`
-- Always add tool responses back to the session
-- Use `MutexSession` wrapper for thread-safe session access
+Primary LLM-based agent: builds request from session history, calls LLM, executes tool calls, repeats until turn complete.
 
-## Agent Types
-
-### LlmAgent
-
-The primary LLM-based agent that:
-1. Builds request from session history + system instruction
-2. Calls LLM
-3. Executes tools if present
-4. Repeats until turn is complete
-5. Returns final response
-
-**Builder pattern:**
 ```rust
-let agent = LlmAgent::builder()
-    .with_llm(llm)
-    .with_session(session)
+let agent = LlmAgent::builder("my-agent", llm)
+    .system_instruction("You are helpful.")
     .with_tools(tools)
-    .with_system_instruction(instruction)
     .build();
 ```
 
-### Workflow Agents
+## Workflow Agents
 
-- `SequentialAgent` - Run agents in sequence
-- `ParallelAgent` - Run agents in parallel
-- `LoopAgent` - Repeat an agent N times
-- `ConditionalAgent` - Branch based on predicate
-- `LlmConditionalAgent` - Use LLM to decide branch
-- `CustomAgent` - Define custom agent behavior
+| Type | Behavior |
+|------|----------|
+| `SequentialAgent` | Run sub-agents in sequence |
+| `ParallelAgent` | Run sub-agents concurrently |
+| `LoopAgent` | Repeat an agent N times |
+| `ConditionalAgent` | Branch on a Rust predicate |
+| `LlmConditionalAgent` | Branch using an LLM decision |
+| `CustomAgent` | Closure-based custom behavior |
 
-## Session Management
+## OrchestratorAgent
 
-The agent appends each exchange to the session:
-1. User/assistant message before LLM call
-2. Tool call event after detecting tool calls
-3. Tool response events after execution
-4. Final assistant message when complete
+Task-graph orchestrator: builds a `TaskGraph` of `TaskNode`s, executes them respecting dependencies, collects `ExecutionTrace`.
 
-## Testing
+## Intra-Repo Dependencies
 
-Use `tokio::test` for async tests. Mock the LLM trait for unit tests.
+- `zero-core` — `Agent`, `BeforeAgentCallback`, `AfterAgentCallback`
+- `zero-llm` — `Llm` trait (used by `LlmAgent`)
+- `zero-session` — `Session`, `State` (for context)
 
-## Important Notes
+## Notes
 
-- Always check for duplicate content before adding to request (see `build_request()`)
-- Tool responses must be added back to session for context
-- Conversation ID should be in ToolContext for conversation-scoped operations
-- Use `turn_complete` flag to determine when to stop looping
+- Re-exports `AfterAgentCallback` and `BeforeAgentCallback` from `zero-core`.
+- Agents are async-first; use `tokio::test` for unit tests.
+- Tool responses must be appended back to the session for correct LLM context.

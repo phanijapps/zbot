@@ -6,12 +6,12 @@ Runnable applications built on the gateway.
 
 ```
 apps/
-├── daemon/     # HTTP/WebSocket server (zerod)
-├── cli/        # Terminal UI client
-└── ui/         # Web dashboard (React)
+├── daemon/     # HTTP/WebSocket server (zbotd binary)
+├── cli/        # Terminal UI client (zbot binary)
+└── ui/         # Web dashboard (React/TypeScript)
 ```
 
-## Daemon
+## Daemon (zbotd)
 
 Standalone HTTP/WebSocket server running the full agent platform.
 
@@ -22,23 +22,30 @@ cargo run -p daemon -- --static-dir ./dist
 # Run on custom port
 cargo run -p daemon -- --port 8080
 
-# Run with config directory
-cargo run -p daemon -- --config-dir ~/.agentzero
+# Run with data directory
+cargo run -p daemon -- --data-dir ~/.agentzero
 ```
 
 **CLI Options:**
-- `--static-dir` - Path to static files (dashboard)
-- `--port` - HTTP port (default: 18791)
-- `--ws-port` - WebSocket port (default: 18790)
-- `--config-dir` - Configuration directory
+- `--static-dir` — Path to React dashboard dist/ directory
+- `--port` / `--http-port` — HTTP port (default: 18791)
+- `--ws-port` — WebSocket port (default: 18790)
+- `--data-dir` — Data directory / vault (default: `~/Documents/agentzero`)
+- `--log-dir` — Enable file logging
+- `--no-dashboard` — Disable static file serving
 
-## CLI
+See `apps/daemon/AGENTS.md` for full details.
+
+## CLI (zbot)
 
 Terminal UI client for interacting with agents.
 
 ```bash
-cargo run -p cli
+cargo run -p cli -- chat assistant
+cargo run -p cli -- invoke assistant "What time is it?"
 ```
+
+See `apps/cli/AGENTS.md` for full details.
 
 ## UI
 
@@ -55,12 +62,11 @@ All apps use `~/Documents/agentzero/` by default:
 ```
 agentzero/
 ├── conversations.db      # SQLite database
-├── INSTRUCTIONS.md       # Custom system prompt
+├── config/               # SOUL.md, INSTRUCTIONS.md, OS.md, shards/
 ├── agents/{name}/        # Agent configs
-├── wards/                # Code Wards (persistent project dirs)
-│   ├── .venv/            #   Shared Python venv
-│   ├── scratch/          #   Default ward
-│   └── {name}/           #   Agent-named projects
+├── wards/                # Code project directories
+│   ├── venv/             #   Shared Python venv
+│   └── {name}/           #   Named project directories
 ├── skills/{name}/        # Skill definitions
 ├── providers.json        # LLM providers
 ├── mcps.json             # MCP servers

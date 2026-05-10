@@ -1,68 +1,47 @@
 # zero-tool
 
-Tool definitions and abstractions for the Zero framework.
+Tool registry and concrete tool infrastructure for the Zero framework.
 
-## Setup
+## What It Provides
 
-```bash
-# Build
-cargo build
+- `ToolRegistry` — in-memory store of `Arc<dyn Tool>` instances, keyed by name
+- `ToolContextImpl` — concrete implementation of `zero_core::ToolContext`
+- `FunctionTool` — wraps a Rust closure as a `Tool`
 
-# Run tests
-cargo test
-```
-
-## Code Style
-
-- Tools implement the `Tool` trait from `zero-core`
-- Use `serde_json::Value` for flexible parameter handling
-- Return structured results as `Value` (can be objects, strings, arrays)
-- Use `thiserror` for error conversion
-
-## Tool Trait
-
-The `Tool` trait is defined in `zero-core` and implemented here:
+## Key Types (re-exported from zero-core)
 
 ```rust
-#[async_trait]
+pub use zero_core::{Tool, ToolContext, Toolset};
+```
+
+## Tool Trait (defined in zero-core)
+
+```rust
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
-    fn parameters(&self) -> Option<Value>;
+    fn parameters_schema(&self) -> Option<Value>;    // JSON Schema for LLM
+    fn response_schema(&self) -> Option<Value>;      // optional
+    fn permissions(&self) -> ToolPermissions;        // risk level, capabilities
+    fn validate(&self, args: &Value) -> Result<()>;
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
 }
 ```
 
-## Parameter Schema
+## Modules
 
-Use JSON Schema for parameters:
+| Module | Purpose |
+|--------|---------|
+| `registry` | `ToolRegistry` — stores and looks up tools by name |
+| `function` | `FunctionTool` — closure-based tool adapter |
+| `context_impl` | `ToolContextImpl` — runtime `ToolContext` implementation |
 
-```rust
-serde_json::json!({
-    "type": "object",
-    "properties": {
-        "param1": {
-            "type": "string",
-            "description": "Parameter description"
-        }
-    },
-    "required": ["param1"]
-})
-```
+## Intra-Repo Dependencies
 
-## ToolContext
+- `zero-core` — `Tool`, `ToolContext`, `Toolset` traits
 
-The context (from `zero-core`) provides:
-- `conversation_id()` - Current conversation ID for scoping
-- Access to state through the context interface
+## Notes
 
-## Testing
-
-Test with various argument shapes (valid, missing required, wrong types).
-
-## Important Notes
-
-- Always validate required parameters and return descriptive errors
-- Use `args.get("key")` for optional parameters
-- Use `and_then(|v| v.as_str())` for type-safe string extraction
-- This crate defines the abstraction only - see `agent-tools` for concrete tool implementations
+- This crate provides registry infrastructure only.
+- Concrete tool implementations (shell, file, memory, etc.) live in `runtime/agent-tools`.
+- Use `ToolRegistry::register()` to add tools and `ToolRegistry::get()` to look them up.
