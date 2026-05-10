@@ -90,7 +90,8 @@ fn format_structured_envelope(agent_id: &str, data: &Value, schema_valid: bool) 
 ///
 /// Returns `Some(Value)` when the message begins with `<!-- structured-result ... -->`.
 /// Returns `None` for plain-text callback messages.
-pub fn extract_structured_result(message: &str) -> Option<Value> {
+#[allow(dead_code)]
+pub(crate) fn extract_structured_result(message: &str) -> Option<Value> {
     let prefix = "<!-- structured-result ";
     let suffix = " -->";
     let trimmed = message.trim_start();
@@ -98,7 +99,7 @@ pub fn extract_structured_result(message: &str) -> Option<Value> {
         return None;
     }
     let after_prefix = &trimmed[prefix.len()..];
-    let end = after_prefix.find(suffix)?;
+    let end = after_prefix.rfind(suffix)?;
     let json_str = &after_prefix[..end];
     serde_json::from_str(json_str).ok()
 }
@@ -145,7 +146,12 @@ pub fn format_callback_message(
     // Prepend structured envelope when schema is set and response is valid JSON
     if output_schema.is_some() {
         if let Ok(json_val) = serde_json::from_str::<Value>(response.trim()) {
-            let envelope = format_structured_envelope(agent_id, &json_val, true);
+            // Check if validate_delegation_response already flagged it as invalid
+            let schema_valid = json_val
+                .get("_schema_valid")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let envelope = format_structured_envelope(agent_id, &json_val, schema_valid);
             return format!("{envelope}\n{markdown_body}");
         }
     }
@@ -457,12 +463,18 @@ mod tests {
     }
 
     #[test]
-    fn no_envelope_for_non_json_response_even_with_schema() {
+    fn schema_invalid_when_response_was_not_json() {
         use serde_json::json;
         let schema = json!({"type": "object"});
-        let msg =
-            format_callback_message("code-agent", "not json at all", "conv-123", Some(&schema));
-        assert!(!msg.contains("<!-- structured-result"));
+        // Simulate what validate_delegation_response does with non-JSON:
+        let validated = serde_json::json!({"summary": "not json at all", "_schema_valid": false});
+        let validated_str = serde_json::to_string(&validated).unwrap();
+        let msg = format_callback_message("code-agent", &validated_str, "conv-123", Some(&schema));
+        // Envelope IS present (validated_str is valid JSON)
+        assert!(msg.starts_with("<!-- structured-result"));
+        // But schema_valid is false
+        let extracted = extract_structured_result(&msg).unwrap();
+        assert_eq!(extracted["schema_valid"], json!(false));
     }
 
     #[test]
