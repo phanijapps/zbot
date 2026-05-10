@@ -544,6 +544,34 @@ impl AgentExecution {
         }
     }
 
+    /// Create a new delegated execution with a caller-provided ID.
+    pub fn new_delegated_with_id(
+        id: impl Into<String>,
+        session_id: impl Into<String>,
+        agent_id: impl Into<String>,
+        parent_execution_id: impl Into<String>,
+        delegation_type: DelegationType,
+        task: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            session_id: session_id.into(),
+            agent_id: agent_id.into(),
+            parent_execution_id: Some(parent_execution_id.into()),
+            delegation_type,
+            task: Some(task.into()),
+            status: ExecutionStatus::Queued,
+            started_at: None,
+            completed_at: None,
+            tokens_in: 0,
+            tokens_out: 0,
+            checkpoint: None,
+            error: None,
+            log_path: None,
+            child_session_id: None,
+        }
+    }
+
     /// Calculate duration in milliseconds (if completed).
     pub fn duration_ms(&self) -> Option<i64> {
         let started = self.started_at.as_ref()?;
@@ -1270,5 +1298,21 @@ mod tests {
         assert_eq!(parsed.parent_execution_id, exec.parent_execution_id);
         assert_eq!(parsed.delegation_type, exec.delegation_type);
         assert_eq!(parsed.task, exec.task);
+    }
+
+    #[test]
+    fn new_delegated_with_id_uses_provided_id() {
+        let exec = AgentExecution::new_delegated_with_id(
+            "exec-custom-uuid",
+            "session-1",
+            "writer-agent",
+            "exec-parent",
+            DelegationType::Sequential,
+            "do work",
+        );
+        assert_eq!(exec.id, "exec-custom-uuid");
+        assert_eq!(exec.agent_id, "writer-agent");
+        assert_eq!(exec.status, ExecutionStatus::Queued);
+        assert_eq!(exec.parent_execution_id, Some("exec-parent".to_string()));
     }
 }
