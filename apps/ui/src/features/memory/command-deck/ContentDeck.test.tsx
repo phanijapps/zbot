@@ -66,6 +66,69 @@ describe("ContentDeck", () => {
     expect(onDeleteFact).not.toHaveBeenCalled();
   });
 
+  it("Wiki tab renders wiki articles", () => {
+    const data = {
+      ...makeWardContent(),
+      counts: { facts: 0, wiki: 2, procedures: 0, episodes: 0 },
+      wiki: [
+        { id: "w1", title: "Auth Overview", content: "Describes the auth system in detail." },
+        { id: "w2", title: "JWT Tokens", content: "Explains how JWT tokens work." },
+      ],
+    } as unknown as WardContent;
+    render(<ContentDeck data={data} />);
+    const wikiTab = screen.getAllByRole("tab").find((t) => t.textContent?.includes("Wiki"))!;
+    fireEvent.click(wikiTab);
+    expect(screen.getByText("Auth Overview")).toBeInTheDocument();
+    expect(screen.getByText("JWT Tokens")).toBeInTheDocument();
+  });
+
+  it("Wiki tab shows empty message when no wiki articles", () => {
+    render(<ContentDeck data={makeWardContent()} />);
+    const wikiTab = screen.getAllByRole("tab").find((t) => t.textContent?.includes("Wiki"))!;
+    fireEvent.click(wikiTab);
+    expect(screen.getByText(/no wiki articles yet/i)).toBeInTheDocument();
+  });
+
+  it("Procedures tab renders procedures with descriptions", () => {
+    const data = {
+      ...makeWardContent(),
+      counts: { facts: 0, wiki: 0, procedures: 1, episodes: 0 },
+      procedures: [
+        { id: "p1", name: "Deploy", description: "How to deploy the service." },
+      ],
+    } as unknown as WardContent;
+    render(<ContentDeck data={data} />);
+    const procTab = screen.getAllByRole("tab").find((t) => t.textContent?.includes("Procedures"))!;
+    fireEvent.click(procTab);
+    expect(screen.getByText("Deploy")).toBeInTheDocument();
+    expect(screen.getByText("How to deploy the service.")).toBeInTheDocument();
+  });
+
+  it("Procedures tab shows empty message when no procedures", () => {
+    render(<ContentDeck data={makeWardContent()} />);
+    const procTab = screen.getAllByRole("tab").find((t) => t.textContent?.includes("Procedures"))!;
+    fireEvent.click(procTab);
+    expect(screen.getByText(/no procedures yet/i)).toBeInTheDocument();
+  });
+
+  it("Episodes tab shows empty message when no episodes", () => {
+    render(<ContentDeck data={makeWardContent()} />);
+    const episodesTab = screen.getAllByRole("tab").find((t) => t.textContent?.includes("Episodes"))!;
+    fireEvent.click(episodesTab);
+    expect(screen.getByText(/no episodes yet/i)).toBeInTheDocument();
+  });
+
+  it("renders ward summary description when present", () => {
+    render(<ContentDeck data={makeWardContent()} />);
+    expect(screen.getByText("Test ward")).toBeInTheDocument();
+  });
+
+  it("renders Graph link", () => {
+    render(<ContentDeck data={makeWardContent()} />);
+    const link = screen.getByText(/graph/i).closest("a");
+    expect(link).toHaveAttribute("href", "/observatory");
+  });
+
   it("Episodes tab renders task_summary + outcome + key_learnings (regression: Episodes count > 0 but list was empty)", () => {
     const data = {
       ...makeWardContent(),

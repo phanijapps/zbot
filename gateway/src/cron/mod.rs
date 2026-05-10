@@ -628,6 +628,305 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn create_job_returns_disabled_without_scheduling() {
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            let request = CreateCronJobRequest {
+                id: "j-disabled".to_string(),
+                name: "j-disabled".to_string(),
+                schedule: "0 0 */4 * * *".to_string(),
+                agent_id: "general-purpose".to_string(),
+                message: "noop".to_string(),
+                respond_to: vec![],
+                enabled: false,
+                timezone: None,
+                metadata: None,
+            };
+            let job = scheduler.create_job(request).await.unwrap();
+            assert!(!job.enabled);
+            assert!(!scheduler.job_uuids.read().await.contains_key("j-disabled"));
+            assert!(!scheduler
+                .job_cancels
+                .read()
+                .await
+                .contains_key("j-disabled"));
+        }
+
+        #[tokio::test]
+        async fn enable_job_then_disable_job_round_trips() {
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            let request = CreateCronJobRequest {
+                id: "j2".to_string(),
+                name: "j2".to_string(),
+                schedule: "0 0 */4 * * *".to_string(),
+                agent_id: "general-purpose".to_string(),
+                message: "noop".to_string(),
+                respond_to: vec![],
+                enabled: false,
+                timezone: None,
+                metadata: None,
+            };
+            scheduler.create_job(request).await.unwrap();
+            assert!(!scheduler.job_uuids.read().await.contains_key("j2"));
+
+            let job = scheduler.enable_job("j2").await.unwrap();
+            assert!(job.enabled);
+            assert!(scheduler.job_uuids.read().await.contains_key("j2"));
+
+            let job = scheduler.disable_job("j2").await.unwrap();
+            assert!(!job.enabled);
+            assert!(!scheduler.job_uuids.read().await.contains_key("j2"));
+        }
+
+        #[tokio::test]
+        async fn list_jobs_returns_seeded_jobs() {
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            assert!(scheduler.list_jobs().await.unwrap().is_empty());
+
+            let request = CreateCronJobRequest {
+                id: "alpha".to_string(),
+                name: "alpha".to_string(),
+                schedule: "0 0 */4 * * *".to_string(),
+                agent_id: "general-purpose".to_string(),
+                message: "noop".to_string(),
+                respond_to: vec![],
+                enabled: true,
+                timezone: None,
+                metadata: None,
+            };
+            scheduler.create_job(request).await.unwrap();
+            let jobs = scheduler.list_jobs().await.unwrap();
+            assert_eq!(jobs.len(), 1);
+            assert_eq!(jobs[0].id, "alpha");
+        }
+
+        #[tokio::test]
+        async fn get_job_returns_existing_record() {
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            let request = CreateCronJobRequest {
+                id: "beta".to_string(),
+                name: "beta-display".to_string(),
+                schedule: "0 0 */4 * * *".to_string(),
+                agent_id: "general-purpose".to_string(),
+                message: "noop".to_string(),
+                respond_to: vec![],
+                enabled: true,
+                timezone: None,
+                metadata: None,
+            };
+            scheduler.create_job(request).await.unwrap();
+            let job = scheduler.get_job("beta").await.unwrap();
+            assert_eq!(job.name, "beta-display");
+        }
+
+        #[tokio::test]
+        async fn get_job_returns_err_for_missing_id() {
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            assert!(scheduler.get_job("nope").await.is_err());
+        }
+
+        #[tokio::test]
+        async fn trigger_submits_to_bus_and_returns_handle() {
+            let (scheduler, bus, _temp) = build_scheduler().await;
+            let request = CreateCronJobRequest {
+                id: "j-trig".to_string(),
+                name: "trig".to_string(),
+                schedule: "0 0 */4 * * *".to_string(),
+                agent_id: "general-purpose".to_string(),
+                message: "ping".to_string(),
+                respond_to: vec![],
+                enabled: true,
+                timezone: None,
+                metadata: None,
+            };
+            scheduler.create_job(request).await.unwrap();
+
+            let result = scheduler.trigger("j-trig").await.unwrap();
+            assert!(result.success);
+            assert_eq!(result.session_id.as_deref(), Some("sess-test"));
+            assert_eq!(result.execution_id.as_deref(), Some("exec-test"));
+            assert_eq!(bus.calls.load(Ordering::SeqCst), 1);
+        }
+
+        #[tokio::test]
+        async fn trigger_uses_root_when_agent_id_blank() {
+            let (scheduler, bus, _temp) = build_scheduler().await;
+            let request = CreateCronJobRequest {
+                id: "j-blank".to_string(),
+                name: "j-blank".to_string(),
+                schedule: "0 0 */4 * * *".to_string(),
+                agent_id: "   ".to_string(),
+                message: "noop".to_string(),
+                respond_to: vec![],
+                enabled: true,
+                timezone: None,
+                metadata: None,
+            };
+            scheduler.create_job(request).await.unwrap();
+            let result = scheduler.trigger("j-blank").await.unwrap();
+            assert!(result.success);
+            assert_eq!(bus.calls.load(Ordering::SeqCst), 1);
+        }
+
+        #[tokio::test]
+        async fn trigger_returns_err_for_missing_id() {
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            assert!(scheduler.trigger("ghost").await.is_err());
+        }
+
+        struct FailingBus;
+        #[async_trait]
+        impl GatewayBus for FailingBus {
+            async fn submit(&self, _r: SessionRequest) -> Result<SessionHandle, BusError> {
+                Err(BusError::Internal("rate-limited".to_string()))
+            }
+            async fn status(&self, _id: &str) -> Result<SessionStatus, BusError> {
+                Err(BusError::SessionNotFound("x".into()))
+            }
+            async fn cancel(&self, _id: &str) -> Result<(), BusError> {
+                Ok(())
+            }
+            async fn pause(&self, _id: &str) -> Result<(), BusError> {
+                Ok(())
+            }
+            async fn resume(&self, _id: &str) -> Result<(), BusError> {
+                Ok(())
+            }
+        }
+
+        #[tokio::test]
+        async fn trigger_reports_failure_when_bus_errors() {
+            let temp = TempDir::new().unwrap();
+            let paths = Arc::new(VaultPaths::new(temp.path().to_path_buf()));
+            let service = CronService::new(paths);
+            let bus: Arc<dyn GatewayBus> = Arc::new(FailingBus);
+            let scheduler = CronScheduler::new(service, bus).await.unwrap();
+            let request = CreateCronJobRequest {
+                id: "j".to_string(),
+                name: "j".to_string(),
+                schedule: "0 0 */4 * * *".to_string(),
+                agent_id: "general-purpose".to_string(),
+                message: "noop".to_string(),
+                respond_to: vec![],
+                enabled: true,
+                timezone: None,
+                metadata: None,
+            };
+            scheduler.create_job(request).await.unwrap();
+
+            let result = scheduler.trigger("j").await.unwrap();
+            assert!(!result.success);
+            assert!(result.session_id.is_none());
+            assert!(result.message.contains("rate-limited"));
+        }
+
+        #[tokio::test]
+        async fn update_job_reschedules_when_schedule_changes() {
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            let request = CreateCronJobRequest {
+                id: "j".to_string(),
+                name: "j".to_string(),
+                schedule: "0 0 */4 * * *".to_string(),
+                agent_id: "general-purpose".to_string(),
+                message: "noop".to_string(),
+                respond_to: vec![],
+                enabled: true,
+                timezone: None,
+                metadata: None,
+            };
+            scheduler.create_job(request).await.unwrap();
+            let original = scheduler
+                .job_cancels
+                .read()
+                .await
+                .get("j")
+                .cloned()
+                .unwrap();
+
+            let update = UpdateCronJobRequest {
+                schedule: Some("0 0 */6 * * *".to_string()),
+                ..Default::default()
+            };
+            scheduler.update_job("j", update).await.unwrap();
+
+            assert!(original.load(Ordering::Acquire));
+            let replacement = scheduler
+                .job_cancels
+                .read()
+                .await
+                .get("j")
+                .cloned()
+                .unwrap();
+            assert!(!replacement.load(Ordering::Acquire));
+        }
+
+        #[tokio::test]
+        async fn update_job_leaves_schedule_when_only_metadata_changes() {
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            let request = CreateCronJobRequest {
+                id: "j".to_string(),
+                name: "old name".to_string(),
+                schedule: "0 0 */4 * * *".to_string(),
+                agent_id: "general-purpose".to_string(),
+                message: "noop".to_string(),
+                respond_to: vec![],
+                enabled: true,
+                timezone: None,
+                metadata: None,
+            };
+            scheduler.create_job(request).await.unwrap();
+            let original = scheduler
+                .job_cancels
+                .read()
+                .await
+                .get("j")
+                .cloned()
+                .unwrap();
+
+            let update = UpdateCronJobRequest {
+                name: Some("new name".to_string()),
+                ..Default::default()
+            };
+            let job = scheduler.update_job("j", update).await.unwrap();
+            assert_eq!(job.name, "new name");
+
+            let same = scheduler
+                .job_cancels
+                .read()
+                .await
+                .get("j")
+                .cloned()
+                .unwrap();
+            assert!(Arc::ptr_eq(&original, &same));
+            assert!(!same.load(Ordering::Acquire));
+        }
+
+        #[tokio::test]
+        async fn delete_job_for_missing_id_returns_err() {
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            assert!(scheduler.delete_job("ghost").await.is_err());
+        }
+
+        #[tokio::test]
+        async fn cron_scheduler_error_display_carries_inner_message() {
+            let svc_err = CronSchedulerError::Service(CronServiceError::NotFound("x".into()));
+            assert!(svc_err.to_string().contains("Service error"));
+        }
+
+        #[tokio::test]
+        async fn service_accessor_returns_underlying_handle() {
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            let svc = scheduler.service();
+            assert!(svc.list().await.unwrap().is_empty());
+        }
+
+        #[tokio::test]
+        async fn start_then_stop_runs_lifecycle() {
+            let (scheduler, _bus, _temp) = build_scheduler().await;
+            scheduler.start().await.unwrap();
+            scheduler.stop().await.unwrap();
+        }
+
+        #[tokio::test]
         async fn reschedule_replaces_cancel_flag() {
             // After update→reschedule, the closure for the old schedule
             // must see a cancelled flag (so any in-flight tick is dropped),

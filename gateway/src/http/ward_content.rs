@@ -365,3 +365,246 @@ pub async fn list_wards(
 
     Ok(Json(items))
 }
+
+#[cfg(test)]
+mod helpers_tests {
+    use super::*;
+
+    fn now_anchor() -> DateTime<Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-04-15T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn age_bucket_today_within_24h() {
+        let now = now_anchor();
+        assert_eq!(age_bucket(now, now - Duration::hours(1)), "today");
+        assert_eq!(age_bucket(now, now - Duration::hours(23)), "today");
+    }
+
+    #[test]
+    fn age_bucket_last_7_days_between_24h_and_week() {
+        let now = now_anchor();
+        assert_eq!(age_bucket(now, now - Duration::hours(25)), "last_7_days");
+        assert_eq!(age_bucket(now, now - Duration::days(6)), "last_7_days");
+    }
+
+    #[test]
+    fn age_bucket_historical_beyond_7_days() {
+        let now = now_anchor();
+        assert_eq!(age_bucket(now, now - Duration::days(7)), "historical");
+        assert_eq!(age_bucket(now, now - Duration::days(30)), "historical");
+    }
+
+    #[test]
+    fn parse_ts_handles_valid_rfc3339() {
+        assert!(parse_ts("2026-04-01T00:00:00Z").is_some());
+    }
+
+    #[test]
+    fn parse_ts_returns_none_for_garbage() {
+        assert!(parse_ts("not-a-date").is_none());
+        assert!(parse_ts("").is_none());
+    }
+
+    #[test]
+    fn stamp_attaches_age_bucket_with_explicit_anchor() {
+        let stamped = stamp(
+            json!({"id": "x"}),
+            now_anchor(),
+            Some("2026-04-15T11:30:00Z"),
+        );
+        assert_eq!(stamped["age_bucket"], "today");
+    }
+
+    #[test]
+    fn stamp_with_unparseable_anchor_falls_back_to_historical() {
+        let stamped = stamp(json!({"id": "x"}), now_anchor(), Some("nonsense"));
+        assert_eq!(stamped["age_bucket"], "historical");
+    }
+
+    #[test]
+    fn stamp_with_no_anchor_falls_back_to_historical() {
+        let stamped = stamp(json!({"id": "x"}), now_anchor(), None);
+        assert_eq!(stamped["age_bucket"], "historical");
+    }
+
+    #[test]
+    fn first_non_empty_line_returns_first_with_content() {
+        assert_eq!(
+            first_non_empty_line("\n\n  hello world\nignored second"),
+            Some("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn first_non_empty_line_returns_none_for_blank_doc() {
+        assert!(first_non_empty_line("").is_none());
+        assert!(first_non_empty_line("\n\n   \n").is_none());
+    }
+
+    fn make_wiki(title: &str, content: &str) -> WikiArticle {
+        WikiArticle {
+            id: format!("art-{title}"),
+            ward_id: "lab".into(),
+            agent_id: "root".into(),
+            title: title.into(),
+            content: content.into(),
+            tags: None,
+            source_fact_ids: None,
+            embedding: None,
+            version: 1,
+            created_at: "2026-04-01T00:00:00Z".into(),
+            updated_at: "2026-04-02T12:30:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn build_summary_uses_index_article_when_present() {
+        let articles = vec![
+            make_wiki("hello", "first body"),
+            make_wiki("__index__", "Project lab description\nsecond line ignored"),
+        ];
+        let s = build_summary("lab", &articles);
+        assert_eq!(s.title, "lab");
+        assert_eq!(s.description.as_deref(), Some("Project lab description"));
+        assert_eq!(s.updated_at.as_deref(), Some("2026-04-02T12:30:00Z"));
+    }
+
+    #[test]
+    fn build_summary_falls_back_when_no_index() {
+        let articles = vec![make_wiki("hello", "no index here")];
+        let s = build_summary("lab", &articles);
+        assert_eq!(s.title, "lab");
+        assert!(s.description.is_none());
+        assert!(s.updated_at.is_none());
+    }
+
+    #[test]
+    fn store_unavailable_returns_503_with_what_label() {
+        let (status, body) = store_unavailable("memory");
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(body.0.error.contains("memory"));
+        assert!(body.0.error.contains("store unavailable"));
+    }
+
+    #[test]
+    fn fact_to_value_includes_age_bucket_from_updated_at() {
+        let now = now_anchor();
+        let fact = MemoryFact {
+            id: "f1".into(),
+            session_id: None,
+            agent_id: "root".into(),
+            scope: "agent".into(),
+            category: "preference".into(),
+            key: "tone".into(),
+            content: "concise".into(),
+            confidence: 0.9,
+            mention_count: 1,
+            source_summary: None,
+            embedding: None,
+            ward_id: "lab".into(),
+            contradicted_by: None,
+            created_at: "2026-04-15T11:00:00Z".into(),
+            updated_at: "2026-04-15T11:00:00Z".into(),
+            expires_at: None,
+            valid_from: None,
+            valid_until: None,
+            superseded_by: None,
+            pinned: false,
+            epistemic_class: Some("convention".into()),
+            source_episode_id: None,
+            source_ref: None,
+        };
+        let v = fact_to_value(fact, now);
+        assert_eq!(v["age_bucket"], "today");
+        assert_eq!(v["agent_id"], "root");
+    }
+
+    #[test]
+    fn wiki_to_value_includes_age_bucket() {
+        let v = wiki_to_value(make_wiki("title", "body"), now_anchor());
+        assert_eq!(v["age_bucket"], "historical");
+        assert_eq!(v["title"], "title");
+    }
+
+    #[test]
+    fn procedure_to_value_uses_last_used_when_present() {
+        let now = now_anchor();
+        let proc = Procedure {
+            id: "p1".into(),
+            agent_id: "root".into(),
+            ward_id: Some("lab".into()),
+            name: "build".into(),
+            description: "build the project".into(),
+            trigger_pattern: None,
+            steps: "[]".into(),
+            parameters: None,
+            success_count: 5,
+            failure_count: 1,
+            avg_duration_ms: Some(120),
+            avg_token_cost: None,
+            last_used: Some("2026-04-15T11:00:00Z".into()),
+            embedding: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-04-01T00:00:00Z".into(),
+        };
+        let v = procedure_to_value(proc, now);
+        assert_eq!(v["age_bucket"], "today");
+    }
+
+    #[test]
+    fn procedure_to_value_falls_back_to_created_at_when_no_last_used() {
+        let now = now_anchor();
+        let proc = Procedure {
+            id: "p1".into(),
+            agent_id: "root".into(),
+            ward_id: Some("lab".into()),
+            name: "build".into(),
+            description: "build the project".into(),
+            trigger_pattern: None,
+            steps: "[]".into(),
+            parameters: None,
+            success_count: 5,
+            failure_count: 1,
+            avg_duration_ms: Some(120),
+            avg_token_cost: None,
+            last_used: None,
+            embedding: None,
+            created_at: "2026-04-15T11:30:00Z".into(),
+            updated_at: "2026-04-15T11:30:00Z".into(),
+        };
+        let v = procedure_to_value(proc, now);
+        assert_eq!(v["age_bucket"], "today");
+    }
+
+    #[test]
+    fn episode_to_value_uses_created_at_for_age() {
+        let now = now_anchor();
+        let ep = SessionEpisode {
+            id: "e1".into(),
+            session_id: "s1".into(),
+            agent_id: "root".into(),
+            ward_id: "lab".into(),
+            task_summary: "fixed bug".into(),
+            outcome: "success".into(),
+            strategy_used: None,
+            key_learnings: None,
+            token_cost: None,
+            embedding: None,
+            created_at: "2026-04-10T12:00:00Z".into(),
+        };
+        let v = episode_to_value(ep, now);
+        assert_eq!(v["age_bucket"], "last_7_days");
+        assert_eq!(v["task_summary"], "fixed bug");
+    }
+
+    #[test]
+    fn internal_helper_emits_500_with_context() {
+        let (status, body) = internal("list facts", "db locked");
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(body.0.error.contains("list facts"));
+        assert!(body.0.error.contains("db locked"));
+    }
+}

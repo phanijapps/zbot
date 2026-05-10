@@ -151,6 +151,15 @@ export const handlers = [
     ]);
   }),
 
+  // Connector inbound log
+  http.get(`${API_BASE}/api/connectors/:id/inbound-log`, ({ params }) => {
+    const connectorId = params.id as string;
+    return HttpResponse.json([
+      { connector_id: connectorId, message: 'test message 1', session_id: 'sess-001', received_at: new Date().toISOString() },
+      { connector_id: connectorId, message: 'test message 2', session_id: 'sess-002', received_at: new Date().toISOString() },
+    ]);
+  }),
+
   // Conversations list
   http.get(`${API_BASE}/api/conversations`, () => {
     return HttpResponse.json([

@@ -1,20 +1,20 @@
 # Zero Framework
 
-Core abstractions for building AI agents. This layer is designed to be publishable as a standalone crate (`zero-agent-framework`).
+Core abstractions for building AI agents. Designed to be publishable as a standalone crate (`zero-agent-framework`).
 
 ## Crates
 
 | Crate | Purpose |
 |-------|---------|
-| `zero-core` | Core traits: Agent, Tool, Toolset, Event, errors |
-| `zero-llm` | LLM abstractions and OpenAI client |
-| `zero-tool` | Tool registry and execution |
-| `zero-mcp` | Model Context Protocol integration |
-| `zero-session` | State and session management |
-| `zero-prompt` | Template rendering with state injection |
-| `zero-middleware` | Message preprocessing pipelines |
-| `zero-agent` | Agent implementations (LlmAgent, workflow agents) |
-| `zero-app` | Convenience prelude re-exporting all crates |
+| `zero-core` | Core traits: `Agent`, `Tool`, `Toolset`, `Event`, `FileSystemContext`, errors |
+| `zero-llm` | LLM abstractions (`Llm` trait) and OpenAI-compatible client + encoder |
+| `zero-tool` | Tool registry (`ToolRegistry`), `FunctionTool`, `ToolContextImpl` |
+| `zero-mcp` | Model Context Protocol — client, connection pool, tool wrapping, filtering |
+| `zero-session` | Session and state management (`InMemorySession`, `InMemoryState`) |
+| `zero-prompt` | Template rendering with `{var}` syntax, session state injection |
+| `zero-middleware` | Re-export shim — all logic lives in `agent_runtime::middleware` |
+| `zero-agent` | Agent implementations: `LlmAgent`, workflow agents, `OrchestratorAgent` |
+| `zero-app` | Convenience aggregator: re-exports all above + `ZeroAppBuilder`/`ZeroApp` |
 
 ## Usage
 
@@ -24,12 +24,12 @@ use zero_app::prelude::*;
 
 ## Design Principles
 
-1. **Trait-based abstractions** - Implement `Tool`, `Agent`, `Toolset` for custom behavior
-2. **No I/O in core** - Network/storage injected via traits
-3. **Async-first** - Built on tokio
-4. **Composable** - Mix and match crates as needed
+1. **Trait-based abstractions** — Implement `Tool`, `Agent`, `Toolset` for custom behavior
+2. **No I/O in core** — Network/storage injected via traits
+3. **Async-first** — Built on tokio
+4. **Composable** — Mix and match crates as needed
 
-## Dependencies
+## Dependency Graph
 
 ```
 zero-core (foundation)
@@ -38,15 +38,16 @@ zero-core (foundation)
     ├── zero-mcp
     ├── zero-session
     ├── zero-prompt
-    └── zero-middleware
+    └── zero-middleware  ← re-exports agent-runtime::middleware
             │
-            └── zero-agent
+            └── zero-agent  (LlmAgent, OrchestratorAgent, workflow agents)
                     │
-                    └── zero-app (aggregator)
+                    └── zero-app (aggregator prelude + ZeroAppBuilder)
 ```
 
 ## Does NOT Contain
 
 - Network I/O (that's `gateway/`)
-- Tool implementations (that's `runtime/agent-tools`)
+- Concrete tool implementations (that's `runtime/agent-tools`)
+- SQLite or persistence (that's `stores/`)
 - Application-specific logic

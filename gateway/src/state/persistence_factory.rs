@@ -72,3 +72,64 @@ pub fn build_memory_store(
 ) -> Arc<dyn MemoryFactStore> {
     Arc::new(SqliteMemoryStore::new(memory_repo, embedding_client))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gateway_services::VaultPaths;
+    use tempfile::TempDir;
+    use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+
+    struct NoEmbed;
+    #[async_trait::async_trait]
+    impl EmbeddingClient for NoEmbed {
+        async fn embed(
+            &self,
+            texts: &[&str],
+        ) -> Result<Vec<Vec<f32>>, agent_runtime::llm::EmbeddingError> {
+            Ok(vec![vec![0.0_f32; 4]; texts.len()])
+        }
+        fn dimensions(&self) -> usize {
+            4
+        }
+        fn model_name(&self) -> String {
+            "test-no-embed".to_string()
+        }
+    }
+
+    fn fixture() -> (TempDir, Arc<KnowledgeDatabase>, Arc<MemoryRepository>) {
+        let dir = TempDir::new().unwrap();
+        let paths = Arc::new(VaultPaths::new(dir.path().to_path_buf()));
+        std::fs::create_dir_all(paths.data_dir()).unwrap();
+        let kdb = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
+        let vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(kdb.clone(), "memory_facts_index", "fact_id").expect("vec index"),
+        );
+        let repo = Arc::new(MemoryRepository::new(kdb.clone(), vec));
+        (dir, kdb, repo)
+    }
+
+    #[test]
+    fn build_memory_store_returns_trait_object_without_embedder() {
+        let (_dir, _kdb, repo) = fixture();
+        let store = build_memory_store(repo, None);
+        assert!(Arc::strong_count(&store) >= 1);
+    }
+
+    #[test]
+    fn build_kg_store_from_storage_yields_arc_dyn() {
+        let (_dir, kdb, _repo) = fixture();
+        let storage = Arc::new(GraphStorage::new(kdb.clone()).expect("graph storage"));
+        let embedder: Arc<dyn EmbeddingClient> = Arc::new(NoEmbed);
+        let store = build_kg_store_from_storage(storage, embedder);
+        assert!(Arc::strong_count(&store) >= 1);
+    }
+
+    #[test]
+    fn build_kg_store_constructs_storage_then_delegates() {
+        let (_dir, kdb, _repo) = fixture();
+        let embedder: Arc<dyn EmbeddingClient> = Arc::new(NoEmbed);
+        let store = build_kg_store(kdb, embedder).expect("build_kg_store");
+        assert!(Arc::strong_count(&store) >= 1);
+    }
+}

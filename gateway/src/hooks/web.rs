@@ -96,16 +96,88 @@ impl Hook for WebHook {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_web_hook_can_handle() {
+    fn make_hook() -> (Arc<SessionRegistry>, Arc<EventBus>, WebHook) {
         let registry = Arc::new(SessionRegistry::new());
         let event_bus = Arc::new(EventBus::new());
-        let hook = WebHook::new(registry, event_bus);
+        let hook = WebHook::new(registry.clone(), event_bus.clone());
+        (registry, event_bus, hook)
+    }
 
+    #[tokio::test]
+    async fn test_web_hook_can_handle() {
+        let (_r, _b, hook) = make_hook();
         let web_ctx = HookContext::web("session-123");
         assert!(hook.can_handle(&web_ctx));
 
         let cli_ctx = HookContext::cli("test");
         assert!(!hook.can_handle(&cli_ctx));
+    }
+
+    #[tokio::test]
+    async fn hook_type_returns_web_with_empty_session_id() {
+        let (_r, _b, hook) = make_hook();
+        match hook.hook_type() {
+            HookType::Web { session_id } => assert_eq!(session_id, ""),
+            other => panic!("expected Web variant, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn respond_returns_err_for_non_web_context() {
+        let (_r, _b, hook) = make_hook();
+        let ctx = HookContext::cli("not-web");
+        let result = hook
+            .respond(&ctx, "hello", ResponseFormat::Text, None)
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Web hook contexts"));
+    }
+
+    #[tokio::test]
+    async fn respond_publishes_event_when_no_session_present() {
+        let (_r, event_bus, hook) = make_hook();
+        let mut rx = event_bus.subscribe_all();
+
+        let ctx = HookContext::web("ws-session-1");
+        hook.respond(&ctx, "hello world", ResponseFormat::Text, None)
+            .await
+            .expect("respond ok");
+
+        let event = rx.recv().await.expect("event");
+        match event {
+            crate::events::GatewayEvent::Respond {
+                session_id,
+                message,
+                conversation_id,
+                ..
+            } => {
+                assert_eq!(session_id, "ws-session-1");
+                assert_eq!(message, "hello world");
+                assert_eq!(conversation_id.as_deref(), Some("ws-session-1"));
+            }
+            other => panic!("expected Respond event, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn respond_uses_metadata_conversation_id_when_present() {
+        let (_r, event_bus, hook) = make_hook();
+        let mut rx = event_bus.subscribe_all();
+
+        let ctx = HookContext::web("ws-session-2")
+            .with_metadata("conversation_id", serde_json::json!("conv-explicit"));
+        hook.respond(&ctx, "hi", ResponseFormat::Text, None)
+            .await
+            .expect("respond ok");
+
+        let event = rx.recv().await.expect("event");
+        if let crate::events::GatewayEvent::Respond {
+            conversation_id, ..
+        } = event
+        {
+            assert_eq!(conversation_id.as_deref(), Some("conv-explicit"));
+        } else {
+            panic!("expected Respond event");
+        }
     }
 }

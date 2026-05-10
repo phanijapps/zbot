@@ -4,17 +4,18 @@ Standalone data services with minimal framework dependencies. Each service is in
 
 ## Crates
 
-| Crate | Purpose | Storage | Tests |
-|-------|---------|---------|-------|
-| `execution-state` | Session lifecycle, execution tracking, token consumption, dashboard stats | SQLite | 82 |
-| `api-logs` | Execution logging and tracing with categories and filtering | SQLite | 0 |
-| `knowledge-graph` | Entity extraction and relationship storage | SQLite | 19 |
-| `daily-sessions` | Daily session continuity with message archiving | SQLite + moka cache | 16 |
+| Crate | Purpose | Storage |
+|-------|---------|---------|
+| `execution-state` | Session lifecycle, execution tracking, token consumption, dashboard stats | SQLite (via `StateDbProvider`) |
+| `api-logs` | Execution logging and tracing with categories and filtering | SQLite (via `DbProvider`) |
+| `knowledge-graph` | Entity/relationship type definitions, extraction, name resolution | Types only; SQLite storage in `zero-stores-sqlite` |
+| `daily-sessions` | Daily session continuity with message archiving | SQLite + moka cache |
 
 ## Build & Test
 
 ```bash
 cargo test -p execution-state    # 82 tests
+cargo test -p api-logs
 cargo test -p knowledge-graph    # 19 tests
 cargo test -p daily-sessions     # 16 tests
 ```
@@ -24,28 +25,28 @@ cargo test -p daily-sessions     # 16 tests
 Services expose traits that the gateway implements:
 
 ```rust
-// In services/execution-state
+// In execution-state
 pub trait StateDbProvider {
     fn get_connection(&self) -> Result<PooledConnection>;
 }
 
-// In services/api-logs
+// In api-logs
 pub trait DbProvider {
     fn get_connection(&self) -> &Connection;
 }
 
-// Gateway's DatabaseManager implements both traits
+// Gateway's DatabaseManager (in zero-stores-sqlite) implements both traits
 ```
 
-This inverts dependencies — services don't depend on gateway, gateway depends on services.
+This inverts dependencies — services don't depend on the gateway; the gateway depends on services.
 
 ## execution-state
 
 The most critical service. Tracks sessions, agent executions, delegations, ward assignments, and token usage.
 
-**Key types**: `Session`, `AgentExecution`, `SessionStatus`, `ExecutionStatus`, `DelegationType`, `TriggerSource`, `DashboardStats`
+**Key types**: `Session`, `AgentExecution`, `SessionStatus`, `ExecutionStatus`, `DelegationType`, `TriggerSource`, `DashboardStats`, `Checkpoint`
 
-**HTTP routes** (11 endpoints):
+**HTTP routes** (mounted by gateway at `/api`):
 - `GET /v2/sessions` — List sessions
 - `GET /v2/sessions/:id/full` — Session with all executions
 - `POST /sessions/:id/{pause,resume,cancel}` — Control operations
@@ -62,11 +63,11 @@ Execution tracing with structured log entries. Each entry has level, category, t
 
 ## knowledge-graph
 
-Extracts and stores entities and relationships from conversations. LLM-powered extraction (stubbed).
+Entity type definitions, extraction, and name resolution. **Storage was relocated to `zero-stores-sqlite::kg`** (Slice D6b).
 
-**Key types**: `Entity`, `Relationship`, `EntityType`, `RelationshipType`, `ExtractedKnowledge`
+**Key types**: `Entity`, `Relationship`, `EntityType`, `RelationshipType`, `ExtractedKnowledge`, `ResolveOutcome`
 
-**Entity types**: Person, Organization, Location, Concept, Tool, Project, Custom
+**Public API**: `EntityExtractor::extract_from_message()`, `resolve()`, `normalize_name()`
 
 ## daily-sessions
 

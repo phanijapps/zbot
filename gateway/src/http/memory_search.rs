@@ -432,3 +432,212 @@ async fn run_facts(
         .map(|(fact, score, src)| fact_to_value(fact, &src, Some(score)))
         .collect()
 }
+
+#[cfg(test)]
+mod helpers_tests {
+    use super::*;
+    use zero_stores_domain::{MemoryFact, Procedure, SessionEpisode, WikiArticle, WikiHit};
+
+    fn fact() -> MemoryFact {
+        MemoryFact {
+            id: "fact-1".into(),
+            session_id: Some("sess-1".into()),
+            agent_id: "root".into(),
+            scope: "agent".into(),
+            category: "preference".into(),
+            key: "tone".into(),
+            content: "be concise".into(),
+            confidence: 0.9,
+            mention_count: 3,
+            source_summary: None,
+            embedding: None,
+            ward_id: "lab".into(),
+            contradicted_by: None,
+            created_at: "2026-04-01T00:00:00Z".into(),
+            updated_at: "2026-04-02T00:00:00Z".into(),
+            expires_at: None,
+            valid_from: None,
+            valid_until: None,
+            superseded_by: None,
+            pinned: false,
+            epistemic_class: Some("convention".into()),
+            source_episode_id: None,
+            source_ref: None,
+        }
+    }
+
+    fn wiki() -> WikiArticle {
+        WikiArticle {
+            id: "wiki-1".into(),
+            ward_id: "lab".into(),
+            agent_id: "root".into(),
+            title: "Index".into(),
+            content: "lorem ipsum dolor sit amet".repeat(20),
+            tags: None,
+            source_fact_ids: None,
+            embedding: None,
+            version: 1,
+            created_at: "2026-04-01T00:00:00Z".into(),
+            updated_at: "2026-04-02T00:00:00Z".into(),
+        }
+    }
+
+    fn proc() -> Procedure {
+        Procedure {
+            id: "proc-1".into(),
+            agent_id: "root".into(),
+            ward_id: Some("lab".into()),
+            name: "build".into(),
+            description: "build the project".into(),
+            trigger_pattern: None,
+            steps: "[]".into(),
+            parameters: None,
+            success_count: 5,
+            failure_count: 1,
+            avg_duration_ms: Some(120),
+            avg_token_cost: None,
+            last_used: Some("2026-04-02T00:00:00Z".into()),
+            embedding: None,
+            created_at: "2026-04-01T00:00:00Z".into(),
+            updated_at: "2026-04-02T00:00:00Z".into(),
+        }
+    }
+
+    fn episode() -> SessionEpisode {
+        SessionEpisode {
+            id: "ep-1".into(),
+            session_id: "sess-1".into(),
+            agent_id: "root".into(),
+            ward_id: "lab".into(),
+            task_summary: "fixed bug".into(),
+            outcome: "success".into(),
+            strategy_used: Some("split-and-trace".into()),
+            key_learnings: Some("logs are gold".into()),
+            token_cost: Some(2048),
+            embedding: None,
+            created_at: "2026-04-02T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn defaults_match_expected_values() {
+        assert_eq!(default_mode(), "hybrid");
+        assert_eq!(default_limit(), 10);
+        let types = default_types();
+        assert_eq!(types.len(), 4);
+        assert!(types.contains(&"facts".to_string()));
+        assert!(types.contains(&"wiki".to_string()));
+        assert!(types.contains(&"procedures".to_string()));
+        assert!(types.contains(&"episodes".to_string()));
+    }
+
+    #[test]
+    fn err_helper_emits_status_and_body() {
+        let (status, body) = err(StatusCode::BAD_REQUEST, "boom");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body.0.error, "boom");
+    }
+
+    #[test]
+    fn store_unavailable_returns_503() {
+        let (status, body) = store_unavailable();
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.0.error, "store unavailable");
+    }
+
+    #[test]
+    fn wiki_hit_to_value_truncates_snippet_to_240_chars() {
+        let hit = WikiHit {
+            article: wiki(),
+            score: 0.42,
+            match_source: "fts".into(),
+        };
+        let v = wiki_hit_to_value(hit);
+        let snippet = v["snippet"].as_str().unwrap();
+        assert!(snippet.chars().count() <= 240);
+        assert_eq!(v["score"], 0.42);
+        assert_eq!(v["match_source"], "fts");
+        assert_eq!(v["title"], "Index");
+        assert_eq!(v["ward_id"], "lab");
+    }
+
+    #[test]
+    fn procedure_to_value_emits_match_source_vec() {
+        let v = procedure_to_value(proc(), 0.7);
+        assert_eq!(v["score"], 0.7);
+        assert_eq!(v["match_source"], "vec");
+        assert_eq!(v["name"], "build");
+        assert_eq!(v["success_count"], 5);
+    }
+
+    #[test]
+    fn episode_to_value_with_score_includes_score_field() {
+        let v = episode_to_value(episode(), Some(0.5), "vec");
+        assert_eq!(v["match_source"], "vec");
+        assert_eq!(v["score"], 0.5);
+        assert_eq!(v["task_summary"], "fixed bug");
+    }
+
+    #[test]
+    fn episode_to_value_without_score_omits_score_field() {
+        let v = episode_to_value(episode(), None, "fts");
+        assert_eq!(v["match_source"], "fts");
+        assert!(v.get("score").is_none() || v.get("score") == Some(&Value::Null));
+    }
+
+    #[test]
+    fn fact_to_value_with_score_includes_score() {
+        let v = fact_to_value(fact(), "fts", Some(0.91));
+        assert_eq!(v["score"], 0.91);
+        assert_eq!(v["match_source"], "fts");
+        assert_eq!(v["agent_id"], "root");
+        assert_eq!(v["pinned"], false);
+    }
+
+    #[test]
+    fn fact_to_value_without_score_omits_score() {
+        let v = fact_to_value(fact(), "vec", None);
+        assert_eq!(v["match_source"], "vec");
+        assert!(v.get("score").is_none() || v.get("score") == Some(&Value::Null));
+    }
+
+    /// Stub store — every other method on `MemoryFactStore` has a default
+    /// impl; we only need to implement the two non-default methods.
+    struct StubStore;
+    #[async_trait::async_trait]
+    impl zero_stores_traits::MemoryFactStore for StubStore {
+        async fn save_fact(
+            &self,
+            _agent_id: &str,
+            _category: &str,
+            _key: &str,
+            _content: &str,
+            _confidence: f64,
+            _session_id: Option<&str>,
+        ) -> Result<Value, String> {
+            unreachable!()
+        }
+        async fn recall_facts(
+            &self,
+            _agent_id: &str,
+            _query: &str,
+            _limit: usize,
+        ) -> Result<Value, String> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn run_facts_in_semantic_mode_without_embedding_returns_empty() {
+        let store = StubStore;
+        let out = run_facts(&store, "anything", "semantic", None, None, None, 10).await;
+        assert!(out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_facts_in_fts_mode_with_default_store_returns_empty() {
+        let store = StubStore;
+        let out = run_facts(&store, "build", "fts", None, Some("root"), Some("lab"), 10).await;
+        assert!(out.is_empty());
+    }
+}

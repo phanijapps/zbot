@@ -20,8 +20,7 @@ src-tauri/target/
 .ref/
 .serena/
 *.wix
-# Tauri removed; rule kept defensively in case the dir reappears.
-src-tauri/Cargo.lock
+
 
 # -----------------------------------------------------------------------------
 # Environment files

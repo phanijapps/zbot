@@ -1791,3 +1791,271 @@ impl AppState {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::EventBus;
+    use crate::hooks::HookRegistry;
+    use tempfile::TempDir;
+
+    fn make_temp_state() -> (TempDir, AppState) {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("agents")).unwrap();
+        std::fs::create_dir_all(dir.path().join("skills")).unwrap();
+        let state = AppState::minimal(dir.path().to_path_buf());
+        (dir, state)
+    }
+
+    #[test]
+    fn minimal_app_state_wires_required_components() {
+        let (_dir, state) = make_temp_state();
+        assert!(state.hook_registry.is_none());
+        assert!(state.cron_scheduler.is_none());
+        assert!(state.session_archiver.is_none());
+        assert!(state.bridge_bus.is_none());
+        assert!(state.memory_store.is_some());
+        assert!(state.episode_store.is_some());
+        assert!(state.wiki_store.is_some());
+        assert!(state.procedure_store.is_some());
+        assert!(state.knowledge_db.is_some());
+    }
+
+    #[test]
+    fn with_hook_registry_wires_the_optional_field() {
+        let (_dir, state) = make_temp_state();
+        let event_bus = Arc::new(EventBus::new());
+        let registry = Arc::new(HookRegistry::new(event_bus));
+        let state = state.with_hook_registry(registry);
+        assert!(state.hook_registry.is_some());
+    }
+
+    #[test]
+    fn ensure_wards_dir_creates_scratch_and_wiki_subtrees() {
+        let (_dir, state) = make_temp_state();
+        state.ensure_wards_dir();
+
+        assert!(state.config_dir.join("wards").join("scratch").is_dir());
+
+        let wiki = state.config_dir.join("wards").join("wiki");
+        assert!(wiki.is_dir());
+        for folder in [
+            "00_Inbox",
+            "20_Projects",
+            "30_Library/Books",
+            "40_Research",
+            "50_Resources",
+            "60_Archive",
+            "70_Assets/Images",
+            "_zztemplates",
+        ] {
+            assert!(wiki.join(folder).is_dir());
+        }
+
+        let agents_md = std::fs::read_to_string(wiki.join("AGENTS.md")).expect("agents.md");
+        assert!(agents_md.starts_with("<!-- obsidian-vault -->"));
+
+        for f in ["ward.md", "structure.md", "core_docs.md"] {
+            assert!(wiki.join("memory-bank").join(f).exists());
+        }
+    }
+
+    #[test]
+    fn ensure_wards_dir_is_idempotent_and_preserves_user_edits() {
+        let (_dir, state) = make_temp_state();
+        state.ensure_wards_dir();
+        let agents_md_path = state
+            .config_dir
+            .join("wards")
+            .join("wiki")
+            .join("AGENTS.md");
+
+        std::fs::write(&agents_md_path, "user-authored content").unwrap();
+        state.ensure_wards_dir();
+        let after = std::fs::read_to_string(&agents_md_path).unwrap();
+        assert_eq!(after, "user-authored content");
+    }
+
+    #[test]
+    fn ensure_wards_dir_reseeds_when_marker_present() {
+        let (_dir, state) = make_temp_state();
+        state.ensure_wards_dir();
+        let agents_md_path = state
+            .config_dir
+            .join("wards")
+            .join("wiki")
+            .join("AGENTS.md");
+
+        std::fs::write(
+            &agents_md_path,
+            "<!-- obsidian-vault -->\nold seed content\n",
+        )
+        .unwrap();
+        state.ensure_wards_dir();
+        let after = std::fs::read_to_string(&agents_md_path).unwrap();
+        assert!(after.starts_with("<!-- obsidian-vault -->"));
+        assert!(after.contains("Folder map"));
+    }
+
+    #[test]
+    fn ensure_wiki_ward_handles_custom_name() {
+        let (_dir, state) = make_temp_state();
+        let wards = state.config_dir.join("wards");
+        std::fs::create_dir_all(&wards).unwrap();
+        state.ensure_wiki_ward(&wards, "knowledge");
+
+        let custom = wards.join("knowledge");
+        assert!(custom.is_dir());
+        assert!(custom.join("AGENTS.md").exists());
+        let content = std::fs::read_to_string(custom.join("AGENTS.md")).unwrap();
+        assert!(content.contains("# knowledge"));
+    }
+
+    #[test]
+    fn ensure_node_env_creates_directory_when_missing() {
+        let (_dir, state) = make_temp_state();
+        let new_path = state.config_dir.join("wards").join(".node_env");
+        assert!(!new_path.exists());
+
+        assert!(state.ensure_node_env());
+        assert!(new_path.is_dir());
+    }
+
+    #[test]
+    fn ensure_node_env_returns_true_when_already_exists() {
+        let (_dir, state) = make_temp_state();
+        let new_path = state.config_dir.join("wards").join(".node_env");
+        std::fs::create_dir_all(&new_path).unwrap();
+        assert!(state.ensure_node_env());
+    }
+
+    #[test]
+    fn ensure_node_env_uses_legacy_path_when_present() {
+        let (_dir, state) = make_temp_state();
+        let legacy = state.config_dir.join("node_env");
+        std::fs::create_dir_all(&legacy).unwrap();
+        assert!(state.ensure_node_env());
+    }
+
+    #[test]
+    fn seed_default_skills_is_no_op_when_skills_dir_has_content() {
+        let (_dir, state) = make_temp_state();
+        let skills_dir = state.paths.vault_dir().join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::write(skills_dir.join("sentinel.md"), "user").unwrap();
+
+        state.seed_default_skills();
+        assert!(skills_dir.join("sentinel.md").exists());
+    }
+
+    #[test]
+    fn seed_default_skills_populates_empty_dir_from_templates() {
+        let (_dir, state) = make_temp_state();
+        let skills_dir = state.paths.vault_dir().join("skills");
+        if skills_dir.exists() {
+            std::fs::remove_dir_all(&skills_dir).unwrap();
+        }
+        state.seed_default_skills();
+        assert!(skills_dir.is_dir());
+    }
+
+    #[tokio::test]
+    async fn seed_default_cron_inserts_bundled_jobs_into_registry() {
+        let (_dir, state) = make_temp_state();
+        state.seed_default_cron().await;
+
+        let registry_path = state.paths.config_dir().join("seeded_defaults.json");
+        assert!(registry_path.exists());
+    }
+
+    #[tokio::test]
+    async fn seed_default_cron_is_idempotent_across_calls() {
+        let (_dir, state) = make_temp_state();
+        state.seed_default_cron().await;
+        state.seed_default_cron().await;
+    }
+
+    #[tokio::test]
+    async fn seed_default_policies_skips_when_existing_corrections_present() {
+        let (_dir, state) = make_temp_state();
+        state.seed_default_policies().await;
+        state.seed_default_policies().await;
+    }
+
+    #[tokio::test]
+    async fn discover_and_start_plugins_handles_missing_plugin_dir() {
+        let (_dir, state) = make_temp_state();
+        state.discover_and_start_plugins().await;
+    }
+
+    #[tokio::test]
+    async fn ensure_runtime_environments_creates_wards_and_envs() {
+        let (_dir, state) = make_temp_state();
+        state.ensure_runtime_environments().await;
+
+        assert!(state.config_dir.join("wards").join("scratch").is_dir());
+        assert!(state.config_dir.join("wards").join(".node_env").is_dir());
+    }
+
+    #[tokio::test]
+    async fn seed_defaults_runs_to_completion() {
+        let (_dir, state) = make_temp_state();
+        state.seed_defaults().await;
+    }
+
+    #[tokio::test]
+    async fn new_app_state_initialises_full_constructor_path() {
+        let dir = TempDir::new().unwrap();
+        let state = AppState::new(dir.path().to_path_buf());
+        assert!(state.knowledge_db.is_some());
+        assert!(state.memory_store.is_some());
+        assert!(state.kg_store.is_some());
+        assert!(state.graph_service.is_some());
+        assert!(state.distillation_repo.is_some());
+        assert!(state.distiller.is_some());
+        assert!(state.session_archiver.is_some());
+        assert!(state.episode_repo.is_some());
+        assert!(state.kg_episode_repo.is_some());
+        assert!(state.cron_scheduler.is_none());
+        assert!(state.bridge_bus.is_none());
+    }
+
+    #[test]
+    fn with_components_uses_supplied_handles() {
+        let dir = TempDir::new().unwrap();
+        let paths: SharedVaultPaths = Arc::new(VaultPaths::new(dir.path().to_path_buf()));
+        let _ = paths.ensure_dirs_exist();
+        let event_bus = Arc::new(EventBus::new());
+        let agents = Arc::new(AgentService::new(paths.agents_dir()));
+        let skills = Arc::new(SkillService::with_roots(paths.skills_dirs()));
+        let provider_service = Arc::new(ProviderService::new(paths.clone()));
+        let mcp_service = Arc::new(McpService::new(paths.clone()));
+        let runtime = Arc::new(RuntimeService::new(event_bus.clone()));
+        let db_manager = Arc::new(DatabaseManager::new(paths.clone()).expect("db manager"));
+        let conversations = Arc::new(ConversationRepository::new(db_manager.clone()));
+        let log_service = Arc::new(LogService::new(db_manager.clone()));
+        let state_service = Arc::new(StateService::new(db_manager.clone()));
+        let connector_service = ConnectorService::new(paths.clone());
+        let connector_registry = Arc::new(ConnectorRegistry::new(connector_service));
+
+        let state = AppState::with_components(
+            agents,
+            skills,
+            provider_service,
+            mcp_service,
+            runtime,
+            event_bus,
+            conversations,
+            log_service,
+            state_service,
+            connector_registry,
+            paths.clone(),
+        );
+
+        assert_eq!(state.config_dir, *paths.vault_dir());
+        assert!(state.memory_store.is_some());
+        assert!(state.episode_store.is_some());
+        assert!(state.wiki_store.is_some());
+        assert!(state.procedure_store.is_some());
+    }
+}

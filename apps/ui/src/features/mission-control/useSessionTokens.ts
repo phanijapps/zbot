@@ -210,3 +210,19 @@ export function sumExecutionTokensByAgent(
   }
   return out;
 }
+
+/**
+ * Build a per-execution token lookup keyed by executionId (exec-...).
+ * Unlike sumExecutionTokensByAgent, this preserves individual run counts
+ * when the same agent is delegated multiple times.
+ */
+export function executionTokensById(
+  entries: ExecutionTokenEntry[] | undefined,
+): Map<string, { in: number; out: number }> {
+  const out = new Map<string, { in: number; out: number }>();
+  if (!entries) return out;
+  for (const e of entries) {
+    out.set(e.executionId, { in: e.in, out: e.out });
+  }
+  return out;
+}

@@ -24,16 +24,19 @@ interface AgentToolGroupProps {
    *  and fires this callback with the tool node so the parent can open a
    *  detail popover. */
   onToolClick?: (tool: TraceNode) => void;
-  /** Optional per-agent token totals keyed by agent_id. When provided and the
-   *  current node's agent has a non-zero entry, the header shows ↓in / ↑out
-   *  in addition to duration + tool count. */
+  /** Per-agent token totals keyed by agent_id. Summed across all runs of that
+   *  agent — used as the fallback for the root node which has no executionId. */
   tokensByAgent?: Map<string, { in: number; out: number }>;
+  /** Per-execution token counts keyed by executionId (exec-...). Takes priority
+   *  over tokensByAgent for delegation nodes so repeated delegations of the same
+   *  agent each show their individual run counts, not the combined total. */
+  tokensByExecution?: Map<string, { in: number; out: number }>;
   /** When true, the body starts collapsed; click the header to expand. The
    *  root group is always expanded — only delegations honor this. */
   defaultCollapsed?: boolean;
 }
 
-export function AgentToolGroup({ node, depth = 0, onToolClick, tokensByAgent, defaultCollapsed = false }: AgentToolGroupProps) {
+export function AgentToolGroup({ node, depth = 0, onToolClick, tokensByAgent, tokensByExecution, defaultCollapsed = false }: AgentToolGroupProps) {
   // Root is always expanded; only delegations can be collapsed by default.
   const [collapsed, setCollapsed] = useState<boolean>(node.type === "delegation" && defaultCollapsed);
 
@@ -46,7 +49,11 @@ export function AgentToolGroup({ node, depth = 0, onToolClick, tokensByAgent, de
   const errors = node.children.filter((c) => c.type === "error");
   const status = mapStatus(node.status);
   const avatar = avatarTone(node.agentId, depth);
-  const tokens = tokensByAgent?.get(node.agentId);
+  // Prefer execution-level count (unique per delegation run) over agent-level
+  // sum (which would be identical for all runs of the same agent type).
+  const tokens =
+    (node.executionId ? tokensByExecution?.get(node.executionId) : undefined) ??
+    tokensByAgent?.get(node.agentId);
   const showTokens = tokens && (tokens.in + tokens.out) > 0;
   const collapsible = node.type === "delegation";
 
@@ -126,6 +133,7 @@ export function AgentToolGroup({ node, depth = 0, onToolClick, tokensByAgent, de
               depth={depth + 1}
               onToolClick={onToolClick}
               tokensByAgent={tokensByAgent}
+              tokensByExecution={tokensByExecution}
               defaultCollapsed={i !== subagents.length - 1}
             />
           ))}
