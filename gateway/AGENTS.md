@@ -63,8 +63,8 @@ gateway-events (foundation — no gateway deps)
 
 | Port | Protocol | Purpose |
 |------|----------|---------|
-| 18791 | HTTP | REST API + Static files |
-| 18790 | WebSocket | Real-time streaming |
+| 18791 | HTTP + WS | REST API, static files, and WebSocket at `/ws` (primary port) |
+| 18790 | WS | Legacy standalone WebSocket — only active with `--legacy-ws-port-enabled`; deprecated, slated for removal |
 
 ## HTTP Endpoints (partial)
 
