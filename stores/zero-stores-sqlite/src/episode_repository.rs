@@ -8,8 +8,8 @@
 //!
 //! To read an embedding back, use [`EpisodeRepository::get_episode_embedding`].
 
-use crate::KnowledgeDatabase;
 use crate::vector_index::VectorIndex;
+use crate::KnowledgeDatabase;
 use chrono::{Duration, Utc};
 use rusqlite::params;
 use std::sync::Arc;

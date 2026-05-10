@@ -224,9 +224,6 @@ mod tests {
             "Phani's MBP_2",
             "uuid",
         );
-        assert_eq!(
-            info.hostname_urls[1],
-            "http://phani-s-mbp-2-zbot.local"
-        );
+        assert_eq!(info.hostname_urls[1], "http://phani-s-mbp-2-zbot.local");
     }
 }

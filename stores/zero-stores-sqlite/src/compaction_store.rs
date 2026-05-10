@@ -91,11 +91,14 @@ impl CompactionStore for GatewayCompactionStore {
     }
 
     async fn latest_run_summary(&self) -> Result<Option<CompactionRunSummary>, String> {
-        Ok(self.repo.latest_run_summary()?.map(|s| CompactionRunSummary {
-            run_id: s.run_id,
-            latest_at: s.latest_at,
-            merges: s.merges,
-            prunes: s.prunes,
-        }))
+        Ok(self
+            .repo
+            .latest_run_summary()?
+            .map(|s| CompactionRunSummary {
+                run_id: s.run_id,
+                latest_at: s.latest_at,
+                merges: s.merges,
+                prunes: s.prunes,
+            }))
     }
 }

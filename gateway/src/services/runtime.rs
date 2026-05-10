@@ -142,7 +142,6 @@ impl RuntimeService {
             paths.vault_dir(),
         )));
 
-
         if let Some(ks) = kg_store {
             runner.set_kg_store(ks);
         }

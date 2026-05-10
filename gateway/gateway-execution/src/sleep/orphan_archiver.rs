@@ -24,8 +24,8 @@
 
 use std::sync::Arc;
 
-use zero_stores::KnowledgeGraphStore;
 use zero_stores::types::EntityId;
+use zero_stores::KnowledgeGraphStore;
 use zero_stores_traits::CompactionStore;
 
 /// Minimum age (in hours) an entity must have before it becomes a candidate
@@ -141,9 +141,9 @@ mod tests {
     use gateway_services::VaultPaths;
     use rusqlite::params;
     use tempfile::TempDir;
+    use zero_stores_sqlite::kg::storage::GraphStorage;
     use zero_stores_sqlite::GatewayCompactionStore;
     use zero_stores_sqlite::SqliteKgStore;
-    use zero_stores_sqlite::kg::storage::GraphStorage;
     use zero_stores_sqlite::{CompactionRepository, KnowledgeDatabase};
 
     struct Harness {

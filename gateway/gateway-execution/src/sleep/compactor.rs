@@ -11,8 +11,8 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use knowledge_graph::{Entity, EntityType};
-use zero_stores::KnowledgeGraphStore;
 use zero_stores::types::EntityId;
+use zero_stores::KnowledgeGraphStore;
 use zero_stores_traits::CompactionStore;
 
 /// Default cosine threshold for considering two entities near-duplicates.

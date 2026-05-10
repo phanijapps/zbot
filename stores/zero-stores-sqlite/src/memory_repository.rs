@@ -13,8 +13,8 @@ use chrono::Utc;
 use rusqlite::params;
 use std::sync::Arc;
 
-use crate::KnowledgeDatabase;
 use crate::vector_index::VectorIndex;
+use crate::KnowledgeDatabase;
 
 // ============================================================================
 // FTS5 QUERY SANITIZATION
@@ -1654,11 +1654,10 @@ mod tests {
         let embedding = vec![0.1_f32, 0.2, 0.3, 0.4];
 
         // Cache miss
-        assert!(
-            repo.get_cached_embedding(hash, model)
-                .expect("get miss")
-                .is_none()
-        );
+        assert!(repo
+            .get_cached_embedding(hash, model)
+            .expect("get miss")
+            .is_none());
 
         // Cache write
         repo.cache_embedding(hash, model, &embedding)

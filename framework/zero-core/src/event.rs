@@ -210,6 +210,13 @@ pub struct DelegateAction {
     /// immediately, subject only to the global concurrency semaphore.
     #[serde(default)]
     pub parallel: bool,
+
+    /// Pre-generated execution ID for this delegation.
+    ///
+    /// Set by DelegateTool so the parent agent has a stable handle
+    /// for subsequent steer_agent calls. If None, stream.rs generates one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_execution_id: Option<String>,
 }
 
 impl EventActions {
@@ -302,6 +309,7 @@ mod tests {
             skills: vec![],
             complexity: Some("M".to_string()),
             parallel: false,
+            child_execution_id: None,
         };
         assert_eq!(action.complexity, Some("M".to_string()));
     }

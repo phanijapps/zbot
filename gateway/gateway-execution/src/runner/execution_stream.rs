@@ -493,11 +493,12 @@ impl ExecutionStream {
                     // AppState but ExecutionStream's struct still holds
                     // the concrete repo for backward compat. Same shape
                     // for kg_store: the SqliteKgStore wrap of graph_storage.
-                    let kg_episode_store_for_indexer: Option<Arc<dyn zero_stores_traits::KgEpisodeStore>> =
-                        self.kg_episode_repo.as_ref().map(|r| {
-                            Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
-                                as Arc<dyn zero_stores_traits::KgEpisodeStore>
-                        });
+                    let kg_episode_store_for_indexer: Option<
+                        Arc<dyn zero_stores_traits::KgEpisodeStore>,
+                    > = self.kg_episode_repo.as_ref().map(|r| {
+                        Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
+                            as Arc<dyn zero_stores_traits::KgEpisodeStore>
+                    });
                     let kg_store_for_indexer: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
                         self.kg_store.clone();
                     let paths_for_indexer = self.paths.clone();

@@ -424,6 +424,7 @@ mod tests {
             skills: vec![],
             complexity: None,
             parallel: false,
+            child_execution_id: None,
         })
         .is_none());
     }

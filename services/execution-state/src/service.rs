@@ -399,6 +399,28 @@ impl<D: StateDbProvider> StateService<D> {
         Ok(execution)
     }
 
+    /// Create a delegated execution with a caller-provided ID.
+    pub fn create_delegated_execution_with_id(
+        &self,
+        id: &str,
+        session_id: &str,
+        agent_id: &str,
+        parent_execution_id: &str,
+        delegation_type: DelegationType,
+        task: &str,
+    ) -> Result<AgentExecution, String> {
+        let execution = AgentExecution::new_delegated_with_id(
+            id,
+            session_id,
+            agent_id,
+            parent_execution_id,
+            delegation_type,
+            task,
+        );
+        self.repo.create_execution(&execution)?;
+        Ok(execution)
+    }
+
     /// Get an execution by ID.
     pub fn get_execution(&self, execution_id: &str) -> Result<Option<AgentExecution>, String> {
         self.repo.get_execution(execution_id)

@@ -1119,6 +1119,7 @@ impl AgentExecutor {
                                     skills: delegate.skills.clone(),
                                     complexity: delegate.complexity.clone(),
                                     parallel: delegate.parallel,
+                                    child_execution_id: delegate.child_execution_id.clone(),
                                 });
                                 // Delegation claim is set atomically by the delegate tool via try_claim
                                 // Stop executor loop — continuation callback will resume root
@@ -1872,7 +1873,7 @@ impl ProgressTracker {
 
         // Exact repetition detection — same tool+args in last 5 calls
         // Only penalize FAILED exact repeats. Successful calls with same args
-        // (e.g., ralph.py next) are legitimate workflow patterns.
+        // are legitimate workflow patterns (e.g. polling, iterating a task list).
         let is_exact_repeat = self
             .recent_tool_calls
             .iter()
@@ -1885,7 +1886,7 @@ impl ProgressTracker {
         // Only track FAILED calls for diversity scoring. Subagents with a
         // narrow toolset (shell, write_file, load_skill, respond) naturally
         // have low diversity ratios even when productive. Penalizing low
-        // diversity on successful calls kills productive ralph.py workflows.
+        // diversity on successful calls would kill legitimate iterative workflows.
         if !succeeded {
             self.tool_name_window.push_back(name.to_string());
             if self.tool_name_window.len() > 20 {
@@ -3127,13 +3128,13 @@ mod progress_tracker_tests {
         let config = ExecutorConfig::new("a".into(), "p".into(), "m".into());
         let mut tracker = ProgressTracker::new(config.max_extensions);
 
-        // Simulate a productive ralph.py workflow:
-        // shell(ralph.py next) -> write_file(create file) -> shell(verify) -> shell(ralph.py complete)
+        // Simulate a productive iterative workflow:
+        // shell(get task) -> write_file(create file) -> shell(verify) -> shell(mark done)
         // All successful — score should stay positive
         for i in 0..5 {
             tracker.record_tool_call(
                 "shell",
-                &json!({"command": format!("ralph.py next {}", i)}),
+                &json!({"command": format!("get_task {}", i)}),
                 true,
             );
             tracker.record_tool_call(
@@ -3148,7 +3149,7 @@ mod progress_tracker_tests {
             );
             tracker.record_tool_call(
                 "shell",
-                &json!({"command": format!("ralph.py complete {}", i)}),
+                &json!({"command": format!("mark_done {}", i)}),
                 true,
             );
         }
