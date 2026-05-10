@@ -13,6 +13,7 @@ pub mod kg_store_adapter;
 pub mod micro_recall;
 pub mod setup;
 pub mod stream;
+mod stream_context;
 pub mod working_memory;
 pub mod working_memory_middleware;
 
@@ -28,6 +29,7 @@ pub use setup::{
     append_system_context, detect_subagent_role, subagent_rules, AgentLoader, SubagentRole,
 };
 pub use stream::{
-    broadcast_event, process_stream_event, ResponseAccumulator, StreamContext, ToolCallAccumulator,
+    broadcast_event, process_stream_event, ResponseAccumulator, ToolCallAccumulator,
 };
+pub use stream_context::StreamContext;
 pub use working_memory::WorkingMemory;
