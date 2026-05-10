@@ -41,6 +41,7 @@ pub mod session_ctx;
 pub mod session_state;
 pub mod sleep;
 pub mod tool_result_extractor;
+pub mod tools;
 pub mod ward_artifact_indexer;
 pub mod ward_wiki;
 
