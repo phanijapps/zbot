@@ -51,6 +51,9 @@ pub mod middleware;
 /// Executor core
 pub mod executor;
 
+/// Progress tracking for loop detection
+pub(crate) mod progress;
+
 /// Steering queue for mid-execution message injection
 pub mod steering;
 
