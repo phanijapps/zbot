@@ -1,9 +1,6 @@
 //! # Invoke Module
 //!
-//! Contains setup and executor building logic for agent invocation.
-//!
-//! This module extracts common setup patterns used by both root agent
-//! invocation and delegated subagent spawning.
+//! Stream event processing, context, and execution accumulation for agent invocation.
 
 mod batch_writer;
 mod delegation_handler;
@@ -15,7 +12,6 @@ pub mod kg_store_adapter;
 pub mod micro_recall;
 mod response_accumulator;
 pub mod setup;
-pub mod stream;
 mod stream_context;
 mod stream_event_processor;
 mod token_tracking;

@@ -63,7 +63,7 @@ Instructions here
     std::fs::create_dir_all(&ward_dir).unwrap();
 
     // Simulate scoped scaffolding (only from coding skill)
-    let setups = gateway_execution::invoke::stream::collect_ward_setups_for_skills(
+    let setups = gateway_execution::invoke::collect_ward_setups_for_skills(
         &skills_dir,
         &["coding".to_string()],
     );
@@ -127,7 +127,7 @@ Instructions here
     let ward_dir = dir.path().join("wards").join("personal-life");
     std::fs::create_dir_all(&ward_dir).unwrap();
 
-    let setups = gateway_execution::invoke::stream::collect_ward_setups_for_skills(
+    let setups = gateway_execution::invoke::collect_ward_setups_for_skills(
         &skills_dir,
         &["life-os".to_string()],
     );
