@@ -15,6 +15,7 @@ mod response_accumulator;
 pub mod setup;
 pub mod stream;
 mod stream_context;
+mod tool_call_accumulator;
 pub mod working_memory;
 pub mod working_memory_middleware;
 
@@ -30,6 +31,7 @@ pub use setup::{
     append_system_context, detect_subagent_role, subagent_rules, AgentLoader, SubagentRole,
 };
 pub use response_accumulator::ResponseAccumulator;
-pub use stream::{broadcast_event, process_stream_event, ToolCallAccumulator};
+pub use stream::{broadcast_event, process_stream_event};
+pub use tool_call_accumulator::{ToolCallAccumulator, ToolCallRecord};
 pub use stream_context::StreamContext;
 pub use working_memory::WorkingMemory;

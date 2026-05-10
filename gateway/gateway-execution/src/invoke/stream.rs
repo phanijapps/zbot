@@ -472,75 +472,7 @@ pub fn broadcast_event(event_bus: Arc<EventBus>, event: GatewayEvent) {
 // TOOL CALL ACCUMULATOR
 // ============================================================================
 
-/// Record of a single tool call during execution.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct ToolCallRecord {
-    /// Unique ID for this tool call
-    pub tool_id: String,
-    /// Name of the tool called
-    pub tool_name: String,
-    /// Arguments passed to the tool
-    pub args: serde_json::Value,
-    /// Result returned by the tool (if completed)
-    pub result: Option<String>,
-    /// Error message (if tool failed)
-    pub error: Option<String>,
-}
-
-/// Accumulator for tool calls during execution.
-///
-/// Tracks all tool calls made during a single execution turn,
-/// allowing them to be persisted and loaded for context continuity.
-#[derive(Default)]
-pub struct ToolCallAccumulator {
-    calls: Vec<ToolCallRecord>,
-}
-
-impl ToolCallAccumulator {
-    /// Create a new tool call accumulator.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Record the start of a tool call.
-    pub fn start_call(&mut self, tool_id: String, tool_name: String, args: serde_json::Value) {
-        self.calls.push(ToolCallRecord {
-            tool_id,
-            tool_name,
-            args,
-            result: None,
-            error: None,
-        });
-    }
-
-    /// Record the completion of a tool call.
-    pub fn complete_call(&mut self, tool_id: &str, result: String, error: Option<String>) {
-        if let Some(call) = self.calls.iter_mut().find(|c| c.tool_id == tool_id) {
-            call.result = Some(result);
-            call.error = error;
-        }
-    }
-
-    /// Convert accumulated tool calls to JSON for storage.
-    /// Returns None if no tool calls were made.
-    pub fn to_json(&self) -> Option<String> {
-        if self.calls.is_empty() {
-            None
-        } else {
-            serde_json::to_string(&self.calls).ok()
-        }
-    }
-
-    /// Check if any tool calls were accumulated.
-    pub fn is_empty(&self) -> bool {
-        self.calls.is_empty()
-    }
-
-    /// Get the number of tool calls.
-    pub fn len(&self) -> usize {
-        self.calls.len()
-    }
-}
+pub use super::tool_call_accumulator::{ToolCallAccumulator, ToolCallRecord};
 
 // ============================================================================
 // WARD SCAFFOLDING HELPERS
