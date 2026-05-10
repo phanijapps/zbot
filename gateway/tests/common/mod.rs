@@ -74,7 +74,10 @@ pub fn setup_with_state_service() -> (TestServer, Arc<StateService<DatabaseManag
 pub fn make_wiki_repo(state: &AppState) -> Arc<WardWikiRepository> {
     let vec: Arc<dyn VectorIndex> = Arc::new(
         SqliteVecIndex::new(
-            state.knowledge_db.clone().expect("test path: SQLite-mode AppState (knowledge_db wired)"),
+            state
+                .knowledge_db
+                .clone()
+                .expect("test path: SQLite-mode AppState (knowledge_db wired)"),
             "wiki_articles_index",
             "article_id",
         )
@@ -89,7 +92,10 @@ pub fn make_wiki_repo(state: &AppState) -> Arc<WardWikiRepository> {
 pub fn make_procedure_repo(state: &AppState) -> Arc<ProcedureRepository> {
     let vec: Arc<dyn VectorIndex> = Arc::new(
         SqliteVecIndex::new(
-            state.knowledge_db.clone().expect("test path: SQLite-mode AppState (knowledge_db wired)"),
+            state
+                .knowledge_db
+                .clone()
+                .expect("test path: SQLite-mode AppState (knowledge_db wired)"),
             "procedures_index",
             "procedure_id",
         )
@@ -104,7 +110,10 @@ pub fn make_procedure_repo(state: &AppState) -> Arc<ProcedureRepository> {
 pub fn make_episode_repo(state: &AppState) -> Arc<EpisodeRepository> {
     let vec: Arc<dyn VectorIndex> = Arc::new(
         SqliteVecIndex::new(
-            state.knowledge_db.clone().expect("test path: SQLite-mode AppState (knowledge_db wired)"),
+            state
+                .knowledge_db
+                .clone()
+                .expect("test path: SQLite-mode AppState (knowledge_db wired)"),
             "session_episodes_index",
             "episode_id",
         )

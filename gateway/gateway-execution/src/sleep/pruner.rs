@@ -7,8 +7,8 @@
 
 use std::sync::Arc;
 
-use zero_stores::KnowledgeGraphStore;
 use zero_stores::types::EntityId;
+use zero_stores::KnowledgeGraphStore;
 use zero_stores_traits::CompactionStore;
 
 use crate::sleep::decay::PruneCandidate;

@@ -226,9 +226,9 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::tempdir;
     use zero_stores::KnowledgeGraphStore;
-    use zero_stores_sqlite::SqliteKgStore;
     use zero_stores_sqlite::kg::storage::GraphStorage;
     use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+    use zero_stores_sqlite::SqliteKgStore;
     use zero_stores_sqlite::{
         CompactionRepository, DatabaseManager, KnowledgeDatabase, MemoryRepository,
         ProcedureRepository,

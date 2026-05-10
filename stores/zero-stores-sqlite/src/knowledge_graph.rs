@@ -8,14 +8,14 @@ use knowledge_graph::types::{
 };
 
 use crate::kg::storage::{ArchivableEntityRow, GraphStorage};
-use zero_stores::KnowledgeGraphStore;
-use zero_stores::StoreResult;
 use zero_stores::error::StoreError;
 use zero_stores::extracted::ExtractedKnowledge;
 use zero_stores::types::{
     ArchivableEntity, Direction, EntityId, KgStats, Neighbor, ReindexReport, RelationshipId,
     ResolveOutcome, StoreOutcome, TraversalHit, VecIndexHealth,
 };
+use zero_stores::KnowledgeGraphStore;
+use zero_stores::StoreResult;
 
 use crate::blocking::{block, map_graph_err};
 use crate::reindex;

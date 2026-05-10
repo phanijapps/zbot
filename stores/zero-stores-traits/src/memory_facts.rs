@@ -195,10 +195,7 @@ pub trait MemoryFactStore: Send + Sync {
     /// Used by the ward snapshot builder so it gets the raw key /
     /// content / source_summary triple without re-decoding the
     /// rendered JSON. Default returns empty.
-    async fn list_primitives_for_ward(
-        &self,
-        _ward_id: &str,
-    ) -> Result<Vec<MemoryFact>, String> {
+    async fn list_primitives_for_ward(&self, _ward_id: &str) -> Result<Vec<MemoryFact>, String> {
         Ok(Vec::new())
     }
 
@@ -382,17 +379,14 @@ pub trait MemoryFactStore: Send + Sync {
             .await?;
         rows.into_iter()
             .map(|mut v| {
-                let score = v
-                    .get("score")
-                    .and_then(|s| s.as_f64())
-                    .unwrap_or(0.0);
+                let score = v.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
                 let match_source = v
                     .as_object_mut()
                     .and_then(|o| o.remove("match_source"))
                     .and_then(|s| s.as_str().map(String::from))
                     .unwrap_or_else(|| "fts".to_string());
-                let fact: MemoryFact = serde_json::from_value(v)
-                    .map_err(|e| format!("decode MemoryFact: {e}"))?;
+                let fact: MemoryFact =
+                    serde_json::from_value(v).map_err(|e| format!("decode MemoryFact: {e}"))?;
                 Ok((fact, score, match_source))
             })
             .collect()

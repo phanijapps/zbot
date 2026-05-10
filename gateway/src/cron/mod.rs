@@ -30,8 +30,8 @@ pub use gateway_cron::*;
 use crate::bus::{GatewayBus, SessionRequest};
 use execution_state::TriggerSource;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tokio_cron_scheduler::{Job, JobScheduler, JobSchedulerError};
 use tracing::{debug, error, info, warn};
@@ -426,7 +426,7 @@ pub enum CronSchedulerError {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_CRON_AGENT_ID, resolve_cron_agent_id};
+    use super::{resolve_cron_agent_id, DEFAULT_CRON_AGENT_ID};
 
     #[test]
     fn returns_configured_agent_id_when_present() {
@@ -482,8 +482,8 @@ mod tests {
         use gateway_bus::{BusError, SessionHandle};
         use gateway_cron::{CreateCronJobRequest, CronJobConfig, CronService};
         use gateway_services::VaultPaths;
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
         use tempfile::TempDir;
 
         /// Test bus that records `submit` calls without doing real work.

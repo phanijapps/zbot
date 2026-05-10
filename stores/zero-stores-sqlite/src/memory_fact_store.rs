@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use agent_runtime::llm::embedding::{EmbeddingClient, content_hash};
+use agent_runtime::llm::embedding::{content_hash, EmbeddingClient};
 use zero_stores_traits::{MemoryFactStore, SkillIndexRow, StrategyFactInsert, StrategyFactMatch};
 
 use crate::memory_repository::{MemoryFact, MemoryRepository};
@@ -606,10 +606,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         Ok(json!({ "primitives": primitives }))
     }
 
-    async fn list_primitives_for_ward(
-        &self,
-        ward_id: &str,
-    ) -> Result<Vec<MemoryFact>, String> {
+    async fn list_primitives_for_ward(&self, ward_id: &str) -> Result<Vec<MemoryFact>, String> {
         self.memory_repo.list_primitives_for_ward(ward_id)
     }
 
@@ -618,7 +615,8 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         session_id: &str,
         limit: usize,
     ) -> Result<Vec<MemoryFact>, String> {
-        self.memory_repo.list_recent_state_handoffs(session_id, limit)
+        self.memory_repo
+            .list_recent_state_handoffs(session_id, limit)
     }
 
     async fn delete_facts_by_key(&self, category: &str, key: &str) -> Result<usize, String> {
@@ -761,9 +759,9 @@ impl MemoryFactStore for GatewayMemoryFactStore {
                 let Some(emb) = query_embedding else {
                     return Ok(Vec::new());
                 };
-                let rows =
-                    self.memory_repo
-                        .search_similar_facts(emb, agent_id, 0.0, limit, ward_id)?;
+                let rows = self
+                    .memory_repo
+                    .search_similar_facts(emb, agent_id, 0.0, limit, ward_id)?;
                 rows.into_iter().map(|sf| (sf, "vec")).collect()
             }
             _ => {
@@ -969,8 +967,8 @@ fn cosine_similarity_f64(a: &[f32], b: &[f32]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::KnowledgeDatabase;
     use crate::vector_index::{SqliteVecIndex, VectorIndex};
+    use crate::KnowledgeDatabase;
     use tempfile::TempDir;
 
     fn create_test_store() -> GatewayMemoryFactStore {

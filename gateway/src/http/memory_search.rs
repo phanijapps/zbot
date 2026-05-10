@@ -332,12 +332,7 @@ pub async fn memory_search(
                 // No FTS table for procedures: fts mode returns empty.
                 ("fts", _) => Vec::new(),
                 (_, Some(emb)) => proc_store
-                    .search_procedures_by_similarity_typed(
-                        emb,
-                        scope_agent,
-                        ward.as_deref(),
-                        limit,
-                    )
+                    .search_procedures_by_similarity_typed(emb, scope_agent, ward.as_deref(), limit)
                     .await
                     .unwrap_or_default()
                     .into_iter()

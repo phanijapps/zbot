@@ -411,7 +411,10 @@ mod tests {
         let ctx = ctx_for("root");
 
         let result = tool
-            .execute(ctx.clone(), json!({ "agent_id": "writer-agent", "task": "do work" }))
+            .execute(
+                ctx.clone(),
+                json!({ "agent_id": "writer-agent", "task": "do work" }),
+            )
             .await
             .expect("must succeed");
 
@@ -419,7 +422,10 @@ mod tests {
             .get("execution_id")
             .and_then(|v| v.as_str())
             .expect("execution_id must be in result");
-        assert!(execution_id.starts_with("exec-"), "must have exec- prefix: {execution_id}");
+        assert!(
+            execution_id.starts_with("exec-"),
+            "must have exec- prefix: {execution_id}"
+        );
 
         let action = ctx.actions().delegate.expect("delegate action must be set");
         assert_eq!(action.child_execution_id.as_deref(), Some(execution_id));

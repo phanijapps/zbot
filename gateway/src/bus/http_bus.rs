@@ -5,11 +5,11 @@
 
 use super::{BusError, GatewayBus, SessionHandle, SessionRequest};
 use crate::execution::{ExecutionConfig, ExecutionRunner};
-use zero_stores_sqlite::DatabaseManager;
 use async_trait::async_trait;
 use execution_state::{SessionStatus, StateService};
 use std::path::PathBuf;
 use std::sync::Arc;
+use zero_stores_sqlite::DatabaseManager;
 
 /// HTTP-based Gateway Bus implementation.
 ///

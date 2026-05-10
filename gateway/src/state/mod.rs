@@ -8,9 +8,7 @@ mod seeded_defaults;
 use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
 use crate::events::EventBus;
-use crate::execution::{
-    DelegationRegistry, MemoryRecall, SessionArchiver, SessionDistiller,
-};
+use crate::execution::{DelegationRegistry, MemoryRecall, SessionArchiver, SessionDistiller};
 use crate::hooks::HookRegistry;
 use crate::services::{
     AgentService, McpService, ModelRegistry, ProviderService, RuntimeService, SettingsService,
@@ -409,15 +407,14 @@ impl AppState {
         // GraphService still requires the concrete graph_storage; on
         // Surreal it's None and recall falls back to non-enriched
         // hybrid (still finds facts, just no KG-traversal boost).
-        let mut memory_recall_inner: Option<MemoryRecall> =
-            if early_memory_store.is_some() {
-                Some(MemoryRecall::new(
-                    embedding_client.clone(),
-                    recall_config.clone(),
-                ))
-            } else {
-                None
-            };
+        let mut memory_recall_inner: Option<MemoryRecall> = if early_memory_store.is_some() {
+            Some(MemoryRecall::new(
+                embedding_client.clone(),
+                recall_config.clone(),
+            ))
+        } else {
+            None
+        };
         // Wire trait-routed episode_store wrapping the SQLite EpisodeRepository.
         if let Some(recall) = memory_recall_inner.as_mut() {
             let store_opt: Option<Arc<dyn zero_stores_traits::EpisodeStore>> =
@@ -576,47 +573,46 @@ impl AppState {
         // missing means the corresponding side-effects (KG ingestion,
         // run-tracking, episode storage, wiki compilation, procedure
         // upsert) skip gracefully. Fact distillation itself runs.
-        let distiller: Option<Arc<SessionDistiller>> =
-            if memory_store.is_some() {
-                let mut distiller_inner = SessionDistiller::new(
-                    provider_service.clone(),
-                    embedding_client.clone(),
-                    conversation_repo.clone(),
-                    paths.clone(),
-                    Some(settings.clone()),
+        let distiller: Option<Arc<SessionDistiller>> = if memory_store.is_some() {
+            let mut distiller_inner = SessionDistiller::new(
+                provider_service.clone(),
+                embedding_client.clone(),
+                conversation_repo.clone(),
+                paths.clone(),
+                Some(settings.clone()),
+            );
+            if let Some(mem) = memory_store.as_ref() {
+                distiller_inner.set_memory_store(mem.clone());
+            }
+            if let Some(kgs) = kg_store.as_ref() {
+                distiller_inner.set_kg_store(kgs.clone());
+            }
+            // Phase E6a/E6b: episode/wiki/procedure trait stores reuse the
+            // same Arc<dyn ...> values we built above for the AppState
+            // fields (`episode_store`, `wiki_store_for_state`,
+            // `procedure_store_for_state`) so the distiller and the HTTP
+            // handlers see the same backing store.
+            if let Some(es) = episode_store_for_state.as_ref() {
+                distiller_inner.set_episode_store(es.clone());
+            }
+            if let Some(ws) = wiki_store_for_state.as_ref() {
+                distiller_inner.set_wiki_store(ws.clone());
+            }
+            if let Some(ps) = procedure_store_for_state.as_ref() {
+                distiller_inner.set_procedure_store(ps.clone());
+            }
+            // Phase E6c: trait-routed distillation store. Wraps the
+            // SQLite DistillationRepository for run-tracking writes.
+            if let Some(dr) = distillation_repo.as_ref() {
+                let store: Arc<dyn zero_stores_traits::DistillationStore> = Arc::new(
+                    zero_stores_sqlite::GatewayDistillationStore::new(dr.clone()),
                 );
-                if let Some(mem) = memory_store.as_ref() {
-                    distiller_inner.set_memory_store(mem.clone());
-                }
-                if let Some(kgs) = kg_store.as_ref() {
-                    distiller_inner.set_kg_store(kgs.clone());
-                }
-                // Phase E6a/E6b: episode/wiki/procedure trait stores reuse the
-                // same Arc<dyn ...> values we built above for the AppState
-                // fields (`episode_store`, `wiki_store_for_state`,
-                // `procedure_store_for_state`) so the distiller and the HTTP
-                // handlers see the same backing store.
-                if let Some(es) = episode_store_for_state.as_ref() {
-                    distiller_inner.set_episode_store(es.clone());
-                }
-                if let Some(ws) = wiki_store_for_state.as_ref() {
-                    distiller_inner.set_wiki_store(ws.clone());
-                }
-                if let Some(ps) = procedure_store_for_state.as_ref() {
-                    distiller_inner.set_procedure_store(ps.clone());
-                }
-                // Phase E6c: trait-routed distillation store. Wraps the
-                // SQLite DistillationRepository for run-tracking writes.
-                if let Some(dr) = distillation_repo.as_ref() {
-                    let store: Arc<dyn zero_stores_traits::DistillationStore> = Arc::new(
-                        zero_stores_sqlite::GatewayDistillationStore::new(dr.clone()),
-                    );
-                    distiller_inner.set_distillation_store(store);
-                }
-                Some(Arc::new(distiller_inner))
-            } else {
-                None
-            };
+                distiller_inner.set_distillation_store(store);
+            }
+            Some(Arc::new(distiller_inner))
+        } else {
+            None
+        };
 
         // Keep a handle for on-demand distillation (backfill, trigger).
         // None when the distiller wasn't constructed.
@@ -1794,5 +1790,4 @@ impl AppState {
 
         true
     }
-
 }

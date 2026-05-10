@@ -66,7 +66,15 @@ pub async fn index_ward_with_options(
     let files = collect_structured_files(ward_path);
 
     for file_path in files {
-        match index_one_file(&file_path, session_id, agent_id, episode_store, kg_store, opts).await
+        match index_one_file(
+            &file_path,
+            session_id,
+            agent_id,
+            episode_store,
+            kg_store,
+            opts,
+        )
+        .await
         {
             Ok(n) => created += n,
             Err(e) => tracing::warn!(
