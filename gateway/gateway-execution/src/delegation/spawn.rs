@@ -69,6 +69,7 @@ pub async fn spawn_delegated_agent(
     kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+    steering_registry: Arc<agent_runtime::SteeringRegistry>,
 ) -> Result<String, String> {
     // Create a child session for subagent isolation
     let child_session =
@@ -302,7 +303,7 @@ pub async fn spawn_delegated_agent(
         builder = builder.with_goal_adapter(a);
     }
 
-    let executor = match builder
+    let mut executor = match builder
         .build(
             &agent,
             &provider,
@@ -324,6 +325,10 @@ pub async fn spawn_delegated_agent(
             return Err(e);
         }
     };
+
+    // Register steering handle so parent agents can steer this subagent via steer_agent tool
+    let steering_handle = executor.enable_steering();
+    steering_registry.register(&execution_id, steering_handle);
 
     // Delegation recall: prime the subagent with unified scored recall over
     // facts, wiki, procedures, graph nodes, episodes, and goals.
@@ -408,6 +413,7 @@ pub async fn spawn_delegated_agent(
         fact_store_for_ctx,
         memory_store_for_snapshot,
         distiller,
+        steering_registry,
     });
 
     tracing::info!(
@@ -497,6 +503,8 @@ struct SpawnContext {
     /// Distiller for the subagent's child session — fired after
     /// `complete_session(child_session_id)`.
     distiller: Option<Arc<crate::distillation::SessionDistiller>>,
+    /// Steering registry — used to remove the handle when the subagent finishes.
+    steering_registry: Arc<agent_runtime::SteeringRegistry>,
 }
 
 /// Spawn the async execution task for the delegated agent.
@@ -521,6 +529,7 @@ fn spawn_execution_task(ctx: SpawnContext) {
         fact_store_for_ctx,
         memory_store_for_snapshot,
         distiller,
+        steering_registry,
     } = ctx;
 
     let agent_id = request.child_agent_id.clone();
@@ -782,6 +791,9 @@ fn spawn_execution_task(ctx: SpawnContext) {
                 .await;
             }
         }
+
+        // Deregister steering handle — subagent is no longer steerable
+        steering_registry.remove(&execution_id);
 
         // Mark child session as completed (prevents orphaned "running" sessions)
         if let Err(e) = state_service.complete_session(&child_session_id) {
