@@ -1,6 +1,6 @@
 # gateway-services
 
-File-backed configuration services with RwLock caching for agents, LLM providers, MCP servers, skills, settings, and agent delegation permissions.
+File-backed configuration services with `RwLock` caching for agents, LLM providers, MCP servers, skills, settings, embeddings, models, and plugins.
 
 ## Build & Test
 
@@ -12,18 +12,23 @@ cargo test -p gateway-services    # 5 tests
 
 | Type | Purpose |
 |------|---------|
-| `AgentService` | Agent config CRUD with RwLock cache |
-| `ProviderService` | LLM provider management with RwLock cache |
+| `AgentService` | Agent config CRUD with `RwLock` cache |
+| `ProviderService` | LLM provider management |
 | `McpService` | MCP server config management |
-| `SkillService` | Skill discovery and loading |
-| `SettingsService` | Application settings with RwLock cache |
-| `AgentRegistry` | Agent delegation permission checking |
-| `AgentConfig` / `Agent` | Agent configuration types |
-| `Provider` / `ProviderTestResult` | Provider types |
+| `SkillService` | Skill discovery, loading (`Skill`, `SkillFrontmatter`, `SkillSource`) |
+| `SettingsService` | App settings (`AppSettings`, `ChatConfig`, `ExecutionSettings`, `OrchestratorConfig`, `MultimodalConfig`, `DistillationConfig`) |
+| `AgentRegistry` | Agent delegation permission registry |
+| `EmbeddingService` | Embedding backend (Ollama / local) with curated model list |
+| `ModelRegistry` | Model metadata registry loaded from `models.json` |
+| `OllamaClient` | HTTP client for Ollama API |
+| `PluginService` | Plugin config CRUD |
+| `VaultPaths` / `SharedVaultPaths` | Path resolution for vault directory |
+| `RecallConfig` | Memory recall configuration |
+| `LangConfig` | Language-specific configurations |
+| `FileWatcher` | Config file change watching |
+| `LogSettings` | Logging configuration |
 
-## Common API Pattern
-
-Each service follows the same pattern:
+## Common CRUD Pattern
 
 ```rust
 service.list() -> Vec<Config>
@@ -31,17 +36,24 @@ service.get(id) -> Option<Config>
 service.create(request) -> Config
 service.update(id, request) -> Config
 service.delete(id)
-service.reload()  // Invalidate RwLock cache
 ```
 
 ## File Structure
 
 | File | Purpose |
 |------|---------|
-| `lib.rs` | Public exports |
-| `agents.rs` | AgentService |
-| `providers.rs` | ProviderService |
-| `mcp.rs` | McpService |
-| `skills.rs` | SkillService |
-| `settings.rs` | SettingsService |
-| `agent_registry.rs` | AgentRegistry (5 tests) |
+| `agents.rs` | `AgentService` |
+| `providers.rs` | `ProviderService` |
+| `mcp.rs` | `McpService` |
+| `skills.rs` | `SkillService`, `Skill`, `WardSetup` |
+| `settings.rs` | `SettingsService`, `AppSettings`, `ChatConfig`, `OrchestratorConfig` |
+| `agent_registry.rs` | `AgentRegistry` (5 tests) |
+| `embedding_service.rs` | `EmbeddingService`, `EmbeddingConfig`, `CuratedModel`, `CURATED_MODELS` |
+| `models.rs` | `ModelRegistry` |
+| `ollama_client.rs` | `OllamaClient` |
+| `plugin_service.rs` | `PluginService` |
+| `paths.rs` | `VaultPaths`, `SharedVaultPaths` |
+| `recall_config.rs` | `RecallConfig` |
+| `lang_config.rs` | `LangConfig` |
+| `watcher.rs` | `FileWatcher`, `WatchConfig` |
+| `logging.rs` | `LogSettings` |

@@ -13,7 +13,7 @@ cargo test -p gateway-events    # 8 tests
 | Type | Purpose |
 |------|---------|
 | `EventBus` | Pub/sub event distribution with agent/session channels |
-| `GatewayEvent` | 20+ event variants (AgentStarted, Token, ToolCall, WardChanged, etc.) |
+| `GatewayEvent` | 26 variants (AgentStarted, Token, ToolCall, WardChanged, IntentAnalysisComplete, CustomizationFileChanged, etc.) |
 | `HookContext` | Context passed to hooks (agent_id, session_id, message, source) |
 | `HookType` | Hook origin type (Cli, Web, Cron, Webhook, etc.) |
 
@@ -27,6 +27,8 @@ cargo test -p gateway-events    # 8 tests
 | `subscribe_all()` | Subscribe to all events |
 | `subscribe_agent()` | Subscribe to specific agent's events |
 | `subscribe_session()` | Subscribe to specific session's events |
+| `publish_session()` | Publish event to a specific session channel |
+| `cleanup_agent()` / `remove_session_channel()` | Clean up channels |
 
 ## GatewayEvent Accessors
 

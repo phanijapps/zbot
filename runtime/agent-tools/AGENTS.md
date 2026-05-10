@@ -1,6 +1,6 @@
 # Agent Tools
 
-Built-in tools for AgentZero agents. Tools are organized by category and registered via `core_tools()` and `optional_tools()`.
+Built-in tool implementations for AgentZero agents. Organized by category and registered via `core_tools()`, `optional_tools()`, and `builtin_tools_with_fs()`.
 
 ## Build & Test
 
@@ -8,83 +8,53 @@ Built-in tools for AgentZero agents. Tools are organized by category and registe
 cargo test -p agent-tools      # 25 tests
 ```
 
-## Tool Categories
+## Tool Modules
 
-### File I/O (`tools/file.rs`)
-| Tool | Risk | Description |
-|------|------|-------------|
-| `read` | Safe | Read file contents with optional offset/limit. Resolves via `ward_dir` when ward_id is set. |
-| `write` | Moderate | Write/append content to ward workspace |
-| `edit` | Moderate | Search and replace in ward files |
+| Module | Key Tools |
+|--------|-----------|
+| `execution/shell.rs` | `ShellTool` — shell commands (cwd = ward dir, uses venv) |
+| `execution/write_file.rs` | `WriteFileTool` — create/overwrite files in ward |
+| `execution/edit_file.rs` | `EditFileTool` — targeted find-and-replace |
+| `execution/skills.rs` | `LoadSkillTool`, `ListSkillsTool` |
+| `execution/session_title.rs` | `SetSessionTitleTool` |
+| `execution/update_plan.rs` | `UpdatePlanTool` — lightweight task checklist |
+| `execution/graph.rs` | `ExecutionGraphTool` — DAG workflow engine |
+| `execution/todos.rs` | `TodoTool` (optional) |
+| `file.rs` | `ReadTool`, `WriteTool`, `EditTool` (optional file-tools group) |
+| `search.rs` | `GrepTool`, `GlobTool` |
+| `ward.rs` | `WardTool` — ward use/list/create/info; emits `WardChanged` |
+| `memory.rs` | `MemoryTool` — persistent key-value (shared/agent/ward scopes) |
+| `web.rs` | `WebFetchTool` (optional) |
+| `graph_query.rs` | `GraphQueryTool` — query knowledge graph entities/relationships |
+| `goal.rs` | `GoalTool` — agent intent lifecycle |
+| `ingest.rs` | `IngestTool` — enqueue text for background extraction |
+| `ui.rs` | `RequestInputTool`, `ShowContentTool` (optional) |
+| `agent.rs` | `ListAgentsTool`, `CreateAgentTool` (optional) |
+| `multimodal.rs` | `MultimodalAnalyzeTool` — vision fallback |
+| `introspection.rs` | `ListMcpsTool`, `ListSkillsTool`, `ListToolsTool` (optional) |
+| `connectors.rs` | `QueryResourceTool` — query bridge worker resources |
 
-### Search (`tools/search.rs`)
-| Tool | Risk | Description |
-|------|------|-------------|
-| `grep` | Safe | Regex search in files |
-| `glob` | Safe | File pattern matching |
-
-### Execution (`tools/execution/`)
-| Tool | Risk | Description |
-|------|------|-------------|
-| `shell` | Dangerous | Run shell commands. cwd = `wards/{ward_id}/`, venv = `wards/.venv/`. |
-| `python` | Dangerous | Execute Python code (optional) |
-| `load_skill` | Safe | Load skill instructions into agent context |
-| `list_skills` | Safe | List available skills |
-
-### Ward (`tools/ward.rs`)
-| Tool | Risk | Description |
-|------|------|-------------|
-| `ward` | Safe | Manage code wards: `use` (switch), `list`, `create`, `info`. Sets `ward_id` in context, emits `WardChanged` event. |
-
-### Memory (`tools/memory.rs`)
-| Tool | Risk | Description |
-|------|------|-------------|
-| `memory` | Safe | Persistent key-value storage. Scopes: `shared`, `agent`. |
-
-### Web (`tools/web.rs`)
-| Tool | Risk | Description |
-|------|------|-------------|
-| `web_fetch` | Moderate | HTTP requests (GET/POST/PUT/DELETE). Blocks internal networks. Optional. |
-
-### Knowledge Graph (`tools/knowledge_graph.rs`)
-| Tool | Risk | Description |
-|------|------|-------------|
-| `list_entities` / `search_entities` / `get_entity_relationships` | Safe | Query entities |
-| `add_entity` / `add_relationship` | Moderate | Modify graph |
-
-### UI (`tools/ui.rs`)
-| Tool | Risk | Description |
-|------|------|-------------|
-| `request_input` | Safe | Collect structured user input via forms |
-| `show_content` | Safe | Display rich content in UI |
-
-### Agent (`tools/agent.rs`, `tools/todo.rs`)
-| Tool | Risk | Description |
-|------|------|-------------|
-| `create_agent` | Moderate | Create new agent config (optional) |
-| `todos` | Safe | Task management |
-
-## Registration
+## Registration Functions
 
 ```rust
-// In tools/mod.rs
-pub fn core_tools(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool>>
-pub fn optional_tools(fs: Arc<dyn FileSystemContext>, settings: &ToolSettings) -> Vec<Arc<dyn Tool>>
+pub fn core_tools(fs: Arc<dyn FileSystemContext>, fact_store: Option<Arc<dyn MemoryFactStore>>)
+    -> Vec<Arc<dyn Tool>>
+pub fn optional_tools(fs: Arc<dyn FileSystemContext>, settings: &ToolSettings)
+    -> Vec<Arc<dyn Tool>>
+pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool>>
 ```
 
-Core tools are always registered. Optional tools depend on `ToolSettings` flags.
+Core tools are always enabled. Optional tools depend on `ToolSettings` boolean flags:
+`file_tools`, `todos`, `python`, `web_fetch`, `ui_tools`, `create_agent`, `introspection`.
 
-## Context & State Keys
+## Security / Guards
 
-Tools receive `ToolContext` which provides:
-- `get_state("ward_id")` — Current code ward (set by ward tool)
-- `get_state("session_id")` — Current session ID
-- `get_state("app:agent_id")` — Current agent ID
-- `get_state("available_agents")` — For list_agents tool
-- `get_state("available_skills")` — For list_skills tool
+`tools/guards.rs` (re-exported from crate root):
+- Path sanitization: rejects `..`, absolute paths; resolves relative to ward or agent data dir
+- Network blocking: `WebFetchTool` blocks localhost, private networks, cloud metadata
+- Shell safety: blocks dangerous commands, enforces timeouts
 
-## Security
+## Key Intra-Repo Dependencies
 
-- **Path sanitization**: Reject `..`, absolute paths. Resolve relative to ward or agent data dir.
-- **Network blocking**: Block localhost, private networks, cloud metadata endpoints.
-- **Shell safety**: Block 40+ dangerous commands, detect suspicious patterns, enforce timeouts.
+- `zero-core` — `Tool`, `ToolContext`, `FileSystemContext`
+- `zero-stores-traits` — `MemoryFactStore` (for `MemoryTool`, `WardTool`)

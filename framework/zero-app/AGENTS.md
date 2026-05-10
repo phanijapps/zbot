@@ -1,43 +1,61 @@
 # zero-app
 
-Meta-package that combines all Zero framework crates.
-
-## Purpose
-
-This crate provides a convenient dependency that includes all Zero framework modules. Depend on `zero-app` instead of individual crates when you need the full framework.
-
-## Included Crates
-
-- `zero-core` - Core traits and types
-- `zero-llm` - LLM abstractions and OpenAI client
-- `zero-tool` - Tool definitions
-- `zero-session` - Session management
-- `zero-agent` - Agent implementations
-- `zero-mcp` - MCP integration
-- `zero-prompt` - Prompt templates
-- `zero-middleware` - Request/response processing
+Integration crate for the Zero framework. Aggregates all `zero-*` crates into a unified re-export surface and provides `ZeroAppBuilder` / `ZeroApp` for high-level application setup.
 
 ## Usage
 
 ```toml
 [dependencies]
-zero-app = "0.1"
+zero-app = { path = "framework/zero-app" }
 ```
 
-This replaces needing to specify each zero-* crate individually.
+```rust
+use zero_app::prelude::*;
 
-## Setup
-
-```bash
-# Build
-cargo build
-
-# Run tests
-cargo test
+let model = Arc::new(OpenAiLlm::new(config));
+let agent = LlmAgent::builder("assistant", model)
+    .system_instruction("You are helpful.")
+    .build();
 ```
 
-## Important Notes
+## Key Re-exports (flat)
 
-- This is a convenience crate only
-- Each sub-crate has its own AGENTS.md with specific details
-- Refer to individual crate documentation for implementation details
+```rust
+// Core
+pub use zero_core::{Agent, Tool, Toolset, Event, Result, ZeroError, FileSystemContext, ...};
+// LLM
+pub use zero_llm::{Llm, LlmConfig, OpenAiLlm, LlmRequest, LlmResponse, ToolCall, ...};
+// Tools
+pub use zero_tool::{FunctionTool, ToolRegistry};
+// Session
+pub use zero_session::{InMemorySession, InMemoryState, SessionService, ...};
+// Agents
+pub use zero_agent::{LlmAgent, LlmAgentBuilder, OrchestratorAgent, OrchestratorBuilder, ...};
+// Workflow agents
+pub use zero_agent::workflow::{ConditionalAgent, LoopAgent, ParallelAgent, SequentialAgent, ...};
+// MCP
+pub use zero_mcp::{McpClient, McpServerConfig, McpToolset, McpTransport, McpCommand, ...};
+// Prompt
+pub use zero_prompt::{Template, TemplateRenderer, inject_session_state};
+// Middleware
+pub use zero_middleware::{MiddlewarePipeline, MiddlewareConfig, SummarizationMiddleware, ...};
+```
+
+A `prelude` module provides the most common types for glob import.
+
+## Application Builder
+
+```rust
+let app = ZeroAppBuilder::new()
+    .with_llm_config(LlmConfig::new(api_key, model))
+    .with_mcp_server(McpServerConfig::stdio("name", "Desc", "/path"))
+    .with_middleware_config(config)
+    .build()?;
+
+let session = app.create_session(session_id, app_name, user_id);
+let registry = app.create_tool_registry().await?;
+```
+
+## Intra-Repo Dependencies
+
+- All `framework/zero-*` crates (re-exports their public surfaces)

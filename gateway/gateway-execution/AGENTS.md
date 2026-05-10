@@ -48,27 +48,40 @@ Real zerod + mock-llm + real UI build + scripted browser. Zero-drift report conf
 ```
 gateway-execution/src/
 ├── lib.rs                  # Public exports
-├── runner.rs               # ExecutionRunner
 ├── config.rs               # ExecutionConfig, GatewayFileSystem
 ├── events.rs               # Event conversion (StreamEvent → GatewayEvent)
 ├── handle.rs               # ExecutionHandle
 ├── lifecycle.rs            # Session/execution lifecycle
-├── continuation.rs         # Continuation logic
-├── delegation/
-│   ├── mod.rs              # Delegation subsystem
-│   ├── callback.rs         # Delegation result handling
-│   ├── context.rs          # DelegationContext
-│   ├── registry.rs         # DelegationRegistry
-│   └── spawn.rs            # Spawn delegated agents
-└── invoke/
-    ├── executor.rs         # Core executor setup
-    ├── batch_writer.rs     # BatchWriter (DB write decoupling)
-    └── stream.rs           # Stream processing
+├── continuation.rs         # Continuation spawning
+├── distillation.rs         # SessionDistiller
+├── archiver.rs             # SessionArchiver
+├── artifacts.rs            # Artifact management
+├── resource_provider.rs    # GatewayResourceProvider
+├── composite_provider.rs   # CompositeResourceProvider
+├── ward_artifact_indexer.rs
+├── ward_wiki.rs
+├── session_state.rs        # SessionState, SessionStateBuilder
+├── runner/                 # Decomposed ExecutionRunner (see runner/AGENTS.md)
+│   ├── core.rs             # ExecutionRunner struct + lifecycle methods
+│   ├── session_invoker.rs  # Narrow traits for handler DI
+│   ├── invoke_bootstrap.rs # Pre-execution two-phase setup
+│   ├── execution_stream.rs # Per-execution event loop
+│   ├── delegation_dispatcher.rs # Long-lived subagent queue
+│   └── continuation_watcher.rs  # SessionContinuationReady listener
+├── delegation/             # Agent delegation subsystem
+│   ├── spawn.rs, context.rs, registry.rs, callback.rs
+├── invoke/                 # Executor building + ingest adapter
+├── ingest/                 # Ingest queue (chunker, extractor, etc.)
+├── recall/                 # Memory recall (MemoryRecall, format_scored_items)
+├── indexer/                # Ward artifact indexer
+├── middleware/             # Working memory middleware
+├── session_ctx/            # Session context helpers
+└── sleep/                  # Execution sleep/wake
 ```
 
 ## Dependencies
 
-Depends on most other gateway sub-crates: gateway-events, gateway-database, gateway-services, gateway-connectors, gateway-templates. Also depends on agent-runtime and agent-tools.
+Depends on most other gateway sub-crates: `gateway-events`, `gateway-services`, `gateway-connectors`, `gateway-templates`, `gateway-hooks`, `gateway-bus`. Also depends on `agent-runtime`, `agent-tools`, and `zero-stores-sqlite` (replaces gateway-database).
 
 ## Conventions
 

@@ -24,10 +24,19 @@ cargo test -p gateway-hooks    # 6 tests
 ```rust
 #[async_trait]
 pub trait Hook: Send + Sync {
-    fn can_handle(&self, context: &HookContext) -> bool;
-    async fn respond(&self, context: &HookContext, response: &str) -> Result<()>;
+    fn hook_type(&self) -> HookType;
+    fn can_handle(&self, ctx: &HookContext) -> bool;
+    async fn respond(
+        &self,
+        ctx: &HookContext,
+        message: &str,
+        format: ResponseFormat,
+        attachments: Option<Vec<Attachment>>,
+    ) -> Result<(), String>;
 }
 ```
+
+`HookContext` and `HookType` are re-exported from `gateway-events`.
 
 ## Public API (HookRegistry)
 

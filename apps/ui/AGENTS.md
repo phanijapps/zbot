@@ -1,37 +1,43 @@
 # UI
 
-Web dashboard for Agent Zero. React 19 + TypeScript + Vite.
+Web dashboard for AgentZero. React 19 + TypeScript + Vite.
 
 ## Structure
 
 ```
 ui/
 ├── src/
-│   ├── features/           # Feature modules
-│   │   ├── agent/          # Chat + agent management
-│   │   ├── skills/         # Skill management
-│   │   ├── integrations/   # Provider management
-│   │   ├── logs/           # Execution logs dashboard
-│   │   └── cron/           # Scheduled tasks
+│   ├── features/               # Feature modules
+│   │   ├── agent/              # Agent management
+│   │   ├── chat/               # Chat panel (streaming)
+│   │   ├── chat-v2/            # Chat panel v2
+│   │   ├── integrations/       # Provider / MCP management
+│   │   ├── logs/               # Execution logs dashboard
+│   │   ├── memory/             # Memory / knowledge graph
+│   │   ├── mission-control/    # Session oversight
+│   │   ├── observatory/        # Real-time monitoring
+│   │   ├── research-v2/        # Research sessions
+│   │   ├── settings/           # App settings
+│   │   └── setup/              # Onboarding wizard
 │   ├── services/
-│   │   └── transport/      # HTTP/WebSocket client
-│   └── shared/             # UI components, types
-├── public/                 # Static assets
-├── index.html              # Entry point
-├── vite.config.ts          # Vite configuration
-└── package.json            # Dependencies
+│   │   └── transport/          # HTTP/WebSocket client
+│   ├── hooks/                  # Shared React hooks
+│   ├── components/             # Shared components
+│   └── shared/                 # Types, utilities
+├── public/                     # Static assets
+├── index.html                  # Entry point
+├── vite.config.ts
+└── package.json
 ```
 
 ## Development
 
 ```bash
-# Install dependencies (from workspace root)
 cd apps/ui && npm install
-
-# Or use workspace scripts
-npm run dev       # Start dev server (port 3000)
-npm run build     # Build for production
+npm run dev       # Dev server (port 3000)
+npm run build     # Production build → dist/
 npm run preview   # Preview production build
+npm run test      # Vitest unit tests
 ```
 
 ## Tech Stack
@@ -45,25 +51,6 @@ npm run preview   # Preview production build
 | Radix UI | Accessible primitives |
 | Lucide | Icons |
 
-## Key Features
-
-### Chat Panel
-- Real-time streaming via WebSocket
-- Markdown rendering
-- Tool call visualization
-- Conversation history
-
-### Logs Dashboard
-- Execution session tree view
-- Activity stream drill-down
-- Filtering by agent/level
-- Session metrics
-
-### Agent Management
-- Create/edit agents
-- System prompt editor
-- Model configuration
-
 ## API Integration
 
 The transport layer (`src/services/transport/`) abstracts HTTP/WebSocket:
@@ -73,6 +60,13 @@ const transport = await getTransport();
 await transport.invoke({ agent_id, conversation_id, message });
 ```
 
+WebSocket delivers `GatewayEvent` JSON for real-time token streaming.
+
 ## Build Output
 
-Production build goes to workspace root `dist/`. The daemon serves this via `--static-dir ./dist`.
+Production build goes to `apps/ui/dist/`. The daemon serves it via `--static-dir ./dist`.
+Copy or symlink from workspace root as needed.
+
+## UI Architecture
+
+See `apps/ui/ARCHITECTURE.md` for component patterns, styling conventions, and state management details before making UI changes.
