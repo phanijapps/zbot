@@ -245,6 +245,7 @@ impl Tool for DelegateTool {
             skills,
             complexity: None,
             parallel,
+            child_execution_id: None, // TODO(steer-agent): pre-generate and attach execution ID
         });
         ctx.set_actions(actions);
 
