@@ -176,9 +176,11 @@ impl Tool for DelegateTool {
             ));
         }
 
-        // Guard: Only one delegation at a time per session.
-        // Atomic claim — first concurrent delegate_to_agent wins, rest return "queued".
-        if !ctx.try_claim("app:delegation_active") {
+        // Guard: Only one sequential delegation at a time per session.
+        // Parallel delegations bypass this — the global semaphore (max_parallel_agents in
+        // settings.json) controls concurrency; excess parallel requests queue in the dispatcher
+        // until a permit is available.
+        if !parallel && !ctx.try_claim("app:delegation_active") {
             return Ok(json!({
                 "status": "queued",
                 "message": "You already have an active delegation. Wait for it to complete — the system will resume you automatically. Do NOT delegate another step until you see the result."
@@ -256,6 +258,9 @@ impl Tool for DelegateTool {
             "execution_id": child_execution_id,
             "convid": child_conversation_id,
             "status": "delegated",
+            "agent_id": target_agent_id,
+            "task": task,
+            "parallel": parallel,
             "message": format!("Task delegated to {}. Use execution_id with steer_agent to send mid-run instructions.", target_agent_id)
         }))
     }
@@ -398,6 +403,43 @@ mod tests {
             second.get("status").and_then(|v| v.as_str()),
             Some("queued"),
             "second delegate must be queued: {second}"
+        );
+    }
+
+    #[tokio::test]
+    async fn parallel_delegates_are_not_blocked_by_claim() {
+        let tool = DelegateTool::new();
+        let ctx = ctx_for("root");
+
+        // First parallel call succeeds and sets the delegate action.
+        let first = tool
+            .execute(
+                ctx.clone(),
+                json!({ "agent_id": "writer-agent", "task": "first", "parallel": true }),
+            )
+            .await
+            .expect("first parallel delegate ok");
+        assert_eq!(
+            first.get("status").and_then(|v| v.as_str()),
+            Some("delegated"),
+            "first parallel must succeed: {first}"
+        );
+
+        // Second parallel call within the same session context must ALSO succeed —
+        // the semaphore (max_parallel_agents setting) controls concurrency; the
+        // try_claim guard must not block parallel calls.
+        let ctx2 = ctx_for("root"); // fresh context simulating next tool call
+        let second = tool
+            .execute(
+                ctx2.clone(),
+                json!({ "agent_id": "analyst-agent", "task": "second", "parallel": true }),
+            )
+            .await
+            .expect("second parallel delegate ok");
+        assert_eq!(
+            second.get("status").and_then(|v| v.as_str()),
+            Some("delegated"),
+            "second parallel must not be blocked: {second}"
         );
     }
 
