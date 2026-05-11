@@ -118,9 +118,14 @@ impl WebSocketHandler {
                 result = router_event_rx.recv() => {
                     match result {
                         Ok(event) => {
-                            // Debug: log delegation events
-                            if matches!(&event, GatewayEvent::DelegationCompleted { .. } | GatewayEvent::DelegationStarted { .. }) {
-                                info!("Event router received: {:?}", event);
+                            match &event {
+                                GatewayEvent::DelegationCompleted { session_id, child_agent_id, .. } => {
+                                    tracing::debug!(session_id = %session_id, agent = %child_agent_id, "Delegation completed");
+                                }
+                                GatewayEvent::DelegationStarted { session_id, child_agent_id, .. } => {
+                                    tracing::debug!(session_id = %session_id, agent = %child_agent_id, "Delegation started");
+                                }
+                                _ => {}
                             }
 
                             // Check for new root executions on AgentStarted events
