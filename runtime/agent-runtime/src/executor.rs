@@ -1123,11 +1123,18 @@ impl AgentExecutor {
                                     child_execution_id: delegate.child_execution_id.clone(),
                                 });
                                 // Delegation claim is set atomically by the delegate tool via try_claim
-                                // Stop executor loop — continuation callback will resume root
-                                // when the subagent completes.
-                                stopped_for_delegation = true;
+                                // Sequential delegations stop the loop immediately — the
+                                // continuation callback resumes the root when the subagent
+                                // completes. Parallel delegations keep the loop alive so the
+                                // LLM can fire additional parallel delegates before calling
+                                // respond(); the execution_stream pauses once respond() fires
+                                // and resumes when ALL parallel agents have completed.
+                                if !delegate.parallel {
+                                    stopped_for_delegation = true;
+                                }
                                 tracing::debug!(
-                                    "Delegation detected, will stop after current tool batch"
+                                    parallel = delegate.parallel,
+                                    "Delegation detected — stopping={}", !delegate.parallel
                                 );
                             }
 
