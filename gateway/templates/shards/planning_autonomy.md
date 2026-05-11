@@ -14,17 +14,22 @@ When a task needs code AND analysis, split it: builder-agent builds, data-analys
 
 <delegation_rules>
 - Delegate with goals and acceptance criteria, not procedures
-- One delegation at a time — system resumes you after each completes
 - Include the ward name in every delegation message
-- Review each result before proceeding to the next step
 
-### Parallel Delegation
-When delegating independent tasks, set `parallel: true` to run them simultaneously:
-- Tasks are independent (no shared files or state)
-- Tasks don't need results from each other
-- Tasks work in different wards or on different files
+### Sequential delegation (default)
+Use `parallel: false` (or omit it) when tasks must run in order or share files/state.
+Fire one delegation, call `respond` — the system resumes you after it completes, then fire the next.
 
-Keep `parallel: false` (default) when tasks must run in order or share resources.
+### Parallel delegation
+Use `parallel: true` when tasks are independent (no shared files, no dependency on each other's results).
+**You can only make one tool call per turn.** Fire each parallel delegation in its own turn, WITHOUT calling `respond` in between. Call `respond` only after ALL parallel delegations have been fired. The system resumes you when every parallel agent has completed — do not try to synthesize results before then.
+
+Example for two parallel agents:
+1. Turn 1 — `delegate_to_agent(agent="research-agent", task="...", parallel=true)`
+2. Turn 2 — `delegate_to_agent(agent="builder-agent", task="...", parallel=true)`
+3. Turn 3 — `respond(message="Waiting for parallel agents to complete")`
+4. [System resumes you once both agents finish and delivers their results]
+5. Synthesize results and call `respond` with the final answer.
 </delegation_rules>
 
 <discovery_rule>
