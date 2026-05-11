@@ -28,6 +28,7 @@ pub type OnSessionReady =
 
 // Import types from sibling modules
 pub use crate::config::ExecutionConfig;
+use crate::agent_pool::AgentResultBus;
 use crate::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
 pub use crate::handle::ExecutionHandle;
 use crate::invoke::{
@@ -118,6 +119,7 @@ pub struct ExecutionRunner {
     /// Adapter for the `goal` agent tool. Wired via [`Self::set_goal_adapter`].
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     steering_registry: Arc<agent_runtime::SteeringRegistry>,
+    agent_result_bus: Arc<AgentResultBus>,
     /// Pre-session setup delegate. Holds the dependency set needed by
     /// `invoke_with_callback`'s bootstrap phase, extracted here so
     /// `setup()` can be tested and read independently of the full runner.
@@ -398,6 +400,7 @@ impl ExecutionRunner {
             >,
         > = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
         let steering_registry = Arc::new(agent_runtime::SteeringRegistry::new());
+        let agent_result_bus = Arc::new(AgentResultBus::new());
 
         let bootstrap = super::invoke_bootstrap::InvokeBootstrap {
             agent_service: agent_service.clone(),
@@ -419,6 +422,7 @@ impl ExecutionRunner {
             ingestion_adapter: None,
             goal_adapter: None,
             steering_registry: Some(steering_registry.clone()),
+            agent_result_bus: Some(agent_result_bus.clone()),
             event_bus: event_bus.clone(),
             handles: handles.clone(),
         };
@@ -451,6 +455,7 @@ impl ExecutionRunner {
             ingestion_adapter: None,
             goal_adapter: None,
             steering_registry,
+            agent_result_bus,
             bootstrap,
         };
 
@@ -576,6 +581,7 @@ impl ExecutionRunner {
             ingestion_adapter: self.ingestion_adapter.clone(),
             goal_adapter: self.goal_adapter.clone(),
             steering_registry: self.steering_registry.clone(),
+            agent_result_bus: self.agent_result_bus.clone(),
         }
     }
 
@@ -877,6 +883,7 @@ impl ExecutionRunner {
             self.ingestion_adapter.clone(),
             self.goal_adapter.clone(),
             self.steering_registry.clone(),
+            self.agent_result_bus.clone(),
         )
         .await?;
 

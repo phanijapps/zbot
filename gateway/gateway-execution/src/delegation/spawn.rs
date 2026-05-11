@@ -16,6 +16,8 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock};
 use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
+use crate::agent_pool::{AgentResultBus, AgentWaitError};
+
 use agent_runtime::ChatMessage;
 
 use crate::handle::ExecutionHandle;
@@ -70,6 +72,7 @@ pub async fn spawn_delegated_agent(
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     steering_registry: Arc<agent_runtime::SteeringRegistry>,
+    agent_result_bus: Arc<AgentResultBus>,
 ) -> Result<String, String> {
     // Create a child session for subagent isolation
     let child_session =
@@ -377,11 +380,12 @@ pub async fn spawn_delegated_agent(
     let handle = ExecutionHandle::new(max_iter);
     let handle_clone = handle.clone();
 
-    // Store handle
+    // Store handle (by conversation_id for general lookups, by execution_id for kill_agent)
     {
         let mut handles_guard = handles.write().await;
         handles_guard.insert(child_conversation_id.clone(), handle.clone());
     }
+    agent_result_bus.register_handle(&execution_id, handle.clone());
 
     // The post-execution state_handoff hook reuses the same trait store
     // the executor was wired with. Cloning is cheap (Arc) and lets the
@@ -414,6 +418,7 @@ pub async fn spawn_delegated_agent(
         memory_store_for_snapshot,
         distiller,
         steering_registry,
+        agent_result_bus,
     });
 
     tracing::info!(
@@ -505,6 +510,8 @@ struct SpawnContext {
     distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     /// Steering registry — used to remove the handle when the subagent finishes.
     steering_registry: Arc<agent_runtime::SteeringRegistry>,
+    /// Result bus — resolves wait_agent and kill_agent primitives.
+    agent_result_bus: Arc<AgentResultBus>,
 }
 
 /// Spawn the async execution task for the delegated agent.
@@ -530,6 +537,7 @@ fn spawn_execution_task(ctx: SpawnContext) {
         memory_store_for_snapshot,
         distiller,
         steering_registry,
+        agent_result_bus,
     } = ctx;
 
     let agent_id = request.child_agent_id.clone();
@@ -738,6 +746,9 @@ fn spawn_execution_task(ctx: SpawnContext) {
 
         match result {
             Ok(()) => {
+                // Unblock any wait_agent before firing callbacks.
+                agent_result_bus.resolve(&execution_id, &agent_id, &accumulated_response);
+
                 handle_execution_success(HandleExecutionSuccess {
                     conversation_repo: &conversation_repo,
                     state_service: &state_service,
@@ -756,8 +767,13 @@ fn spawn_execution_task(ctx: SpawnContext) {
                 .await;
             }
             Err(agent_runtime::ExecutorError::Stopped) => {
-                // Cooperative stop cascaded from parent — exit the
-                // delegated session cleanly without a crash report.
+                // Cooperative stop cascaded from parent — reject any waiter then exit cleanly.
+                agent_result_bus.reject(
+                    &execution_id,
+                    AgentWaitError::Crashed {
+                        error: "agent stopped cooperatively".to_string(),
+                    },
+                );
                 tracing::info!(
                     session_id = %session_id,
                     "Delegated agent stopped cooperatively"
@@ -773,6 +789,14 @@ fn spawn_execution_task(ctx: SpawnContext) {
                     &state_service,
                     &session_id,
                     &paths,
+                );
+
+                // Unblock any wait_agent with the crash error before DB writes.
+                agent_result_bus.reject(
+                    &execution_id,
+                    AgentWaitError::Crashed {
+                        error: crash_report.clone(),
+                    },
                 );
 
                 handle_execution_failure(HandleExecutionFailure {

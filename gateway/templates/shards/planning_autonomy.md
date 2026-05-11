@@ -30,6 +30,20 @@ Example for two parallel agents:
 3. Turn 3 — `respond(message="Waiting for parallel agents to complete")`
 4. [System resumes you once both agents finish and delivers their results]
 5. Synthesize results and call `respond` with the final answer.
+
+### Sequential with result routing (wait_agent)
+Use `wait_agent` when each step depends on the previous step's OUTPUT (not just completion). The result from step N becomes input to step N+1.
+
+**You stay active the entire time.** No `respond` call between steps — you block on `wait_agent`, get the result, then immediately delegate the next step.
+
+Example: researcher finds sources → writer uses those exact sources → editor polishes that draft:
+1. Turn 1 — `delegate_to_agent(agent="research-agent", task="find sources on X")` → returns `{execution_id: "exec-r"}`
+2. Turn 2 — `wait_agent(execution_id="exec-r")` → blocks, returns `{result: "found 5 sources: ..."}` when researcher finishes
+3. Turn 3 — `delegate_to_agent(agent="writing-agent", task="write post using: found 5 sources: ...")` → returns `{execution_id: "exec-w"}`
+4. Turn 4 — `wait_agent(execution_id="exec-w")` → blocks, returns `{result: "draft complete: ..."}` when writer finishes
+5. Turn 5 — `respond(message="Here is the final post: ...")`
+
+Use `kill_agent(execution_id=...)` to stop a running agent if you no longer need its result (e.g., after a timeout or a change in plan).
 </delegation_rules>
 
 <discovery_rule>
