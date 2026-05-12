@@ -126,6 +126,7 @@ impl RuntimeService {
             connector_registry,
             memory_store,
             distiller,
+            handoff_writer: None, // wired in Task 7
             memory_recall,
             bridge_registry,
             bridge_outbox,

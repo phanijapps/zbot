@@ -17,10 +17,10 @@ use gateway_services::SharedVaultPaths;
 use tokio::sync::{mpsc, RwLock};
 use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
+use crate::delegation::extract_structured_result;
 use crate::delegation::{DelegationRegistry, DelegationRequest};
 use crate::handle::ExecutionHandle;
 use crate::invoke::micro_recall::MicroRecallContext;
-use crate::delegation::extract_structured_result;
 use crate::invoke::working_memory_middleware;
 use crate::invoke::{
     broadcast_event, process_stream_event, spawn_batch_writer_with_repo, BatchWriterHandle,
@@ -56,6 +56,7 @@ pub struct ExecutionStream {
     pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     pub bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
     pub bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
+    pub handoff_writer: Option<Arc<crate::sleep::HandoffWriter>>,
 }
 
 /// Per-execution identifiers, handle, and message payload.
@@ -289,7 +290,9 @@ impl ExecutionStream {
                 "tool" => {
                     let content = msg.text_content();
                     // Detect delegate_to_agent returns — sentinel is "status":"delegated"
-                    if content.contains("\"status\":\"delegated\"") || content.contains("\"status\": \"delegated\"") {
+                    if content.contains("\"status\":\"delegated\"")
+                        || content.contains("\"status\": \"delegated\"")
+                    {
                         working_memory_middleware::process_tool_result(
                             &mut acc.working_memory,
                             "delegate_to_agent",
@@ -305,7 +308,9 @@ impl ExecutionStream {
                     if content.contains("Recalled") || content.contains("correction") {
                         for line in content.lines() {
                             let trimmed = line.trim().trim_start_matches("- ");
-                            if trimmed.starts_with("[correction]") || trimmed.starts_with("[pattern]") {
+                            if trimmed.starts_with("[correction]")
+                                || trimmed.starts_with("[pattern]")
+                            {
                                 acc.working_memory.add_correction(trimmed);
                             }
                         }
@@ -313,7 +318,10 @@ impl ExecutionStream {
                     // Detect delegation callbacks and mark agents as completed.
                     // Structured path: <!-- structured-result {"agent":"...", ...} -->
                     if let Some(envelope) = extract_structured_result(&content) {
-                        if let Some(agent_id) = envelope.get("agent").and_then(|v: &serde_json::Value| v.as_str()) {
+                        if let Some(agent_id) = envelope
+                            .get("agent")
+                            .and_then(|v: &serde_json::Value| v.as_str())
+                        {
                             let result_str = envelope
                                 .get("data")
                                 .map(|d: &serde_json::Value| d.to_string())
@@ -324,7 +332,9 @@ impl ExecutionStream {
                                 &result_str,
                             );
                         }
-                    } else if content.contains("## From ") || content.starts_with("## Delegation Failed") {
+                    } else if content.contains("## From ")
+                        || content.starts_with("## Delegation Failed")
+                    {
                         // Plain-text callback: "## From Research Agent\n..."
                         // Error callback: "## Delegation Failed\n**Agent:** Research Agent\n..."
                         let agent_id = if let Some(line) =
@@ -579,6 +589,17 @@ impl ExecutionStream {
                         .await;
                     });
                 }
+
+                // Session handoff — fire-and-forget, silent on failure.
+                if let Some(writer) = self.handoff_writer.as_ref() {
+                    let writer = writer.clone();
+                    let sid = session_id.clone();
+                    let aid = agent_id.clone();
+                    let wid = session_ward.clone().unwrap_or_default();
+                    tokio::spawn(async move {
+                        writer.write(&sid, &aid, &wid).await;
+                    });
+                }
             }
             Err(agent_runtime::ExecutorError::Stopped) => {
                 // Cooperative stop — the executor's mid-stream poll
@@ -742,6 +763,7 @@ mod tests {
             connector_registry: None,
             bridge_registry: None,
             bridge_outbox: None,
+            handoff_writer: None,
         };
     }
 }
