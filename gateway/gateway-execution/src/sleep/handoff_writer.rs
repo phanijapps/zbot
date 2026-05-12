@@ -145,8 +145,37 @@ pub fn should_inject(entry: &HandoffEntry) -> bool {
 /// Reads `handoff.latest` from `<vault_dir>/agents_data/shared/session_summaries.json`.
 /// Returns `None` if absent, unparseable, or older than `HANDOFF_MAX_AGE_DAYS`.
 /// Returns `Some(block)` where `block` is the `## Last Session` formatted string.
-pub fn read_handoff_block(_vault_dir: &Path) -> Option<String> {
-    todo!("implement in Task 3")
+pub fn read_handoff_block(vault_dir: &Path) -> Option<String> {
+    let path = vault_dir
+        .join("agents_data")
+        .join("shared")
+        .join("session_summaries.json");
+    let store = load_kv_store(&path).ok()?;
+    let latest = store.entries.get("handoff.latest")?;
+    let entry: HandoffEntry = serde_json::from_str(&latest.value).ok()?;
+    if !should_inject(&entry) {
+        return None;
+    }
+    let date_str = entry
+        .completed_at
+        .parse::<DateTime<Utc>>()
+        .map(|dt| dt.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|_| entry.completed_at.chars().take(10).collect());
+    Some(format!(
+        "## Last Session  ({date} · ward: {ward} · {turns} turns)\n\
+         {summary}\n\n\
+         Corrections active: {corrections} · Goals: {goals}\n\
+         Full context: memory(action=get, scope=shared, file=session_summaries, key=handoff.{sid})\n\
+         Last intent:  memory(action=get_fact, key={intent_key})",
+        date = date_str,
+        ward = entry.ward_id,
+        turns = entry.turns,
+        summary = entry.summary,
+        corrections = entry.correction_count,
+        goals = entry.goal_count,
+        sid = entry.session_id,
+        intent_key = entry.intent_key,
+    ))
 }
 
 // ============================================================================
@@ -448,5 +477,84 @@ mod tests {
             should_inject(&fresh),
             "6-day-old handoff should be injected"
         );
+    }
+
+    // ---- Test 5: read_handoff_block returns formatted block ----
+
+    #[test]
+    fn read_handoff_block_returns_formatted_block() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shared_dir = tmp.path().join("agents_data").join("shared");
+        std::fs::create_dir_all(&shared_dir).unwrap();
+
+        let entry = HandoffEntry {
+            summary: "User explored memory. Spec written.".to_string(),
+            session_id: "sess-abc".to_string(),
+            completed_at: Utc::now().to_rfc3339(),
+            ward_id: "memory-ward".to_string(),
+            intent_key: "ctx.sess-abc.intent".to_string(),
+            goal_count: 2,
+            open_task_count: 0,
+            correction_count: 3,
+            turns: 10,
+        };
+        let mut store = MemoryStore::default();
+        let value = serde_json::to_string(&entry).unwrap();
+        let now = Utc::now().to_rfc3339();
+        store.entries.insert(
+            "handoff.latest".to_string(),
+            MemoryEntry { value, tags: vec![], created_at: now.clone(), updated_at: now },
+        );
+        let path = shared_dir.join("session_summaries.json");
+        save_kv_store(&path, &store).unwrap();
+
+        let block = read_handoff_block(tmp.path()).expect("should return a block");
+        assert!(block.contains("## Last Session"), "block must start with ## Last Session");
+        assert!(block.contains("User explored memory"), "block must contain summary");
+        assert!(block.contains("memory-ward"), "block must contain ward_id");
+        assert!(block.contains("Corrections active: 3"), "block must contain correction_count");
+        assert!(block.contains("Goals: 2"), "block must contain goal_count");
+        assert!(block.contains("handoff.sess-abc"), "block must contain session key");
+    }
+
+    // ---- Test 6: read_handoff_block returns None for stale entry ----
+
+    #[test]
+    fn read_handoff_block_returns_none_when_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shared_dir = tmp.path().join("agents_data").join("shared");
+        std::fs::create_dir_all(&shared_dir).unwrap();
+
+        let entry = HandoffEntry {
+            summary: "old summary".to_string(),
+            session_id: "sess-old".to_string(),
+            completed_at: (Utc::now() - chrono::Duration::days(10)).to_rfc3339(),
+            ward_id: "ward".to_string(),
+            intent_key: "ctx.sess-old.intent".to_string(),
+            goal_count: 0,
+            open_task_count: 0,
+            correction_count: 0,
+            turns: 5,
+        };
+        let mut store = MemoryStore::default();
+        let value = serde_json::to_string(&entry).unwrap();
+        let now = Utc::now().to_rfc3339();
+        store.entries.insert(
+            "handoff.latest".to_string(),
+            MemoryEntry { value, tags: vec![], created_at: now.clone(), updated_at: now },
+        );
+        save_kv_store(&shared_dir.join("session_summaries.json"), &store).unwrap();
+
+        let block = read_handoff_block(tmp.path());
+        assert!(block.is_none(), "stale handoff should return None");
+    }
+
+    // ---- Test 7: read_handoff_block returns None when no file ----
+
+    #[test]
+    fn read_handoff_block_returns_none_when_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let block = read_handoff_block(tmp.path());
+        assert!(block.is_none(), "absent file should return None");
     }
 }
