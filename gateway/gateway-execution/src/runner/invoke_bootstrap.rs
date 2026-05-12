@@ -316,10 +316,10 @@ impl InvokeBootstrap {
         // Session handoff — injected after recall so it lands at history[0]
         // (the last insert(0, ..) wins the front slot; agent reads handoff
         // first, giving orientation before noisy recall facts).
-        if let Some(block) =
-            crate::sleep::handoff_writer::read_handoff_block(self.paths.vault_dir())
-        {
-            history.insert(0, ChatMessage::system(block));
+        if let Some(store) = &self.memory_store {
+            if let Some(block) = crate::sleep::handoff_writer::read_handoff_block(store).await {
+                history.insert(0, ChatMessage::system(block));
+            }
         }
 
         // Create executor (restore ward_id from existing session if available)

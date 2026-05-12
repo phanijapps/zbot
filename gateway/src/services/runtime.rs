@@ -113,17 +113,16 @@ impl RuntimeService {
         ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
         goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     ) -> Self {
-        let handoff_writer = {
+        let handoff_writer = memory_store.as_ref().map(|fs| {
             let llm = Arc::new(gateway_execution::sleep::LlmHandoffWriter::new(
                 provider_service.clone(),
             ));
-            let shared_kv_dir = paths.vault_dir().join("agents_data").join("shared");
-            Some(Arc::new(gateway_execution::sleep::HandoffWriter::new(
+            Arc::new(gateway_execution::sleep::HandoffWriter::new(
                 llm,
-                shared_kv_dir,
+                fs.clone(),
                 conversation_repo.clone(),
-            )))
-        };
+            ))
+        });
 
         let mut runner = ExecutionRunner::with_config(gateway_execution::ExecutionRunnerConfig {
             event_bus: event_bus.clone(),
