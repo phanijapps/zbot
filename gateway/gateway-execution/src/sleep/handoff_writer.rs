@@ -63,7 +63,7 @@ impl HandoffWriter {
 
     /// Fire-and-forget entry point: loads last 50 messages then calls
     /// `write_with_messages`. All errors are logged at warn and swallowed.
-    pub async fn write(&self, session_id: &str, agent_id: &str, ward_id: &str) {
+    pub async fn write(&self, session_id: &str, _agent_id: &str, ward_id: &str) {
         let messages_raw = match self
             .conversation_repo
             .get_session_conversation(session_id, 50)
@@ -145,7 +145,7 @@ pub fn should_inject(entry: &HandoffEntry) -> bool {
 /// Reads `handoff.latest` from `<vault_dir>/agents_data/shared/session_summaries.json`.
 /// Returns `None` if absent, unparseable, or older than `HANDOFF_MAX_AGE_DAYS`.
 /// Returns `Some(block)` where `block` is the `## Last Session` formatted string.
-pub fn read_handoff_block(vault_dir: &Path) -> Option<String> {
+pub fn read_handoff_block(_vault_dir: &Path) -> Option<String> {
     todo!("implement in Task 3")
 }
 
