@@ -153,14 +153,12 @@ pub fn read_handoff_block(vault_dir: &Path) -> Option<String> {
     let store = load_kv_store(&path).ok()?;
     let latest = store.entries.get("handoff.latest")?;
     let entry: HandoffEntry = serde_json::from_str(&latest.value).ok()?;
-    if !should_inject(&entry) {
+    // Parse once — reuse for staleness check and date formatting.
+    let completed_at = entry.completed_at.parse::<DateTime<Utc>>().ok()?;
+    if (Utc::now() - completed_at).num_days() > HANDOFF_MAX_AGE_DAYS {
         return None;
     }
-    let date_str = entry
-        .completed_at
-        .parse::<DateTime<Utc>>()
-        .map(|dt| dt.format("%Y-%m-%d").to_string())
-        .unwrap_or_else(|_| entry.completed_at.chars().take(10).collect());
+    let date_str = completed_at.format("%Y-%m-%d").to_string();
     Some(format!(
         "## Last Session  ({date} · ward: {ward} · {turns} turns)\n\
          {summary}\n\n\
