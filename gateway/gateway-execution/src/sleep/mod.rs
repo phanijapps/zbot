@@ -6,6 +6,7 @@
 //! Tasks 5, 6, and 7 extend this module with `decay`, `pruner`, and `worker`.
 
 pub mod compactor;
+pub mod handoff_writer;
 pub mod decay;
 pub mod embedding_reindex;
 pub mod kg_backfill;
