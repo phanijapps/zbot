@@ -31,3 +31,7 @@ pub use synthesizer::{
 };
 pub use verifier::LlmPairwiseVerifier;
 pub use worker::{SleepOps, SleepTimeWorker};
+pub use handoff_writer::{
+    HandoffEntry, HandoffInput, HandoffLlm, HandoffWriter, LlmHandoffWriter,
+    read_handoff_block, should_inject,
+};
