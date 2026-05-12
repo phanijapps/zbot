@@ -52,7 +52,8 @@ impl Tool for DelegateTool {
 
     fn description(&self) -> &'static str {
         "Delegate a task to a specialized subagent. The subagent will work on the task \
-         independently and you will receive a callback message when it completes. \
+         independently. Returns an execution_id you can pass to wait_agent (block until result), \
+         steer_agent (send mid-run instructions), or kill_agent (stop it). \
          Use this for complex subtasks that require specialized expertise."
     }
 
@@ -261,7 +262,7 @@ impl Tool for DelegateTool {
             "agent_id": target_agent_id,
             "task": task,
             "parallel": parallel,
-            "message": format!("Task delegated to {}. Use execution_id with steer_agent to send mid-run instructions.", target_agent_id)
+            "message": format!("Task delegated to {}. Use execution_id with wait_agent to block until it completes and get its result, steer_agent to send mid-run instructions, or kill_agent to stop it.", target_agent_id)
         }))
     }
 }

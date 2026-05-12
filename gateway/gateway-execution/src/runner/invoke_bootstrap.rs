@@ -26,6 +26,7 @@ use gateway_services::{
 use tokio::sync::RwLock;
 use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
+use crate::agent_pool::AgentResultBus;
 use crate::config::ExecutionConfig;
 use crate::handle::ExecutionHandle;
 use crate::invoke::{collect_agents_summary, collect_skills_summary, AgentLoader, ExecutorBuilder};
@@ -66,6 +67,7 @@ pub(super) struct InvokeBootstrap {
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     pub(super) steering_registry: Option<Arc<agent_runtime::SteeringRegistry>>,
+    pub(super) agent_result_bus: Option<Arc<AgentResultBus>>,
     pub(super) event_bus: Arc<EventBus>,
     pub(super) handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
 }
@@ -480,6 +482,12 @@ impl InvokeBootstrap {
         if let Some(ref sr) = self.steering_registry {
             builder = builder.with_steering_registry(sr.clone());
         }
+        if let Some(ref bus) = self.agent_result_bus {
+            builder = builder
+                .with_agent_result_bus(bus.clone())
+                .with_state_service(self.state_service.clone())
+                .with_conversation_repo(self.conversation_repo.clone());
+        }
 
         // Intent analysis for root agent first turns only.
         // Note: execution_logs stores execution_id in the session_id column,
@@ -850,6 +858,7 @@ mod tests {
             ingestion_adapter: None,
             goal_adapter: None,
             steering_registry: None,
+            agent_result_bus: None,
             event_bus: Arc::new(EventBus::new()),
             handles,
         };

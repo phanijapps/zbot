@@ -32,6 +32,7 @@ use agent_tools::{
     WriteFileTool,
 };
 use gateway_services::agents::Agent;
+use execution_state::StateService;
 use gateway_services::models::ModelRegistry;
 use gateway_services::providers::Provider;
 use gateway_services::{McpService, SettingsService, SkillService};
@@ -39,7 +40,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use zero_core::{ConnectorResourceProvider, FileSystemContext};
 use zero_stores::MemoryFactStore;
+use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
+use crate::agent_pool::AgentResultBus;
 use crate::config::GatewayFileSystem;
 
 /// Resolve the effective thinking flag for an agent execution.
@@ -81,6 +84,9 @@ pub struct ExecutorBuilder {
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     steering_registry: Option<Arc<agent_runtime::SteeringRegistry>>,
+    agent_result_bus: Option<Arc<AgentResultBus>>,
+    state_service: Option<Arc<StateService<DatabaseManager>>>,
+    conversation_repo: Option<Arc<ConversationRepository>>,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
     chat_mode: bool,
 }
@@ -101,6 +107,9 @@ impl ExecutorBuilder {
             ingestion_adapter: None,
             goal_adapter: None,
             steering_registry: None,
+            agent_result_bus: None,
+            state_service: None,
+            conversation_repo: None,
             extra_initial_state: None,
             chat_mode: false,
         }
@@ -172,6 +181,24 @@ impl ExecutorBuilder {
         registry: Arc<agent_runtime::SteeringRegistry>,
     ) -> Self {
         self.steering_registry = Some(registry);
+        self
+    }
+
+    /// Set the agent result bus for `wait_agent` and `kill_agent` tools.
+    pub fn with_agent_result_bus(mut self, bus: Arc<AgentResultBus>) -> Self {
+        self.agent_result_bus = Some(bus);
+        self
+    }
+
+    /// Set the state service used by `wait_agent` fast-path.
+    pub fn with_state_service(mut self, svc: Arc<StateService<DatabaseManager>>) -> Self {
+        self.state_service = Some(svc);
+        self
+    }
+
+    /// Set the conversation repo used by `wait_agent` fast-path.
+    pub fn with_conversation_repo(mut self, repo: Arc<ConversationRepository>) -> Self {
+        self.conversation_repo = Some(repo);
         self
     }
 
@@ -589,6 +616,20 @@ impl ExecutorBuilder {
             // Steer running subagent (if steering registry wired)
             if let Some(ref sr) = self.steering_registry {
                 tool_registry.register(Arc::new(crate::tools::SteerAgentTool::new(sr.clone())));
+            }
+
+            // Agent pool tools: wait_agent + kill_agent (if result bus wired)
+            if let (Some(ref bus), Some(ref svc), Some(ref repo)) = (
+                &self.agent_result_bus,
+                &self.state_service,
+                &self.conversation_repo,
+            ) {
+                tool_registry.register(Arc::new(crate::tools::WaitAgentTool::new(
+                    bus.clone(),
+                    svc.clone(),
+                    repo.clone(),
+                )));
+                tool_registry.register(Arc::new(crate::tools::KillAgentTool::new(bus.clone())));
             }
 
             // Knowledge graph query — fully trait-routed (Phase E6c):
