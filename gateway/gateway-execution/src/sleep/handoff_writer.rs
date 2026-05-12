@@ -54,13 +54,18 @@ impl HandoffWriter {
         shared_kv_dir: PathBuf,
         conversation_repo: Arc<ConversationRepository>,
     ) -> Self {
-        Self { llm, shared_kv_dir, conversation_repo }
+        Self {
+            llm,
+            shared_kv_dir,
+            conversation_repo,
+        }
     }
 
     /// Fire-and-forget entry point: loads last 50 messages then calls
     /// `write_with_messages`. All errors are logged at warn and swallowed.
     pub async fn write(&self, session_id: &str, agent_id: &str, ward_id: &str) {
-        let messages_raw = match self.conversation_repo
+        let messages_raw = match self
+            .conversation_repo
             .get_session_conversation(session_id, 50)
         {
             Ok(m) => m,
@@ -69,9 +74,13 @@ impl HandoffWriter {
                 return;
             }
         };
-        let messages = self.conversation_repo
+        let messages = self
+            .conversation_repo
             .session_messages_to_chat_format(&messages_raw);
-        if let Err(e) = self.write_with_messages(session_id, ward_id, messages).await {
+        if let Err(e) = self
+            .write_with_messages(session_id, ward_id, messages)
+            .await
+        {
             tracing::warn!(session_id, "handoff: write failed: {e}");
         }
     }
@@ -106,8 +115,7 @@ impl HandoffWriter {
     fn persist(&self, session_id: &str, entry: &HandoffEntry) -> Result<(), String> {
         let path = self.shared_kv_dir.join("session_summaries.json");
         let mut store = load_kv_store(&path)?;
-        let value = serde_json::to_string(entry)
-            .map_err(|e| format!("serialize entry: {e}"))?;
+        let value = serde_json::to_string(entry).map_err(|e| format!("serialize entry: {e}"))?;
         let now = Utc::now().to_rfc3339();
         let make_mem_entry = |v: String| MemoryEntry {
             value: v,
@@ -115,7 +123,9 @@ impl HandoffWriter {
             created_at: now.clone(),
             updated_at: now.clone(),
         };
-        store.entries.insert("handoff.latest".to_string(), make_mem_entry(value.clone()));
+        store
+            .entries
+            .insert("handoff.latest".to_string(), make_mem_entry(value.clone()));
         store
             .entries
             .insert(format!("handoff.{session_id}"), make_mem_entry(value));
@@ -147,20 +157,17 @@ fn load_kv_store(path: &Path) -> Result<MemoryStore, String> {
     if !path.exists() {
         return Ok(MemoryStore::default());
     }
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     serde_json::from_str(&content).map_err(|e| format!("parse session_summaries: {e}"))
 }
 
 fn save_kv_store(path: &Path, store: &MemoryStore) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
-    let content = serde_json::to_string_pretty(store)
-        .map_err(|e| format!("serialize: {e}"))?;
-    std::fs::write(path, content.as_bytes())
-        .map_err(|e| format!("write {}: {e}", path.display()))
+    let content = serde_json::to_string_pretty(store).map_err(|e| format!("serialize: {e}"))?;
+    std::fs::write(path, content.as_bytes()).map_err(|e| format!("write {}: {e}", path.display()))
 }
 
 // ============================================================================
@@ -178,10 +185,8 @@ impl LlmHandoffWriter {
         Self { provider_service }
     }
 
-    fn build_client(
-        &self,
-    ) -> Result<Arc<dyn agent_runtime::llm::LlmClient>, String> {
-        use agent_runtime::llm::{LlmConfig, openai::OpenAiClient};
+    fn build_client(&self) -> Result<Arc<dyn agent_runtime::llm::LlmClient>, String> {
+        use agent_runtime::llm::{openai::OpenAiClient, LlmConfig};
         let providers = self
             .provider_service
             .list()
@@ -201,8 +206,7 @@ impl LlmHandoffWriter {
         )
         .with_temperature(0.2)
         .with_max_tokens(256);
-        let client = OpenAiClient::new(config)
-            .map_err(|e| format!("build client: {e}"))?;
+        let client = OpenAiClient::new(config).map_err(|e| format!("build client: {e}"))?;
         Ok(Arc::new(client) as Arc<dyn agent_runtime::llm::LlmClient>)
     }
 }
@@ -233,7 +237,8 @@ impl HandoffLlm for LlmHandoffWriter {
         );
         let messages = vec![
             ChatMessage::system(
-                "You are a concise session summarizer. Return only the summary text, no JSON.".to_string(),
+                "You are a concise session summarizer. Return only the summary text, no JSON."
+                    .to_string(),
             ),
             ChatMessage::user(prompt),
         ];
@@ -300,10 +305,7 @@ mod tests {
         Arc::new(ConversationRepository::new(db))
     }
 
-    fn make_writer(
-        tmp: &TempDir,
-        llm: Arc<dyn HandoffLlm>,
-    ) -> HandoffWriter {
+    fn make_writer(tmp: &TempDir, llm: Arc<dyn HandoffLlm>) -> HandoffWriter {
         let shared_kv_dir = tmp.path().join("agents_data").join("shared");
         HandoffWriter::new(llm, shared_kv_dir, make_conversation_repo(tmp))
     }
@@ -325,15 +327,13 @@ mod tests {
     #[tokio::test]
     async fn generates_summary_from_messages() {
         let tmp = tempfile::tempdir().unwrap();
-        let llm = MockLlm::ok("User explored memory limits. Wrote reflective spec. Left impl incomplete.");
+        let llm = MockLlm::ok(
+            "User explored memory limits. Wrote reflective spec. Left impl incomplete.",
+        );
         let writer = make_writer(&tmp, llm.clone());
 
         let result = writer
-            .write_with_messages(
-                "sess-abc",
-                "test-ward",
-                sample_messages(6),
-            )
+            .write_with_messages("sess-abc", "test-ward", sample_messages(6))
             .await;
 
         assert!(result.is_ok(), "write_with_messages failed: {result:?}");
@@ -346,7 +346,10 @@ mod tests {
             .join("shared")
             .join("session_summaries.json");
         let store = load_kv_store(&path).unwrap();
-        let latest = store.entries.get("handoff.latest").expect("handoff.latest missing");
+        let latest = store
+            .entries
+            .get("handoff.latest")
+            .expect("handoff.latest missing");
         let entry: HandoffEntry = serde_json::from_str(&latest.value).unwrap();
         assert!(!entry.summary.is_empty(), "summary should be non-empty");
         assert_eq!(entry.session_id, "sess-abc");
@@ -431,13 +434,19 @@ mod tests {
             correction_count: 0,
             turns: 5,
         };
-        assert!(!should_inject(&stale), "8-day-old handoff should be excluded");
+        assert!(
+            !should_inject(&stale),
+            "8-day-old handoff should be excluded"
+        );
 
         // 6 days ago — should inject
         let fresh = HandoffEntry {
             completed_at: (Utc::now() - chrono::Duration::days(6)).to_rfc3339(),
             ..stale.clone()
         };
-        assert!(should_inject(&fresh), "6-day-old handoff should be injected");
+        assert!(
+            should_inject(&fresh),
+            "6-day-old handoff should be injected"
+        );
     }
 }
