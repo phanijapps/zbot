@@ -6,5 +6,6 @@ pub mod conflict_resolver;
 pub mod corrections_abstractor;
 pub mod decay;
 pub mod orphan_archiver;
+pub mod pattern_extractor;
 pub mod pruner;
 pub mod synthesizer;

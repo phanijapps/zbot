@@ -12,6 +12,9 @@ pub use sleep::corrections_abstractor::{
 };
 pub use sleep::decay::{DecayConfig, DecayEngine, KgDecayStats, PruneCandidate};
 pub use sleep::orphan_archiver::{OrphanArchiver, OrphanArchiverStats};
+pub use sleep::pattern_extractor::{
+    PatternExtractLlm, PatternExtractor, PatternInput, PatternResponse, PatternStats, PatternStep,
+};
 pub use sleep::pruner::{PruneStats, Pruner};
 pub use sleep::synthesizer::{
     SynthesisInput, SynthesisLlm, SynthesisResponse, SynthesisStats, Synthesizer,
