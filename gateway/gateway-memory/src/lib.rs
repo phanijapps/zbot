@@ -3,6 +3,7 @@
 
 pub mod sleep;
 
+pub use sleep::compactor::{CompactionStats, Compactor, PairwiseVerifier};
 pub use sleep::conflict_resolver::{
     ConflictJudgeLlm, ConflictResolver, ConflictResponse, ConflictStats,
 };
