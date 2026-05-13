@@ -4,6 +4,8 @@
 
 **Author trail:** Built up across the work in sessions starting `dd8b51a8-e020-4ada-bb4f-e59ccacbb115` and continuing in `2be03b02-1859-4ed2-8680-3a36172e9215` / `d0db5589-286d-4cfd-99ed-c9b9a697e67f`. Last updated 2026-05-13.
 
+Last updated: 2026-05-13. **Extraction status: complete (Phases A–F + MEM-005 all shipped).**
+
 ---
 
 ## 1. Scope: What "Memory" Means Today
@@ -16,7 +18,7 @@ The memory subsystem currently lives across three crates:
 | `stores/zero-stores-sqlite` | SQLite implementations of all above traits |
 | `stores/zero-stores-domain` | `MemoryFact`, `StrategyFactInsert`, `StrategyFactMatch` types |
 | `gateway/gateway-execution/src/sleep/` | All sleep-time memory components (Compactor, Synthesizer, PatternExtractor, Pruner, OrphanArchiver, **CorrectionsAbstractor**, **ConflictResolver**, **HandoffWriter**) |
-| `gateway/gateway-memory` | **NEW — Phases A through D.** Memory subsystem complete: config types, all sleep-component engines + abstraction traits, recall pipeline, `MemoryLlmFactory` trait, all 6 production `Llm*` impls, `HandoffWriter` struct (cycle broken via `ConversationStore` trait), `parse_llm_json` utility. Only the gateway wiring (Phases E + F) remains. |
+| `gateway/gateway-memory` | **COMPLETE — Phases A through F.** The full memory subsystem: config types, all sleep-component engines + abstraction traits, recall pipeline, `MemoryLlmFactory` + 6 production `Llm*` impls, `HandoffWriter` struct, `SleepOps` + `SleepTimeWorker`, and the `MemoryServices::new(MemoryServicesConfig)` factory. Gateway constructs services in 41 lines (was 104). |
 | `gateway/gateway-execution/src/recall/` | Recall scoring + retrieval pipeline |
 | `gateway/gateway-execution/src/runner/invoke_bootstrap.rs` | Session-start memory injection (handoff, corrections, goals, targeted recall) |
 | `gateway/gateway-services/src/recall_config.rs` | `RecallConfig` |
@@ -159,6 +161,15 @@ Today's memory code reaches into:
 
 Listed in reverse-chronological order. All on branch `feat/parallel-delegation-aggregation`.
 
+### Phase E + F — Worker move, MemoryServices factory, gateway wiring collapse (2026-05-13)
+- `20d59f9b` refactor(gateway): collapse memory construction into MemoryServices::new — Phase F
+- `2b894611` feat(gateway-memory): add MemoryServices factory — Phase E.2
+- `3c4e9973` refactor(gateway-memory): move SleepOps + SleepTimeWorker to gateway-memory — Phase E.1
+
+**Effect:** `gateway/src/state/mod.rs` construction block reduced from 104 lines to 41 lines (63-line reduction). All memory subsystem construction now lives in `gateway-memory::MemoryServices::new(MemoryServicesConfig)`. Gateway retains only policy (interval hours, agent_id) — wiring is owned by the factory.
+
+**Extraction complete.** A future memory-feature developer touches only `gateway-memory`.
+
 ### Phase D — LLM factory abstraction + 6 LLM impls migrated (2026-05-13)
 - `f8adf7b1` refactor(handoff): move HandoffWriter struct via ConversationStore trait — MEM-005
 - `87b46052` refactor(gateway-memory): move LlmPairwiseVerifier + use MemoryLlmFactory
@@ -252,7 +263,9 @@ Each phase has a written plan that describes the *intent* of the change set. The
 2. ✅ **DONE (Phase B, 9 commits)** — **Second**: Move the sleep-time components (`Compactor`, `Synthesizer`, `PatternExtractor`, `Pruner`, `OrphanArchiver`, `CorrectionsAbstractor`, `ConflictResolver`, `HandoffWriter`) — they're self-contained behind their trait-object inputs.
 3. ✅ **DONE (Phase D + MEM-005, 9 commits)** — **Third**: Introduce `MemoryLlmFactory` trait, replace direct `ProviderService` dependency. This is the hardest decoupling because every `Llm*` production impl has the same `build_client` shape — there's an opportunity to DRY this into one shared helper.
 4. ✅ **DONE (Phase C, 1 commit)** — **Fourth**: Move `recall/mod.rs` + `RecallConfig` into `zero-memory`. Caller in `invoke_bootstrap.rs` stays in gateway because it composes recall with goals + handoff + corrections (all of which are memory) but also with the orchestrator runtime (not memory).
-5. **Fifth**: Move `SleepOps` + `SleepTimeWorker` into `zero-memory`. Replace the imperative construction block in `state/mod.rs` with a `MemoryServices::new(...)` factory call.
+5. ✅ **DONE (Phase E)** — Move `SleepOps` + `SleepTimeWorker` into `gateway-memory`. Replace the imperative construction block in `state/mod.rs` with a `MemoryServices::new(MemoryServicesConfig { ... })` factory call.
+
+   ✅ **DONE (Phase F)** — `gateway/src/state/mod.rs` construction block collapsed from 104 lines to 41 lines via `MemoryServices::new(...)`. All 14 config fields accept trait objects (no concrete-type leaks into gateway).
 
 After extraction, the `gateway` crate should only need:
 - `zero-memory::MemoryServices` (factory)

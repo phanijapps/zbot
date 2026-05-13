@@ -47,7 +47,7 @@ None. Phase 4 foundation is sufficient. The `evidence` column is already in plac
 
 ## MEM-002 — Memory subsystem extraction into `gateway-memory/` crate
 
-**Status:** Pending
+**Status:** ✅ Done — Phases A through F shipped 2026-05-13 (commits a1e96a74 through 20d59f9b). See tracking doc for inventory.
 **Severity:** Low (cosmetic / maintainability)
 **Trigger:** Any of: (a) a second consumer wants the memory subsystem (e.g. a second daemon, a published library); (b) `gateway/gateway-execution/` becomes hard to navigate; (c) you want to publish memory as a standalone open-source crate. Until one of those, the inventory tracking doc is sufficient.
 
