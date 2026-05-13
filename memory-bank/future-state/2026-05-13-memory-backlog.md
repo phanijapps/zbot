@@ -116,7 +116,7 @@ None. Phase 4 foundation done.
 
 ## MEM-003 — ConflictResolver: cache LLM client across pair judgments
 
-**Status:** Pending
+**Status:** Pending. (Note: Phase D's `MemoryLlmFactory` abstraction makes implementing this easier — the factory can cache the client.)
 **Severity:** Low (perf nit)
 **Trigger:** Observed judge-call latency exceeds expectation, OR a single sleep cycle examines >20 pairs and you notice the cycle takes noticeably longer than expected.
 
@@ -168,7 +168,7 @@ WHERE agent_id = ? AND epistemic_class != 'archival' AND last_seen_at < ?
 
 ## MEM-005 — Move `HandoffWriter` struct into `gateway-memory`
 
-**Status:** Pending
+**Status:** ✅ Done — commit `f8adf7b1` (2026-05-13)
 **Severity:** Low (architectural inconsistency)
 **Trigger:** Phase D/E of the extraction (when introducing the LLM/store factory abstractions), OR when something else needs a clean `ConversationStore` trait abstraction.
 
