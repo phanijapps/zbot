@@ -32,6 +32,7 @@ pub use sleep::pruner::{PruneStats, Pruner};
 pub use sleep::synthesizer::{
     SynthesisInput, SynthesisLlm, SynthesisResponse, SynthesisStats, Synthesizer,
 };
+pub use sleep::verifier::LlmPairwiseVerifier;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

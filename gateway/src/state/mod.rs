@@ -782,7 +782,7 @@ impl AppState {
                 let verifier: Option<
                     Arc<dyn gateway_execution::sleep::compactor::PairwiseVerifier>,
                 > = Some(Arc::new(
-                    gateway_execution::sleep::LlmPairwiseVerifier::new(provider_service.clone()),
+                    gateway_execution::sleep::LlmPairwiseVerifier::new(memory_llm_factory.clone()),
                 ));
                 let compactor = Arc::new(gateway_execution::sleep::Compactor::new(
                     kgs.clone(),

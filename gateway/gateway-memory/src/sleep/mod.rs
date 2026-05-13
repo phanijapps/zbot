@@ -10,3 +10,4 @@ pub mod orphan_archiver;
 pub mod pattern_extractor;
 pub mod pruner;
 pub mod synthesizer;
+pub mod verifier;
