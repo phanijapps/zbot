@@ -27,6 +27,13 @@ impl Default for DecayConfig {
     }
 }
 
+/// Counts returned by [`DecayEngine::decay_kg_confidence`].
+#[derive(Debug, Default, Clone)]
+pub struct KgDecayStats {
+    pub entities_decayed: u64,
+    pub relationships_decayed: u64,
+}
+
 /// A decayed entity slated for soft-deletion by the Pruner.
 #[derive(Debug, Clone)]
 pub struct PruneCandidate {
@@ -50,6 +57,47 @@ pub struct DecayEngine {
 impl DecayEngine {
     pub fn new(kg_store: Arc<dyn KnowledgeGraphStore>, config: DecayConfig) -> Self {
         Self { kg_store, config }
+    }
+
+    /// Apply temporal confidence decay to KG entities and relationships.
+    /// Conservative: errors are logged and the cycle returns whatever stats
+    /// were collected before the failure.
+    pub async fn decay_kg_confidence(
+        &self,
+        agent_id: &str,
+        config: &gateway_services::KgDecayConfig,
+    ) -> KgDecayStats {
+        let mut stats = KgDecayStats::default();
+        if !config.enabled {
+            return stats;
+        }
+        match self
+            .kg_store
+            .decay_entity_confidence(
+                agent_id,
+                config.entity_half_life_days,
+                config.min_confidence,
+                config.skip_recent_hours,
+            )
+            .await
+        {
+            Ok(n) => stats.entities_decayed = n,
+            Err(e) => tracing::warn!(error = %e, "decay_entity_confidence failed"),
+        }
+        match self
+            .kg_store
+            .decay_relationship_confidence(
+                agent_id,
+                config.relationship_half_life_days,
+                config.min_confidence,
+                config.skip_recent_hours,
+            )
+            .await
+        {
+            Ok(n) => stats.relationships_decayed = n,
+            Err(e) => tracing::warn!(error = %e, "decay_relationship_confidence failed"),
+        }
+        stats
     }
 
     /// Return prune candidates for `agent_id`. On query failure, returns an
@@ -86,6 +134,7 @@ mod tests {
     use gateway_services::VaultPaths;
     use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType};
     use std::sync::Arc;
+    use zero_stores::KnowledgeGraphStore;
     use zero_stores_sqlite::kg::storage::GraphStorage;
     use zero_stores_sqlite::{KnowledgeDatabase, SqliteKgStore};
 
@@ -182,5 +231,54 @@ mod tests {
             !names.contains(&"Fresh Topic"),
             "recent entity should not be returned; got {names:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn decay_kg_confidence_returns_stats_when_enabled() {
+        let (_tmp, graph) = setup();
+        let agent_id = "agent-kg-decay";
+
+        // Seed one old entity.
+        graph
+            .knowledge_db()
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         epistemic_class, confidence, mention_count, access_count,
+                         first_seen_at, last_seen_at)
+                     VALUES ('old-1', ?1, 'Concept', 'Old', 'old', 'h1', 'current',
+                             0.8, 1, 0, ?2, ?2)",
+                    rusqlite::params![
+                        agent_id,
+                        (chrono::Utc::now() - chrono::Duration::days(180)).to_rfc3339()
+                    ],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let kg_store: Arc<dyn KnowledgeGraphStore> =
+            Arc::new(zero_stores_sqlite::SqliteKgStore::new(graph.clone()));
+        let engine = DecayEngine::new(kg_store, DecayConfig::default());
+        let config = gateway_services::KgDecayConfig::default();
+        let stats = engine.decay_kg_confidence(agent_id, &config).await;
+        assert_eq!(stats.entities_decayed, 1);
+        assert_eq!(stats.relationships_decayed, 0);
+    }
+
+    #[tokio::test]
+    async fn decay_kg_confidence_no_op_when_disabled() {
+        let (_tmp, graph) = setup();
+        let kg_store: Arc<dyn KnowledgeGraphStore> =
+            Arc::new(zero_stores_sqlite::SqliteKgStore::new(graph));
+        let engine = DecayEngine::new(kg_store, DecayConfig::default());
+        let config = gateway_services::KgDecayConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let stats = engine.decay_kg_confidence("any", &config).await;
+        assert_eq!(stats.entities_decayed, 0);
+        assert_eq!(stats.relationships_decayed, 0);
     }
 }
