@@ -381,7 +381,7 @@
     <div class="title-eyebrow">// agentzero / memory subsystem</div>
     <h1 class="title">Memory<span class="accent">.</span></h1>
     <p class="title-sub">How the agent learns what to remember.</p>
-    <div class="title-meta">2026-05-13<span class="dot">●</span>phases 1–3 + phase 4 foundation shipped</div>
+    <div class="title-meta">2026-05-13<span class="dot">●</span>phases 1–4 foundation shipped • crate extraction begins</div>
   </section>
 
   <!-- ============= SLIDE 2 — METAPHOR ============= -->
@@ -1035,6 +1035,16 @@
               <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,sans-serif;font-size:11px;line-height:1.5;color:#8a97a9;text-align:center;font-weight:300">Temporal decay on KG confidence + evidence column ready.</div>
             </foreignObject>
           </g>
+
+          <!-- crate extraction annotation — below Phase 4, right edge -->
+          <g>
+            <line x1="880" y1="174" x2="880" y2="290" stroke="#233042" stroke-width="1" stroke-dasharray="3 3"/>
+            <line x1="880" y1="290" x2="1020" y2="290" stroke="#233042" stroke-width="1" stroke-dasharray="3 3"/>
+            <circle cx="1020" cy="290" r="7" fill="#0c1118" stroke="#a3ff5c" stroke-width="1.5" stroke-dasharray="2 2"/>
+            <circle cx="1020" cy="290" r="2.5" fill="#a3ff5c" opacity="0.6"/>
+            <text x="1015" y="275" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c" letter-spacing="1.5" opacity="0.8">CRATE EXTRACTION</text>
+            <text x="1015" y="287" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="8" fill="#4a5468" letter-spacing="1">Phase A shipped · B–F pending</text>
+          </g>
         </svg>
       </div>
       <div class="timeline-footer">
@@ -1045,7 +1055,74 @@
     </div>
   </section>
 
-  <!-- ============= SLIDE 12 — CLOSING ============= -->
+  <!-- ============= SLIDE 12 — CRATE EXTRACTION PHASE A ============= -->
+  <section class="slide detail-slide">
+    <div class="detail-head">
+      <span class="stamp">MAINT</span>
+      <h3>Memory crate extraction — Phase A shipped</h3>
+    </div>
+    <div class="split">
+      <div>
+        <p class="caption">Memory code grew across half a dozen directories inside the gateway as each phase shipped. <strong>Consolidating it into a single <span class="mono">gateway-memory</span> crate</strong> makes the boundary explicit and future phases cheaper to ship.</p>
+        <p class="caption">Phase A moved the config types — <span class="mono">RecallConfig</span> and its substructs, <span class="mono">MemorySettings</span>, <span class="mono">KgDecayConfig</span> — into the new crate. <span class="mono">gateway-services</span> keeps re-exports so all existing callers compile unchanged.</p>
+        <div class="config-note">
+          <span class="k">Phase A</span> (config types) — <strong>done</strong> · commit <span class="k">a1e96a74</span><br>
+          <span class="k">Phase B</span> — sleep components (Compactor, Synthesizer, Pruner, …)<br>
+          <span class="k">Phase C</span> — recall pipeline + RecallEngine<br>
+          <span class="k">Phase D</span> — LlmFactory trait, remove ProviderService dep<br>
+          <span class="k">Phase E</span> — SleepOps + SleepTimeWorker<br>
+          <span class="k">Phase F</span> — MemoryServices factory, collapse construction block
+        </div>
+      </div>
+      <div class="svg-frame" data-label="before → after">
+        <svg viewBox="0 0 460 380" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- BEFORE label -->
+          <text x="100" y="28" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9" letter-spacing="2">BEFORE</text>
+          <!-- scattered file paths -->
+          <g font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">
+            <rect x="10" y="40" width="180" height="20" rx="2" fill="#131a24" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="54" fill="#8a97a9">gateway-services/recall_config.rs</text>
+            <rect x="10" y="68" width="180" height="20" rx="2" fill="#131a24" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="82" fill="#8a97a9">gateway-services/settings.rs</text>
+            <rect x="10" y="96" width="180" height="20" rx="2" fill="#131a24" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="110" fill="#8a97a9">gateway-execution/sleep/decay.rs</text>
+            <rect x="10" y="124" width="180" height="20" rx="2" fill="#131a24" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="138" fill="#8a97a9">gateway-execution/sleep/worker.rs</text>
+            <rect x="10" y="152" width="180" height="20" rx="2" fill="#131a24" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="166" fill="#8a97a9">gateway-execution/recall/mod.rs</text>
+            <rect x="10" y="180" width="180" height="20" rx="2" fill="#131a24" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="194" fill="#8a97a9">gateway/state/mod.rs</text>
+          </g>
+
+          <!-- arrow -->
+          <line x1="230" y1="120" x2="270" y2="120" stroke="#a3ff5c" stroke-width="1.5"/>
+          <polygon points="270,116 278,120 270,124" fill="#a3ff5c"/>
+
+          <!-- AFTER label -->
+          <text x="370" y="28" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="2">AFTER</text>
+          <!-- gateway-memory box -->
+          <rect x="285" y="60" width="160" height="120" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+          <text x="365" y="84" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1">gateway-memory</text>
+          <line x1="295" y1="92" x2="435" y2="92" stroke="#233042" stroke-width="1"/>
+          <text x="365" y="110" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#8a97a9">RecallConfig</text>
+          <text x="365" y="126" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#8a97a9">MemorySettings</text>
+          <text x="365" y="142" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#8a97a9">KgDecayConfig</text>
+          <text x="365" y="158" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#4a5468">… more in B–F …</text>
+
+          <!-- re-export note -->
+          <rect x="285" y="198" width="160" height="28" rx="2" fill="#131a24" stroke="#233042" stroke-width="1"/>
+          <text x="365" y="216" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#4a5468">gateway-services re-exports</text>
+          <line x1="365" y1="180" x2="365" y2="198" stroke="#233042" stroke-width="1" stroke-dasharray="3 2"/>
+
+          <!-- phase a badge -->
+          <rect x="295" y="245" width="130" height="22" rx="11" fill="rgba(163,255,92,0.08)" stroke="#a3ff5c" stroke-width="1"/>
+          <text x="360" y="260" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c" letter-spacing="1.5">PHASE A — DONE</text>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 13 — CLOSING ============= -->
   <section class="slide closing">
     <div class="slide-tag"><span class="accent">11</span> &nbsp;/&nbsp; closing</div>
     <div class="closing-grid">
@@ -1137,7 +1214,7 @@
 </div>
 
 <div class="nav-hint"><kbd>←</kbd><kbd>→</kbd> or click to advance</div>
-<div class="counter"><span class="now" id="counter-now">01</span><span class="sep">/</span><span id="counter-tot">12</span></div>
+<div class="counter"><span class="now" id="counter-now">01</span><span class="sep">/</span><span id="counter-tot">13</span></div>
 
 <script>
 (function () {

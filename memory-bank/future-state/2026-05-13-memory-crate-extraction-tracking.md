@@ -16,6 +16,7 @@ The memory subsystem currently lives across three crates:
 | `stores/zero-stores-sqlite` | SQLite implementations of all above traits |
 | `stores/zero-stores-domain` | `MemoryFact`, `StrategyFactInsert`, `StrategyFactMatch` types |
 | `gateway/gateway-execution/src/sleep/` | All sleep-time memory components (Compactor, Synthesizer, PatternExtractor, Pruner, OrphanArchiver, **CorrectionsAbstractor**, **ConflictResolver**, **HandoffWriter**) |
+| `gateway/gateway-memory` | **NEW — Phase A.** Memory subsystem types: `RecallConfig` + substructs, `MemorySettings`, `KgDecayConfig`. Re-exported by `gateway-services` for backward compat. |
 | `gateway/gateway-execution/src/recall/` | Recall scoring + retrieval pipeline |
 | `gateway/gateway-execution/src/runner/invoke_bootstrap.rs` | Session-start memory injection (handoff, corrections, goals, targeted recall) |
 | `gateway/gateway-services/src/recall_config.rs` | `RecallConfig` |
@@ -158,6 +159,9 @@ Today's memory code reaches into:
 
 Listed in reverse-chronological order. All on branch `feat/parallel-delegation-aggregation`.
 
+### Phase A — Memory crate extraction begins (2026-05-13)
+- `a1e96a74` feat(gateway-memory): extract config types — Phase A of memory crate extraction
+
 ### Phase 4 Foundation — KG Confidence Decay (2026-05-13)
 - `e3a606a4` feat(sleep): wire KG confidence decay into sleep worker
 - `8e7e22ee` feat(sleep): add decay_kg_confidence to DecayEngine
@@ -212,7 +216,7 @@ Each phase has a written plan that describes the *intent* of the change set. The
 
 ## 10. Suggested Extraction Order (when you're ready)
 
-1. **First**: Move `RecallConfig` + `MemorySettings` types into the new `zero-memory` crate. Keep references in `gateway-services` as re-exports. Low risk, no logic changes.
+1. ✅ **DONE (commit `a1e96a74`)** — **First**: Move `RecallConfig` + `MemorySettings` types into the new `zero-memory` crate. Keep references in `gateway-services` as re-exports. Low risk, no logic changes.
 2. **Second**: Move the sleep-time components (`Compactor`, `Synthesizer`, `PatternExtractor`, `Pruner`, `OrphanArchiver`, `CorrectionsAbstractor`, `ConflictResolver`, `HandoffWriter`) — they're self-contained behind their trait-object inputs.
 3. **Third**: Introduce `MemoryLlmFactory` trait, replace direct `ProviderService` dependency. This is the hardest decoupling because every `Llm*` production impl has the same `build_client` shape — there's an opportunity to DRY this into one shared helper.
 4. **Fourth**: Move `recall/mod.rs` + `RecallConfig` into `zero-memory`. Caller in `invoke_bootstrap.rs` stays in gateway because it composes recall with goals + handoff + corrections (all of which are memory) but also with the orchestrator runtime (not memory).
