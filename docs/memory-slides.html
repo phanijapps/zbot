@@ -380,8 +380,8 @@
   <section class="slide title-slide active">
     <div class="title-eyebrow">// agentzero / memory subsystem</div>
     <h1 class="title">Memory<span class="accent">.</span></h1>
-    <p class="title-sub">How the agent learns what to remember.</p>
-    <div class="title-meta">2026-05-13<span class="dot">●</span>phases 1–4 foundation shipped • memory crate extraction complete</div>
+    <p class="title-sub">how zbot remembers — phases 1–4 + crate extraction complete</p>
+    <div class="title-meta">2026-05-13<span class="dot">●</span>architecture · storage · recall · sleep · lifecycle · phases · extraction</div>
   </section>
 
   <!-- ============= SLIDE 2 — METAPHOR ============= -->
@@ -475,65 +475,688 @@
     <div class="split flip">
       <div>
         <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:32px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.1">Memory is many small fragments,<br>not one big blob.</h3>
-        <p class="caption">Each fragment has a typed prefix (<span class="mono">correction</span>, <span class="mono">schema</span>, <span class="mono">handoff</span>, <span class="mono">goal</span>) and a short opaque id.</p>
-        <p class="caption">Recall doesn't replay history — it pulls the <strong>handful of cards</strong> that matter for the current turn, ranked by similarity and category weight.</p>
-        <p class="caption" style="color:var(--ink-dim);font-size:15px;margin-top:18px">A correction is what you told it.<br>A schema is what it learned.<br>A handoff is what just ended.<br>A goal is what's in flight.</p>
+        <p class="caption">Each fragment carries a <strong>category</strong> (<span class="mono">correction</span>, <span class="mono">schema</span>, <span class="mono">strategy</span>, <span class="mono">user</span>, <span class="mono">handoff</span>, <span class="mono">goal</span>…), a content body, an embedding, a confidence score, and a short opaque key.</p>
+        <p class="caption">Recall doesn't replay history — it pulls the <strong>handful of cards</strong> that matter for the current turn, ranked by similarity then multiplied by category weight.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:15px;margin-top:18px">A correction is what you told it.<br>A schema is what it learned.<br>A strategy is what worked.<br>A user fact is what's true about you.<br>A handoff is what just ended.<br>A goal is what's in flight.</p>
       </div>
       <div class="svg-frame" data-label="fragments / typed cards">
-        <svg viewBox="0 0 560 400" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round">
+        <svg viewBox="0 0 560 560" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round">
           <!-- card: correction -->
-          <g transform="translate(40,40) rotate(-3 130 60)">
-            <rect width="240" height="120" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
-            <rect x="0" y="0" width="6" height="120" fill="#a3ff5c"/>
-            <text x="20" y="26" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="1.5">CORRECTION</text>
-            <text x="20" y="44" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">correction.5b2a</text>
-            <line x1="20" y1="56" x2="220" y2="56" stroke="#233042" stroke-width="1"/>
-            <text x="20" y="78" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"Use sentence case in commit</text>
-            <text x="20" y="94" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">titles, not Title Case."</text>
-            <text x="20" y="112" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">conf 0.84  ·  weight 1.5</text>
+          <g transform="translate(40,20) rotate(-3 130 60)">
+            <rect width="240" height="110" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <rect x="0" y="0" width="6" height="110" fill="#a3ff5c"/>
+            <text x="20" y="24" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="1.5">CORRECTION</text>
+            <text x="20" y="40" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">correction.5b2a</text>
+            <line x1="20" y1="50" x2="220" y2="50" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="70" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"Use sentence case in commit</text>
+            <text x="20" y="86" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">titles, not Title Case."</text>
+            <text x="20" y="103" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">conf 0.84  ·  weight 1.5</text>
           </g>
 
           <!-- card: schema -->
-          <g transform="translate(290,30) rotate(4 130 60)">
-            <rect width="240" height="120" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
-            <rect x="0" y="0" width="6" height="120" fill="#a3ff5c"/>
-            <text x="20" y="26" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="1.5">SCHEMA</text>
-            <text x="20" y="44" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">schema.corrections.a3f8b2c0</text>
-            <line x1="20" y1="56" x2="220" y2="56" stroke="#233042" stroke-width="1"/>
-            <text x="20" y="78" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"Sentence case everywhere in</text>
-            <text x="20" y="94" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">commit titles. Cap subjects 72."</text>
-            <text x="20" y="112" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">conf 0.92  ·  weight 1.6</text>
+          <g transform="translate(290,10) rotate(4 130 60)">
+            <rect width="240" height="110" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <rect x="0" y="0" width="6" height="110" fill="#a3ff5c"/>
+            <text x="20" y="24" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="1.5">SCHEMA</text>
+            <text x="20" y="40" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">schema.corrections.a3f8b2c0</text>
+            <line x1="20" y1="50" x2="220" y2="50" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="70" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"Sentence case everywhere in</text>
+            <text x="20" y="86" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">commit titles. Cap subjects 72."</text>
+            <text x="20" y="103" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">conf 0.92  ·  weight 1.6</text>
           </g>
 
           <!-- card: handoff -->
-          <g transform="translate(20,210) rotate(2 130 60)">
-            <rect width="240" height="120" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
-            <rect x="0" y="0" width="6" height="120" fill="#8a97a9"/>
-            <text x="20" y="26" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9" letter-spacing="1.5">HANDOFF</text>
-            <text x="20" y="44" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">handoff.latest</text>
-            <line x1="20" y1="56" x2="220" y2="56" stroke="#233042" stroke-width="1"/>
-            <text x="20" y="78" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"We were debugging the recall</text>
-            <text x="20" y="94" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">scoring bug in lifecycle.rs."</text>
-            <text x="20" y="112" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">ended 14m ago</text>
+          <g transform="translate(20,160) rotate(2 130 60)">
+            <rect width="240" height="110" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <rect x="0" y="0" width="6" height="110" fill="#8a97a9"/>
+            <text x="20" y="24" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9" letter-spacing="1.5">HANDOFF</text>
+            <text x="20" y="40" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">handoff.latest</text>
+            <line x1="20" y1="50" x2="220" y2="50" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="70" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"Worked on memory-crate Phase F.</text>
+            <text x="20" y="86" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">Wiring 104 → 41 lines."</text>
+            <text x="20" y="103" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">sentinel  ·  ended 14m ago</text>
           </g>
 
           <!-- card: goal -->
-          <g transform="translate(280,220) rotate(-2 130 60)">
-            <rect width="240" height="120" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
-            <rect x="0" y="0" width="6" height="120" fill="#8a97a9"/>
-            <text x="20" y="26" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9" letter-spacing="1.5">GOAL</text>
-            <text x="20" y="44" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">goal.active.f9c3</text>
-            <line x1="20" y1="56" x2="220" y2="56" stroke="#233042" stroke-width="1"/>
-            <text x="20" y="78" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"Ship phases 1–3 of the</text>
-            <text x="20" y="94" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">reflective memory roadmap."</text>
-            <text x="20" y="112" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">status active</text>
+          <g transform="translate(280,170) rotate(-2 130 60)">
+            <rect width="240" height="110" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <rect x="0" y="0" width="6" height="110" fill="#8a97a9"/>
+            <text x="20" y="24" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9" letter-spacing="1.5">GOAL</text>
+            <text x="20" y="40" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">goal.active.f9c3</text>
+            <line x1="20" y1="50" x2="220" y2="50" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="70" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"Ship phases 1–3 of the</text>
+            <text x="20" y="86" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">reflective memory roadmap."</text>
+            <text x="20" y="103" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">status active</text>
+          </g>
+
+          <!-- card: strategy -->
+          <g transform="translate(40,310) rotate(-4 130 60)">
+            <rect width="240" height="110" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <rect x="0" y="0" width="6" height="110" fill="#8a97a9"/>
+            <text x="20" y="24" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9" letter-spacing="1.5">STRATEGY</text>
+            <text x="20" y="40" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">strategy.deploy.7b40</text>
+            <line x1="20" y1="50" x2="220" y2="50" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="70" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"When postgres-timeout hits,</text>
+            <text x="20" y="86" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">prefer jittered exp. backoff."</text>
+            <text x="20" y="103" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">conf 0.71  ·  weight 1.4</text>
+          </g>
+
+          <!-- card: user -->
+          <g transform="translate(290,320) rotate(3 130 60)">
+            <rect width="240" height="110" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <rect x="0" y="0" width="6" height="110" fill="#8a97a9"/>
+            <text x="20" y="24" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9" letter-spacing="1.5">USER</text>
+            <text x="20" y="40" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">user.phani.editor</text>
+            <line x1="20" y1="50" x2="220" y2="50" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="70" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"Uses neovim. Lives in</text>
+            <text x="20" y="86" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">tmux. Prefers ripgrep."</text>
+            <text x="20" y="103" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">conf 0.96  ·  weight 1.3</text>
+          </g>
+
+          <!-- legend -->
+          <g transform="translate(40,450)">
+            <text x="0" y="0" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="1.5">RECALL WEIGHT, HIGHEST → LOWEST</text>
+            <text x="0" y="22" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">schema 1.6</text>
+            <text x="105" y="22" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">correction 1.5</text>
+            <text x="240" y="22" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">strategy 1.4</text>
+            <text x="360" y="22" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">user 1.3</text>
+            <text x="0" y="44" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">instruction 1.2</text>
+            <text x="135" y="44" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">domain 1.0</text>
+            <text x="245" y="44" font-family="JetBrains Mono, monospace" font-size="11" fill="#4a5468">pattern 0.9</text>
+            <text x="360" y="44" font-family="JetBrains Mono, monospace" font-size="11" fill="#4a5468">ward 0.8</text>
           </g>
         </svg>
       </div>
     </div>
   </section>
 
-  <!-- ============= SLIDE 4 — PHASE 1 TITLE ============= -->
+  <!-- ============= SLIDE 4 — ARCHITECTURE AT A GLANCE ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">03</span> &nbsp;/&nbsp; architecture</div>
+    <div class="split">
+      <div class="svg-frame" data-label="crates &amp; dependencies">
+        <svg viewBox="0 0 700 460" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- gateway-memory: the big one -->
+          <g>
+            <rect x="40" y="40" width="280" height="380" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <rect x="40" y="40" width="6" height="380" fill="#a3ff5c" stroke="none"/>
+            <text x="180" y="68" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="14" fill="#a3ff5c" letter-spacing="1.5">gateway-memory</text>
+            <text x="180" y="86" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#8a97a9" font-style="italic">the home of memory</text>
+            <line x1="60" y1="100" x2="300" y2="100" stroke="#233042" stroke-width="1"/>
+
+            <!-- sub: sleep -->
+            <text x="60" y="124" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="1.2">sleep::*</text>
+            <text x="60" y="142" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">Compactor · Synthesizer</text>
+            <text x="60" y="158" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">PatternExtractor · Pruner</text>
+            <text x="60" y="174" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">OrphanArchiver · HandoffWriter</text>
+            <text x="60" y="190" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">CorrectionsAbstractor</text>
+            <text x="60" y="206" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">ConflictResolver · DecayEngine</text>
+            <line x1="60" y1="220" x2="300" y2="220" stroke="#233042" stroke-width="1" stroke-dasharray="2 3"/>
+
+            <!-- sub: recall -->
+            <text x="60" y="240" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="1.2">recall::*</text>
+            <text x="60" y="258" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">MemoryRecall · ScoredItem</text>
+            <text x="60" y="274" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">RRF blend · traversal adapters</text>
+            <line x1="60" y1="286" x2="300" y2="286" stroke="#233042" stroke-width="1" stroke-dasharray="2 3"/>
+
+            <!-- sub: llm factory -->
+            <text x="60" y="306" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="1.2">llm_factory</text>
+            <text x="60" y="324" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">MemoryLlmFactory trait</text>
+            <text x="60" y="340" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">LlmClientConfig per impl</text>
+            <line x1="60" y1="352" x2="300" y2="352" stroke="#233042" stroke-width="1" stroke-dasharray="2 3"/>
+
+            <!-- sub: services -->
+            <text x="60" y="372" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="1.2">services</text>
+            <text x="60" y="390" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">MemoryServices::new(...)</text>
+            <text x="60" y="406" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">SleepTimeWorker · SleepOps</text>
+          </g>
+
+          <!-- gateway-execution -->
+          <g>
+            <rect x="360" y="40" width="300" height="120" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="510" y="66" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#8a97a9" letter-spacing="1.5">gateway-execution</text>
+            <text x="510" y="84" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#4a5468" font-style="italic">composes memory with runtime</text>
+            <line x1="380" y1="96" x2="640" y2="96" stroke="#233042" stroke-width="1"/>
+            <text x="380" y="116" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">runner::invoke_bootstrap</text>
+            <text x="380" y="132" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">handoff + goals + corrections + recall</text>
+            <text x="380" y="148" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">→ injects context at session start</text>
+          </g>
+
+          <!-- stores/zero-stores-* -->
+          <g>
+            <rect x="360" y="200" width="300" height="100" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="510" y="226" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#8a97a9" letter-spacing="1.5">stores/zero-stores-*</text>
+            <text x="510" y="244" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#4a5468" font-style="italic">trait + sqlite impl</text>
+            <line x1="380" y1="256" x2="640" y2="256" stroke="#233042" stroke-width="1"/>
+            <text x="380" y="276" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">ConversationStore · MemoryFactStore</text>
+            <text x="380" y="292" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">KnowledgeGraphStore · EpisodeStore</text>
+          </g>
+
+          <!-- gateway state/wiring -->
+          <g>
+            <rect x="360" y="340" width="300" height="80" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5" stroke-dasharray="3 3"/>
+            <text x="510" y="364" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#8a97a9" letter-spacing="1.5">gateway::state</text>
+            <text x="510" y="382" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#4a5468" font-style="italic">policy only · 41 lines (was 104)</text>
+            <line x1="380" y1="392" x2="640" y2="392" stroke="#233042" stroke-width="1"/>
+            <text x="510" y="410" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">interval hours, agent_id, store wiring</text>
+          </g>
+
+          <!-- arrows: dependencies -->
+          <path d="M320,140 L360,100" stroke="#a3ff5c" stroke-width="1.2"/>
+          <path d="M353,98 L362,100 L358,108" stroke="#a3ff5c" stroke-width="1.2"/>
+          <text x="335" y="118" font-family="JetBrains Mono, monospace" font-size="8" fill="#a3ff5c">uses</text>
+
+          <path d="M320,275 L360,250" stroke="#a3ff5c" stroke-width="1.2"/>
+          <path d="M353,248 L362,250 L358,258" stroke="#a3ff5c" stroke-width="1.2"/>
+          <text x="335" y="265" font-family="JetBrains Mono, monospace" font-size="8" fill="#a3ff5c">via traits</text>
+
+          <path d="M320,380 L360,380" stroke="#a3ff5c" stroke-width="1.2"/>
+          <path d="M353,374 L362,380 L353,386" stroke="#a3ff5c" stroke-width="1.2"/>
+          <text x="335" y="372" font-family="JetBrains Mono, monospace" font-size="8" fill="#a3ff5c">factory</text>
+        </svg>
+      </div>
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:28px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.15">Everything memory-related<br>lives in one crate.</h3>
+        <p class="caption">Before extraction, memory code was scattered across <strong>five files in three crates</strong>. Adding a new component meant touching the gateway, the execution crate, and services together.</p>
+        <p class="caption">Now <span class="mono">gateway-memory</span> owns it all: sleep components, recall pipeline, LLM factory abstraction, and the construction factory itself.</p>
+        <p class="caption">Trait boundaries keep it decoupled. <span class="mono">MemoryLlmFactory</span> hides providers; <span class="mono">MemoryFactStore</span> &amp; siblings hide the SQLite backend. The execution crate composes — memory produces blocks, the runtime decides where they go.</p>
+        <div class="config-note">
+          <span class="k">gateway/src/state/mod.rs</span> &mdash; memory wiring<br>
+          before: <span class="k">104 lines</span> &middot; after: <span class="k">41 lines</span> &middot; one factory call
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 5 — STORAGE LAYER ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">04</span> &nbsp;/&nbsp; storage</div>
+    <div class="split flip">
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:28px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.15">Two SQLite files<br>do all the work.</h3>
+        <p class="caption"><span class="mono">knowledge.db</span> is the <strong>reference book</strong>: typed fragments, KG entities, KG relationships, episode chains, compaction audit.</p>
+        <p class="caption"><span class="mono">conversations.db</span> is the <strong>daily log</strong>: chat history. Separate file, separate concerns — memory never reads it directly, only the <span class="mono">ConversationStore</span> trait does.</p>
+        <p class="caption">Embeddings live in their own <span class="mono">sqlite-vec</span> virtual table, joined to facts by <span class="mono">fact_id</span>. FTS5 indexes the same content for keyword search. The hybrid recall pipeline reads both.</p>
+        <div class="config-note">
+          <span class="k">Phase 4 foundation:</span> evidence TEXT column on kg_entities + kg_relationships.<br>
+          <span class="k">migration:</span> idempotent, PRAGMA-checked, ready for MEM-001 propagation.
+        </div>
+      </div>
+      <div class="svg-frame" data-label="storage layout">
+        <svg viewBox="0 0 640 460" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- knowledge.db -->
+          <g>
+            <rect x="30" y="30" width="380" height="380" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="220" y="58" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="14" fill="#a3ff5c" letter-spacing="1.5">knowledge.db</text>
+            <text x="220" y="76" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#8a97a9" font-style="italic">the reference book</text>
+            <line x1="50" y1="88" x2="390" y2="88" stroke="#233042" stroke-width="1"/>
+
+            <!-- memory_facts row -->
+            <rect x="50" y="100" width="340" height="68" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1.2"/>
+            <text x="62" y="120" font-family="JetBrains Mono, monospace" font-size="12" fill="#a3ff5c">memory_facts</text>
+            <text x="62" y="138" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">id · key · category · content · confidence</text>
+            <text x="62" y="152" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">superseded_by · contradicted_by · valid_until</text>
+            <text x="62" y="164" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">created_at · updated_at · agent_id · ward_id</text>
+
+            <!-- memory_facts_index row -->
+            <rect x="50" y="178" width="340" height="50" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1.2" stroke-dasharray="3 3"/>
+            <text x="62" y="198" font-family="JetBrains Mono, monospace" font-size="12" fill="#a3ff5c">memory_facts_index</text>
+            <text x="62" y="216" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">sqlite-vec · fact_id · embedding[N]</text>
+
+            <!-- fts5 row -->
+            <rect x="50" y="238" width="340" height="40" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1.2" stroke-dasharray="3 3"/>
+            <text x="62" y="258" font-family="JetBrains Mono, monospace" font-size="12" fill="#a3ff5c">memory_facts_fts</text>
+            <text x="62" y="272" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">FTS5 · keyword search · trigger-synced</text>
+
+            <!-- kg_entities -->
+            <rect x="50" y="290" width="160" height="56" rx="2" fill="#0c1118" stroke="#8a97a9" stroke-width="1.2"/>
+            <text x="62" y="308" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">kg_entities</text>
+            <text x="62" y="324" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">name · confidence</text>
+            <text x="62" y="338" font-family="JetBrains Mono, monospace" font-size="9" fill="#ff7a59">evidence (provisioned)</text>
+
+            <!-- kg_relationships -->
+            <rect x="220" y="290" width="170" height="56" rx="2" fill="#0c1118" stroke="#8a97a9" stroke-width="1.2"/>
+            <text x="232" y="308" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">kg_relationships</text>
+            <text x="232" y="324" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">subject · predicate · object</text>
+            <text x="232" y="338" font-family="JetBrains Mono, monospace" font-size="9" fill="#ff7a59">evidence (provisioned)</text>
+
+            <!-- episodes + compaction -->
+            <rect x="50" y="356" width="160" height="40" rx="2" fill="#0c1118" stroke="#8a97a9" stroke-width="1.2"/>
+            <text x="62" y="374" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">kg_episodes</text>
+            <text x="62" y="388" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">session_episodes</text>
+
+            <rect x="220" y="356" width="170" height="40" rx="2" fill="#0c1118" stroke="#8a97a9" stroke-width="1.2"/>
+            <text x="232" y="374" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">compaction_log</text>
+            <text x="232" y="388" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">audit trail · merge events</text>
+
+            <!-- join arrow -->
+            <path d="M205,168 C260,168 260,178 220,178" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 2"/>
+            <text x="245" y="173" font-family="JetBrains Mono, monospace" font-size="8" fill="#a3ff5c">fact_id</text>
+          </g>
+
+          <!-- conversations.db -->
+          <g>
+            <rect x="440" y="30" width="180" height="380" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="530" y="58" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#8a97a9" letter-spacing="1.5">conversations.db</text>
+            <text x="530" y="76" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#4a5468" font-style="italic">the daily log</text>
+            <line x1="460" y1="88" x2="600" y2="88" stroke="#233042" stroke-width="1"/>
+
+            <rect x="460" y="100" width="140" height="56" rx="2" fill="#0c1118" stroke="#8a97a9" stroke-width="1.2"/>
+            <text x="470" y="120" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">sessions</text>
+            <text x="470" y="136" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">id · started · ended</text>
+            <text x="470" y="148" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">status · agent_id</text>
+
+            <rect x="460" y="170" width="140" height="56" rx="2" fill="#0c1118" stroke="#8a97a9" stroke-width="1.2"/>
+            <text x="470" y="190" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">messages</text>
+            <text x="470" y="206" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">role · content</text>
+            <text x="470" y="218" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">tool_calls · turn_idx</text>
+
+            <text x="530" y="270" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#4a5468" font-style="italic">read only by</text>
+            <text x="530" y="284" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">ConversationStore</text>
+            <text x="530" y="298" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#4a5468" font-style="italic">trait</text>
+
+            <text x="530" y="370" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#4a5468" font-style="italic">handoff writer reads</text>
+            <text x="530" y="384" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#4a5468" font-style="italic">at session end</text>
+          </g>
+
+          <!-- caption -->
+          <text x="320" y="436" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="1.2">facts ↔ embeddings: joined by fact_id · separate row, same key</text>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 6 — RECALL PIPELINE ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">05</span> &nbsp;/&nbsp; recall pipeline</div>
+    <div class="stack-vert">
+      <div class="svg-frame" data-label="query → top-K">
+        <svg viewBox="0 0 1100 320" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- pipeline boxes -->
+          <g font-family="JetBrains Mono, monospace" font-size="10" letter-spacing="1.2">
+            <!-- 1 embed -->
+            <rect x="20" y="100" width="100" height="60" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="70" y="120" text-anchor="middle" fill="#a3ff5c" font-size="9">[1] EMBED</text>
+            <text x="70" y="138" text-anchor="middle" fill="#e7ecf3" font-size="10">query</text>
+            <text x="70" y="152" text-anchor="middle" fill="#4a5468" font-size="8">→ vector</text>
+
+            <!-- arrow -->
+            <path d="M120,130 L150,130" stroke="#a3ff5c" stroke-width="1.5"/>
+            <path d="M143,124 L153,130 L143,136" stroke="#a3ff5c" stroke-width="1.5"/>
+
+            <!-- 2 hybrid search -->
+            <rect x="150" y="80" width="120" height="100" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="210" y="100" text-anchor="middle" fill="#a3ff5c" font-size="9">[2] HYBRID SEARCH</text>
+            <line x1="160" y1="108" x2="260" y2="108" stroke="#233042"/>
+            <text x="210" y="124" text-anchor="middle" fill="#e7ecf3" font-size="9">FTS5 (kw)</text>
+            <text x="210" y="138" text-anchor="middle" fill="#4a5468" font-size="8">+</text>
+            <text x="210" y="152" text-anchor="middle" fill="#e7ecf3" font-size="9">cosine (sem)</text>
+            <text x="210" y="168" text-anchor="middle" fill="#a3ff5c" font-size="8">RRF blend</text>
+
+            <!-- arrow -->
+            <path d="M270,130 L300,130" stroke="#a3ff5c" stroke-width="1.5"/>
+            <path d="M293,124 L303,130 L293,136" stroke="#a3ff5c" stroke-width="1.5"/>
+
+            <!-- 3 category weights -->
+            <rect x="300" y="100" width="120" height="60" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="360" y="120" text-anchor="middle" fill="#a3ff5c" font-size="9">[3] WEIGHTS</text>
+            <text x="360" y="138" text-anchor="middle" fill="#e7ecf3" font-size="10">× category</text>
+            <text x="360" y="152" text-anchor="middle" fill="#4a5468" font-size="8">schema 1.6 / corr 1.5</text>
+
+            <!-- arrow -->
+            <path d="M420,130 L450,130" stroke="#a3ff5c" stroke-width="1.5"/>
+            <path d="M443,124 L453,130 L443,136" stroke="#a3ff5c" stroke-width="1.5"/>
+
+            <!-- 4 ward + decay -->
+            <rect x="450" y="100" width="120" height="60" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="510" y="120" text-anchor="middle" fill="#a3ff5c" font-size="9">[4] BOOSTS &amp; DECAY</text>
+            <text x="510" y="138" text-anchor="middle" fill="#e7ecf3" font-size="10">ward × 1.3</text>
+            <text x="510" y="152" text-anchor="middle" fill="#4a5468" font-size="8">half-life decay</text>
+
+            <!-- arrow -->
+            <path d="M570,130 L600,130" stroke="#a3ff5c" stroke-width="1.5"/>
+            <path d="M593,124 L603,130 L593,136" stroke="#a3ff5c" stroke-width="1.5"/>
+
+            <!-- 5 penalties -->
+            <rect x="600" y="100" width="120" height="60" rx="3" fill="#131a24" stroke="#ff7a59" stroke-width="1.5"/>
+            <text x="660" y="120" text-anchor="middle" fill="#ff7a59" font-size="9">[5] PENALTIES</text>
+            <text x="660" y="138" text-anchor="middle" fill="#e7ecf3" font-size="10">contradicted × 0.7</text>
+            <text x="660" y="152" text-anchor="middle" fill="#4a5468" font-size="8">superseded × 0.1</text>
+
+            <!-- arrow -->
+            <path d="M720,130 L750,130" stroke="#a3ff5c" stroke-width="1.5"/>
+            <path d="M743,124 L753,130 L743,136" stroke="#a3ff5c" stroke-width="1.5"/>
+
+            <!-- 6 min_score filter -->
+            <rect x="750" y="100" width="100" height="60" rx="3" fill="#131a24" stroke="#ff7a59" stroke-width="1.5"/>
+            <text x="800" y="120" text-anchor="middle" fill="#ff7a59" font-size="9">[6] NOISE GATE</text>
+            <text x="800" y="138" text-anchor="middle" fill="#e7ecf3" font-size="10">drop &lt; 0.3</text>
+            <text x="800" y="152" text-anchor="middle" fill="#4a5468" font-size="8">min_score</text>
+
+            <!-- arrow -->
+            <path d="M850,130 L880,130" stroke="#a3ff5c" stroke-width="1.5"/>
+            <path d="M873,124 L883,130 L873,136" stroke="#a3ff5c" stroke-width="1.5"/>
+
+            <!-- 7 graph traversal -->
+            <rect x="880" y="100" width="110" height="60" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="935" y="120" text-anchor="middle" fill="#a3ff5c" font-size="9">[7] GRAPH</text>
+            <text x="935" y="138" text-anchor="middle" fill="#e7ecf3" font-size="10">2 hops, decay 0.6</text>
+            <text x="935" y="152" text-anchor="middle" fill="#4a5468" font-size="8">expand by relation</text>
+
+            <!-- arrow -->
+            <path d="M990,130 L1020,130" stroke="#a3ff5c" stroke-width="1.5"/>
+            <path d="M1013,124 L1023,130 L1013,136" stroke="#a3ff5c" stroke-width="1.5"/>
+
+            <!-- 8 top-K -->
+            <rect x="1020" y="80" width="70" height="100" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="1055" y="100" text-anchor="middle" fill="#a3ff5c" font-size="9">[8] TOP-K</text>
+            <line x1="1028" y1="108" x2="1082" y2="108" stroke="#233042"/>
+            <text x="1055" y="128" text-anchor="middle" fill="#e7ecf3" font-size="10">max 10</text>
+            <text x="1055" y="146" text-anchor="middle" fill="#4a5468" font-size="9">≤ 3000</text>
+            <text x="1055" y="158" text-anchor="middle" fill="#4a5468" font-size="9">tokens</text>
+            <text x="1055" y="172" text-anchor="middle" fill="#a3ff5c" font-size="8">block</text>
+          </g>
+
+          <!-- below pipeline: input/output labels -->
+          <text x="70" y="80" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#8a97a9" font-style="italic">user message</text>
+          <text x="1055" y="200" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#a3ff5c" font-style="italic">## Recalled Context</text>
+
+          <!-- footnote: degrade gracefully -->
+          <text x="20" y="260" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.2">[!] NO EMBED CLIENT?</text>
+          <text x="20" y="276" font-family="Inter, sans-serif" font-size="11" fill="#8a97a9">pipeline degrades gracefully to FTS-only — no crash, fewer results.</text>
+
+          <text x="600" y="260" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.2">[!] RECALL_UNIFIED</text>
+          <text x="600" y="276" font-family="Inter, sans-serif" font-size="11" fill="#8a97a9">also pulls wiki articles, procedures, episodes, active goals — each silently skipped if missing.</text>
+        </svg>
+      </div>
+      <div class="config-note" style="margin-top:0">
+        <span class="k">recall_config.json</span> &mdash; tune every step.<br>
+        <span class="k">min_score: 0.3</span> &middot; <span class="k">vector_weight: 0.7</span> &middot; <span class="k">bm25_weight: 0.3</span> &middot;
+        <span class="k">contradiction_penalty: 0.7</span> &middot; <span class="k">ward_affinity_boost: 1.3</span> &middot;
+        <span class="k">graph_traversal.max_hops: 2</span> &middot; <span class="k">max_facts: 10</span> &middot; <span class="k">max_recall_tokens: 3000</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 7 — SLEEP CYCLE ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">06</span> &nbsp;/&nbsp; sleep cycle</div>
+    <div class="split">
+      <div class="svg-frame" data-label="hourly sleep cycle · 8 components">
+        <svg viewBox="0 0 580 460" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- center clock face -->
+          <circle cx="290" cy="230" r="60" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+          <circle cx="290" cy="230" r="50" fill="none" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 4" opacity="0.5"/>
+          <text x="290" y="226" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#a3ff5c" letter-spacing="1.5">SleepOps</text>
+          <text x="290" y="244" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">every 1h</text>
+          <text x="290" y="258" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#4a5468">SleepTimeWorker</text>
+
+          <!-- 8 components arranged radially -->
+          <!-- [1] Compactor (top) -->
+          <g>
+            <rect x="220" y="20" width="140" height="56" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <text x="232" y="38" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[1] Compactor</text>
+            <text x="232" y="54" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">merges near-dup KG</text>
+            <text x="232" y="68" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">entities (LLM judge)</text>
+          </g>
+          <line x1="290" y1="76" x2="290" y2="170" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- [2] Synthesizer (top-right) -->
+          <g>
+            <rect x="420" y="80" width="150" height="56" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <text x="432" y="98" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[2] Synthesizer</text>
+            <text x="432" y="114" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">co-occurrence →</text>
+            <text x="432" y="128" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">strategy fragment</text>
+          </g>
+          <line x1="420" y1="135" x2="340" y2="190" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- [3] PatternExtractor (right) -->
+          <g>
+            <rect x="420" y="170" width="150" height="56" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <text x="432" y="188" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[3] PatternExtractor</text>
+            <text x="432" y="204" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">tool-call sequences →</text>
+            <text x="432" y="218" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">procedural patterns</text>
+          </g>
+          <line x1="420" y1="198" x2="350" y2="220" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- [4] OrphanArchiver (bottom-right) -->
+          <g>
+            <rect x="420" y="260" width="150" height="56" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="432" y="278" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[4] OrphanArchiver</text>
+            <text x="432" y="294" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">archives lonely KG</text>
+            <text x="432" y="308" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">entities (no LLM)</text>
+          </g>
+          <line x1="420" y1="288" x2="350" y2="250" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- [5] CorrectionsAbstractor (bottom-right-2) -->
+          <g>
+            <rect x="320" y="350" width="180" height="56" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="332" y="368" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[5] CorrectionsAbstractor</text>
+            <text x="332" y="384" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">3+ corrections → schema</text>
+            <text x="332" y="398" font-family="JetBrains Mono, monospace" font-size="9" fill="#ff7a59">throttled · 24h default</text>
+          </g>
+          <line x1="350" y1="350" x2="320" y2="280" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- [6] ConflictResolver (bottom-left-2) -->
+          <g>
+            <rect x="80" y="350" width="180" height="56" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="92" y="368" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[6] ConflictResolver</text>
+            <text x="92" y="384" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">schema pair → judge → supersede</text>
+            <text x="92" y="398" font-family="JetBrains Mono, monospace" font-size="9" fill="#ff7a59">throttled · 24h default</text>
+          </g>
+          <line x1="230" y1="350" x2="260" y2="280" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- [7] DecayEngine (bottom-left) -->
+          <g>
+            <rect x="10" y="260" width="150" height="56" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="22" y="278" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[7] DecayEngine</text>
+            <text x="22" y="294" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">KG entity + relation</text>
+            <text x="22" y="308" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">confidence decay</text>
+          </g>
+          <line x1="160" y1="288" x2="230" y2="250" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- [8] Pruner (left) -->
+          <g>
+            <rect x="10" y="170" width="150" height="56" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="22" y="188" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[8] Pruner</text>
+            <text x="22" y="204" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">soft-delete entities</text>
+            <text x="22" y="218" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">below floor</text>
+          </g>
+          <line x1="160" y1="198" x2="230" y2="220" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- HandoffWriter (top-left, separate cycle) -->
+          <g>
+            <rect x="10" y="80" width="150" height="56" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5" stroke-dasharray="3 3"/>
+            <text x="22" y="98" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9" letter-spacing="1.2">HandoffWriter</text>
+            <text x="22" y="114" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">at session end</text>
+            <text x="22" y="128" font-family="Inter, sans-serif" font-size="10" fill="#4a5468">(not part of cycle)</text>
+          </g>
+
+          <!-- footnote -->
+          <text x="290" y="436" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.2">5/8 USE AN LLM · EACH GETS ITS OWN TEMP + TOKEN BUDGET</text>
+        </svg>
+      </div>
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:26px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.15">Eight components,<br>each does one thing.</h3>
+        <p class="caption">Every hour a background worker fires <span class="mono">SleepOps</span>. Components are independent — one failing doesn't stop the others.</p>
+        <p class="caption">Five of them call an LLM. Each one has its <strong>own temperature + max-tokens</strong>: Synthesizer at 0.0 / 512, HandoffWriter at 0.2 / 256, judges at 0.0 with tight budgets.</p>
+        <p class="caption">The expensive ones — <strong>CorrectionsAbstractor</strong> and <strong>ConflictResolver</strong> — have their own throttles. Default 24h, settable to 0 to fire every cycle.</p>
+        <div class="config-note">
+          <span class="k">settings.json</span> → <span class="k">execution.memory</span><br>
+          <span class="k">correctionsAbstractorIntervalHours</span> · default 24<br>
+          <span class="k">conflictResolverIntervalHours</span> · default 24
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 8 — SESSION LIFE CYCLE ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">07</span> &nbsp;/&nbsp; session lifecycle</div>
+    <div class="stack-vert">
+      <div class="svg-frame" data-label="memory wraps every session">
+        <svg viewBox="0 0 1100 360" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- timeline spine -->
+          <line x1="50" y1="180" x2="1050" y2="180" stroke="#233042" stroke-width="2"/>
+
+          <!-- Session boundaries -->
+          <line x1="50" y1="100" x2="50" y2="260" stroke="#a3ff5c" stroke-width="2"/>
+          <text x="50" y="92" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="1.5">SESSION START</text>
+          <line x1="1050" y1="100" x2="1050" y2="260" stroke="#a3ff5c" stroke-width="2"/>
+          <text x="1050" y="92" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="1.5">SESSION END</text>
+
+          <!-- bootstrap (left, READ) -->
+          <g>
+            <rect x="70" y="120" width="200" height="120" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <text x="170" y="140" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">invoke_bootstrap()</text>
+            <line x1="80" y1="148" x2="260" y2="148" stroke="#233042"/>
+            <text x="80" y="164" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">[1]</text>
+            <text x="100" y="164" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">handoff.latest</text>
+            <text x="80" y="180" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">[2]</text>
+            <text x="100" y="180" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">active goals</text>
+            <text x="80" y="196" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">[3]</text>
+            <text x="100" y="196" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">active corrections</text>
+            <text x="80" y="212" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">[4]</text>
+            <text x="100" y="212" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">handoff-targeted recall</text>
+            <text x="80" y="228" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">[5]</text>
+            <text x="100" y="228" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">user-query recall</text>
+          </g>
+          <text x="170" y="260" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.5">READ — 5 BLOCKS INJECTED</text>
+
+          <!-- conversation middle -->
+          <g>
+            <rect x="290" y="140" width="540" height="80" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.2"/>
+            <text x="560" y="162" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#8a97a9" font-style="italic">user turns · tool calls · assistant responses</text>
+            <!-- turn dots -->
+            <g fill="#a3ff5c">
+              <circle cx="320" cy="200" r="3"/>
+              <circle cx="370" cy="200" r="3"/>
+              <circle cx="420" cy="200" r="3"/>
+              <circle cx="470" cy="200" r="3"/>
+              <circle cx="520" cy="200" r="3"/>
+              <circle cx="570" cy="200" r="3"/>
+              <circle cx="620" cy="200" r="3"/>
+              <circle cx="670" cy="200" r="3"/>
+              <circle cx="720" cy="200" r="3"/>
+              <circle cx="770" cy="200" r="3"/>
+            </g>
+            <!-- every-5-turns marker -->
+            <g>
+              <circle cx="470" cy="200" r="8" fill="none" stroke="#a3ff5c" stroke-width="1.5"/>
+              <circle cx="670" cy="200" r="8" fill="none" stroke="#a3ff5c" stroke-width="1.5"/>
+              <line x1="470" y1="208" x2="470" y2="240" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+              <line x1="670" y1="208" x2="670" y2="240" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+              <text x="470" y="256" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">recall</text>
+              <text x="670" y="256" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">recall</text>
+            </g>
+          </g>
+          <text x="560" y="282" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.5">MID-SESSION RECALL EVERY 5 TURNS · novelty &gt; 0.3 injected</text>
+
+          <!-- handoff writer (right, WRITE) -->
+          <g>
+            <rect x="850" y="120" width="190" height="120" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <text x="945" y="140" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">HandoffWriter</text>
+            <line x1="860" y1="148" x2="1030" y2="148" stroke="#233042"/>
+            <text x="860" y="166" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">read transcript</text>
+            <text x="860" y="184" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">LLM compact (t 0.2)</text>
+            <text x="860" y="202" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">write handoff.latest</text>
+            <text x="860" y="220" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">write handoff.{session_id}</text>
+          </g>
+          <text x="945" y="260" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.5">WRITE — FRAGMENT FOR NEXT SESSION</text>
+
+          <!-- arrow: handoff feeds next session -->
+          <path d="M945,240 C945,310 170,310 170,260" stroke="#a3ff5c" stroke-width="1.2" stroke-dasharray="3 4"/>
+          <path d="M174,253 L168,261 L177,266" stroke="#a3ff5c" stroke-width="1.2" fill="none"/>
+          <text x="560" y="330" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.5">the loop closes — what's written becomes what's read</text>
+        </svg>
+      </div>
+      <div class="config-note" style="margin-top:0">
+        <span class="k">ward-scoped:</span> handoff is skipped if the previous session was in a different ward · prevents bleed-through.<br>
+        <span class="k">always-on injection:</span> corrections + goals don't rely on recall — they're pulled directly, every session.
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 9 — CONFIGURABILITY ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">08</span> &nbsp;/&nbsp; configurability</div>
+    <div class="detail-head" style="border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:36px;">
+      <span class="stamp">two files</span>
+      <h3>Every knob exposed. Sane defaults.</h3>
+    </div>
+    <div class="split">
+      <div>
+        <div class="config-note" style="margin-top:0">
+          <span class="k">settings.json</span> → <span class="k">execution.memory</span><br>
+          <span style="color:var(--ink);font-weight:500">sleep cycle throttles</span>
+        </div>
+        <pre style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--ink-dim);background:var(--bg-soft);border:1px solid var(--rule);border-radius:3px;padding:18px;margin-top:14px;line-height:1.6;white-space:pre-wrap">{
+  "execution": {
+    "memory": {
+      "<span class="k">correctionsAbstractorIntervalHours</span>": 24,
+      "<span class="k">conflictResolverIntervalHours</span>": 24
+    }
+  }
+}</pre>
+        <p class="caption" style="margin-top:18px;font-size:14px">Set either to <span class="mono">0</span> to fire on every hourly cycle. Missing keys fall back to compiled defaults.</p>
+      </div>
+      <div>
+        <div class="config-note" style="margin-top:0">
+          <span class="k">config/recall_config.json</span><br>
+          <span style="color:var(--ink);font-weight:500">recall pipeline tuning</span>
+        </div>
+        <table style="width:100%;border-collapse:collapse;margin-top:14px;font-family:'JetBrains Mono',monospace;font-size:11px">
+          <thead>
+            <tr style="border-bottom:1px solid var(--rule)">
+              <th style="text-align:left;padding:8px 12px 8px 0;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">KNOB</th>
+              <th style="text-align:right;padding:8px 12px;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">DEFAULT</th>
+              <th style="text-align:left;padding:8px 0 8px 12px;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">CONTROLS</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:9px 12px 9px 0;color:var(--accent)">category_weights.schema</td>
+              <td style="text-align:right;padding:9px 12px;color:var(--ink)">1.6</td>
+              <td style="padding:9px 0 9px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">distilled principles rank highest</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:9px 12px 9px 0;color:var(--accent)">category_weights.correction</td>
+              <td style="text-align:right;padding:9px 12px;color:var(--ink)">1.5</td>
+              <td style="padding:9px 0 9px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">raw user corrections</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:9px 12px 9px 0;color:var(--accent)">min_score</td>
+              <td style="text-align:right;padding:9px 12px;color:var(--ink)">0.3</td>
+              <td style="padding:9px 0 9px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">noise gate</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:9px 12px 9px 0;color:var(--accent)">max_recall_tokens</td>
+              <td style="text-align:right;padding:9px 12px;color:var(--ink)">3000</td>
+              <td style="padding:9px 0 9px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">context budget</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:9px 12px 9px 0;color:var(--accent)">ward_affinity_boost</td>
+              <td style="text-align:right;padding:9px 12px;color:var(--ink)">1.3</td>
+              <td style="padding:9px 0 9px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">in-ward facts boosted</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:9px 12px 9px 0;color:var(--accent)">kg_decay.entity_half_life_days</td>
+              <td style="text-align:right;padding:9px 12px;color:var(--ink)">90</td>
+              <td style="padding:9px 0 9px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">KG entity confidence half-life</td>
+            </tr>
+            <tr>
+              <td style="padding:9px 12px 9px 0;color:var(--accent)">mid_session_recall.every_n_turns</td>
+              <td style="text-align:right;padding:9px 12px;color:var(--ink)">5</td>
+              <td style="padding:9px 0 9px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">how often recall refires mid-chat</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="caption" style="margin-top:16px;font-size:13px;color:var(--ink-dim)">Partial files <strong style="color:var(--accent)">deep-merge</strong> with defaults — user keys win.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 10 — PHASE 1 TITLE ============= -->
   <section class="slide phase-slide">
     <div class="phase-num">// phase 01 / 04</div>
     <h2 class="phase">Foundation<span style="color:var(--accent)">.</span></h2>
@@ -973,7 +1596,7 @@
 
   <!-- ============= SLIDE 11 — TIMELINE RECAP ============= -->
   <section class="slide">
-    <div class="slide-tag"><span class="accent">10</span> &nbsp;/&nbsp; recap</div>
+    <div class="slide-tag"><span class="accent">16</span> &nbsp;/&nbsp; recap</div>
     <div class="timeline-wrap">
       <div class="svg-frame" data-label="memory roadmap" style="display:flex;align-items:center">
         <svg viewBox="0 0 1100 320" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
@@ -1139,9 +1762,112 @@
     </div>
   </section>
 
-  <!-- ============= SLIDE 13 — CLOSING ============= -->
+  <!-- ============= SLIDE 19 — THE CLOSED LOOP ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">18</span> &nbsp;/&nbsp; the closed loop</div>
+    <div class="split">
+      <div class="svg-frame" data-label="correction → schema → conflict → retire">
+        <svg viewBox="0 0 540 540" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- circular flow center -->
+          <circle cx="270" cy="270" r="190" fill="none" stroke="#233042" stroke-width="1" stroke-dasharray="3 5"/>
+
+          <!-- 1: USER GIVES CORRECTION (top) -->
+          <g>
+            <circle cx="270" cy="70" r="32" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="270" y="68" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">[1]</text>
+            <text x="270" y="84" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">user</text>
+            <text x="270" y="20" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#e7ecf3" letter-spacing="1">USER CORRECTS</text>
+            <text x="270" y="36" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">"use sentence case in commits"</text>
+          </g>
+
+          <!-- arrow 1→2 -->
+          <path d="M310,90 Q400,130 430,210" stroke="#a3ff5c" stroke-width="1.5"/>
+          <path d="M424,204 L432,212 L424,219" stroke="#a3ff5c" stroke-width="1.5"/>
+
+          <!-- 2: FACT STORED (right) -->
+          <g>
+            <circle cx="450" cy="240" r="32" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="450" y="238" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">[2]</text>
+            <text x="450" y="254" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">store</text>
+            <text x="510" y="220" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="11" fill="#e7ecf3" letter-spacing="1">FACT WRITTEN</text>
+            <text x="510" y="236" text-anchor="end" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">correction.5b2a</text>
+            <text x="510" y="252" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">weight 1.5</text>
+          </g>
+
+          <!-- arrow 2→3 -->
+          <path d="M448,275 Q430,360 400,395" stroke="#a3ff5c" stroke-width="1.5"/>
+          <path d="M393,389 L399,397 L407,392" stroke="#a3ff5c" stroke-width="1.5"/>
+
+          <!-- 3: RECALLED NEXT SESSION (bottom-right) -->
+          <g>
+            <circle cx="370" cy="430" r="32" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="370" y="428" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">[3]</text>
+            <text x="370" y="444" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">recall</text>
+            <text x="430" y="412" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="11" fill="#e7ecf3" letter-spacing="1">SURFACES</text>
+            <text x="430" y="448" text-anchor="end" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">next session, always-on</text>
+            <text x="430" y="464" text-anchor="end" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">+ recall-matched</text>
+          </g>
+
+          <!-- arrow 3→4 -->
+          <path d="M338,442 Q260,470 200,442" stroke="#a3ff5c" stroke-width="1.5"/>
+          <path d="M206,449 L198,442 L206,435" stroke="#a3ff5c" stroke-width="1.5"/>
+
+          <!-- 4: ACCUMULATES (bottom-left) -->
+          <g>
+            <circle cx="170" cy="430" r="32" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="170" y="428" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">[4]</text>
+            <text x="170" y="444" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">N ≥ 3</text>
+            <text x="110" y="412" text-anchor="start" font-family="JetBrains Mono, monospace" font-size="11" fill="#e7ecf3" letter-spacing="1">SIMILAR PILE UP</text>
+            <text x="110" y="448" text-anchor="start" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">3+ corrections same theme</text>
+            <text x="110" y="464" text-anchor="start" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">over days or weeks</text>
+          </g>
+
+          <!-- arrow 4→5 -->
+          <path d="M140,395 Q110,360 90,275" stroke="#a3ff5c" stroke-width="1.5"/>
+          <path d="M84,282 L92,275 L97,283" stroke="#a3ff5c" stroke-width="1.5"/>
+
+          <!-- 5: CorrectionsAbstractor (left) -->
+          <g>
+            <circle cx="90" cy="240" r="32" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="90" y="238" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">[5]</text>
+            <text x="90" y="254" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">abstract</text>
+            <text x="30" y="220" text-anchor="start" font-family="JetBrains Mono, monospace" font-size="11" fill="#e7ecf3" letter-spacing="1">PROMOTED</text>
+            <text x="30" y="236" text-anchor="start" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">schema.corrections.*</text>
+            <text x="30" y="252" text-anchor="start" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">weight 1.6 — outranks!</text>
+          </g>
+
+          <!-- arrow 5→6 (back to top via center) -->
+          <path d="M115,210 Q170,130 230,90" stroke="#a3ff5c" stroke-width="1.5"/>
+          <path d="M224,84 L232,90 L227,99" stroke="#a3ff5c" stroke-width="1.5"/>
+
+          <!-- center text + side branch (conflict resolver) -->
+          <g>
+            <text x="270" y="262" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#a3ff5c" letter-spacing="1.8">CLOSED LOOP</text>
+            <text x="270" y="280" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#8a97a9" font-style="italic">smarter at what to remember</text>
+          </g>
+
+          <!-- branch: contradicting → ConflictResolver retires -->
+          <g>
+            <rect x="190" y="318" width="160" height="48" rx="3" fill="#0c1118" stroke="#ff7a59" stroke-width="1.2" stroke-dasharray="3 3"/>
+            <text x="270" y="336" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#ff7a59" letter-spacing="1.2">[6] CONFLICT?</text>
+            <text x="270" y="352" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">ConflictResolver retires loser</text>
+          </g>
+          <path d="M90,272 Q150,310 195,340" stroke="#ff7a59" stroke-width="1" stroke-dasharray="2 3"/>
+        </svg>
+      </div>
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:28px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.15">From correction<br>to distilled rule.</h3>
+        <p class="caption">A single user correction enters the system. Within one session it's recalled. Across multiple sessions it accumulates with siblings. Eventually the <strong>CorrectionsAbstractor</strong> notices the pattern and promotes them.</p>
+        <p class="caption">The promoted <span class="mono">schema</span> outranks the raw corrections (1.6 vs 1.5) — so even though the originals still live in the notebook, the distilled rule is what surfaces first.</p>
+        <p class="caption">If two distilled rules ever disagree, <strong>ConflictResolver</strong> intervenes: higher confidence wins, recency breaks ties, the loser gets <span class="mono">superseded_by</span> set and quietly leaves the recall pool.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:24px"><strong style="color:var(--accent)">Raw feedback → distilled rules → resolved against each other → stale ones retired.</strong> The agent gets smarter at remembering what's worth remembering.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 20 — CLOSING ============= -->
   <section class="slide closing">
-    <div class="slide-tag"><span class="accent">11</span> &nbsp;/&nbsp; closing</div>
+    <div class="slide-tag"><span class="accent">19</span> &nbsp;/&nbsp; closing</div>
     <div class="closing-grid">
       <div>
         <h2>The agent now <span class="accent">remembers</span> —<br>and learns what's<br>worth remembering.</h2>
@@ -1232,7 +1958,7 @@
 </div>
 
 <div class="nav-hint"><kbd>←</kbd><kbd>→</kbd> or click to advance</div>
-<div class="counter"><span class="now" id="counter-now">01</span><span class="sep">/</span><span id="counter-tot">13</span></div>
+<div class="counter"><span class="now" id="counter-now">01</span><span class="sep">/</span><span id="counter-tot">20</span></div>
 
 <script>
 (function () {
