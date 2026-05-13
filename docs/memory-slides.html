@@ -381,7 +381,7 @@
     <div class="title-eyebrow">// agentzero / memory subsystem</div>
     <h1 class="title">Memory<span class="accent">.</span></h1>
     <p class="title-sub">How the agent learns what to remember.</p>
-    <div class="title-meta">2026-05-13<span class="dot">●</span>phases 1–3 shipped</div>
+    <div class="title-meta">2026-05-13<span class="dot">●</span>phases 1–3 + phase 4 foundation shipped</div>
   </section>
 
   <!-- ============= SLIDE 2 — METAPHOR ============= -->
@@ -890,11 +890,11 @@
     </div>
   </section>
 
-  <!-- ============= SLIDE 10 — PHASE 4 PREVIEW ============= -->
+  <!-- ============= SLIDE 10 — PHASE 4 FOUNDATION ============= -->
   <section class="slide detail-slide">
     <div class="detail-head">
-      <span class="stamp" style="color:#ff7a59">Phase 04 &middot; not started</span>
-      <h3>Belief network — confidence on the things themselves</h3>
+      <span class="stamp">Phase 04 &middot; foundation shipped</span>
+      <h3>Belief network — foundation shipped</h3>
     </div>
     <div class="split">
       <div class="svg-frame" data-label="knowledge graph with node-level confidence">
@@ -940,11 +940,11 @@
             <text x="340" y="298" text-anchor="middle" fill="#e7ecf3" font-size="11">recall</text>
             <text x="340" y="311" text-anchor="middle" fill="#a3ff5c" font-size="9">c 0.85</text>
 
-            <!-- node 6: fading -->
+            <!-- node 6: decaying (now real — decay shipped) -->
             <circle cx="540" cy="270" r="30" fill="#131a24" stroke="#a3ff5c" stroke-width="2" opacity="0.35"/>
-            <circle cx="540" cy="270" r="38" fill="none" stroke="#ff7a59" stroke-width="1" stroke-dasharray="2 3" opacity="0.5"/>
+            <circle cx="540" cy="270" r="38" fill="none" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3" opacity="0.5"/>
             <text x="540" y="268" text-anchor="middle" fill="#e7ecf3" font-size="11" opacity="0.5">old-skill</text>
-            <text x="540" y="282" text-anchor="middle" fill="#ff7a59" font-size="9">c 0.21 ↓</text>
+            <text x="540" y="282" text-anchor="middle" fill="#a3ff5c" font-size="9">c 0.21 ↓</text>
           </g>
 
           <!-- legend / annotation -->
@@ -953,18 +953,19 @@
             <text x="18" y="0" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">confidence lives on the node, not the fragment</text>
           </g>
           <g transform="translate(360,330)">
-            <circle cx="6" cy="-3" r="5" fill="none" stroke="#ff7a59" stroke-width="1.5" stroke-dasharray="2 2"/>
-            <text x="18" y="0" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">fades when contradictions arrive, decays over time</text>
+            <circle cx="6" cy="-3" r="5" fill="none" stroke="#a3ff5c" stroke-width="1.5" stroke-dasharray="2 2"/>
+            <text x="18" y="0" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c">decay: shipped — confidence fades on age</text>
           </g>
         </svg>
       </div>
       <div>
-        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:24px;margin:0 0 18px;letter-spacing:-0.01em;line-height:1.2">From fragments<br>to the things they're about.</h3>
-        <p class="caption">Today the agent <strong>trusts fragments</strong>. Each one has its own confidence.</p>
-        <p class="caption">Phase 4 lifts confidence up to the knowledge-graph itself — onto the <strong>people, projects, and concepts</strong> the fragments are about. A person node, a project node, a relationship — each carries its own uncertainty score.</p>
-        <p class="caption">The agent will then reason not only about <em>what it knows</em>, but <em>how sure it is</em>. Evidence strengthens nodes; contradictions decay them.</p>
-        <div class="config-note" style="border-left-color:#ff7a59">
-          <span style="color:#ff7a59">structural change</span> &middot; schema migration on the knowledge-graph tables; reads + writes get rewritten. Right next step after Phase 3 stabilizes.
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:24px;margin:0 0 18px;letter-spacing:-0.01em;line-height:1.2">Confidence now lives<br>on the things themselves.</h3>
+        <p class="caption">Phase 4 lifts confidence off fragments and onto the <strong>knowledge-graph nodes</strong> — the people, projects, and concepts the fragments are about. Each entity and relationship now carries its own decaying score.</p>
+        <p class="caption"><strong>Temporal decay shipped:</strong> every sleep cycle, KG entity and relationship confidence is multiplied by <span class="mono">0.5^(days_since_last_seen / half_life)</span>, floored at <span class="mono">min_confidence</span>. An <span class="mono">evidence</span> column is in place on both tables, ready for the next pass.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:15px">Still to come: contradiction propagation from facts to KG nodes, and graph-traversal weighting by confidence.</p>
+        <div class="config-note">
+          <span class="k">recall_config.json</span> &rarr; <span class="k">kg_decay</span><br>
+          fields: <span class="k">entity_half_life_days</span> &middot; <span class="k">relationship_half_life_days</span> &middot; <span class="k">min_confidence</span> &middot; <span class="k">skip_recent_hours</span>
         </div>
       </div>
     </div>
@@ -1023,14 +1024,15 @@
             </foreignObject>
           </g>
 
-          <!-- node 4: phase 4 (next) -->
+          <!-- node 4: phase 4 (foundation done) -->
           <g>
-            <circle cx="880" cy="160" r="14" fill="#0c1118" stroke="#ff7a59" stroke-width="2" stroke-dasharray="3 3"/>
-            <text x="880" y="100" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#ff7a59" letter-spacing="2">PHASE 4</text>
-            <text x="880" y="120" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.5">NEXT</text>
+            <circle cx="880" cy="160" r="14" fill="#0c1118" stroke="#a3ff5c" stroke-width="2"/>
+            <circle cx="880" cy="160" r="5" fill="#a3ff5c"/>
+            <text x="880" y="100" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="2">PHASE 4</text>
+            <text x="880" y="120" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.5">FOUNDATION DONE</text>
             <text x="880" y="200" text-anchor="middle" font-family="Inter, sans-serif" font-weight="500" font-size="13" fill="#e7ecf3">Belief network</text>
             <foreignObject x="780" y="210" width="200" height="80">
-              <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,sans-serif;font-size:11px;line-height:1.5;color:#8a97a9;text-align:center;font-weight:300">Confidence moves onto graph nodes, not just fragments.</div>
+              <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,sans-serif;font-size:11px;line-height:1.5;color:#8a97a9;text-align:center;font-weight:300">Temporal decay on KG confidence + evidence column ready.</div>
             </foreignObject>
           </g>
         </svg>

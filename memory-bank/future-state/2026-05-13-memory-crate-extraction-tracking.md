@@ -59,6 +59,15 @@ These are the *new* memory components built across the three phases. All live in
 | `cosine` helper | `sleep/conflict_resolver.rs` | f32 cosine similarity (defensive against empty / mismatched lengths) |
 | `pick_winner` helper | `sleep/conflict_resolver.rs` | Higher-confidence wins, tie-break by `updated_at` |
 
+### Phase 4 — Belief Network Foundation
+
+| Component | File | Responsibility |
+|-----------|------|----------------|
+| `decay_entity_confidence` / `decay_relationship_confidence` | `stores/zero-stores/src/knowledge_graph.rs` (trait), `stores/zero-stores-sqlite/src/knowledge_graph.rs` (impl) | Batch-apply temporal decay to KG `confidence` columns based on `last_seen_at` age, floor at `min_confidence`, transaction-wrapped |
+| `DecayEngine::decay_kg_confidence` | `gateway/gateway-execution/src/sleep/decay.rs` | Orchestrates both store calls, enabled-guard, returns `KgDecayStats` |
+| `evidence` TEXT column | `stores/zero-stores-sqlite/src/knowledge_schema.rs` | Schema-only — preparatory for future contradiction-propagation work. No code populates it yet. |
+| `KgDecayConfig` | `gateway/gateway-services/src/recall_config.rs` | Configurable half-lives + floor + skip-recent guard |
+
 ---
 
 ## 3. Recall Pipeline Changes
@@ -149,6 +158,13 @@ Today's memory code reaches into:
 
 Listed in reverse-chronological order. All on branch `feat/parallel-delegation-aggregation`.
 
+### Phase 4 Foundation — KG Confidence Decay (2026-05-13)
+- `e3a606a4` feat(sleep): wire KG confidence decay into sleep worker
+- `8e7e22ee` feat(sleep): add decay_kg_confidence to DecayEngine
+- `d6c11834` feat(kg): add decay_entity_confidence + decay_relationship_confidence store methods
+- `c5927dc5` feat(recall): add KgDecayConfig to RecallConfig
+- `207e3ed7` feat(kg): add evidence column to kg_entities and kg_relationships
+
 ### Phase 3 — Conflict Resolution (2026-05-13)
 - `93206722` feat(gateway): wire ConflictResolver into sleep worker
 - `ae969b87` feat(sleep): wire ConflictResolver into SleepOps and cycle loop
@@ -208,3 +224,5 @@ After extraction, the `gateway` crate should only need:
 - `zero-memory::RecallEngine` (called from invoke_bootstrap.rs)
 
 Plus a few injected traits for cross-cutting concerns: `MemoryLlmFactory`, the existing store traits.
+
+**Phase 4 foundation already in `zero-memory` candidates:** the new `KgDecayConfig`, `DecayEngine::decay_kg_confidence`, and `KgDecayStats` all live in the same files as their Phase 1–3 siblings, so the extraction migration touches the same crates.
