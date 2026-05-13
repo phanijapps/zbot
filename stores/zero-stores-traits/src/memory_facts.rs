@@ -473,6 +473,16 @@ pub trait MemoryFactStore: Send + Sync {
         Ok(None)
     }
 
+    // ---- Per-fact embeddings -------------------------------------------
+
+    /// Return the stored embedding vector for a fact by its id, or `None`
+    /// if no embedding has been indexed for it. Backends that keep
+    /// embeddings in a side-table (e.g. sqlite-vec) implement this;
+    /// others return the default `Ok(None)`.
+    async fn get_fact_embedding(&self, _fact_id: &str) -> Result<Option<Vec<f32>>, String> {
+        Ok(None)
+    }
+
     // ---- Embedding cache (best-effort optimization) ---------------------
 
     /// Read a cached embedding for `(content_hash, model_name)`.

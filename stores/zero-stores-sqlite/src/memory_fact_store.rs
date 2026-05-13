@@ -868,6 +868,10 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             .get_fact_by_key(agent_id, scope, ward_id, key)
     }
 
+    async fn get_fact_embedding(&self, fact_id: &str) -> Result<Option<Vec<f32>>, String> {
+        self.memory_repo.get_fact_embedding(fact_id)
+    }
+
     async fn get_cached_embedding(
         &self,
         content_hash: &str,

@@ -6,6 +6,7 @@
 //! Tasks 5, 6, and 7 extend this module with `decay`, `pruner`, and `worker`.
 
 pub mod compactor;
+pub mod conflict_resolver;
 pub mod corrections_abstractor;
 pub mod decay;
 pub mod embedding_reindex;
