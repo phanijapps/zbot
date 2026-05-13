@@ -4,6 +4,7 @@
 pub mod sleep;
 
 pub use sleep::decay::{DecayConfig, DecayEngine, KgDecayStats, PruneCandidate};
+pub use sleep::pruner::{PruneStats, Pruner};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

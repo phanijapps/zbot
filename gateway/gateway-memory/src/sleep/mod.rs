@@ -2,3 +2,4 @@
 //! during the gateway-memory crate extraction (Phase B).
 
 pub mod decay;
+pub mod pruner;
