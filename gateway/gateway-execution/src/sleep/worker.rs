@@ -12,8 +12,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::sleep::{
-    Compactor, CorrectionsAbstractor, DecayEngine, OrphanArchiver, PatternExtractor, Pruner,
-    Synthesizer,
+    Compactor, ConflictResolver, CorrectionsAbstractor, DecayEngine, OrphanArchiver,
+    PatternExtractor, Pruner, Synthesizer,
 };
 
 /// Bundle of optional sleep-time ops passed to [`SleepTimeWorker::start`].
@@ -25,6 +25,7 @@ pub struct SleepOps {
     pub pattern_extractor: Option<Arc<PatternExtractor>>,
     pub orphan_archiver: Option<Arc<OrphanArchiver>>,
     pub corrections_abstractor: Option<Arc<CorrectionsAbstractor>>,
+    pub conflict_resolver: Option<Arc<ConflictResolver>>,
 }
 
 /// Background worker that orchestrates the full sleep-time pipeline.
@@ -120,6 +121,7 @@ pub struct CycleStats {
     pub synthesis_facts_bumped: u64,
     pub patterns_inserted: u64,
     pub schemas_abstracted: u64,
+    pub conflicts_resolved: u64,
     pub prune_candidates: u64,
     pub pruned: u64,
     pub pruned_failed: u64,
@@ -203,6 +205,19 @@ async fn run_cycle(
         }
     }
 
+    // Conflict resolution — supersedes contradicting schema facts. Runs after
+    // corrections abstraction so newly-promoted schemas are also considered.
+    if let Some(cr) = ops.conflict_resolver.as_ref() {
+        match cr.run_cycle(&run_id, agent_id).await {
+            Ok(s) => {
+                stats.conflicts_resolved = s.conflicts_resolved;
+            }
+            Err(e) => {
+                tracing::warn!(%run_id, error = %e, "conflict resolver cycle failed");
+            }
+        }
+    }
+
     tracing::info!(
         kind,
         %run_id,
@@ -212,6 +227,7 @@ async fn run_cycle(
         synthesis_bumped = stats.synthesis_facts_bumped,
         patterns_inserted = stats.patterns_inserted,
         schemas_abstracted = stats.schemas_abstracted,
+        conflicts_resolved = stats.conflicts_resolved,
         prune_candidates = stats.prune_candidates,
         pruned = stats.pruned,
         pruned_failed = stats.pruned_failed,
@@ -413,6 +429,7 @@ mod tests {
             pattern_extractor: Some(px),
             orphan_archiver: Some(archiver),
             corrections_abstractor: None,
+            conflict_resolver: None,
         };
         let stats = run_cycle("test", &c, &d, &p, &ops, "agent-ops").await;
         // Empty DB => no insertions from any op.
@@ -506,6 +523,7 @@ mod tests {
             pattern_extractor: Some(px),
             orphan_archiver: None,
             corrections_abstractor: None,
+            conflict_resolver: None,
         };
         let stats = run_cycle("test", &c, &d, &p, &ops, "agent-err").await;
         // Cycle completed; decay/prune ran (0 candidates in empty DB).
