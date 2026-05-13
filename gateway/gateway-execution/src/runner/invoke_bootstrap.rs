@@ -145,6 +145,22 @@ fn format_corrections_block(facts: &[zero_stores_traits::MemoryFact]) -> Option<
     Some(format!("## Active Corrections\n{}", lines.join("\n")))
 }
 
+fn format_goals_block(goals: &[agent_tools::GoalSummary]) -> Option<String> {
+    let active: Vec<&agent_tools::GoalSummary> =
+        goals.iter().filter(|g| g.state == "active").collect();
+    if active.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = active
+        .iter()
+        .map(|g| match &g.description {
+            Some(desc) => format!("- {} — {}", g.title, desc),
+            None => format!("- {}", g.title),
+        })
+        .collect();
+    Some(format!("## Active Goals\n{}", lines.join("\n")))
+}
+
 // ============================================================================
 // IMPL
 // ============================================================================
@@ -338,6 +354,20 @@ impl InvokeBootstrap {
                 }
                 Err(e) => {
                     tracing::warn!(agent_id = %config.agent_id, "corrections inject failed: {e}");
+                }
+            }
+        }
+
+        // Active goals — injected so agent picks up any in-flight objectives.
+        if let Some(adapter) = &self.goal_adapter {
+            match adapter.list_active(&config.agent_id).await {
+                Ok(goals) => {
+                    if let Some(block) = format_goals_block(&goals) {
+                        history.insert(0, ChatMessage::system(block));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(agent_id = %config.agent_id, "goals inject failed: {e}");
                 }
             }
         }
