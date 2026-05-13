@@ -1953,6 +1953,7 @@ dependencies = [
  "gateway-bridge",
  "gateway-connectors",
  "gateway-events",
+ "gateway-memory",
  "gateway-services",
  "gateway-templates",
  "indexmap",
@@ -1992,10 +1993,19 @@ dependencies = [
 name = "gateway-memory"
 version = "2026.5.3"
 dependencies = [
+ "async-trait",
+ "chrono",
+ "gateway-services",
+ "knowledge-graph",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "tracing",
+ "zero-stores",
+ "zero-stores-sqlite",
+ "zero-stores-traits",
 ]
 
 [[package]]

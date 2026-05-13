@@ -1,6 +1,8 @@
 //! Memory subsystem configuration types. Owned by gateway-memory crate;
 //! re-exported through gateway-services for backward compat.
 
+pub mod sleep;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;

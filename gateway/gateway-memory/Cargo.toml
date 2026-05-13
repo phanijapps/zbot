@@ -16,8 +16,23 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 
+# Async + utilities used by sleep-time components.
+async-trait = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+
+# Knowledge-graph store traits (used by Pruner, OrphanArchiver, DecayEngine).
+zero-stores = { path = "../../stores/zero-stores" }
+zero-stores-traits = { path = "../../stores/zero-stores-traits" }
+
 [dev-dependencies]
 tempfile = "3"
+
+# Test-only deps for sleep-component tests.
+gateway-services = { path = "../gateway-services" }
+knowledge-graph = { path = "../../services/knowledge-graph" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+zero-stores-sqlite = { path = "../../stores/zero-stores-sqlite" }
 
 [lints]
 workspace = true
