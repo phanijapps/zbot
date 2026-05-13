@@ -1,0 +1,54 @@
+# ============================================================================
+# GATEWAY MEMORY
+# Memory subsystem types — config and settings shared between recall + sleep.
+# ============================================================================
+
+[package]
+name = "gateway-memory"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Memory subsystem types — config and settings shared between recall + sleep components."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+# Async + utilities used by sleep-time components.
+async-trait = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+
+# Knowledge-graph store traits (used by Pruner, OrphanArchiver, DecayEngine,
+# and the recall adapters/MemoryRecall).
+zero-stores = { path = "../../stores/zero-stores" }
+zero-stores-traits = { path = "../../stores/zero-stores-traits" }
+
+# Domain types (MemoryFact, Procedure, ScoredFact, WikiArticle) used by recall.
+zero-stores-domain = { path = "../../stores/zero-stores-domain" }
+
+# Entity / EntityType types used by Compactor's PairwiseVerifier trait.
+knowledge-graph = { path = "../../services/knowledge-graph" }
+
+# LLM client trait (EmbeddingClient) used by Synthesizer + sleep components
+# + MemoryRecall (query embedding).
+agent-runtime = { path = "../../runtime/agent-runtime" }
+
+# `zero_core::types::Part` used by `HandoffWriter`'s message-to-chat
+# conversion.
+zero-core = { path = "../../framework/zero-core" }
+
+[dev-dependencies]
+tempfile = "3"
+
+# Test-only deps for sleep-component tests and recall-module tests
+# (previous_episodes uses VaultPaths/KnowledgeDatabase/EpisodeRepository).
+gateway-services = { path = "../gateway-services" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+zero-stores-sqlite = { path = "../../stores/zero-stores-sqlite" }
+
+[lints]
+workspace = true

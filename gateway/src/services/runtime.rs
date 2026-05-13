@@ -63,6 +63,9 @@ impl RuntimeService {
         log_service: Arc<LogService<DatabaseManager>>,
         state_service: Arc<StateService<DatabaseManager>>,
     ) -> Self {
+        let memory_llm_factory: Arc<dyn gateway_memory::MemoryLlmFactory> = Arc::new(
+            crate::memory_llm_factory::ProviderServiceLlmFactory::new(provider_service.clone()),
+        );
         Self::with_runner_and_connectors(
             event_bus,
             agent_service,
@@ -85,6 +88,7 @@ impl RuntimeService {
             None, // kg_episode_repo
             None, // ingestion_adapter
             None, // goal_adapter
+            memory_llm_factory,
         )
     }
 
@@ -112,15 +116,18 @@ impl RuntimeService {
         kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
         ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
         goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+        memory_llm_factory: Arc<dyn gateway_memory::MemoryLlmFactory>,
     ) -> Self {
         let handoff_writer = memory_store.as_ref().map(|fs| {
             let llm = Arc::new(gateway_execution::sleep::LlmHandoffWriter::new(
-                provider_service.clone(),
+                memory_llm_factory.clone(),
             ));
+            let conversation_store: Arc<dyn zero_stores_traits::ConversationStore> =
+                conversation_repo.clone();
             Arc::new(gateway_execution::sleep::HandoffWriter::new(
                 llm,
                 fs.clone(),
-                conversation_repo.clone(),
+                conversation_store,
             ))
         });
 

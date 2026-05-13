@@ -243,6 +243,12 @@ impl AppState {
         let provider_service = Arc::new(ProviderService::new(paths.clone()));
         let mcp_service = Arc::new(McpService::new(paths.clone()));
 
+        // Factory for sleep-time memory LLM clients — built once, shared
+        // across every sleep-time component that needs an LLM call.
+        let memory_llm_factory: Arc<dyn gateway_memory::MemoryLlmFactory> = Arc::new(
+            crate::memory_llm_factory::ProviderServiceLlmFactory::new(provider_service.clone()),
+        );
+
         // Initialize model capabilities registry (bundled + local overrides)
         let bundled_models = gateway_templates::Templates::get("models_registry.json")
             .map(|f| f.data.to_vec())
@@ -708,6 +714,7 @@ impl AppState {
             kg_episode_repo.clone(),
             ingestion_adapter,
             goal_adapter,
+            memory_llm_factory.clone(),
         ));
 
         // Phase 4: CompactionRepository + SleepTimeWorker (background maintenance).
@@ -772,99 +779,36 @@ impl AppState {
             compaction_store.as_ref(),
         ) {
             (Some(kgs), Some(eps), Some(mems), Some(prs), Some(compstore)) => {
-                let verifier: Option<
-                    Arc<dyn gateway_execution::sleep::compactor::PairwiseVerifier>,
-                > = Some(Arc::new(
-                    gateway_execution::sleep::LlmPairwiseVerifier::new(provider_service.clone()),
-                ));
-                let compactor = Arc::new(gateway_execution::sleep::Compactor::new(
-                    kgs.clone(),
-                    compstore.clone(),
-                    verifier,
-                ));
-                let decay = Arc::new(gateway_execution::sleep::DecayEngine::new(
-                    kgs.clone(),
-                    gateway_execution::sleep::DecayConfig::default(),
-                ));
-                let pruner = Arc::new(gateway_execution::sleep::Pruner::new(
-                    kgs.clone(),
-                    compstore.clone(),
-                ));
-                let synth_llm = Arc::new(gateway_execution::sleep::LlmSynthesizer::new(
-                    provider_service.clone(),
-                ));
-                let synthesizer = Arc::new(gateway_execution::sleep::Synthesizer::new(
-                    kgs.clone(),
-                    eps.clone(),
-                    mems.clone(),
-                    compstore.clone(),
-                    synth_llm,
-                    embedding_client.clone(),
-                ));
-                let pattern_llm = Arc::new(gateway_execution::sleep::LlmPatternExtractor::new(
-                    provider_service.clone(),
-                ));
-                let pattern_extractor = Arc::new(gateway_execution::sleep::PatternExtractor::new(
-                    eps.clone(),
-                    conversation_store_for_state.clone(),
-                    prs.clone(),
-                    compstore.clone(),
-                    pattern_llm,
-                ));
-                let orphan_archiver = Arc::new(gateway_execution::sleep::OrphanArchiver::new(
-                    kgs.clone(),
-                    compstore.clone(),
-                ));
                 let abstractions_interval_hours = settings
                     .get_execution_settings()
                     .map(|s| s.memory.corrections_abstractor_interval_hours)
                     .unwrap_or(24);
-                let abstractions_interval =
-                    std::time::Duration::from_secs(abstractions_interval_hours as u64 * 3600);
-                let abstractions_llm =
-                    Arc::new(gateway_execution::sleep::LlmCorrectionsAbstractor::new(
-                        provider_service.clone(),
-                    ));
-                let corrections_abstractor =
-                    Arc::new(gateway_execution::sleep::CorrectionsAbstractor::new(
-                        mems.clone(),
-                        compstore.clone(),
-                        abstractions_llm,
-                        abstractions_interval,
-                    ));
                 let conflict_interval_hours = settings
                     .get_execution_settings()
                     .map(|s| s.memory.conflict_resolver_interval_hours)
                     .unwrap_or(24);
-                let conflict_interval =
-                    std::time::Duration::from_secs(conflict_interval_hours as u64 * 3600);
-                let conflict_llm = Arc::new(gateway_execution::sleep::LlmConflictJudge::new(
-                    provider_service.clone(),
-                ));
-                let conflict_resolver = Arc::new(gateway_execution::sleep::ConflictResolver::new(
-                    mems.clone(),
-                    compstore.clone(),
-                    conflict_llm,
-                    conflict_interval,
-                ));
-                let ops = gateway_execution::sleep::SleepOps {
-                    synthesizer: Some(synthesizer),
-                    pattern_extractor: Some(pattern_extractor),
-                    orphan_archiver: Some(orphan_archiver),
-                    corrections_abstractor: Some(corrections_abstractor),
-                    conflict_resolver: Some(conflict_resolver),
-                };
-                Some(Arc::new(
-                    gateway_execution::sleep::SleepTimeWorker::start_with_ops(
-                        compactor,
-                        decay,
-                        pruner,
-                        ops,
-                        recall_config.kg_decay.clone(),
-                        std::time::Duration::from_secs(60 * 60),
-                        "root".to_string(),
-                    ),
-                ))
+                let memory_services =
+                    gateway_memory::MemoryServices::new(gateway_memory::MemoryServicesConfig {
+                        agent_id: "root".to_string(),
+                        interval: std::time::Duration::from_secs(60 * 60),
+                        llm_factory: memory_llm_factory.clone(),
+                        kg_store: kgs.clone(),
+                        episode_store: eps.clone(),
+                        memory_store: mems.clone(),
+                        compaction_store: compstore.clone(),
+                        procedure_store: prs.clone(),
+                        conversation_store: conversation_store_for_state.clone(),
+                        embedding_client: embedding_client.clone(),
+                        kg_decay_config: recall_config.kg_decay.clone(),
+                        corrections_abstractor_interval: std::time::Duration::from_secs(
+                            abstractions_interval_hours as u64 * 3600,
+                        ),
+                        conflict_resolver_interval: std::time::Duration::from_secs(
+                            conflict_interval_hours as u64 * 3600,
+                        ),
+                        decay_config: gateway_memory::sleep::DecayConfig::default(),
+                    });
+                Some(memory_services.sleep_time_worker.clone())
             }
             _ => None,
         };

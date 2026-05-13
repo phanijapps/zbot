@@ -22,6 +22,7 @@ pub mod goal;
 pub mod kg_episode;
 pub mod kg_ops;
 pub mod memory_fact;
+pub mod message;
 pub mod procedure;
 pub mod session_episode;
 pub mod wiki;
@@ -34,6 +35,7 @@ pub use kg_ops::{
     StrategyCandidate,
 };
 pub use memory_fact::{MemoryFact, ScoredFact, StrategyFactInsert, StrategyFactMatch};
+pub use message::Message;
 pub use procedure::{PatternProcedureInsert, Procedure, ProcedureSummary};
 pub use session_episode::{ScoredEpisode, SessionEpisode, SuccessfulEpisode};
 pub use wiki::{WikiArticle, WikiHit};

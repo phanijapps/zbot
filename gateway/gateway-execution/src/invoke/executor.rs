@@ -33,7 +33,6 @@ use agent_tools::{
 };
 use execution_state::StateService;
 use gateway_services::agents::Agent;
-use execution_state::StateService;
 use gateway_services::models::ModelRegistry;
 use gateway_services::providers::Provider;
 use gateway_services::{McpService, SettingsService, SkillService};

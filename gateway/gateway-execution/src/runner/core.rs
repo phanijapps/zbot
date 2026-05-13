@@ -29,7 +29,6 @@ pub type OnSessionReady =
 // Import types from sibling modules
 use crate::agent_pool::AgentResultBus;
 pub use crate::config::ExecutionConfig;
-use crate::agent_pool::AgentResultBus;
 use crate::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
 pub use crate::handle::ExecutionHandle;
 use crate::invoke::{

@@ -10,6 +10,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::RwLock;
 
+// Re-export so `gateway_services::settings::MemorySettings` keeps working;
+// `lib.rs` continues to surface it as `gateway_services::MemorySettings`.
+pub use gateway_memory::MemorySettings;
+
 /// Application settings.
 ///
 /// Stored in `{data_dir}/settings.json` and persisted across restarts.
@@ -209,37 +213,6 @@ impl Default for WikiConfig {
     fn default() -> Self {
         Self {
             ward_name: default_wiki_ward_name(),
-        }
-    }
-}
-
-/// Background memory worker configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemorySettings {
-    /// Minimum hours between corrections-abstraction LLM calls.
-    /// Default: 24. Set to 0 to run on every sleep cycle (hourly).
-    #[serde(default = "default_corrections_abstractor_interval_hours")]
-    pub corrections_abstractor_interval_hours: u32,
-    /// Minimum hours between conflict-resolution LLM judge passes.
-    /// Default: 24. Set to 0 to run on every sleep cycle (hourly).
-    #[serde(default = "default_conflict_resolver_interval_hours")]
-    pub conflict_resolver_interval_hours: u32,
-}
-
-fn default_corrections_abstractor_interval_hours() -> u32 {
-    24
-}
-
-fn default_conflict_resolver_interval_hours() -> u32 {
-    24
-}
-
-impl Default for MemorySettings {
-    fn default() -> Self {
-        Self {
-            corrections_abstractor_interval_hours: default_corrections_abstractor_interval_hours(),
-            conflict_resolver_interval_hours: default_conflict_resolver_interval_hours(),
         }
     }
 }

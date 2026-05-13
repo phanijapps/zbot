@@ -47,7 +47,7 @@ None. Phase 4 foundation is sufficient. The `evidence` column is already in plac
 
 ## MEM-002 — Memory subsystem extraction into `gateway-memory/` crate
 
-**Status:** Pending
+**Status:** ✅ Done — Phases A through F shipped 2026-05-13 (commits a1e96a74 through 20d59f9b). See tracking doc for inventory.
 **Severity:** Low (cosmetic / maintainability)
 **Trigger:** Any of: (a) a second consumer wants the memory subsystem (e.g. a second daemon, a published library); (b) `gateway/gateway-execution/` becomes hard to navigate; (c) you want to publish memory as a standalone open-source crate. Until one of those, the inventory tracking doc is sufficient.
 
@@ -116,7 +116,7 @@ None. Phase 4 foundation done.
 
 ## MEM-003 — ConflictResolver: cache LLM client across pair judgments
 
-**Status:** Pending
+**Status:** Pending. (Note: Phase D's `MemoryLlmFactory` abstraction makes implementing this easier — the factory can cache the client.)
 **Severity:** Low (perf nit)
 **Trigger:** Observed judge-call latency exceeds expectation, OR a single sleep cycle examines >20 pairs and you notice the cycle takes noticeably longer than expected.
 
@@ -163,6 +163,46 @@ WHERE agent_id = ? AND epistemic_class != 'archival' AND last_seen_at < ?
 ### Effort
 
 ~1 commit. ~1 hour including verification.
+
+---
+
+## MEM-005 — Move `HandoffWriter` struct into `gateway-memory`
+
+**Status:** ✅ Done — commit `f8adf7b1` (2026-05-13)
+**Severity:** Low (architectural inconsistency)
+**Trigger:** Phase D/E of the extraction (when introducing the LLM/store factory abstractions), OR when something else needs a clean `ConversationStore` trait abstraction.
+
+### Context
+
+During Phase B of the memory crate extraction (commit `bba92b87`), the `HandoffWriter` *engine struct* could not be moved into `gateway-memory` because it takes a concrete `Arc<zero_stores_sqlite::ConversationRepository>` parameter (not a trait). Moving it would create a crate-dependency cycle:
+
+```
+gateway-memory → zero-stores-sqlite → gateway-services → gateway-memory
+```
+
+What *did* move into `gateway-memory/src/sleep/handoff_writer.rs`: `HandoffLlm` trait, `HandoffEntry`, `HandoffInput`, `HANDOFF_*` constants, `should_inject`, `read_handoff_block`, and tests 4-8.
+
+What *stayed* in `gateway-execution/src/sleep/handoff_writer.rs`: the `HandoffWriter` struct + impl, `LlmHandoffWriter` (expected — production LLM impl), `format_conversation_for_summary` helper, tests 1/2/3/9/10.
+
+### Fix
+
+Two options, in increasing order of cleanliness:
+
+**Option A — Extend `ConversationStore` trait (preferred)**
+- Add `get_session_conversation(session_id) -> Result<Conversation>` and `session_messages_to_chat_format(...)` to the `ConversationStore` trait in `stores/zero-stores-traits/src/conversation.rs`
+- Implement on `zero-stores-sqlite::ConversationRepository`
+- Change `HandoffWriter::new` to accept `Arc<dyn ConversationStore>` instead of `Arc<ConversationRepository>`
+- Move the struct + impl + remaining tests + helper into `gateway-memory/src/sleep/handoff_writer.rs`
+
+**Option B — Keep the split** (current state) — defer indefinitely
+
+### Effort
+
+Option A: ~1 commit, 1-2 hours. Mostly trait method additions + signature change + move. Tests already cover the behavior.
+
+### Dependencies
+
+None blocking. Best paired with Phase D (LLM factory) since that's when the abstraction-introduction work is happening anyway.
 
 ---
 
