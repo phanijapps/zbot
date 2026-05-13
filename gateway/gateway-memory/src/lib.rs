@@ -33,6 +33,7 @@ pub use sleep::synthesizer::{
     SynthesisInput, SynthesisLlm, SynthesisResponse, SynthesisStats, Synthesizer,
 };
 pub use sleep::verifier::LlmPairwiseVerifier;
+pub use sleep::worker::{CycleStats, SleepOps, SleepTimeWorker};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
