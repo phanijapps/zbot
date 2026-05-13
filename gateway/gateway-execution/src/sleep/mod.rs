@@ -19,6 +19,10 @@ pub mod worker;
 
 pub use compactor::{CompactionStats, Compactor, PairwiseVerifier};
 pub use decay::{DecayConfig, DecayEngine, PruneCandidate};
+pub use handoff_writer::{
+    read_handoff_block, should_inject, HandoffEntry, HandoffInput, HandoffLlm, HandoffWriter,
+    LlmHandoffWriter,
+};
 pub use kg_backfill::{KgBackfillStats, KgBackfiller};
 pub use orphan_archiver::{OrphanArchiver, OrphanArchiverStats};
 pub use pattern_extractor::{
@@ -31,7 +35,3 @@ pub use synthesizer::{
 };
 pub use verifier::LlmPairwiseVerifier;
 pub use worker::{SleepOps, SleepTimeWorker};
-pub use handoff_writer::{
-    HandoffEntry, HandoffInput, HandoffLlm, HandoffWriter, LlmHandoffWriter,
-    read_handoff_block, should_inject,
-};
