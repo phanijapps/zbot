@@ -1821,6 +1821,7 @@ dependencies = [
  "gateway-events",
  "gateway-execution",
  "gateway-hooks",
+ "gateway-memory",
  "gateway-services",
  "gateway-templates",
  "gateway-ws-protocol",

@@ -1,10 +1,12 @@
 //! Memory subsystem configuration types. Owned by gateway-memory crate;
 //! re-exported through gateway-services for backward compat.
 
+pub mod llm_factory;
 pub mod recall;
 pub mod sleep;
 pub mod util;
 
+pub use llm_factory::{LlmClientConfig, MemoryLlmFactory};
 pub use util::{parse_llm_json, strip_code_fence};
 
 pub use recall::scored_item::{
