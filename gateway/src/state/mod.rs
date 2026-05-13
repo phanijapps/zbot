@@ -714,6 +714,7 @@ impl AppState {
             kg_episode_repo.clone(),
             ingestion_adapter,
             goal_adapter,
+            memory_llm_factory.clone(),
         ));
 
         // Phase 4: CompactionRepository + SleepTimeWorker (background maintenance).
