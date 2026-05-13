@@ -134,6 +134,18 @@ struct IntentOutcome {
 }
 
 // ============================================================================
+// FREE FUNCTIONS
+// ============================================================================
+
+fn format_corrections_block(facts: &[zero_stores_traits::MemoryFact]) -> Option<String> {
+    if facts.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = facts.iter().map(|f| format!("- {}", f.content)).collect();
+    Some(format!("## Active Corrections\n{}", lines.join("\n")))
+}
+
+// ============================================================================
 // IMPL
 // ============================================================================
 
@@ -309,6 +321,23 @@ impl InvokeBootstrap {
                         0,
                         ChatMessage::system(crate::recall::format_recall_failure_message(&e)),
                     );
+                }
+            }
+        }
+
+        // Always-active corrections — injected unconditionally so agent never misses hard rules.
+        if let Some(store) = &self.memory_store {
+            match store
+                .get_facts_by_category(&config.agent_id, "correction", 30)
+                .await
+            {
+                Ok(facts) => {
+                    if let Some(block) = format_corrections_block(&facts) {
+                        history.insert(0, ChatMessage::system(block));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(agent_id = %config.agent_id, "corrections inject failed: {e}");
                 }
             }
         }
