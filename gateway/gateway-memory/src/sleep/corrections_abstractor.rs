@@ -11,9 +11,13 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use agent_runtime::llm::ChatMessage;
 use async_trait::async_trait;
 use serde::Deserialize;
 use zero_stores_traits::{CompactionStore, MemoryFactStore};
+
+use crate::util::parse_llm_json;
+use crate::{LlmClientConfig, MemoryLlmFactory};
 
 const MIN_CORRECTIONS_TO_ABSTRACT: usize = 3;
 const MAX_CORRECTIONS_PER_CALL: usize = 20;
@@ -182,6 +186,62 @@ fn short_hash(s: &str) -> String {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     s.hash(&mut h);
     format!("{:08x}", (h.finish() & 0xFFFF_FFFF) as u32)
+}
+
+// ============================================================================
+// LLM-backed implementation
+// ============================================================================
+
+/// Production `AbstractionLlm` wired to the injected `MemoryLlmFactory`.
+pub struct LlmCorrectionsAbstractor {
+    factory: Arc<dyn MemoryLlmFactory>,
+}
+
+impl LlmCorrectionsAbstractor {
+    pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
+        Self { factory }
+    }
+}
+
+#[async_trait]
+impl AbstractionLlm for LlmCorrectionsAbstractor {
+    async fn abstract_corrections(
+        &self,
+        corrections: &[String],
+    ) -> Result<AbstractionResponse, String> {
+        let client = self
+            .factory
+            .build_client(LlmClientConfig::new(0.0, 512))
+            .await?;
+        let formatted = corrections
+            .iter()
+            .enumerate()
+            .map(|(i, c)| format!("{}. {c}", i + 1))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let prompt = format!(
+            "You identify common principles from an AI agent's correction history.\n\
+             Below are {n} correction facts the agent has accumulated.\n\
+             Decide if they share a common theme expressible as one imperative principle.\n\n\
+             Return ONLY JSON: \
+             {{\"schema\": string, \"confidence\": 0.0-1.0, \
+             \"key_fact\": string, \"decision\": \"abstract\" | \"skip\"}}.\n\
+             - \"schema\": theme name in snake_case (<5 words)\n\
+             - \"key_fact\": the principle as a single imperative sentence\n\
+             - \"decision\": \"abstract\" if clear shared principle, \"skip\" if too diverse\n\n\
+             Corrections:\n{formatted}",
+            n = corrections.len(),
+        );
+        let messages = vec![
+            ChatMessage::system("You return only valid JSON.".to_string()),
+            ChatMessage::user(prompt),
+        ];
+        let response = client
+            .chat(messages, None)
+            .await
+            .map_err(|e| format!("LLM call: {e}"))?;
+        parse_llm_json::<AbstractionResponse>(&response.content)
+    }
 }
 
 // ============================================================================

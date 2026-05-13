@@ -829,7 +829,7 @@ impl AppState {
                     std::time::Duration::from_secs(abstractions_interval_hours as u64 * 3600);
                 let abstractions_llm =
                     Arc::new(gateway_execution::sleep::LlmCorrectionsAbstractor::new(
-                        provider_service.clone(),
+                        memory_llm_factory.clone(),
                     ));
                 let corrections_abstractor =
                     Arc::new(gateway_execution::sleep::CorrectionsAbstractor::new(
