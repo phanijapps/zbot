@@ -1,8 +1,13 @@
 //! Memory subsystem configuration types. Owned by gateway-memory crate;
 //! re-exported through gateway-services for backward compat.
 
+pub mod recall;
 pub mod sleep;
 
+pub use recall::scored_item::{
+    intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, ScoredItem,
+};
+pub use recall::{format_recall_failure_message, format_scored_items, MemoryRecall};
 pub use sleep::compactor::{CompactionStats, Compactor, PairwiseVerifier};
 pub use sleep::conflict_resolver::{
     ConflictJudgeLlm, ConflictResolver, ConflictResponse, ConflictStats,
