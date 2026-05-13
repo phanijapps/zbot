@@ -151,6 +151,7 @@ pub struct RecallConfig {
 impl Default for RecallConfig {
     fn default() -> Self {
         let category_weights = HashMap::from([
+            ("schema".to_string(), 1.6),
             ("correction".to_string(), 1.5),
             ("strategy".to_string(), 1.4),
             ("user".to_string(), 1.3),
@@ -289,7 +290,7 @@ mod tests {
     fn default_config() {
         let config = RecallConfig::default();
 
-        assert_eq!(config.category_weights.len(), 9);
+        assert_eq!(config.category_weights.len(), 10);
         assert_eq!(config.category_weights["correction"], 1.5);
         assert_eq!(config.category_weights["strategy"], 1.4);
         assert_eq!(config.category_weights["user"], 1.3);
@@ -321,7 +322,7 @@ mod tests {
         // Should return defaults when file doesn't exist
         assert_eq!(config.max_recall_tokens, 3000);
         assert_eq!(config.max_facts, 10);
-        assert_eq!(config.category_weights.len(), 9);
+        assert_eq!(config.category_weights.len(), 10);
     }
 
     #[test]
@@ -394,7 +395,7 @@ mod tests {
         // Should fall back to defaults
         assert_eq!(config.max_recall_tokens, 3000);
         assert_eq!(config.max_facts, 10);
-        assert_eq!(config.category_weights.len(), 9);
+        assert_eq!(config.category_weights.len(), 10);
     }
 
     #[test]
@@ -470,6 +471,17 @@ mod tests {
     fn default_min_score_is_0_3() {
         let config = RecallConfig::default();
         assert_eq!(config.min_score, 0.3);
+    }
+
+    #[test]
+    fn schema_category_weight_is_higher_than_correction() {
+        let config = RecallConfig::default();
+        let schema_w = config.category_weight("schema");
+        let correction_w = config.category_weight("correction");
+        assert!(
+            schema_w > correction_w,
+            "schema weight ({schema_w}) must exceed correction weight ({correction_w})"
+        );
     }
 
     #[test]
