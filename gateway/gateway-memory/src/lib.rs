@@ -3,6 +3,8 @@
 
 pub mod sleep;
 
+pub use sleep::decay::{DecayConfig, DecayEngine, KgDecayStats, PruneCandidate};
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
