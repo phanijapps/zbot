@@ -38,6 +38,7 @@ tempfile = "3"
 gateway-services = { path = "../gateway-services" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { workspace = true }
+zero-stores-domain = { path = "../../stores/zero-stores-domain" }
 zero-stores-sqlite = { path = "../../stores/zero-stores-sqlite" }
 
 [lints]

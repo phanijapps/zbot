@@ -2006,6 +2006,7 @@ dependencies = [
  "tracing",
  "uuid",
  "zero-stores",
+ "zero-stores-domain",
  "zero-stores-sqlite",
  "zero-stores-traits",
 ]

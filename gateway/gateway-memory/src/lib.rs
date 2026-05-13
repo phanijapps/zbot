@@ -11,6 +11,9 @@ pub use sleep::corrections_abstractor::{
     AbstractionLlm, AbstractionResponse, AbstractionStats, CorrectionsAbstractor,
 };
 pub use sleep::decay::{DecayConfig, DecayEngine, KgDecayStats, PruneCandidate};
+pub use sleep::handoff_writer::{
+    read_handoff_block, should_inject, HandoffEntry, HandoffInput, HandoffLlm,
+};
 pub use sleep::orphan_archiver::{OrphanArchiver, OrphanArchiverStats};
 pub use sleep::pattern_extractor::{
     PatternExtractLlm, PatternExtractor, PatternInput, PatternResponse, PatternStats, PatternStep,
