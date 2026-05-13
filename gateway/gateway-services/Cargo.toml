@@ -17,6 +17,7 @@ zero-core = { path = "../../framework/zero-core" }
 agent-runtime = { path = "../../runtime/agent-runtime" }
 agent-tools = { path = "../../runtime/agent-tools" }
 discovery = { path = "../../discovery" }
+gateway-memory = { path = "../gateway-memory" }
 
 # Serialization
 serde = { workspace = true }

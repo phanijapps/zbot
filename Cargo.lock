@@ -1989,6 +1989,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gateway-memory"
+version = "2026.5.3"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "gateway-services"
 version = "2026.5.3"
 dependencies = [
@@ -2000,6 +2010,7 @@ dependencies = [
  "dirs 5.0.1",
  "discovery",
  "futures",
+ "gateway-memory",
  "httpmock",
  "notify",
  "notify-debouncer-full",

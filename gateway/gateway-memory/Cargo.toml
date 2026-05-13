@@ -1,0 +1,23 @@
+# ============================================================================
+# GATEWAY MEMORY
+# Memory subsystem types — config and settings shared between recall + sleep.
+# ============================================================================
+
+[package]
+name = "gateway-memory"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Memory subsystem types — config and settings shared between recall + sleep components."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
