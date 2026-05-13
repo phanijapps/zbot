@@ -6,6 +6,7 @@
 //! Tasks 5, 6, and 7 extend this module with `decay`, `pruner`, and `worker`.
 
 pub mod compactor;
+pub mod corrections_abstractor;
 pub mod decay;
 pub mod embedding_reindex;
 pub mod handoff_writer;
@@ -32,6 +33,9 @@ pub use pattern_extractor::{
 pub use pruner::{PruneStats, Pruner};
 pub use synthesizer::{
     LlmSynthesizer, SynthesisInput, SynthesisLlm, SynthesisResponse, SynthesisStats, Synthesizer,
+};
+pub use corrections_abstractor::{
+    AbstractionLlm, AbstractionStats, CorrectionsAbstractor, LlmCorrectionsAbstractor,
 };
 pub use verifier::LlmPairwiseVerifier;
 pub use worker::{SleepOps, SleepTimeWorker};
