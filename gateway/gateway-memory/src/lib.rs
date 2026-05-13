@@ -3,6 +3,9 @@
 
 pub mod recall;
 pub mod sleep;
+pub mod util;
+
+pub use util::{parse_llm_json, strip_code_fence};
 
 pub use recall::scored_item::{
     intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, ScoredItem,
