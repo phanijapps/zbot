@@ -381,7 +381,7 @@
     <div class="title-eyebrow">// agentzero / memory subsystem</div>
     <h1 class="title">Memory<span class="accent">.</span></h1>
     <p class="title-sub">How the agent learns what to remember.</p>
-    <div class="title-meta">2026-05-13<span class="dot">●</span>phases 1–4 foundation shipped • crate extraction begins</div>
+    <div class="title-meta">2026-05-13<span class="dot">●</span>phases 1–4 foundation shipped • crate extraction: phases A + B done</div>
   </section>
 
   <!-- ============= SLIDE 2 — METAPHOR ============= -->
@@ -1043,7 +1043,7 @@
             <circle cx="1020" cy="290" r="7" fill="#0c1118" stroke="#a3ff5c" stroke-width="1.5" stroke-dasharray="2 2"/>
             <circle cx="1020" cy="290" r="2.5" fill="#a3ff5c" opacity="0.6"/>
             <text x="1015" y="275" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c" letter-spacing="1.5" opacity="0.8">CRATE EXTRACTION</text>
-            <text x="1015" y="287" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="8" fill="#4a5468" letter-spacing="1">Phase A shipped · B–F pending</text>
+            <text x="1015" y="287" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="8" fill="#4a5468" letter-spacing="1">Phases A+B shipped · C–F pending</text>
           </g>
         </svg>
       </div>
@@ -1059,19 +1059,16 @@
   <section class="slide detail-slide">
     <div class="detail-head">
       <span class="stamp">MAINT</span>
-      <h3>Memory crate extraction — Phase A shipped</h3>
+      <h3>Memory crate extraction — Phases A + B shipped</h3>
     </div>
     <div class="split">
       <div>
         <p class="caption">Memory code grew across half a dozen directories inside the gateway as each phase shipped. <strong>Consolidating it into a single <span class="mono">gateway-memory</span> crate</strong> makes the boundary explicit and future phases cheaper to ship.</p>
-        <p class="caption">Phase A moved the config types — <span class="mono">RecallConfig</span> and its substructs, <span class="mono">MemorySettings</span>, <span class="mono">KgDecayConfig</span> — into the new crate. <span class="mono">gateway-services</span> keeps re-exports so all existing callers compile unchanged.</p>
+        <p class="caption">Phase A moved the config types — <span class="mono">RecallConfig</span>, <span class="mono">MemorySettings</span>, <span class="mono">KgDecayConfig</span>. Phase B moved the sleep-component engines (Pruner, OrphanArchiver, DecayEngine, Compactor, Synthesizer, PatternExtractor, CorrectionsAbstractor, ConflictResolver) + their abstraction traits. Production <span class="mono">Llm*</span> impls stay in gateway-execution until Phase D. <span class="mono">HandoffWriter</span> struct also stays (MEM-005 cycle fix).</p>
         <div class="config-note">
           <span class="k">Phase A</span> (config types) — <strong>done</strong> · commit <span class="k">a1e96a74</span><br>
-          <span class="k">Phase B</span> — sleep components (Compactor, Synthesizer, Pruner, …)<br>
-          <span class="k">Phase C</span> — recall pipeline + RecallEngine<br>
-          <span class="k">Phase D</span> — LlmFactory trait, remove ProviderService dep<br>
-          <span class="k">Phase E</span> — SleepOps + SleepTimeWorker<br>
-          <span class="k">Phase F</span> — MemoryServices factory, collapse construction block
+          <span class="k">Phase B</span> (sleep engines + traits) — <strong>done</strong> · 9 commits ending <span class="k">bba92b87</span><br>
+          <span class="k">C</span>: recall · <span class="k">D</span>: LLM factory · <span class="k">E</span>: worker + factory · <span class="k">F</span>: gateway wiring · <span class="k">MEM-005</span>: HandoffWriter struct cycle fix
         </div>
       </div>
       <div class="svg-frame" data-label="before → after">
@@ -1101,22 +1098,25 @@
           <!-- AFTER label -->
           <text x="370" y="28" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="2">AFTER</text>
           <!-- gateway-memory box -->
-          <rect x="285" y="60" width="160" height="120" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
-          <text x="365" y="84" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1">gateway-memory</text>
-          <line x1="295" y1="92" x2="435" y2="92" stroke="#233042" stroke-width="1"/>
-          <text x="365" y="110" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#8a97a9">RecallConfig</text>
-          <text x="365" y="126" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#8a97a9">MemorySettings</text>
-          <text x="365" y="142" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#8a97a9">KgDecayConfig</text>
-          <text x="365" y="158" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#4a5468">… more in B–F …</text>
+          <rect x="285" y="40" width="160" height="160" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+          <text x="365" y="64" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1">gateway-memory</text>
+          <line x1="295" y1="72" x2="435" y2="72" stroke="#233042" stroke-width="1"/>
+          <text x="365" y="90" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#8a97a9">RecallConfig · MemorySettings</text>
+          <text x="365" y="106" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#8a97a9">KgDecayConfig</text>
+          <line x1="295" y1="116" x2="435" y2="116" stroke="#233042" stroke-width="1" stroke-dasharray="2 2"/>
+          <text x="365" y="132" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#8a97a9">Pruner · OrphanArchiver</text>
+          <text x="365" y="148" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#8a97a9">DecayEngine · Compactor</text>
+          <text x="365" y="164" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#8a97a9">Synthesizer · PatternExtractor</text>
+          <text x="365" y="180" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#8a97a9">CorrectionsAbstractor · ConflictResolver</text>
 
           <!-- re-export note -->
-          <rect x="285" y="198" width="160" height="28" rx="2" fill="#131a24" stroke="#233042" stroke-width="1"/>
-          <text x="365" y="216" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#4a5468">gateway-services re-exports</text>
-          <line x1="365" y1="180" x2="365" y2="198" stroke="#233042" stroke-width="1" stroke-dasharray="3 2"/>
+          <rect x="285" y="218" width="160" height="28" rx="2" fill="#131a24" stroke="#233042" stroke-width="1"/>
+          <text x="365" y="236" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#4a5468">gateway-services re-exports</text>
+          <line x1="365" y1="200" x2="365" y2="218" stroke="#233042" stroke-width="1" stroke-dasharray="3 2"/>
 
-          <!-- phase a badge -->
-          <rect x="295" y="245" width="130" height="22" rx="11" fill="rgba(163,255,92,0.08)" stroke="#a3ff5c" stroke-width="1"/>
-          <text x="360" y="260" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c" letter-spacing="1.5">PHASE A — DONE</text>
+          <!-- phases a+b badge -->
+          <rect x="285" y="262" width="160" height="22" rx="11" fill="rgba(163,255,92,0.08)" stroke="#a3ff5c" stroke-width="1"/>
+          <text x="365" y="277" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c" letter-spacing="1.5">PHASES A + B — DONE</text>
         </svg>
       </div>
     </div>

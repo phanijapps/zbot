@@ -16,7 +16,7 @@ The memory subsystem currently lives across three crates:
 | `stores/zero-stores-sqlite` | SQLite implementations of all above traits |
 | `stores/zero-stores-domain` | `MemoryFact`, `StrategyFactInsert`, `StrategyFactMatch` types |
 | `gateway/gateway-execution/src/sleep/` | All sleep-time memory components (Compactor, Synthesizer, PatternExtractor, Pruner, OrphanArchiver, **CorrectionsAbstractor**, **ConflictResolver**, **HandoffWriter**) |
-| `gateway/gateway-memory` | **NEW — Phase A.** Memory subsystem types: `RecallConfig` + substructs, `MemorySettings`, `KgDecayConfig`. Re-exported by `gateway-services` for backward compat. |
+| `gateway/gateway-memory` | **NEW — Phases A + B.** Memory subsystem: config types (`RecallConfig`, `KgDecayConfig`, `MemorySettings`) + sleep-component engines (Pruner, OrphanArchiver, DecayEngine, Compactor, Synthesizer, PatternExtractor, CorrectionsAbstractor, ConflictResolver) + their abstraction traits. Production `Llm*` impls remain in `gateway-execution/sleep/` until LLM factory abstraction (Phase D). `HandoffWriter` struct also still in gateway-execution (MEM-005 cycle fix pending). |
 | `gateway/gateway-execution/src/recall/` | Recall scoring + retrieval pipeline |
 | `gateway/gateway-execution/src/runner/invoke_bootstrap.rs` | Session-start memory injection (handoff, corrections, goals, targeted recall) |
 | `gateway/gateway-services/src/recall_config.rs` | `RecallConfig` |
@@ -159,6 +159,20 @@ Today's memory code reaches into:
 
 Listed in reverse-chronological order. All on branch `feat/parallel-delegation-aggregation`.
 
+### Phase B — Sleep components moved to gateway-memory (2026-05-13)
+- `bba92b87` refactor(gateway-memory): move HandoffWriter from gateway-execution
+- `4ae55c8c` refactor(gateway-memory): move PatternExtractor from gateway-execution
+- `4793aa9d` refactor(gateway-memory): move Synthesizer from gateway-execution
+- `1e2e3062` refactor(gateway-memory): move Compactor from gateway-execution
+- `dec59f88` refactor(gateway-memory): move ConflictResolver from gateway-execution
+- `1a89ac97` refactor(gateway-memory): move CorrectionsAbstractor from gateway-execution
+- `312a8ea5` refactor(gateway-memory): move OrphanArchiver from gateway-execution
+- `89ad46ac` refactor(gateway-memory): move Pruner from gateway-execution
+- `59a660a1` refactor(gateway-memory): move DecayEngine from gateway-execution
+- `aa98a131` chore(gateway-memory): scaffold sleep submodule + add deps for Phase B
+
+**Note:** `HandoffWriter` struct itself stayed in gateway-execution (concrete-type dep would cycle through zero-stores-sqlite). Trait + read_handoff_block + supporting types + 5 of 10 tests moved. Full struct move tracked as MEM-005.
+
 ### Phase A — Memory crate extraction begins (2026-05-13)
 - `a1e96a74` feat(gateway-memory): extract config types — Phase A of memory crate extraction
 
@@ -217,7 +231,7 @@ Each phase has a written plan that describes the *intent* of the change set. The
 ## 10. Suggested Extraction Order (when you're ready)
 
 1. ✅ **DONE (commit `a1e96a74`)** — **First**: Move `RecallConfig` + `MemorySettings` types into the new `zero-memory` crate. Keep references in `gateway-services` as re-exports. Low risk, no logic changes.
-2. **Second**: Move the sleep-time components (`Compactor`, `Synthesizer`, `PatternExtractor`, `Pruner`, `OrphanArchiver`, `CorrectionsAbstractor`, `ConflictResolver`, `HandoffWriter`) — they're self-contained behind their trait-object inputs.
+2. ✅ **DONE (Phase B, 9 commits)** — **Second**: Move the sleep-time components (`Compactor`, `Synthesizer`, `PatternExtractor`, `Pruner`, `OrphanArchiver`, `CorrectionsAbstractor`, `ConflictResolver`, `HandoffWriter`) — they're self-contained behind their trait-object inputs.
 3. **Third**: Introduce `MemoryLlmFactory` trait, replace direct `ProviderService` dependency. This is the hardest decoupling because every `Llm*` production impl has the same `build_client` shape — there's an opportunity to DRY this into one shared helper.
 4. **Fourth**: Move `recall/mod.rs` + `RecallConfig` into `zero-memory`. Caller in `invoke_bootstrap.rs` stays in gateway because it composes recall with goals + handoff + corrections (all of which are memory) but also with the orchestrator runtime (not memory).
 5. **Fifth**: Move `SleepOps` + `SleepTimeWorker` into `zero-memory`. Replace the imperative construction block in `state/mod.rs` with a `MemoryServices::new(...)` factory call.
