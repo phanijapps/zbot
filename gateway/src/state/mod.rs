@@ -860,6 +860,7 @@ impl AppState {
                         decay,
                         pruner,
                         ops,
+                        recall_config.kg_decay.clone(),
                         std::time::Duration::from_secs(60 * 60),
                         "root".to_string(),
                     ),
