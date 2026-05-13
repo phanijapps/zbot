@@ -815,10 +815,21 @@ impl AppState {
                     kgs.clone(),
                     compstore.clone(),
                 ));
+                let abstractions_llm =
+                    Arc::new(gateway_execution::sleep::LlmCorrectionsAbstractor::new(
+                        provider_service.clone(),
+                    ));
+                let corrections_abstractor =
+                    Arc::new(gateway_execution::sleep::CorrectionsAbstractor::new(
+                        mems.clone(),
+                        compstore.clone(),
+                        abstractions_llm,
+                    ));
                 let ops = gateway_execution::sleep::SleepOps {
                     synthesizer: Some(synthesizer),
                     pattern_extractor: Some(pattern_extractor),
                     orphan_archiver: Some(orphan_archiver),
+                    corrections_abstractor: Some(corrections_abstractor),
                 };
                 Some(Arc::new(
                     gateway_execution::sleep::SleepTimeWorker::start_with_ops(

@@ -11,7 +11,10 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::sleep::{Compactor, DecayEngine, OrphanArchiver, PatternExtractor, Pruner, Synthesizer};
+use crate::sleep::{
+    Compactor, CorrectionsAbstractor, DecayEngine, OrphanArchiver, PatternExtractor, Pruner,
+    Synthesizer,
+};
 
 /// Bundle of optional sleep-time ops passed to [`SleepTimeWorker::start`].
 /// Using a struct avoids adding more positional parameters as the pipeline
@@ -21,6 +24,7 @@ pub struct SleepOps {
     pub synthesizer: Option<Arc<Synthesizer>>,
     pub pattern_extractor: Option<Arc<PatternExtractor>>,
     pub orphan_archiver: Option<Arc<OrphanArchiver>>,
+    pub corrections_abstractor: Option<Arc<CorrectionsAbstractor>>,
 }
 
 /// Background worker that orchestrates the full sleep-time pipeline.
@@ -115,6 +119,7 @@ pub struct CycleStats {
     pub synthesis_facts_inserted: u64,
     pub synthesis_facts_bumped: u64,
     pub patterns_inserted: u64,
+    pub schemas_abstracted: u64,
     pub prune_candidates: u64,
     pub pruned: u64,
     pub pruned_failed: u64,
@@ -186,6 +191,18 @@ async fn run_cycle(
         }
     }
 
+    // Corrections abstraction — promotes repeated correction facts to schema facts.
+    if let Some(ca) = ops.corrections_abstractor.as_ref() {
+        match ca.run_cycle(&run_id, agent_id).await {
+            Ok(s) => {
+                stats.schemas_abstracted = s.schemas_abstracted;
+            }
+            Err(e) => {
+                tracing::warn!(%run_id, error = %e, "corrections abstractor cycle failed");
+            }
+        }
+    }
+
     tracing::info!(
         kind,
         %run_id,
@@ -194,6 +211,7 @@ async fn run_cycle(
         synthesis_inserted = stats.synthesis_facts_inserted,
         synthesis_bumped = stats.synthesis_facts_bumped,
         patterns_inserted = stats.patterns_inserted,
+        schemas_abstracted = stats.schemas_abstracted,
         prune_candidates = stats.prune_candidates,
         pruned = stats.pruned,
         pruned_failed = stats.pruned_failed,
@@ -394,6 +412,7 @@ mod tests {
             synthesizer: Some(synth),
             pattern_extractor: Some(px),
             orphan_archiver: Some(archiver),
+            corrections_abstractor: None,
         };
         let stats = run_cycle("test", &c, &d, &p, &ops, "agent-ops").await;
         // Empty DB => no insertions from any op.
@@ -486,6 +505,7 @@ mod tests {
             synthesizer: Some(synth),
             pattern_extractor: Some(px),
             orphan_archiver: None,
+            corrections_abstractor: None,
         };
         let stats = run_cycle("test", &c, &d, &p, &ops, "agent-err").await;
         // Cycle completed; decay/prune ran (0 candidates in empty DB).
