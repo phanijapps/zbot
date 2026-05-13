@@ -242,18 +242,39 @@ impl LlmHandoffWriter {
     }
 }
 
+/// Formats conversation messages for the LLM summary prompt.
+/// Includes user, assistant, and tool messages (up to 40).
+/// Assistant messages with tool calls are annotated with `[called: name1, name2]`.
+pub(crate) fn format_conversation_for_summary(messages: &[ChatMessage]) -> String {
+    messages
+        .iter()
+        .filter(|m| m.role == "user" || m.role == "assistant" || m.role == "tool")
+        .take(40)
+        .map(|m| {
+            if m.role == "assistant" {
+                if let Some(calls) = &m.tool_calls {
+                    let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
+                    if !names.is_empty() {
+                        let text = m.text_content();
+                        return if text.is_empty() {
+                            format!("assistant [called: {}]", names.join(", "))
+                        } else {
+                            format!("assistant [called: {}]: {}", names.join(", "), text)
+                        };
+                    }
+                }
+            }
+            format!("{}: {}", m.role, m.text_content())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[async_trait]
 impl HandoffLlm for LlmHandoffWriter {
     async fn summarize(&self, input: &HandoffInput) -> Result<String, String> {
         let client = self.build_client()?;
-        let conversation = input
-            .messages
-            .iter()
-            .filter(|m| m.role == "user" || m.role == "assistant")
-            .take(40)
-            .map(|m| format!("{}: {}", m.role, m.text_content()))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let conversation = format_conversation_for_summary(&input.messages);
         let prompt = format!(
             "Summarize this conversation in 3-5 sentences. Cover:\n\
              - What was accomplished\n\
@@ -705,5 +726,39 @@ mod tests {
         let raw = store.get("handoff.latest").unwrap();
         let entry: HandoffEntry = serde_json::from_str(&raw).unwrap();
         assert_eq!(entry.correction_count, 2);
+    }
+
+    // ---- Test 10: format_conversation_for_summary includes tool call annotations ----
+
+    #[test]
+    fn format_conversation_includes_tool_annotations() {
+        use agent_runtime::ToolCall;
+
+        let mut assistant_msg = ChatMessage::assistant("Let me check.".to_string());
+        assistant_msg.tool_calls = Some(vec![ToolCall {
+            id: "tc-1".to_string(),
+            name: "memory".to_string(),
+            arguments: serde_json::json!({"action": "get_fact"}),
+        }]);
+
+        let messages = vec![
+            ChatMessage::user("What do you know?".to_string()),
+            assistant_msg,
+            ChatMessage::system("memory result".to_string()), // system filtered out
+        ];
+
+        let text = format_conversation_for_summary(&messages);
+        assert!(
+            text.contains("[called: memory]"),
+            "tool name missing: {text}"
+        );
+        assert!(
+            !text.contains("memory result"),
+            "system message should be excluded: {text}"
+        );
+        assert!(
+            text.contains("What do you know"),
+            "user message missing: {text}"
+        );
     }
 }
