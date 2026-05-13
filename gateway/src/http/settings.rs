@@ -299,6 +299,9 @@ pub struct UpdateExecutionSettingsRequest {
     /// Default multimodal (vision) model configuration
     #[serde(default)]
     pub multimodal: Option<gateway_services::MultimodalConfig>,
+    /// Background memory worker configuration.
+    #[serde(default)]
+    pub memory: Option<gateway_services::MemorySettings>,
     /// Experimental UI feature flags (free-form bag).
     #[serde(default)]
     pub feature_flags: std::collections::HashMap<String, bool>,
@@ -340,6 +343,9 @@ impl UpdateExecutionSettingsRequest {
             distillation: self.distillation.unwrap_or_default(),
             multimodal: self.multimodal.unwrap_or_default(),
             feature_flags: self.feature_flags,
+
+            // User-configurable with fallback to existing
+            memory: self.memory.unwrap_or_else(|| existing.memory.clone()),
 
             // Runtime state (preserved from existing settings)
             chat: existing.chat.clone(),
@@ -489,6 +495,7 @@ mod tests {
             orchestrator: None,
             distillation: None,
             multimodal: None,
+            memory: None,
             feature_flags: std::collections::HashMap::new(),
         }
     }

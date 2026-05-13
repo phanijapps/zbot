@@ -71,6 +71,9 @@ pub struct ExecutionSettings {
     /// Wiki / Obsidian vault ward configuration.
     #[serde(default)]
     pub wiki: WikiConfig,
+    /// Background memory worker configuration.
+    #[serde(default)]
+    pub memory: MemorySettings,
     /// Experimental UI feature flags. Free-form bag persisted verbatim so
     /// we can gate beta surfaces without schema churn.
     #[serde(default)]
@@ -210,6 +213,28 @@ impl Default for WikiConfig {
     }
 }
 
+/// Background memory worker configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySettings {
+    /// Minimum hours between corrections-abstraction LLM calls.
+    /// Default: 24. Set to 0 to run on every sleep cycle (hourly).
+    #[serde(default = "default_corrections_abstractor_interval_hours")]
+    pub corrections_abstractor_interval_hours: u32,
+}
+
+fn default_corrections_abstractor_interval_hours() -> u32 {
+    24
+}
+
+impl Default for MemorySettings {
+    fn default() -> Self {
+        Self {
+            corrections_abstractor_interval_hours: default_corrections_abstractor_interval_hours(),
+        }
+    }
+}
+
 impl Default for ExecutionSettings {
     fn default() -> Self {
         Self {
@@ -222,6 +247,7 @@ impl Default for ExecutionSettings {
             multimodal: MultimodalConfig::default(),
             chat: ChatConfig::default(),
             wiki: WikiConfig::default(),
+            memory: MemorySettings::default(),
             feature_flags: std::collections::HashMap::new(),
         }
     }

@@ -8,7 +8,8 @@
 //! Category weights: schema (1.6) > correction (1.5) — schemas are preferred
 //! in recall over the raw corrections they distill.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use agent_runtime::llm::{ChatMessage, LlmClient, LlmConfig};
 use async_trait::async_trait;
@@ -54,6 +55,9 @@ pub struct CorrectionsAbstractor {
     memory_store: Arc<dyn MemoryFactStore>,
     compaction_store: Arc<dyn CompactionStore>,
     llm: Arc<dyn AbstractionLlm>,
+    /// Minimum time between LLM calls. `Duration::ZERO` = run every cycle.
+    interval: Duration,
+    last_run: Mutex<Option<Instant>>,
 }
 
 impl CorrectionsAbstractor {
@@ -61,21 +65,35 @@ impl CorrectionsAbstractor {
         memory_store: Arc<dyn MemoryFactStore>,
         compaction_store: Arc<dyn CompactionStore>,
         llm: Arc<dyn AbstractionLlm>,
+        interval: Duration,
     ) -> Self {
         Self {
             memory_store,
             compaction_store,
             llm,
+            interval,
+            last_run: Mutex::new(None),
         }
     }
 
     /// Run one abstraction cycle. Returns aggregate stats. Any error is
     /// logged and the cycle returns partial stats — never fails hard.
+    ///
+    /// Skips the LLM call if less than `interval` has elapsed since the last
+    /// successful run (throttle resets on daemon restart).
     pub async fn run_cycle(
         &self,
         run_id: &str,
         agent_id: &str,
     ) -> Result<AbstractionStats, String> {
+        if !self.interval.is_zero() {
+            if let Some(last) = *self.last_run.lock().unwrap() {
+                if last.elapsed() < self.interval {
+                    return Ok(AbstractionStats::default());
+                }
+            }
+        }
+
         let mut stats = AbstractionStats::default();
 
         let corrections = self
@@ -114,11 +132,19 @@ impl CorrectionsAbstractor {
 
         match self
             .memory_store
-            .save_fact(agent_id, "schema", &key, &resp.key_fact, resp.confidence, None)
+            .save_fact(
+                agent_id,
+                "schema",
+                &key,
+                &resp.key_fact,
+                resp.confidence,
+                None,
+            )
             .await
         {
             Ok(_) => {
                 stats.schemas_abstracted += 1;
+                *self.last_run.lock().unwrap() = Some(Instant::now());
                 let reason = format!(
                     "abstracted from {} corrections (schema={}, confidence={:.2})",
                     corrections.len(),
@@ -354,6 +380,7 @@ mod tests {
             h.memory_store.clone(),
             h.compaction_store.clone(),
             mock,
+            Duration::ZERO,
         );
 
         let stats = abs.run_cycle("run-abs", "agent-abs").await.unwrap();
@@ -382,6 +409,7 @@ mod tests {
             h.memory_store.clone(),
             h.compaction_store.clone(),
             Arc::new(MockFailLlm),
+            Duration::ZERO,
         );
 
         let stats = abs.run_cycle("run-few", "agent-few").await.unwrap();
@@ -400,6 +428,7 @@ mod tests {
             h.memory_store.clone(),
             h.compaction_store.clone(),
             Arc::new(MockLlm::always_skip()),
+            Duration::ZERO,
         );
 
         let stats = abs.run_cycle("run-skip", "agent-skip").await.unwrap();
@@ -432,6 +461,7 @@ mod tests {
             h.memory_store.clone(),
             h.compaction_store.clone(),
             mock,
+            Duration::ZERO,
         );
 
         let stats = abs.run_cycle("run-lowconf", "agent-lowconf").await.unwrap();
@@ -456,6 +486,7 @@ mod tests {
             h.memory_store.clone(),
             h.compaction_store.clone(),
             mock,
+            Duration::ZERO,
         );
 
         abs.run_cycle("run-idem-1", "agent-idem").await.unwrap();
@@ -471,6 +502,64 @@ mod tests {
             1,
             "upsert must not create duplicate schema facts"
         );
+    }
+
+    #[tokio::test]
+    async fn throttle_skips_when_interval_not_elapsed() {
+        let h = setup();
+        seed_corrections(&h.memory_store, "agent-throttle", 3).await;
+
+        // Set a 1-hour interval — no time will pass in test, so second call is throttled.
+        let interval = Duration::from_secs(3600);
+        let mock = Arc::new(MockLlm::new(AbstractionResponse {
+            schema: "principle".into(),
+            confidence: 0.9,
+            key_fact: "Always do X".into(),
+            decision: "abstract".into(),
+        }));
+        let abs = CorrectionsAbstractor::new(
+            h.memory_store.clone(),
+            h.compaction_store.clone(),
+            mock,
+            interval,
+        );
+
+        // First call runs and records last_run.
+        let s1 = abs.run_cycle("run-t1", "agent-throttle").await.unwrap();
+        assert_eq!(s1.schemas_abstracted, 1);
+
+        // Second call immediately after: interval hasn't elapsed → skipped.
+        let s2 = abs.run_cycle("run-t2", "agent-throttle").await.unwrap();
+        assert_eq!(s2.schemas_abstracted, 0);
+        assert_eq!(
+            s2.corrections_considered, 0,
+            "throttled call must return empty stats"
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_interval_always_runs() {
+        let h = setup();
+        seed_corrections(&h.memory_store, "agent-zero", 3).await;
+
+        let mock = Arc::new(MockLlm::new(AbstractionResponse {
+            schema: "principle".into(),
+            confidence: 0.9,
+            key_fact: "Always do Z".into(),
+            decision: "abstract".into(),
+        }));
+        let abs = CorrectionsAbstractor::new(
+            h.memory_store.clone(),
+            h.compaction_store.clone(),
+            mock,
+            Duration::ZERO,
+        );
+
+        // Both calls run regardless of elapsed time.
+        let s1 = abs.run_cycle("run-z1", "agent-zero").await.unwrap();
+        let s2 = abs.run_cycle("run-z2", "agent-zero").await.unwrap();
+        assert_eq!(s1.schemas_abstracted, 1);
+        assert_eq!(s2.schemas_abstracted, 1);
     }
 
     #[test]

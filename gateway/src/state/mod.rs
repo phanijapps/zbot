@@ -815,6 +815,12 @@ impl AppState {
                     kgs.clone(),
                     compstore.clone(),
                 ));
+                let abstractions_interval_hours = settings
+                    .get_execution_settings()
+                    .map(|s| s.memory.corrections_abstractor_interval_hours)
+                    .unwrap_or(24);
+                let abstractions_interval =
+                    std::time::Duration::from_secs(abstractions_interval_hours as u64 * 3600);
                 let abstractions_llm =
                     Arc::new(gateway_execution::sleep::LlmCorrectionsAbstractor::new(
                         provider_service.clone(),
@@ -824,6 +830,7 @@ impl AppState {
                         mems.clone(),
                         compstore.clone(),
                         abstractions_llm,
+                        abstractions_interval,
                     ));
                 let ops = gateway_execution::sleep::SleepOps {
                     synthesizer: Some(synthesizer),
