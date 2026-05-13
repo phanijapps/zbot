@@ -2003,6 +2003,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "uuid",
  "zero-stores",
  "zero-stores-sqlite",
  "zero-stores-traits",

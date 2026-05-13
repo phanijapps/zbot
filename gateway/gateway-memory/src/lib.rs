@@ -3,6 +3,9 @@
 
 pub mod sleep;
 
+pub use sleep::conflict_resolver::{
+    ConflictJudgeLlm, ConflictResolver, ConflictResponse, ConflictStats,
+};
 pub use sleep::corrections_abstractor::{
     AbstractionLlm, AbstractionResponse, AbstractionStats, CorrectionsAbstractor,
 };
