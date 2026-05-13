@@ -138,6 +138,9 @@ pub struct RecallConfig {
     pub high_confidence_threshold: f64,
     /// Multiplier applied to the recall score of contradicted facts (0.0–1.0).
     pub contradiction_penalty: f64,
+    /// Minimum score threshold — results scoring below this are suppressed.
+    /// Prevents low-relevance facts from appearing for short generic queries.
+    pub min_score: f64,
     pub mid_session_recall: MidSessionRecallConfig,
     pub graph_traversal: GraphTraversalConfig,
     pub temporal_decay: TemporalDecayConfig,
@@ -169,6 +172,7 @@ impl Default for RecallConfig {
             max_episodes: 3,
             high_confidence_threshold: 0.9,
             contradiction_penalty: 0.7,
+            min_score: 0.3,
             mid_session_recall: MidSessionRecallConfig::default(),
             graph_traversal: GraphTraversalConfig::default(),
             temporal_decay: TemporalDecayConfig::default(),
@@ -460,5 +464,21 @@ mod tests {
         // Unknown categories return 1.0 fallback
         assert_eq!(config.category_weight("nonexistent"), 1.0);
         assert_eq!(config.category_weight(""), 1.0);
+    }
+
+    #[test]
+    fn default_min_score_is_0_3() {
+        let config = RecallConfig::default();
+        assert_eq!(config.min_score, 0.3);
+    }
+
+    #[test]
+    fn min_score_can_be_overridden() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("recall_config.json"), r#"{"min_score": 0.5}"#).unwrap();
+        let config = RecallConfig::load_from_path(dir.path());
+        assert_eq!(config.min_score, 0.5);
     }
 }
