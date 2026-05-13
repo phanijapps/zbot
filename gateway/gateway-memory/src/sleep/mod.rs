@@ -7,3 +7,4 @@ pub mod corrections_abstractor;
 pub mod decay;
 pub mod orphan_archiver;
 pub mod pruner;
+pub mod synthesizer;

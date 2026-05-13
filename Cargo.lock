@@ -1993,6 +1993,7 @@ dependencies = [
 name = "gateway-memory"
 version = "2026.5.3"
 dependencies = [
+ "agent-runtime",
  "async-trait",
  "chrono",
  "gateway-services",

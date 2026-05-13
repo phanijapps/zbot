@@ -28,6 +28,9 @@ zero-stores-traits = { path = "../../stores/zero-stores-traits" }
 # Entity / EntityType types used by Compactor's PairwiseVerifier trait.
 knowledge-graph = { path = "../../services/knowledge-graph" }
 
+# LLM client trait (EmbeddingClient) used by Synthesizer + sleep components.
+agent-runtime = { path = "../../runtime/agent-runtime" }
+
 [dev-dependencies]
 tempfile = "3"
 
