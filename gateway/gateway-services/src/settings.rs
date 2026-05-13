@@ -221,9 +221,17 @@ pub struct MemorySettings {
     /// Default: 24. Set to 0 to run on every sleep cycle (hourly).
     #[serde(default = "default_corrections_abstractor_interval_hours")]
     pub corrections_abstractor_interval_hours: u32,
+    /// Minimum hours between conflict-resolution LLM judge passes.
+    /// Default: 24. Set to 0 to run on every sleep cycle (hourly).
+    #[serde(default = "default_conflict_resolver_interval_hours")]
+    pub conflict_resolver_interval_hours: u32,
 }
 
 fn default_corrections_abstractor_interval_hours() -> u32 {
+    24
+}
+
+fn default_conflict_resolver_interval_hours() -> u32 {
     24
 }
 
@@ -231,6 +239,7 @@ impl Default for MemorySettings {
     fn default() -> Self {
         Self {
             corrections_abstractor_interval_hours: default_corrections_abstractor_interval_hours(),
+            conflict_resolver_interval_hours: default_conflict_resolver_interval_hours(),
         }
     }
 }
@@ -621,6 +630,28 @@ mod tests {
             parsed["tools"]["python"].as_bool(),
             Some(true),
             "typed field update must still take effect"
+        );
+    }
+}
+
+#[cfg(test)]
+mod memory_settings_tests {
+    use super::*;
+
+    #[test]
+    fn default_conflict_resolver_interval_is_24() {
+        let m = MemorySettings::default();
+        assert_eq!(m.conflict_resolver_interval_hours, 24);
+    }
+
+    #[test]
+    fn memory_settings_deserializes_partial() {
+        let json = r#"{"conflictResolverIntervalHours": 6}"#;
+        let m: MemorySettings = serde_json::from_str(json).unwrap();
+        assert_eq!(m.conflict_resolver_interval_hours, 6);
+        assert_eq!(
+            m.corrections_abstractor_interval_hours, 24,
+            "default preserved"
         );
     }
 }
