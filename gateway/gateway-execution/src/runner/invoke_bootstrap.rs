@@ -341,6 +341,61 @@ impl InvokeBootstrap {
             }
         }
 
+        // Targeted recall from last session topics — surfaces related facts
+        // from the handoff summary even before the user's first message.
+        // Injected after user-query recall so reading order is:
+        // handoff → goals → corrections → handoff-recall → user-recall
+        if let (Some(recall), Some(store)) = (&self.memory_recall, &self.memory_store) {
+            use crate::sleep::handoff_writer::{
+                HANDOFF_AGENT_SENTINEL, HANDOFF_SCOPE, HANDOFF_WARD,
+            };
+            if let Ok(Some(fact)) = store
+                .get_fact_by_key(
+                    HANDOFF_AGENT_SENTINEL,
+                    HANDOFF_SCOPE,
+                    HANDOFF_WARD,
+                    "handoff.latest",
+                )
+                .await
+            {
+                if let Ok(entry) = serde_json::from_str::<crate::sleep::handoff_writer::HandoffEntry>(
+                    &fact.content,
+                ) {
+                    if !entry.summary.is_empty() {
+                        match recall
+                            .recall_unified(
+                                &config.agent_id,
+                                &entry.summary,
+                                ward_id.as_deref(),
+                                &[],
+                                5,
+                            )
+                            .await
+                        {
+                            Ok(items) if !items.is_empty() => {
+                                let formatted = crate::recall::format_scored_items(&items);
+                                if !formatted.is_empty() {
+                                    history.insert(
+                                        0,
+                                        ChatMessage::system(format!(
+                                            "## Context from Last Session\n{formatted}"
+                                        )),
+                                    );
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::warn!(
+                                    agent_id = %config.agent_id,
+                                    "handoff targeted recall failed: {e}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Always-active corrections — injected unconditionally so agent never misses hard rules.
         if let Some(store) = &self.memory_store {
             match store

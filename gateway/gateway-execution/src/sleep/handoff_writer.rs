@@ -11,10 +11,10 @@ use zero_stores_sqlite::ConversationRepository;
 
 pub const HANDOFF_MAX_AGE_DAYS: i64 = 7;
 
-const HANDOFF_AGENT_SENTINEL: &str = "__handoff__";
+pub(crate) const HANDOFF_AGENT_SENTINEL: &str = "__handoff__";
 const HANDOFF_CATEGORY: &str = "handoff";
-const HANDOFF_SCOPE: &str = "global";
-const HANDOFF_WARD: &str = "__global__";
+pub(crate) const HANDOFF_SCOPE: &str = "global";
+pub(crate) const HANDOFF_WARD: &str = "__global__";
 
 /// Stored JSON shape for each `handoff.*` fact in the DB.
 #[derive(Debug, Clone, Serialize, Deserialize)]
