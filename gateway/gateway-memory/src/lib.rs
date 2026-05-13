@@ -3,6 +3,9 @@
 
 pub mod sleep;
 
+pub use sleep::corrections_abstractor::{
+    AbstractionLlm, AbstractionResponse, AbstractionStats, CorrectionsAbstractor,
+};
 pub use sleep::decay::{DecayConfig, DecayEngine, KgDecayStats, PruneCandidate};
 pub use sleep::orphan_archiver::{OrphanArchiver, OrphanArchiverStats};
 pub use sleep::pruner::{PruneStats, Pruner};
