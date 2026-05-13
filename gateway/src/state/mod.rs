@@ -845,7 +845,7 @@ impl AppState {
                 let conflict_interval =
                     std::time::Duration::from_secs(conflict_interval_hours as u64 * 3600);
                 let conflict_llm = Arc::new(gateway_execution::sleep::LlmConflictJudge::new(
-                    provider_service.clone(),
+                    memory_llm_factory.clone(),
                 ));
                 let conflict_resolver = Arc::new(gateway_execution::sleep::ConflictResolver::new(
                     mems.clone(),

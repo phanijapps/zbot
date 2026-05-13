@@ -7,9 +7,13 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use agent_runtime::llm::ChatMessage;
 use async_trait::async_trait;
 use serde::Deserialize;
 use zero_stores_traits::{CompactionStore, MemoryFact, MemoryFactStore};
+
+use crate::util::parse_llm_json;
+use crate::{LlmClientConfig, MemoryLlmFactory};
 
 const MAX_SCHEMA_FACTS_PER_CYCLE: usize = 50;
 const MAX_LLM_CALLS_PER_CYCLE: usize = 10;
@@ -222,6 +226,51 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
         0.0
     } else {
         dot / (na.sqrt() * nb.sqrt())
+    }
+}
+
+// ============================================================================
+// LLM-backed implementation
+// ============================================================================
+
+/// Production conflict judge wired to the injected `MemoryLlmFactory`.
+pub struct LlmConflictJudge {
+    factory: Arc<dyn MemoryLlmFactory>,
+}
+
+impl LlmConflictJudge {
+    pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
+        Self { factory }
+    }
+}
+
+#[async_trait]
+impl ConflictJudgeLlm for LlmConflictJudge {
+    async fn judge(&self, a: &str, b: &str) -> Result<ConflictResponse, String> {
+        let client = self
+            .factory
+            .build_client(LlmClientConfig::new(0.0, 256))
+            .await?;
+        let prompt = format!(
+            "You judge whether two principles for an AI agent contradict each other.\n\
+             Two principles can be about the same topic and NOT contradict (they may\n\
+             cover different cases). Only say \"contradicts\" if one principle's\n\
+             prescription would violate the other.\n\n\
+             Return ONLY JSON: \
+             {{\"decision\": \"contradicts\" | \"compatible\", \
+             \"confidence\": 0.0-1.0, \"reason\": string}}.\n\n\
+             Principle A: {a}\n\
+             Principle B: {b}",
+        );
+        let messages = vec![
+            ChatMessage::system("You return only valid JSON.".to_string()),
+            ChatMessage::user(prompt),
+        ];
+        let response = client
+            .chat(messages, None)
+            .await
+            .map_err(|e| format!("LLM call: {e}"))?;
+        parse_llm_json::<ConflictResponse>(&response.content)
     }
 }
 
