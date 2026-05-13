@@ -19,6 +19,9 @@ pub mod verifier;
 pub mod worker;
 
 pub use compactor::{CompactionStats, Compactor, PairwiseVerifier};
+pub use corrections_abstractor::{
+    AbstractionLlm, AbstractionStats, CorrectionsAbstractor, LlmCorrectionsAbstractor,
+};
 pub use decay::{DecayConfig, DecayEngine, PruneCandidate};
 pub use handoff_writer::{
     read_handoff_block, should_inject, HandoffEntry, HandoffInput, HandoffLlm, HandoffWriter,
@@ -33,9 +36,6 @@ pub use pattern_extractor::{
 pub use pruner::{PruneStats, Pruner};
 pub use synthesizer::{
     LlmSynthesizer, SynthesisInput, SynthesisLlm, SynthesisResponse, SynthesisStats, Synthesizer,
-};
-pub use corrections_abstractor::{
-    AbstractionLlm, AbstractionStats, CorrectionsAbstractor, LlmCorrectionsAbstractor,
 };
 pub use verifier::LlmPairwiseVerifier;
 pub use worker::{SleepOps, SleepTimeWorker};
