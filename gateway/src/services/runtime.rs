@@ -113,6 +113,17 @@ impl RuntimeService {
         ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
         goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     ) -> Self {
+        let handoff_writer = memory_store.as_ref().map(|fs| {
+            let llm = Arc::new(gateway_execution::sleep::LlmHandoffWriter::new(
+                provider_service.clone(),
+            ));
+            Arc::new(gateway_execution::sleep::HandoffWriter::new(
+                llm,
+                fs.clone(),
+                conversation_repo.clone(),
+            ))
+        });
+
         let mut runner = ExecutionRunner::with_config(gateway_execution::ExecutionRunnerConfig {
             event_bus: event_bus.clone(),
             agent_service,
@@ -126,6 +137,7 @@ impl RuntimeService {
             connector_registry,
             memory_store,
             distiller,
+            handoff_writer,
             memory_recall,
             bridge_registry,
             bridge_outbox,

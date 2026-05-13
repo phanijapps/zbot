@@ -1134,7 +1134,8 @@ impl AgentExecutor {
                                 }
                                 tracing::debug!(
                                     parallel = delegate.parallel,
-                                    "Delegation detected — stopping={}", !delegate.parallel
+                                    "Delegation detected — stopping={}",
+                                    !delegate.parallel
                                 );
                             }
 

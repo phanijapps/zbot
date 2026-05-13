@@ -31,6 +31,7 @@ use agent_tools::{
     WardTool,
     WriteFileTool,
 };
+use execution_state::StateService;
 use gateway_services::agents::Agent;
 use execution_state::StateService;
 use gateway_services::models::ModelRegistry;

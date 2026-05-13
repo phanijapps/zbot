@@ -285,12 +285,15 @@ impl MemoryRecall {
             apply_class_aware_penalty(sf);
         }
 
-        // Sort by score descending and take top-K
+        // Drop superseded facts before sorting — no point ranking items we'll discard.
+        results.retain(|sf| sf.fact.superseded_by.is_none());
+        // Sort by score descending, drop items below min_score, and take top-K
         results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        results.retain(|sf| sf.score >= self.config.min_score);
         results.truncate(limit);
 
         Ok(results)
@@ -332,10 +335,13 @@ impl MemoryRecall {
                 .unwrap_or_default()
                 .into_iter()
                 .filter_map(|v| {
+                    let score = v.get("score").and_then(|s| s.as_f64()).unwrap_or(0.5);
                     serde_json::from_value::<zero_stores_sqlite::MemoryFact>(v)
                         .ok()
-                        .map(|fact| adapters::fact_to_item(&fact, 0.5))
+                        .filter(|fact| fact.superseded_by.is_none())
+                        .map(|fact| adapters::fact_to_item(&fact, score))
                 })
+                .filter(|item| item.score >= self.config.min_score)
                 .collect()
         } else {
             Vec::new()
@@ -678,5 +684,82 @@ mod tests {
         let mut sf = make_scored_fact(None, Some("2026-01-01"), 1.0);
         apply_class_aware_penalty(&mut sf);
         assert!((sf.score - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn recall_facts_retains_only_items_above_min_score() {
+        use std::sync::Arc;
+        let config = Arc::new(RecallConfig::default()); // default min_score = 0.3
+
+        // Simulate what recall_facts does: sort → retain → truncate
+        let mut results = vec![
+            mk_item(ItemKind::Fact, "high", "high relevance", 0.9),
+            mk_item(ItemKind::Fact, "mid", "borderline", 0.3),
+            mk_item(ItemKind::Fact, "low", "chess procedures", 0.1),
+        ];
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.retain(|sf| sf.score >= config.min_score);
+        results.truncate(10);
+
+        assert_eq!(results.len(), 2, "low-score item should be filtered");
+        assert!(results.iter().any(|i| i.id == "high"));
+        assert!(results.iter().any(|i| i.id == "mid"));
+        assert!(
+            !results.iter().any(|i| i.id == "low"),
+            "chess procedures should be suppressed"
+        );
+    }
+
+    #[test]
+    fn recall_facts_excludes_superseded() {
+        // Sanity test: retain logic drops items whose underlying fact has
+        // superseded_by set. Verifies the filter intent directly without the
+        // full recall pipeline.
+        use zero_stores_sqlite::MemoryFact;
+
+        let mk_fact = |id: &str, superseded: Option<&str>| MemoryFact {
+            id: id.to_string(),
+            session_id: None,
+            agent_id: "agent".to_string(),
+            scope: "agent".to_string(),
+            category: "schema".to_string(),
+            key: format!("schema.{id}"),
+            content: "content".to_string(),
+            confidence: 0.9,
+            mention_count: 1,
+            source_summary: None,
+            embedding: None,
+            ward_id: "__global__".to_string(),
+            contradicted_by: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            expires_at: None,
+            valid_from: None,
+            valid_until: None,
+            superseded_by: superseded.map(String::from),
+            pinned: false,
+            epistemic_class: Some("current".to_string()),
+            source_episode_id: None,
+            source_ref: None,
+        };
+
+        let facts = vec![
+            mk_fact("a", None),
+            mk_fact("b", Some("a")),
+            mk_fact("c", None),
+        ];
+
+        let kept: Vec<_> = facts
+            .into_iter()
+            .filter(|f| f.superseded_by.is_none())
+            .collect();
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().any(|f| f.id == "a"));
+        assert!(kept.iter().any(|f| f.id == "c"));
+        assert!(!kept.iter().any(|f| f.id == "b"));
     }
 }

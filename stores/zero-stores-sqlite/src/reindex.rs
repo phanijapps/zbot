@@ -577,7 +577,7 @@ mod tests {
             .await
             .unwrap();
         // Also run the gateway-database helper explicitly — must not error.
-        db.with_connection(|conn| crate::knowledge_schema::cleanup_orphan_reindex_tables(conn))
+        db.with_connection(crate::knowledge_schema::cleanup_orphan_reindex_tables)
             .unwrap();
     }
 

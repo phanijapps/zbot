@@ -124,6 +124,34 @@ impl Default for SessionOffloadConfig {
     }
 }
 
+/// Knowledge-graph decay configuration — controls how entity and
+/// relationship `confidence` is reduced over time based on `last_seen_at`.
+/// Applied during the sleep-time cycle. Unlike `temporal_decay` (which is
+/// per-category for `memory_facts`), KG decay uses a single half-life
+/// for entities and another for relationships.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KgDecayConfig {
+    pub enabled: bool,
+    pub entity_half_life_days: f64,
+    pub relationship_half_life_days: f64,
+    /// Floor — confidence never drops below this value.
+    pub min_confidence: f64,
+    /// Skip rows whose `last_seen_at` is within this many hours.
+    pub skip_recent_hours: i64,
+}
+
+impl Default for KgDecayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            entity_half_life_days: 90.0,
+            relationship_half_life_days: 90.0,
+            min_confidence: 0.01,
+            skip_recent_hours: 24,
+        }
+    }
+}
+
 /// Recall priority configuration — weights, limits, and thresholds that
 /// control how memory facts and episodes are scored and retrieved.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,16 +166,21 @@ pub struct RecallConfig {
     pub high_confidence_threshold: f64,
     /// Multiplier applied to the recall score of contradicted facts (0.0–1.0).
     pub contradiction_penalty: f64,
+    /// Minimum score threshold — results scoring below this are suppressed.
+    /// Prevents low-relevance facts from appearing for short generic queries.
+    pub min_score: f64,
     pub mid_session_recall: MidSessionRecallConfig,
     pub graph_traversal: GraphTraversalConfig,
     pub temporal_decay: TemporalDecayConfig,
     pub predictive_recall: PredictiveRecallConfig,
     pub session_offload: SessionOffloadConfig,
+    pub kg_decay: KgDecayConfig,
 }
 
 impl Default for RecallConfig {
     fn default() -> Self {
         let category_weights = HashMap::from([
+            ("schema".to_string(), 1.6),
             ("correction".to_string(), 1.5),
             ("strategy".to_string(), 1.4),
             ("user".to_string(), 1.3),
@@ -169,11 +202,13 @@ impl Default for RecallConfig {
             max_episodes: 3,
             high_confidence_threshold: 0.9,
             contradiction_penalty: 0.7,
+            min_score: 0.3,
             mid_session_recall: MidSessionRecallConfig::default(),
             graph_traversal: GraphTraversalConfig::default(),
             temporal_decay: TemporalDecayConfig::default(),
             predictive_recall: PredictiveRecallConfig::default(),
             session_offload: SessionOffloadConfig::default(),
+            kg_decay: KgDecayConfig::default(),
         }
     }
 }
@@ -285,7 +320,7 @@ mod tests {
     fn default_config() {
         let config = RecallConfig::default();
 
-        assert_eq!(config.category_weights.len(), 9);
+        assert_eq!(config.category_weights.len(), 10);
         assert_eq!(config.category_weights["correction"], 1.5);
         assert_eq!(config.category_weights["strategy"], 1.4);
         assert_eq!(config.category_weights["user"], 1.3);
@@ -317,7 +352,7 @@ mod tests {
         // Should return defaults when file doesn't exist
         assert_eq!(config.max_recall_tokens, 3000);
         assert_eq!(config.max_facts, 10);
-        assert_eq!(config.category_weights.len(), 9);
+        assert_eq!(config.category_weights.len(), 10);
     }
 
     #[test]
@@ -390,7 +425,7 @@ mod tests {
         // Should fall back to defaults
         assert_eq!(config.max_recall_tokens, 3000);
         assert_eq!(config.max_facts, 10);
-        assert_eq!(config.category_weights.len(), 9);
+        assert_eq!(config.category_weights.len(), 10);
     }
 
     #[test]
@@ -460,5 +495,59 @@ mod tests {
         // Unknown categories return 1.0 fallback
         assert_eq!(config.category_weight("nonexistent"), 1.0);
         assert_eq!(config.category_weight(""), 1.0);
+    }
+
+    #[test]
+    fn default_min_score_is_0_3() {
+        let config = RecallConfig::default();
+        assert_eq!(config.min_score, 0.3);
+    }
+
+    #[test]
+    fn schema_category_weight_is_higher_than_correction() {
+        let config = RecallConfig::default();
+        let schema_w = config.category_weight("schema");
+        let correction_w = config.category_weight("correction");
+        assert!(
+            schema_w > correction_w,
+            "schema weight ({schema_w}) must exceed correction weight ({correction_w})"
+        );
+    }
+
+    #[test]
+    fn min_score_can_be_overridden() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("recall_config.json"), r#"{"min_score": 0.5}"#).unwrap();
+        let config = RecallConfig::load_from_path(dir.path());
+        assert_eq!(config.min_score, 0.5);
+    }
+
+    #[test]
+    fn kg_decay_config_defaults() {
+        let c = RecallConfig::default();
+        assert!(c.kg_decay.enabled);
+        assert_eq!(c.kg_decay.entity_half_life_days, 90.0);
+        assert_eq!(c.kg_decay.relationship_half_life_days, 90.0);
+        assert_eq!(c.kg_decay.min_confidence, 0.01);
+        assert_eq!(c.kg_decay.skip_recent_hours, 24);
+    }
+
+    #[test]
+    fn kg_decay_partial_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(
+            path.join("recall_config.json"),
+            r#"{"kg_decay": {"entity_half_life_days": 30.0}}"#,
+        )
+        .unwrap();
+        let c = RecallConfig::load_from_path(dir.path());
+        assert_eq!(c.kg_decay.entity_half_life_days, 30.0);
+        // others remain default
+        assert_eq!(c.kg_decay.relationship_half_life_days, 90.0);
+        assert!(c.kg_decay.enabled);
     }
 }

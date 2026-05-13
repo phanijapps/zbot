@@ -11,7 +11,10 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::sleep::{Compactor, DecayEngine, OrphanArchiver, PatternExtractor, Pruner, Synthesizer};
+use crate::sleep::{
+    Compactor, ConflictResolver, CorrectionsAbstractor, DecayEngine, OrphanArchiver,
+    PatternExtractor, Pruner, Synthesizer,
+};
 
 /// Bundle of optional sleep-time ops passed to [`SleepTimeWorker::start`].
 /// Using a struct avoids adding more positional parameters as the pipeline
@@ -21,6 +24,8 @@ pub struct SleepOps {
     pub synthesizer: Option<Arc<Synthesizer>>,
     pub pattern_extractor: Option<Arc<PatternExtractor>>,
     pub orphan_archiver: Option<Arc<OrphanArchiver>>,
+    pub corrections_abstractor: Option<Arc<CorrectionsAbstractor>>,
+    pub conflict_resolver: Option<Arc<ConflictResolver>>,
 }
 
 /// Background worker that orchestrates the full sleep-time pipeline.
@@ -47,6 +52,7 @@ impl SleepTimeWorker {
             decay_engine,
             pruner,
             SleepOps::default(),
+            gateway_services::KgDecayConfig::default(),
             interval,
             agent_id,
         )
@@ -60,12 +66,14 @@ impl SleepTimeWorker {
         decay_engine: Arc<DecayEngine>,
         pruner: Arc<Pruner>,
         ops: SleepOps,
+        kg_decay_config: gateway_services::KgDecayConfig,
         interval: Duration,
         agent_id: String,
     ) -> Self {
         let (tx, mut rx) = mpsc::channel::<()>(8);
 
         tokio::spawn(async move {
+            let kg_decay_config = kg_decay_config;
             // Use `interval` but explicitly skip its initial immediate fire so
             // we don't hammer the graph at boot — wait one full period before the
             // first scheduled run. On-demand triggers bypass this.
@@ -83,14 +91,14 @@ impl SleepTimeWorker {
             loop {
                 tokio::select! {
                     _ = ticker.tick() => {
-                        run_cycle("scheduled", &compactor, &decay_engine, &pruner, &ops, &agent_id).await;
+                        run_cycle("scheduled", &compactor, &decay_engine, &pruner, &ops, &kg_decay_config, &agent_id).await;
                     }
                     maybe = rx.recv() => {
                         if maybe.is_none() {
                             tracing::info!("sleep-time worker trigger channel closed; exiting");
                             break;
                         }
-                        run_cycle("on-demand", &compactor, &decay_engine, &pruner, &ops, &agent_id).await;
+                        run_cycle("on-demand", &compactor, &decay_engine, &pruner, &ops, &kg_decay_config, &agent_id).await;
                     }
                 }
             }
@@ -115,12 +123,16 @@ pub struct CycleStats {
     pub synthesis_facts_inserted: u64,
     pub synthesis_facts_bumped: u64,
     pub patterns_inserted: u64,
+    pub schemas_abstracted: u64,
+    pub conflicts_resolved: u64,
     pub prune_candidates: u64,
     pub pruned: u64,
     pub pruned_failed: u64,
     pub orphans_scanned: u64,
     pub orphans_archived: u64,
     pub orphans_failed: u64,
+    pub kg_entities_decayed: u64,
+    pub kg_relationships_decayed: u64,
 }
 
 async fn run_cycle(
@@ -129,6 +141,7 @@ async fn run_cycle(
     decay_engine: &Arc<DecayEngine>,
     pruner: &Arc<Pruner>,
     ops: &SleepOps,
+    kg_decay_config: &gateway_services::KgDecayConfig,
     agent_id: &str,
 ) -> CycleStats {
     let run_id = format!("sleep-{}", uuid::Uuid::new_v4());
@@ -165,6 +178,14 @@ async fn run_cycle(
         }
     }
 
+    // KG confidence decay — runs before prune candidate list so newly-decayed
+    // entities are still considered by the existing orphan-age heuristic.
+    let kg_decay_stats = decay_engine
+        .decay_kg_confidence(agent_id, kg_decay_config)
+        .await;
+    stats.kg_entities_decayed = kg_decay_stats.entities_decayed;
+    stats.kg_relationships_decayed = kg_decay_stats.relationships_decayed;
+
     let candidates = decay_engine.list_prune_candidates(agent_id).await;
     stats.prune_candidates = candidates.len() as u64;
     let prune_stats = pruner.prune(&run_id, &candidates).await;
@@ -186,6 +207,31 @@ async fn run_cycle(
         }
     }
 
+    // Corrections abstraction — promotes repeated correction facts to schema facts.
+    if let Some(ca) = ops.corrections_abstractor.as_ref() {
+        match ca.run_cycle(&run_id, agent_id).await {
+            Ok(s) => {
+                stats.schemas_abstracted = s.schemas_abstracted;
+            }
+            Err(e) => {
+                tracing::warn!(%run_id, error = %e, "corrections abstractor cycle failed");
+            }
+        }
+    }
+
+    // Conflict resolution — supersedes contradicting schema facts. Runs after
+    // corrections abstraction so newly-promoted schemas are also considered.
+    if let Some(cr) = ops.conflict_resolver.as_ref() {
+        match cr.run_cycle(&run_id, agent_id).await {
+            Ok(s) => {
+                stats.conflicts_resolved = s.conflicts_resolved;
+            }
+            Err(e) => {
+                tracing::warn!(%run_id, error = %e, "conflict resolver cycle failed");
+            }
+        }
+    }
+
     tracing::info!(
         kind,
         %run_id,
@@ -194,12 +240,16 @@ async fn run_cycle(
         synthesis_inserted = stats.synthesis_facts_inserted,
         synthesis_bumped = stats.synthesis_facts_bumped,
         patterns_inserted = stats.patterns_inserted,
+        schemas_abstracted = stats.schemas_abstracted,
+        conflicts_resolved = stats.conflicts_resolved,
         prune_candidates = stats.prune_candidates,
         pruned = stats.pruned,
         pruned_failed = stats.pruned_failed,
         orphans_scanned = stats.orphans_scanned,
         orphans_archived = stats.orphans_archived,
         orphans_failed = stats.orphans_failed,
+        kg_entities_decayed = stats.kg_entities_decayed,
+        kg_relationships_decayed = stats.kg_relationships_decayed,
         "sleep-time cycle done"
     );
     stats
@@ -323,7 +373,16 @@ mod tests {
     async fn cycle_with_none_ops_runs() {
         let h = harness();
         let (c, d, p) = build_core(&h);
-        let stats = run_cycle("test", &c, &d, &p, &SleepOps::default(), "agent-none").await;
+        let stats = run_cycle(
+            "test",
+            &c,
+            &d,
+            &p,
+            &SleepOps::default(),
+            &gateway_services::KgDecayConfig::default(),
+            "agent-none",
+        )
+        .await;
         assert_eq!(stats.merges_performed, 0);
         assert_eq!(stats.synthesis_facts_inserted, 0);
         assert_eq!(stats.patterns_inserted, 0);
@@ -394,8 +453,19 @@ mod tests {
             synthesizer: Some(synth),
             pattern_extractor: Some(px),
             orphan_archiver: Some(archiver),
+            corrections_abstractor: None,
+            conflict_resolver: None,
         };
-        let stats = run_cycle("test", &c, &d, &p, &ops, "agent-ops").await;
+        let stats = run_cycle(
+            "test",
+            &c,
+            &d,
+            &p,
+            &ops,
+            &gateway_services::KgDecayConfig::default(),
+            "agent-ops",
+        )
+        .await;
         // Empty DB => no insertions from any op.
         assert_eq!(stats.synthesis_facts_inserted, 0);
         assert_eq!(stats.patterns_inserted, 0);
@@ -486,8 +556,19 @@ mod tests {
             synthesizer: Some(synth),
             pattern_extractor: Some(px),
             orphan_archiver: None,
+            corrections_abstractor: None,
+            conflict_resolver: None,
         };
-        let stats = run_cycle("test", &c, &d, &p, &ops, "agent-err").await;
+        let stats = run_cycle(
+            "test",
+            &c,
+            &d,
+            &p,
+            &ops,
+            &gateway_services::KgDecayConfig::default(),
+            "agent-err",
+        )
+        .await;
         // Cycle completed; decay/prune ran (0 candidates in empty DB).
         assert_eq!(stats.pruned, 0);
         assert_eq!(stats.pruned_failed, 0);

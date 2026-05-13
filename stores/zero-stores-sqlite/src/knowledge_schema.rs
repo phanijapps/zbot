@@ -27,6 +27,8 @@ pub fn initialize_knowledge_database(conn: &Connection) -> Result<(), rusqlite::
     conn.execute_batch(V23_WIKI_FTS_SQL)?;
     conn.execute_batch(V24_GLOBAL_SCOPE_BACKFILL_SQL)?;
     add_skill_index_format_version_if_missing(conn)?;
+    ensure_evidence_column(conn, "kg_entities")?;
+    ensure_evidence_column(conn, "kg_relationships")?;
     conn.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?1, datetime('now'))",
         rusqlite::params![SCHEMA_VERSION],
@@ -49,6 +51,20 @@ fn add_skill_index_format_version_if_missing(conn: &Connection) -> Result<(), ru
         conn.execute_batch(
             "ALTER TABLE skill_index_state ADD COLUMN format_version INTEGER NOT NULL DEFAULT 1",
         )?;
+    }
+    Ok(())
+}
+
+/// Ensure the `evidence TEXT` column exists on the given KG table.
+/// Idempotent — does nothing if the column already exists.
+fn ensure_evidence_column(conn: &Connection, table: &str) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let has_evidence = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == "evidence");
+    if !has_evidence {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN evidence TEXT"), [])?;
     }
     Ok(())
 }
@@ -82,7 +98,8 @@ CREATE TABLE IF NOT EXISTS kg_entities (
     valid_until TEXT,
     invalidated_by TEXT,
     compressed_into TEXT,
-    source_episode_ids TEXT
+    source_episode_ids TEXT,
+    evidence TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_entities_normalized_hash
     ON kg_entities(agent_id, entity_type, normalized_hash);
@@ -111,6 +128,7 @@ CREATE TABLE IF NOT EXISTS kg_relationships (
     invalidated_at TEXT,
     invalidated_by TEXT,
     source_episode_ids TEXT,
+    evidence TEXT,
     UNIQUE(source_entity_id, target_entity_id, relationship_type),
     FOREIGN KEY (source_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE,
     FOREIGN KEY (target_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE
@@ -809,5 +827,26 @@ mod tests {
         let (present, missing) = list_vec_table_presence(&conn);
         assert_eq!(present.len(), 4);
         assert_eq!(missing, vec!["memory_facts_index".to_string()]);
+    }
+
+    #[test]
+    fn kg_entities_and_relationships_have_evidence_column() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        for table in ["kg_entities", "kg_relationships"] {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .unwrap();
+            let cols: Vec<String> = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect();
+            assert!(
+                cols.contains(&"evidence".to_string()),
+                "{table} must have evidence column; got: {cols:?}"
+            );
+        }
     }
 }

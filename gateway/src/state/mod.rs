@@ -815,10 +815,44 @@ impl AppState {
                     kgs.clone(),
                     compstore.clone(),
                 ));
+                let abstractions_interval_hours = settings
+                    .get_execution_settings()
+                    .map(|s| s.memory.corrections_abstractor_interval_hours)
+                    .unwrap_or(24);
+                let abstractions_interval =
+                    std::time::Duration::from_secs(abstractions_interval_hours as u64 * 3600);
+                let abstractions_llm =
+                    Arc::new(gateway_execution::sleep::LlmCorrectionsAbstractor::new(
+                        provider_service.clone(),
+                    ));
+                let corrections_abstractor =
+                    Arc::new(gateway_execution::sleep::CorrectionsAbstractor::new(
+                        mems.clone(),
+                        compstore.clone(),
+                        abstractions_llm,
+                        abstractions_interval,
+                    ));
+                let conflict_interval_hours = settings
+                    .get_execution_settings()
+                    .map(|s| s.memory.conflict_resolver_interval_hours)
+                    .unwrap_or(24);
+                let conflict_interval =
+                    std::time::Duration::from_secs(conflict_interval_hours as u64 * 3600);
+                let conflict_llm = Arc::new(gateway_execution::sleep::LlmConflictJudge::new(
+                    provider_service.clone(),
+                ));
+                let conflict_resolver = Arc::new(gateway_execution::sleep::ConflictResolver::new(
+                    mems.clone(),
+                    compstore.clone(),
+                    conflict_llm,
+                    conflict_interval,
+                ));
                 let ops = gateway_execution::sleep::SleepOps {
                     synthesizer: Some(synthesizer),
                     pattern_extractor: Some(pattern_extractor),
                     orphan_archiver: Some(orphan_archiver),
+                    corrections_abstractor: Some(corrections_abstractor),
+                    conflict_resolver: Some(conflict_resolver),
                 };
                 Some(Arc::new(
                     gateway_execution::sleep::SleepTimeWorker::start_with_ops(
@@ -826,6 +860,7 @@ impl AppState {
                         decay,
                         pruner,
                         ops,
+                        recall_config.kg_decay.clone(),
                         std::time::Duration::from_secs(60 * 60),
                         "root".to_string(),
                     ),
