@@ -56,12 +56,16 @@ impl HandoffWriter {
         fact_store: Arc<dyn zero_stores::MemoryFactStore>,
         conversation_repo: Arc<ConversationRepository>,
     ) -> Self {
-        Self { llm, fact_store, conversation_repo }
+        Self {
+            llm,
+            fact_store,
+            conversation_repo,
+        }
     }
 
     /// Fire-and-forget entry point: loads last 50 messages then calls
     /// `write_with_messages`. All errors are logged at warn and swallowed.
-    pub async fn write(&self, session_id: &str, _agent_id: &str, ward_id: &str) {
+    pub async fn write(&self, session_id: &str, agent_id: &str, ward_id: &str) {
         let messages_raw = match self
             .conversation_repo
             .get_session_conversation(session_id, 50)
@@ -75,7 +79,10 @@ impl HandoffWriter {
         let messages = self
             .conversation_repo
             .session_messages_to_chat_format(&messages_raw);
-        if let Err(e) = self.write_with_messages(session_id, ward_id, messages).await {
+        if let Err(e) = self
+            .write_with_messages(session_id, agent_id, ward_id, messages)
+            .await
+        {
             tracing::warn!(session_id, "handoff: write failed: {e}");
         }
     }
@@ -84,11 +91,21 @@ impl HandoffWriter {
     pub async fn write_with_messages(
         &self,
         session_id: &str,
+        agent_id: &str,
         ward_id: &str,
         messages: Vec<ChatMessage>,
     ) -> Result<(), String> {
         let turns = messages.iter().filter(|m| m.role == "user").count() as u32;
-        let input = HandoffInput { messages, ward_id: ward_id.to_string() };
+        let correction_count = self
+            .fact_store
+            .get_facts_by_category(agent_id, "correction", 200)
+            .await
+            .unwrap_or_default()
+            .len() as u32;
+        let input = HandoffInput {
+            messages,
+            ward_id: ward_id.to_string(),
+        };
         let summary = self.llm.summarize(&input).await?;
         let entry = HandoffEntry {
             summary,
@@ -98,15 +115,14 @@ impl HandoffWriter {
             intent_key: format!("ctx.{session_id}.intent"),
             goal_count: 0,
             open_task_count: 0,
-            correction_count: 0,
+            correction_count,
             turns,
         };
         self.persist(session_id, &entry).await
     }
 
     async fn persist(&self, session_id: &str, entry: &HandoffEntry) -> Result<(), String> {
-        let json =
-            serde_json::to_string(entry).map_err(|e| format!("serialize entry: {e}"))?;
+        let json = serde_json::to_string(entry).map_err(|e| format!("serialize entry: {e}"))?;
         self.fact_store
             .save_fact(
                 HANDOFF_AGENT_SENTINEL,
@@ -142,18 +158,31 @@ pub fn should_inject(entry: &HandoffEntry) -> bool {
 }
 
 /// Reads `handoff.latest` from the fact store.
-/// Returns `None` if absent, unparseable, or older than `HANDOFF_MAX_AGE_DAYS`.
+/// Returns `None` if absent, unparseable, older than `HANDOFF_MAX_AGE_DAYS`,
+/// or if `current_ward` is `Some` and doesn't match the entry's ward.
 pub async fn read_handoff_block(
     fact_store: &Arc<dyn zero_stores::MemoryFactStore>,
+    current_ward: Option<&str>,
 ) -> Option<String> {
     let fact = fact_store
-        .get_fact_by_key(HANDOFF_AGENT_SENTINEL, HANDOFF_SCOPE, HANDOFF_WARD, "handoff.latest")
+        .get_fact_by_key(
+            HANDOFF_AGENT_SENTINEL,
+            HANDOFF_SCOPE,
+            HANDOFF_WARD,
+            "handoff.latest",
+        )
         .await
         .ok()??;
     let entry: HandoffEntry = serde_json::from_str(&fact.content).ok()?;
     let completed_at = entry.completed_at.parse::<DateTime<Utc>>().ok()?;
     if (Utc::now() - completed_at).num_days() > HANDOFF_MAX_AGE_DAYS {
         return None;
+    }
+    // Ward filter: skip if the new session is a different ward (None = accept any)
+    if let Some(cw) = current_ward {
+        if !entry.ward_id.is_empty() && entry.ward_id != cw {
+            return None;
+        }
     }
     let date_str = completed_at.format("%Y-%m-%d").to_string();
     Some(format!(
@@ -301,13 +330,15 @@ mod tests {
 
     // ---- Mock MemoryFactStore ----
 
+    #[derive(Default)]
     struct MockFactStore {
         facts: Mutex<HashMap<String, String>>,
+        corrections: Mutex<Vec<String>>,
     }
 
     impl MockFactStore {
         fn new() -> Arc<Self> {
-            Arc::new(Self { facts: Mutex::new(HashMap::new()) })
+            Arc::new(Self::default())
         }
         fn get(&self, key: &str) -> Option<String> {
             self.facts.lock().unwrap().get(key).cloned()
@@ -378,6 +409,47 @@ mod tests {
                 source_ref: None,
             }))
         }
+
+        async fn get_facts_by_category(
+            &self,
+            _agent_id: &str,
+            category: &str,
+            _limit: usize,
+        ) -> Result<Vec<MemoryFact>, String> {
+            if category != "correction" {
+                return Ok(Vec::new());
+            }
+            let items = self.corrections.lock().unwrap().clone();
+            Ok(items
+                .into_iter()
+                .enumerate()
+                .map(|(i, content)| MemoryFact {
+                    id: format!("corr-{i}"),
+                    session_id: None,
+                    agent_id: "".to_string(),
+                    scope: "".to_string(),
+                    ward_id: "".to_string(),
+                    category: "correction".to_string(),
+                    key: format!("correction.{i}"),
+                    content,
+                    confidence: 1.0,
+                    mention_count: 1,
+                    source_summary: None,
+                    embedding: None,
+                    contradicted_by: None,
+                    created_at: "".to_string(),
+                    updated_at: "".to_string(),
+                    expires_at: None,
+                    valid_from: None,
+                    valid_until: None,
+                    superseded_by: None,
+                    pinned: false,
+                    epistemic_class: None,
+                    source_episode_id: None,
+                    source_ref: None,
+                })
+                .collect())
+        }
     }
 
     // ---- Harness ----
@@ -415,13 +487,14 @@ mod tests {
     #[tokio::test]
     async fn generates_summary_from_messages() {
         let tmp = tempfile::tempdir().unwrap();
-        let llm =
-            MockLlm::ok("User explored memory limits. Wrote reflective spec. Left impl incomplete.");
+        let llm = MockLlm::ok(
+            "User explored memory limits. Wrote reflective spec. Left impl incomplete.",
+        );
         let store = MockFactStore::new();
         let writer = make_writer(&tmp, llm.clone(), store.clone());
 
         let result = writer
-            .write_with_messages("sess-abc", "test-ward", sample_messages(6))
+            .write_with_messages("sess-abc", "agent-root", "test-ward", sample_messages(6))
             .await;
 
         assert!(result.is_ok(), "write_with_messages failed: {result:?}");
@@ -444,12 +517,15 @@ mod tests {
         let writer = make_writer(&tmp, MockLlm::ok("Session summary here."), store.clone());
 
         writer
-            .write_with_messages("sess-xyz", "my-ward", sample_messages(4))
+            .write_with_messages("sess-xyz", "agent-root", "my-ward", sample_messages(4))
             .await
             .unwrap();
 
         assert!(store.contains("handoff.latest"), "handoff.latest missing");
-        assert!(store.contains("handoff.sess-xyz"), "handoff.sess-xyz missing");
+        assert!(
+            store.contains("handoff.sess-xyz"),
+            "handoff.sess-xyz missing"
+        );
 
         let latest: HandoffEntry =
             serde_json::from_str(&store.get("handoff.latest").unwrap()).unwrap();
@@ -467,11 +543,14 @@ mod tests {
         let writer = make_writer(&tmp, MockLlm::err(), store.clone());
 
         let result = writer
-            .write_with_messages("sess-fail", "ward", sample_messages(2))
+            .write_with_messages("sess-fail", "agent-root", "ward", sample_messages(2))
             .await;
 
         assert!(result.is_err(), "expected Err when LLM fails");
-        assert!(!store.contains("handoff.latest"), "no fact should be written on LLM failure");
+        assert!(
+            !store.contains("handoff.latest"),
+            "no fact should be written on LLM failure"
+        );
     }
 
     // ---- Test 4: stale_handoff_excluded ----
@@ -489,13 +568,19 @@ mod tests {
             correction_count: 0,
             turns: 5,
         };
-        assert!(!should_inject(&stale), "8-day-old handoff should be excluded");
+        assert!(
+            !should_inject(&stale),
+            "8-day-old handoff should be excluded"
+        );
 
         let fresh = HandoffEntry {
             completed_at: (Utc::now() - chrono::Duration::days(6)).to_rfc3339(),
             ..stale.clone()
         };
-        assert!(should_inject(&fresh), "6-day-old handoff should be injected");
+        assert!(
+            should_inject(&fresh),
+            "6-day-old handoff should be injected"
+        );
     }
 
     // ---- Test 5: read_handoff_block returns formatted block ----
@@ -514,14 +599,15 @@ mod tests {
             correction_count: 3,
             turns: 10,
         };
-        store
-            .facts
-            .lock()
-            .unwrap()
-            .insert("handoff.latest".to_string(), serde_json::to_string(&entry).unwrap());
+        store.facts.lock().unwrap().insert(
+            "handoff.latest".to_string(),
+            serde_json::to_string(&entry).unwrap(),
+        );
 
         let store: Arc<dyn zero_stores::MemoryFactStore> = store;
-        let block = read_handoff_block(&store).await.expect("should return a block");
+        let block = read_handoff_block(&store, None)
+            .await
+            .expect("should return a block");
         assert!(block.contains("## Last Session"));
         assert!(block.contains("User explored memory"));
         assert!(block.contains("memory-ward"));
@@ -546,14 +632,13 @@ mod tests {
             correction_count: 0,
             turns: 5,
         };
-        store
-            .facts
-            .lock()
-            .unwrap()
-            .insert("handoff.latest".to_string(), serde_json::to_string(&entry).unwrap());
+        store.facts.lock().unwrap().insert(
+            "handoff.latest".to_string(),
+            serde_json::to_string(&entry).unwrap(),
+        );
 
         let store: Arc<dyn zero_stores::MemoryFactStore> = store;
-        assert!(read_handoff_block(&store).await.is_none());
+        assert!(read_handoff_block(&store, None).await.is_none());
     }
 
     // ---- Test 7: read_handoff_block returns None when absent ----
@@ -561,6 +646,64 @@ mod tests {
     #[tokio::test]
     async fn read_handoff_block_returns_none_when_absent() {
         let store: Arc<dyn zero_stores::MemoryFactStore> = MockFactStore::new();
-        assert!(read_handoff_block(&store).await.is_none());
+        assert!(read_handoff_block(&store, None).await.is_none());
+    }
+
+    // ---- Test 8: ward filter ----
+
+    #[tokio::test]
+    async fn read_handoff_block_returns_none_when_ward_differs() {
+        let store = MockFactStore::new();
+        let entry = HandoffEntry {
+            summary: "Done something.".to_string(),
+            session_id: "sess-1".to_string(),
+            completed_at: Utc::now().to_rfc3339(),
+            ward_id: "coding-ward".to_string(),
+            intent_key: "ctx.sess-1.intent".to_string(),
+            goal_count: 0,
+            open_task_count: 0,
+            correction_count: 0,
+            turns: 3,
+        };
+        store.facts.lock().unwrap().insert(
+            "handoff.latest".to_string(),
+            serde_json::to_string(&entry).unwrap(),
+        );
+        let store: Arc<dyn zero_stores::MemoryFactStore> = store;
+        assert!(read_handoff_block(&store, Some("research-ward"))
+            .await
+            .is_none());
+        assert!(read_handoff_block(&store, Some("coding-ward"))
+            .await
+            .is_some());
+        assert!(read_handoff_block(&store, None).await.is_some());
+    }
+
+    // ---- Test 9: real correction_count ----
+
+    #[tokio::test]
+    async fn correction_count_reflects_real_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = MockFactStore::new();
+        store
+            .corrections
+            .lock()
+            .unwrap()
+            .push("Use write_file not shell".to_string());
+        store
+            .corrections
+            .lock()
+            .unwrap()
+            .push("Never CPU offload".to_string());
+
+        let writer = make_writer(&tmp, MockLlm::ok("Summary."), store.clone());
+        writer
+            .write_with_messages("sess-c", "agent-root", "test-ward", sample_messages(4))
+            .await
+            .unwrap();
+
+        let raw = store.get("handoff.latest").unwrap();
+        let entry: HandoffEntry = serde_json::from_str(&raw).unwrap();
+        assert_eq!(entry.correction_count, 2);
     }
 }

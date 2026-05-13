@@ -317,7 +317,9 @@ impl InvokeBootstrap {
         // (the last insert(0, ..) wins the front slot; agent reads handoff
         // first, giving orientation before noisy recall facts).
         if let Some(store) = &self.memory_store {
-            if let Some(block) = crate::sleep::handoff_writer::read_handoff_block(store).await {
+            if let Some(block) =
+                crate::sleep::handoff_writer::read_handoff_block(store, ward_id.as_deref()).await
+            {
                 history.insert(0, ChatMessage::system(block));
             }
         }
