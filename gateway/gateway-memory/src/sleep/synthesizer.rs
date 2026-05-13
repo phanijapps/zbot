@@ -14,10 +14,14 @@
 use std::sync::Arc;
 
 use agent_runtime::llm::embedding::EmbeddingClient;
+use agent_runtime::llm::ChatMessage;
 use async_trait::async_trait;
 use serde::Deserialize;
 use zero_stores::{KnowledgeGraphStore, StrategyCandidate};
 use zero_stores_traits::{CompactionStore, EpisodeStore, MemoryFactStore, StrategyFactInsert};
+
+use crate::util::parse_llm_json;
+use crate::{LlmClientConfig, MemoryLlmFactory};
 
 /// Maximum candidates fetched from the DB per cycle.
 const CANDIDATE_LIMIT: usize = 20;
@@ -340,6 +344,67 @@ fn slugify(s: &str) -> String {
         "entity".to_string()
     } else {
         trimmed
+    }
+}
+
+// ============================================================================
+// LLM-backed implementation
+// ============================================================================
+
+/// LLM-backed `SynthesisLlm` wired to the injected `MemoryLlmFactory`.
+/// Conservative on failure — propagates `Err` so `run_cycle` can log+skip.
+pub struct LlmSynthesizer {
+    factory: Arc<dyn MemoryLlmFactory>,
+}
+
+impl LlmSynthesizer {
+    pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
+        Self { factory }
+    }
+}
+
+#[async_trait]
+impl SynthesisLlm for LlmSynthesizer {
+    async fn synthesize(&self, input: &SynthesisInput) -> Result<SynthesisResponse, String> {
+        let client = self
+            .factory
+            .build_client(LlmClientConfig::new(0.0, 512))
+            .await?;
+        let prompt = format!(
+            "You identify reusable cross-session strategies from an agent's knowledge graph.\n\
+             The entity below has appeared across {n} distinct sessions within the last 30 days.\n\
+             Decide whether the repeated co-occurrence reveals a *strategy* worth memorising \
+             as a stable rule (e.g. \"when X times out, retry with backoff\").\n\n\
+             Return ONLY JSON: {{\"strategy\": string, \"confidence\": 0.0-1.0, \
+             \"key_fact\": string, \"decision\": \"synthesize\" | \"skip\"}}.\n\n\
+             Entity: name={name:?} type={etype}\n\
+             Recent task summaries:\n{tasks}\n\n\
+             Relationships:\n{rels}",
+            n = input.session_count,
+            name = input.entity_name,
+            etype = input.entity_type,
+            tasks = input
+                .task_summaries
+                .iter()
+                .map(|t| format!("- {t}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            rels = input
+                .relationship_summaries
+                .iter()
+                .map(|r| format!("- {r}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let messages = vec![
+            ChatMessage::system("You return only valid JSON.".to_string()),
+            ChatMessage::user(prompt),
+        ];
+        let response = client
+            .chat(messages, None)
+            .await
+            .map_err(|e| format!("LLM call: {e}"))?;
+        parse_llm_json::<SynthesisResponse>(&response.content)
     }
 }
 

@@ -243,6 +243,12 @@ impl AppState {
         let provider_service = Arc::new(ProviderService::new(paths.clone()));
         let mcp_service = Arc::new(McpService::new(paths.clone()));
 
+        // Factory for sleep-time memory LLM clients — built once, shared
+        // across every sleep-time component that needs an LLM call.
+        let memory_llm_factory: Arc<dyn gateway_memory::MemoryLlmFactory> = Arc::new(
+            crate::memory_llm_factory::ProviderServiceLlmFactory::new(provider_service.clone()),
+        );
+
         // Initialize model capabilities registry (bundled + local overrides)
         let bundled_models = gateway_templates::Templates::get("models_registry.json")
             .map(|f| f.data.to_vec())
@@ -791,7 +797,7 @@ impl AppState {
                     compstore.clone(),
                 ));
                 let synth_llm = Arc::new(gateway_execution::sleep::LlmSynthesizer::new(
-                    provider_service.clone(),
+                    memory_llm_factory.clone(),
                 ));
                 let synthesizer = Arc::new(gateway_execution::sleep::Synthesizer::new(
                     kgs.clone(),
