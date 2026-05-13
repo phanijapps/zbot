@@ -4,6 +4,7 @@
 pub mod sleep;
 
 pub use sleep::decay::{DecayConfig, DecayEngine, KgDecayStats, PruneCandidate};
+pub use sleep::orphan_archiver::{OrphanArchiver, OrphanArchiverStats};
 pub use sleep::pruner::{PruneStats, Pruner};
 
 use serde::{Deserialize, Serialize};

@@ -2,4 +2,5 @@
 //! during the gateway-memory crate extraction (Phase B).
 
 pub mod decay;
+pub mod orphan_archiver;
 pub mod pruner;
