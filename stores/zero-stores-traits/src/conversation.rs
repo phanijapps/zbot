@@ -10,19 +10,21 @@
 // trait.
 //
 // Note on scope:
-// - Trait surface is intentionally narrow. Most `ConversationRepository`
-//   methods return rich row types (`Message`, `agent_runtime::ChatMessage`)
-//   that live outside this dependency-light traits crate. Hoisting those
-//   value types up to `zero-stores-traits` to widen the trait surface is
-//   deferred until a consumer actually needs trait-erased access — the
-//   point of this scaffold is symmetry with `KnowledgeGraphStore` and
-//   `OutboxStore`, not full method coverage.
-// - The included methods are the simple session-metadata lookups whose
-//   return types (`Option<String>`) are already trait-friendly. Both
-//   methods exist verbatim on `ConversationRepository` today.
+// - Trait surface is intentionally narrow. Only methods that an existing
+//   trait-erased consumer needs are exposed. Rich-type methods
+//   (`agent_runtime::ChatMessage` etc.) are deliberately NOT hoisted here
+//   — that would force `zero-stores-traits` to depend on `agent-runtime`
+//   which cycles back through `agent-tools`. Consumers convert the POD
+//   `Message` rows returned here into rich types themselves.
+// - The included methods cover (a) session-metadata lookups whose return
+//   types are trait-friendly and (b) the message-history read that
+//   `HandoffWriter` needs (returning the POD `Message` from
+//   `zero-stores-domain`).
 // - Methods are synchronous to mirror the existing public surface (the
 //   underlying `DatabaseManager::with_connection` call is blocking). Errors
 //   stay as `String`, matching the existing API.
+
+use zero_stores_domain::Message;
 
 /// Backend-agnostic interface for the conversation message stream.
 ///
@@ -47,6 +49,19 @@ pub trait ConversationStore: Send + Sync {
     /// successful sessions. Default: empty so backends that haven't
     /// implemented yet make pattern extraction a quiet no-op.
     fn tool_sequence_for_session(&self, _session_id: &str) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Load up to `limit` messages for a session, oldest-to-newest.
+    /// Returns POD `Message` rows; rich-type conversion (to
+    /// `agent_runtime::ChatMessage`) lives in the consumer crate.
+    /// Default: empty so backends that haven't implemented yet make
+    /// sleep-time handoff a quiet no-op.
+    fn get_session_messages(
+        &self,
+        _session_id: &str,
+        _limit: usize,
+    ) -> Result<Vec<Message>, String> {
         Ok(Vec::new())
     }
 }

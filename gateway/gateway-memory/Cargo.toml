@@ -36,6 +36,10 @@ knowledge-graph = { path = "../../services/knowledge-graph" }
 # + MemoryRecall (query embedding).
 agent-runtime = { path = "../../runtime/agent-runtime" }
 
+# `zero_core::types::Part` used by `HandoffWriter`'s message-to-chat
+# conversion.
+zero-core = { path = "../../framework/zero-core" }
+
 [dev-dependencies]
 tempfile = "3"
 

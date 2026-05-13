@@ -122,10 +122,12 @@ impl RuntimeService {
             let llm = Arc::new(gateway_execution::sleep::LlmHandoffWriter::new(
                 memory_llm_factory.clone(),
             ));
+            let conversation_store: Arc<dyn zero_stores_traits::ConversationStore> =
+                conversation_repo.clone();
             Arc::new(gateway_execution::sleep::HandoffWriter::new(
                 llm,
                 fs.clone(),
-                conversation_repo.clone(),
+                conversation_store,
             ))
         });
 

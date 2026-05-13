@@ -5,7 +5,6 @@
 
 use chrono::Utc;
 use rusqlite::params;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::DatabaseManager;
@@ -14,20 +13,13 @@ use crate::DatabaseManager;
 // TYPES
 // ============================================================================
 
-/// A message record
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Message {
-    pub id: String,
-    pub execution_id: Option<String>,
-    pub session_id: Option<String>,
-    pub role: String,
-    pub content: String,
-    pub created_at: String,
-    pub token_count: i32,
-    pub tool_calls: Option<String>,
-    pub tool_results: Option<String>,
-    pub tool_call_id: Option<String>,
-}
+/// A persisted conversation message row.
+///
+/// Re-export of the backend-agnostic POD type defined in
+/// `zero-stores-domain`. Lives there (not here) so the
+/// `ConversationStore` trait can hand back conversation history without
+/// forcing consumers onto the sqlite crate.
+pub use zero_stores_domain::Message;
 
 // ============================================================================
 // REPOSITORY
@@ -361,6 +353,10 @@ impl zero_stores_traits::ConversationStore for ConversationRepository {
 
     fn get_session_agent_id(&self, session_id: &str) -> Result<Option<String>, String> {
         ConversationRepository::get_session_agent_id(self, session_id)
+    }
+
+    fn get_session_messages(&self, session_id: &str, limit: usize) -> Result<Vec<Message>, String> {
+        ConversationRepository::get_session_conversation(self, session_id, limit)
     }
 
     fn tool_sequence_for_session(&self, session_id: &str) -> Result<Vec<String>, String> {
