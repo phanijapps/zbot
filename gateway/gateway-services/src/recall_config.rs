@@ -124,6 +124,34 @@ impl Default for SessionOffloadConfig {
     }
 }
 
+/// Knowledge-graph decay configuration — controls how entity and
+/// relationship `confidence` is reduced over time based on `last_seen_at`.
+/// Applied during the sleep-time cycle. Unlike `temporal_decay` (which is
+/// per-category for `memory_facts`), KG decay uses a single half-life
+/// for entities and another for relationships.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KgDecayConfig {
+    pub enabled: bool,
+    pub entity_half_life_days: f64,
+    pub relationship_half_life_days: f64,
+    /// Floor — confidence never drops below this value.
+    pub min_confidence: f64,
+    /// Skip rows whose `last_seen_at` is within this many hours.
+    pub skip_recent_hours: i64,
+}
+
+impl Default for KgDecayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            entity_half_life_days: 90.0,
+            relationship_half_life_days: 90.0,
+            min_confidence: 0.01,
+            skip_recent_hours: 24,
+        }
+    }
+}
+
 /// Recall priority configuration — weights, limits, and thresholds that
 /// control how memory facts and episodes are scored and retrieved.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,6 +174,7 @@ pub struct RecallConfig {
     pub temporal_decay: TemporalDecayConfig,
     pub predictive_recall: PredictiveRecallConfig,
     pub session_offload: SessionOffloadConfig,
+    pub kg_decay: KgDecayConfig,
 }
 
 impl Default for RecallConfig {
@@ -179,6 +208,7 @@ impl Default for RecallConfig {
             temporal_decay: TemporalDecayConfig::default(),
             predictive_recall: PredictiveRecallConfig::default(),
             session_offload: SessionOffloadConfig::default(),
+            kg_decay: KgDecayConfig::default(),
         }
     }
 }
@@ -492,5 +522,32 @@ mod tests {
         std::fs::write(path.join("recall_config.json"), r#"{"min_score": 0.5}"#).unwrap();
         let config = RecallConfig::load_from_path(dir.path());
         assert_eq!(config.min_score, 0.5);
+    }
+
+    #[test]
+    fn kg_decay_config_defaults() {
+        let c = RecallConfig::default();
+        assert!(c.kg_decay.enabled);
+        assert_eq!(c.kg_decay.entity_half_life_days, 90.0);
+        assert_eq!(c.kg_decay.relationship_half_life_days, 90.0);
+        assert_eq!(c.kg_decay.min_confidence, 0.01);
+        assert_eq!(c.kg_decay.skip_recent_hours, 24);
+    }
+
+    #[test]
+    fn kg_decay_partial_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(
+            path.join("recall_config.json"),
+            r#"{"kg_decay": {"entity_half_life_days": 30.0}}"#,
+        )
+        .unwrap();
+        let c = RecallConfig::load_from_path(dir.path());
+        assert_eq!(c.kg_decay.entity_half_life_days, 30.0);
+        // others remain default
+        assert_eq!(c.kg_decay.relationship_half_life_days, 90.0);
+        assert!(c.kg_decay.enabled);
     }
 }
