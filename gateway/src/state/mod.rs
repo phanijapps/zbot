@@ -808,7 +808,7 @@ impl AppState {
                     embedding_client.clone(),
                 ));
                 let pattern_llm = Arc::new(gateway_execution::sleep::LlmPatternExtractor::new(
-                    provider_service.clone(),
+                    memory_llm_factory.clone(),
                 ));
                 let pattern_extractor = Arc::new(gateway_execution::sleep::PatternExtractor::new(
                     eps.clone(),

@@ -12,12 +12,16 @@
 
 use std::sync::Arc;
 
+use agent_runtime::llm::ChatMessage;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use zero_stores_traits::{
     CompactionStore, ConversationStore, EpisodeStore, PatternProcedureInsert, ProcedureStore,
     SuccessfulEpisode,
 };
+
+use crate::util::parse_llm_json;
+use crate::{LlmClientConfig, MemoryLlmFactory};
 
 /// Maximum successful session_episodes loaded per cycle.
 const CANDIDATE_LIMIT: usize = 50;
@@ -383,6 +387,59 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
         return 0.0;
     }
     dot / (na.sqrt() * nb.sqrt())
+}
+
+// ============================================================================
+// LLM-backed implementation
+// ============================================================================
+
+/// LLM-backed `PatternExtractLlm`. Conservative on failure — propagates `Err`
+/// so `run_cycle` can log+skip.
+pub struct LlmPatternExtractor {
+    factory: Arc<dyn MemoryLlmFactory>,
+}
+
+impl LlmPatternExtractor {
+    pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
+        Self { factory }
+    }
+}
+
+#[async_trait]
+impl PatternExtractLlm for LlmPatternExtractor {
+    async fn generalize(&self, input: &PatternInput) -> Result<PatternResponse, String> {
+        let client = self
+            .factory
+            .build_client(LlmClientConfig::new(0.0, 1024))
+            .await?;
+        let prompt = format!(
+            "Two recent successful agent sessions shared a recurring tool-call \
+             sequence. Generalize it into a reusable procedure.\n\n\
+             Return ONLY JSON: {{\"name\": snake_case_string, \"description\": string, \
+             \"trigger_pattern\": string, \"parameters\": [string], \
+             \"steps\": [{{\"action\": string, \"agent\": string|null, \
+             \"note\": string|null, \"task_template\": string|null}}]}}.\n\n\
+             Session A task: {sa}\n\
+             Session A tool sequence: {ta:?}\n\n\
+             Session B task: {sb}\n\
+             Session B tool sequence: {tb:?}\n\n\
+             Matched prefix: {mp:?}",
+            sa = input.task_summary_a,
+            sb = input.task_summary_b,
+            ta = input.tool_sequence_a,
+            tb = input.tool_sequence_b,
+            mp = input.matched_prefix,
+        );
+        let messages = vec![
+            ChatMessage::system("You return only valid JSON.".to_string()),
+            ChatMessage::user(prompt),
+        ];
+        let response = client
+            .chat(messages, None)
+            .await
+            .map_err(|e| format!("LLM call: {e}"))?;
+        parse_llm_json::<PatternResponse>(&response.content)
+    }
 }
 
 // ============================================================================
