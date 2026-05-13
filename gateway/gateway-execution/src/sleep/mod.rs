@@ -20,6 +20,9 @@ pub mod verifier;
 pub mod worker;
 
 pub use compactor::{CompactionStats, Compactor, PairwiseVerifier};
+pub use conflict_resolver::{
+    ConflictJudgeLlm, ConflictResolver, ConflictResponse, ConflictStats, LlmConflictJudge,
+};
 pub use corrections_abstractor::{
     AbstractionLlm, AbstractionStats, CorrectionsAbstractor, LlmCorrectionsAbstractor,
 };
