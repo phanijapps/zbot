@@ -24,6 +24,7 @@ pub use scored_item::{intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, S
 
 use std::sync::Arc;
 
+use crate::rerank::CrossEncoderReranker;
 use crate::RecallConfig;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use zero_stores_domain::{MemoryFact, Procedure, ScoredFact};
@@ -157,6 +158,7 @@ pub struct MemoryRecall {
     episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>>,
     wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>>,
     procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    reranker: Option<Arc<dyn CrossEncoderReranker>>,
     config: Arc<RecallConfig>,
 }
 
@@ -175,8 +177,16 @@ impl MemoryRecall {
             episode_store: None,
             wiki_store: None,
             procedure_store: None,
+            reranker: None,
             config,
         }
+    }
+
+    /// Wire the cross-encoder reranker (MEM-007). When set and
+    /// `config.rerank.enabled` is true, the reranker runs after MMR
+    /// and before the final truncate-to-top-K in [`Self::recall`].
+    pub fn set_reranker(&mut self, reranker: Arc<dyn CrossEncoderReranker>) {
+        self.reranker = Some(reranker);
     }
 
     /// Access the recall configuration.
@@ -422,6 +432,16 @@ impl MemoryRecall {
         if self.config.mmr.enabled {
             if let Some(store) = self.memory_store.as_ref() {
                 mmr_rerank(&mut results, store, &self.config.mmr, limit).await?;
+            }
+        }
+
+        // 9.7 Cross-encoder reranker (MEM-007). Runs after MMR so the
+        // model sees a diversity-reordered pool. The reranker's own
+        // top_k_after caps the output; we still truncate to `limit`
+        // below in case top_k_after > limit.
+        if self.config.rerank.enabled {
+            if let Some(reranker) = self.reranker.as_ref() {
+                results = reranker.rerank(user_message, results).await;
             }
         }
 
