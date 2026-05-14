@@ -16,8 +16,9 @@
 //! - [`KnnIntentClassifier`] — production impl: embeds exemplars once at
 //!   construction, then per-query embeds the query and does a top-K cosine
 //!   vote against the bank.
-//! - `IntentProfiles` — partial [`RecallConfig`] overlays keyed by intent
-//!   label (added in a later commit).
+//! - [`IntentProfiles`] — partial [`RecallConfig`] overlays keyed by intent
+//!   label, applied via the same [`crate::deep_merge`] function used by
+//!   [`RecallConfig::load_from_path`].
 //!
 //! See `memory-bank/future-state/2026-05-13-memory-backlog.md` (MEM-008) for
 //! the design rationale and exemplar/profile taxonomy.
@@ -27,8 +28,10 @@ use std::sync::Arc;
 
 use agent_runtime::llm::embedding::EmbeddingClient;
 use async_trait::async_trait;
+use serde_json::Value;
 
 use crate::recall::cosine_similarity;
+use crate::{deep_merge, RecallConfig};
 
 /// Classifies a query into a (possibly-absent) intent label.
 ///
@@ -202,6 +205,83 @@ impl IntentClassifier for KnnIntentClassifier {
                 })
             })
             .map(|(label, _)| label.to_string())
+    }
+}
+
+/// Per-intent recall config overlays.
+///
+/// Each entry maps an intent label (e.g. `"factoid-lookup"`) to a partial
+/// JSON object that gets deep-merged onto the base [`RecallConfig`] when
+/// the classifier returns that intent. Unknown intents return the base
+/// config unchanged.
+///
+/// The overlay JSON has the same shape as `recall_config.json` itself —
+/// any subset of fields is valid, and nested objects merge by key (see
+/// [`crate::deep_merge`]).
+pub struct IntentProfiles {
+    overrides: HashMap<String, Value>,
+}
+
+impl IntentProfiles {
+    /// Build profiles from a parsed JSON value. The value must be an object
+    /// whose keys are intent labels and whose values are partial
+    /// [`RecallConfig`] overlays.
+    ///
+    /// Non-object input yields an empty profile bank — every intent falls
+    /// back to the base config.
+    pub fn from_json(value: Value) -> Self {
+        let overrides = match value {
+            Value::Object(map) => map.into_iter().collect(),
+            _ => HashMap::new(),
+        };
+        Self { overrides }
+    }
+
+    /// Build profiles from an explicit map (used by tests).
+    pub fn from_map(overrides: HashMap<String, Value>) -> Self {
+        Self { overrides }
+    }
+
+    /// Number of intent profiles registered. Exposed for tests + logging.
+    pub fn len(&self) -> usize {
+        self.overrides.len()
+    }
+
+    /// True when no profiles are registered.
+    pub fn is_empty(&self) -> bool {
+        self.overrides.is_empty()
+    }
+
+    /// Apply the overlay for `intent` on top of `base`.
+    ///
+    /// If `intent` is not in the bank, returns a clone of `base`. If the
+    /// merged JSON can't deserialize back into [`RecallConfig`] (e.g.
+    /// because the overlay has malformed fields), logs a warning and
+    /// returns `base` unchanged.
+    pub fn apply(&self, base: &RecallConfig, intent: &str) -> RecallConfig {
+        let Some(overlay) = self.overrides.get(intent) else {
+            return base.clone();
+        };
+
+        let base_v = match serde_json::to_value(base) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("IntentProfiles::apply: base config failed to serialize: {e}");
+                return base.clone();
+            }
+        };
+        let merged = deep_merge(base_v, overlay.clone());
+
+        match serde_json::from_value(merged) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                tracing::warn!(
+                    "IntentProfiles::apply: failed to deserialize merged config for intent \
+                     '{intent}': {e} — falling back to base"
+                );
+                base.clone()
+            }
+        }
     }
 }
 
@@ -405,5 +485,93 @@ mod tests {
             .unwrap();
         // "stuff" contains no "factoid" keyword → query embedding falls to default.
         assert_eq!(classifier.classify("stuff").await, None);
+    }
+
+    // --- IntentProfiles ---------------------------------------------------
+
+    #[test]
+    fn profiles_apply_overlays_category_weights() {
+        let base = RecallConfig::default();
+        assert_eq!(base.category_weight("correction"), 1.5);
+
+        let overlay = serde_json::json!({
+            "correction-recall": {
+                "category_weights": { "correction": 2.5 }
+            }
+        });
+        let profiles = IntentProfiles::from_json(overlay);
+
+        let effective = profiles.apply(&base, "correction-recall");
+        assert_eq!(effective.category_weight("correction"), 2.5);
+        // Other weights preserved.
+        assert_eq!(effective.category_weight("strategy"), 1.4);
+        assert_eq!(effective.category_weight("schema"), 1.6);
+    }
+
+    #[test]
+    fn profiles_apply_unknown_intent_returns_base() {
+        let base = RecallConfig::default();
+        let overlay = serde_json::json!({
+            "factoid-lookup": { "max_facts": 5 }
+        });
+        let profiles = IntentProfiles::from_json(overlay);
+
+        let effective = profiles.apply(&base, "made-up-intent");
+        assert_eq!(effective.max_facts, base.max_facts);
+        assert_eq!(effective.category_weight("correction"), 1.5);
+    }
+
+    #[test]
+    fn profiles_apply_partial_overlay_preserves_other_fields() {
+        let base = RecallConfig::default();
+        let overlay = serde_json::json!({
+            "factoid-lookup": {
+                "category_weights": { "correction": 0.8 }
+            }
+        });
+        let profiles = IntentProfiles::from_json(overlay);
+
+        let effective = profiles.apply(&base, "factoid-lookup");
+        // Overlay applied.
+        assert_eq!(effective.category_weight("correction"), 0.8);
+        // Unrelated fields preserved.
+        assert_eq!(effective.max_facts, base.max_facts);
+        assert_eq!(effective.vector_weight, base.vector_weight);
+        assert_eq!(effective.bm25_weight, base.bm25_weight);
+        assert_eq!(effective.min_score, base.min_score);
+    }
+
+    #[test]
+    fn profiles_from_non_object_yields_empty_bank() {
+        let profiles = IntentProfiles::from_json(serde_json::json!([1, 2, 3]));
+        assert!(profiles.is_empty());
+
+        let base = RecallConfig::default();
+        // Any intent falls through to base.
+        let effective = profiles.apply(&base, "anything");
+        assert_eq!(effective.max_facts, base.max_facts);
+    }
+
+    #[test]
+    fn profiles_overlay_deeply_nested_graph_traversal() {
+        let base = RecallConfig::default();
+        let overlay = serde_json::json!({
+            "code-help": {
+                "graph_traversal": { "max_hops": 4 }
+            }
+        });
+        let profiles = IntentProfiles::from_json(overlay);
+
+        let effective = profiles.apply(&base, "code-help");
+        assert_eq!(effective.graph_traversal.max_hops, 4);
+        // Sibling fields preserved.
+        assert_eq!(
+            effective.graph_traversal.enabled,
+            base.graph_traversal.enabled
+        );
+        assert_eq!(
+            effective.graph_traversal.hop_decay,
+            base.graph_traversal.hop_decay
+        );
     }
 }

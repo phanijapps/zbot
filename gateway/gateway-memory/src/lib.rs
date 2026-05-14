@@ -9,7 +9,9 @@ pub mod services;
 pub mod sleep;
 pub mod util;
 
-pub use intent_router::{IdentityClassifier, IntentClassifier, KnnIntentClassifier};
+pub use intent_router::{
+    IdentityClassifier, IntentClassifier, IntentProfiles, KnnIntentClassifier,
+};
 pub use llm_factory::{LlmClientConfig, MemoryLlmFactory};
 pub use rerank::{CrossEncoderReranker, FastembedReranker, IdentityReranker};
 pub use services::{MemoryServices, MemoryServicesConfig};
@@ -436,7 +438,10 @@ impl RecallConfig {
 /// Recursively merge two JSON values. Object keys from `overlay` overwrite
 /// matching keys in `base`; nested objects are merged recursively.
 /// Non-object values from `overlay` replace `base` entirely.
-fn deep_merge(base: Value, overlay: Value) -> Value {
+///
+/// Exposed as `pub(crate)` so [`crate::intent_router::IntentProfiles::apply`]
+/// can reuse the same merge semantics that drive [`RecallConfig::load_from_path`].
+pub(crate) fn deep_merge(base: Value, overlay: Value) -> Value {
     match (base, overlay) {
         (Value::Object(mut base_map), Value::Object(overlay_map)) => {
             for (key, value) in overlay_map {
