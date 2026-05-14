@@ -739,6 +739,98 @@ mod tests {
         assert_eq!(order, vec![0, 1]);
     }
 
+    /// Minimal `MemoryFactStore` stub for MMR integration tests. The
+    /// trait requires `save_fact` and `recall_facts` to be implemented;
+    /// every other method (including `get_fact_embedding`, the only one
+    /// MMR actually calls) falls through to the trait's default impl —
+    /// our candidates already carry their embeddings inline, so the
+    /// hydration call short-circuits before reaching the store.
+    struct NoopStore;
+
+    #[async_trait::async_trait]
+    impl zero_stores::MemoryFactStore for NoopStore {
+        async fn save_fact(
+            &self,
+            _agent_id: &str,
+            _category: &str,
+            _key: &str,
+            _content: &str,
+            _confidence: f64,
+            _session_id: Option<&str>,
+        ) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!({}))
+        }
+
+        async fn recall_facts(
+            &self,
+            _agent_id: &str,
+            _query: &str,
+            _limit: usize,
+        ) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!([]))
+        }
+    }
+
+    fn mk_scored(id: &str, score: f64, embedding: Vec<f32>) -> ScoredFact {
+        ScoredFact {
+            fact: MemoryFact {
+                id: id.to_string(),
+                session_id: None,
+                agent_id: "agent-1".to_string(),
+                scope: "agent".to_string(),
+                category: "misc".to_string(),
+                key: format!("test.{id}"),
+                content: format!("content-{id}"),
+                confidence: 0.9,
+                mention_count: 1,
+                source_summary: None,
+                embedding: Some(embedding),
+                ward_id: "__global__".to_string(),
+                contradicted_by: None,
+                created_at: String::new(),
+                updated_at: String::new(),
+                expires_at: None,
+                valid_from: None,
+                valid_until: None,
+                superseded_by: None,
+                pinned: false,
+                epistemic_class: Some("current".to_string()),
+                source_episode_id: None,
+                source_ref: None,
+            },
+            score,
+        }
+    }
+
+    #[tokio::test]
+    async fn mmr_integration_diverse_set_promoted() {
+        // Four candidates with descending scores. f1/f2/f3 share a
+        // near-identical embedding cluster; f4 is orthogonal. With
+        // λ=0.6 and limit=3, the diverse f4 must appear in top-3
+        // despite its lowest raw score, evicting one of the cluster.
+        let candidates = vec![
+            mk_scored("f1", 1.0, vec![1.0, 0.0]),
+            mk_scored("f2", 0.9, vec![0.99, 0.14]),
+            mk_scored("f3", 0.8, vec![0.98, 0.20]),
+            mk_scored("f4", 0.7, vec![0.0, 1.0]),
+        ];
+        let store: Arc<dyn zero_stores::MemoryFactStore> = Arc::new(NoopStore);
+        let mut working = candidates;
+        let cfg = crate::MmrConfig {
+            enabled: true,
+            lambda: 0.6,
+            candidate_pool: 4,
+        };
+        mmr_rerank(&mut working, &store, &cfg, 3).await.unwrap();
+        let ids: Vec<String> = working.iter().map(|sf| sf.fact.id.clone()).collect();
+        assert_eq!(working.len(), 3, "limit honored");
+        assert!(
+            ids.contains(&"f4".to_string()),
+            "diverse f4 should be in top-3, got {ids:?}"
+        );
+        assert_eq!(ids[0], "f1", "highest score still wins first slot");
+    }
+
     fn mk_item(kind: ItemKind, id: &str, content: &str, score: f64) -> ScoredItem {
         ScoredItem {
             kind,
