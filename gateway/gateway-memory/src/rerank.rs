@@ -323,4 +323,34 @@ mod tests {
         let output = reranker.rerank("anything", Vec::new()).await;
         assert!(output.is_empty(), "empty input → empty output");
     }
+
+    #[tokio::test]
+    async fn fastembed_reranker_unknown_model_falls_back_to_identity() {
+        // Pass a model_id that doesn't match any fastembed::RerankerModel.
+        // The lazy-load path should log a warning, return None, and the
+        // rerank() call should return the candidate pool unchanged.
+        // This proves the "graceful failure → identity behavior" contract
+        // without needing to download a real ONNX model.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let reranker = FastembedReranker::new(
+            "definitely/not-a-real-reranker-model",
+            10, // candidate_pool
+            10, // top_k_after
+            0.0,
+            tmp.path().to_path_buf(),
+        );
+        let input = vec![
+            mk_scored("a", 0.9, "alpha"),
+            mk_scored("b", 0.5, "beta"),
+            mk_scored("c", 0.1, "gamma"),
+        ];
+        let ids_before: Vec<String> = input.iter().map(|sf| sf.fact.id.clone()).collect();
+        let output = reranker.rerank("query", input).await;
+        let ids_after: Vec<String> = output.iter().map(|sf| sf.fact.id.clone()).collect();
+        assert_eq!(
+            ids_after, ids_before,
+            "unknown model → order preserved (identity fallback)"
+        );
+        assert_eq!(output.len(), 3, "no candidates dropped on fallback");
+    }
 }
