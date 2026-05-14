@@ -15,6 +15,7 @@ use zero_stores_traits::{
     CompactionStore, ConversationStore, EpisodeStore, MemoryFactStore, ProcedureStore,
 };
 
+use crate::intent_router::{IntentClassifier, IntentProfiles};
 use crate::sleep::{
     Compactor, ConflictResolver, CorrectionsAbstractor, DecayConfig, DecayEngine, LlmConflictJudge,
     LlmCorrectionsAbstractor, LlmPairwiseVerifier, LlmPatternExtractor, LlmSynthesizer,
@@ -45,6 +46,16 @@ pub struct MemoryServicesConfig {
     pub corrections_abstractor_interval: Duration,
     pub conflict_resolver_interval: Duration,
     pub decay_config: DecayConfig,
+    /// Optional semantic intent router classifier (MEM-008). When set,
+    /// the gateway wires it onto `MemoryRecall` via
+    /// `set_intent_classifier`. Currently this struct is the assembly
+    /// point only; the recall path itself is wired in the state
+    /// composition root, not inside this factory.
+    pub intent_classifier: Option<Arc<dyn IntentClassifier>>,
+    /// Optional per-intent profile bank (MEM-008). When set alongside
+    /// `intent_classifier`, queries with a confident intent get a
+    /// deep-merged overlay applied to their effective `RecallConfig`.
+    pub intent_profiles: Option<Arc<IntentProfiles>>,
 }
 
 /// Bundle of ready-to-use memory subsystem handles.
@@ -76,6 +87,11 @@ impl MemoryServices {
             corrections_abstractor_interval,
             conflict_resolver_interval,
             decay_config,
+            // intent router fields are wired onto MemoryRecall by the
+            // gateway's state composition root (MemoryServices owns the
+            // sleep-time worker; MemoryRecall lives on AppState directly).
+            intent_classifier: _,
+            intent_profiles: _,
         } = config;
 
         let verifier: Option<Arc<dyn PairwiseVerifier>> =

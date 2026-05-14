@@ -29,6 +29,7 @@ use std::sync::Arc;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use async_trait::async_trait;
 use serde_json::Value;
+use tokio::sync::OnceCell;
 
 use crate::recall::cosine_similarity;
 use crate::{deep_merge, RecallConfig};
@@ -60,17 +61,27 @@ impl IntentClassifier for IdentityClassifier {
 
 /// Production kNN intent classifier (Aurelio Semantic Router pattern).
 ///
-/// At construction time, every exemplar utterance is embedded in one batch
-/// call and stored alongside its intent label. At query time: embed the
-/// query, cosine against every bank entry, take the top-K nearest, vote by
-/// label. If the top-1 cosine is below `confidence_threshold`, return `None`.
+/// At construction time, raw exemplar utterances are stored. On the first
+/// `classify()` call, the entire bank is batch-embedded once and cached
+/// via a [`tokio::sync::OnceCell`] — subsequent calls reuse the cached
+/// bank, so exemplars are never re-embedded on the recall hot path. This
+/// matches `FastembedReranker`'s lazy-load-on-first-call pattern and
+/// keeps the constructor sync so it slots into `AppState::new`.
 ///
-/// The exemplar bank is built once and held for the lifetime of the
-/// classifier — exemplars are never re-embedded on the recall hot path.
+/// At query time: embed the query, cosine against every bank entry, take
+/// the top-K nearest, vote by label. If the top-1 cosine is below
+/// `confidence_threshold`, return `None`.
 pub struct KnnIntentClassifier {
     embedding_client: Arc<dyn EmbeddingClient>,
-    /// Pre-embedded exemplars. Each entry: `(intent_label, embedding)`.
-    bank: Vec<(String, Vec<f32>)>,
+    /// Raw exemplars: flat parallel vectors so the bank-build call sees a
+    /// single batched `embed(&[&str])`.
+    raw_labels: Vec<String>,
+    raw_texts: Vec<String>,
+    /// Pre-embedded bank, lazily initialized on first `classify` call.
+    /// `Some(vec)` means "ready"; `None` (never set) is impossible after
+    /// `ensure_bank` returns. An empty inner vec means "no exemplars
+    /// configured — every classify returns `None`".
+    bank: OnceCell<Vec<(String, Vec<f32>)>>,
     /// Top-K vote depth. Default 5 (passed from [`crate::IntentRouterConfig`]).
     k: usize,
     /// Minimum cosine similarity to the nearest exemplar required for a
@@ -80,73 +91,87 @@ pub struct KnnIntentClassifier {
 }
 
 impl KnnIntentClassifier {
-    /// Build a new classifier. Batch-embeds every exemplar via the embedding
-    /// client and stores `(label, embedding)` pairs internally.
+    /// Build a new classifier. Construction is cheap and sync — the bank
+    /// is embedded lazily on the first `classify()` call (and cached for
+    /// the lifetime of the classifier).
     ///
-    /// Returns an error if the embedding call fails or returns the wrong
-    /// number of vectors. An empty `exemplars` map yields an empty bank,
-    /// which is valid — every subsequent `classify` call returns `None`.
-    pub async fn new(
+    /// An empty `exemplars` map yields an empty bank, which is valid —
+    /// every subsequent `classify` call returns `None`.
+    pub fn new(
         embedding_client: Arc<dyn EmbeddingClient>,
         exemplars: HashMap<String, Vec<String>>,
         k: usize,
         confidence_threshold: f64,
-    ) -> Result<Self, String> {
-        // Flatten to two parallel vectors so we can do one batch embed call
-        // and zip back to (label, embedding) pairs afterwards.
-        let mut labels: Vec<String> = Vec::new();
-        let mut texts: Vec<String> = Vec::new();
+    ) -> Self {
+        let mut raw_labels: Vec<String> = Vec::new();
+        let mut raw_texts: Vec<String> = Vec::new();
         for (intent, utterances) in exemplars {
             for utt in utterances {
-                labels.push(intent.clone());
-                texts.push(utt);
+                raw_labels.push(intent.clone());
+                raw_texts.push(utt);
             }
         }
-
-        if texts.is_empty() {
-            return Ok(Self {
-                embedding_client,
-                bank: Vec::new(),
-                k,
-                confidence_threshold,
-            });
-        }
-
-        let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-        let embeddings = embedding_client
-            .embed(&text_refs)
-            .await
-            .map_err(|e| format!("Failed to embed intent exemplars: {e}"))?;
-
-        if embeddings.len() != labels.len() {
-            return Err(format!(
-                "Embedding client returned {} vectors for {} exemplars",
-                embeddings.len(),
-                labels.len()
-            ));
-        }
-
-        let bank: Vec<(String, Vec<f32>)> = labels.into_iter().zip(embeddings).collect();
-
-        Ok(Self {
+        Self {
             embedding_client,
-            bank,
+            raw_labels,
+            raw_texts,
+            bank: OnceCell::new(),
             k,
             confidence_threshold,
-        })
+        }
     }
 
-    /// Size of the exemplar bank (number of `(label, embedding)` pairs).
-    /// Exposed for tests and logging.
-    pub fn bank_size(&self) -> usize {
-        self.bank.len()
+    /// Get-or-initialize the embedded bank. Returns a reference to the
+    /// shared bank vec. On embed failure, returns an empty bank (cached
+    /// forever — subsequent calls won't retry; the recall pipeline keeps
+    /// running, just without routing).
+    async fn ensure_bank(&self) -> &Vec<(String, Vec<f32>)> {
+        self.bank
+            .get_or_init(|| async {
+                if self.raw_texts.is_empty() {
+                    return Vec::new();
+                }
+                let text_refs: Vec<&str> = self.raw_texts.iter().map(|s| s.as_str()).collect();
+                match self.embedding_client.embed(&text_refs).await {
+                    Ok(embs) if embs.len() == self.raw_labels.len() => self
+                        .raw_labels
+                        .iter()
+                        .cloned()
+                        .zip(embs)
+                        .collect::<Vec<_>>(),
+                    Ok(embs) => {
+                        tracing::warn!(
+                            "Intent classifier bank build: {} embeddings for {} exemplars — \
+                             router disabled",
+                            embs.len(),
+                            self.raw_labels.len()
+                        );
+                        Vec::new()
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Intent classifier bank build failed: {e} — router disabled"
+                        );
+                        Vec::new()
+                    }
+                }
+            })
+            .await
+    }
+
+    /// Size of the configured exemplar list (before embedding). Exposed
+    /// for startup logging — the real bank size after embed only matches
+    /// this when the embed call succeeded.
+    pub fn exemplar_count(&self) -> usize {
+        self.raw_texts.len()
     }
 }
 
 #[async_trait]
 impl IntentClassifier for KnnIntentClassifier {
     async fn classify(&self, query: &str) -> Option<String> {
-        if self.bank.is_empty() {
+        let bank = self.ensure_bank().await;
+        if bank.is_empty() {
             return None;
         }
 
@@ -165,8 +190,7 @@ impl IntentClassifier for KnnIntentClassifier {
         };
 
         // Compute cosine against every bank entry.
-        let mut scored: Vec<(usize, f64)> = self
-            .bank
+        let mut scored: Vec<(usize, f64)> = bank
             .iter()
             .enumerate()
             .map(|(idx, (_, emb))| (idx, cosine_similarity(&query_emb, emb)))
@@ -188,7 +212,7 @@ impl IntentClassifier for KnnIntentClassifier {
         let k = self.k.min(scored.len());
         let mut counts: HashMap<&str, (usize, f64)> = HashMap::new();
         for &(idx, sim) in &scored[..k] {
-            let label = self.bank[idx].0.as_str();
+            let label = bank[idx].0.as_str();
             let entry = counts.entry(label).or_insert((0, 0.0));
             entry.0 += 1;
             entry.1 += sim;
@@ -378,7 +402,10 @@ mod tests {
     // --- KnnIntentClassifier construction ---------------------------------
 
     #[tokio::test]
-    async fn knn_constructor_embeds_all_exemplars() {
+    async fn knn_lazily_embeds_all_exemplars_in_single_batch() {
+        // Bank build is lazy: until the first classify(), no embed runs.
+        // Subsequent classify calls reuse the cached bank — only the
+        // query gets embedded.
         let client = Arc::new(CountingEmbeddingClient::new(vec![1.0, 0.0]));
         let mut exemplars = HashMap::new();
         exemplars.insert(
@@ -394,35 +421,42 @@ mod tests {
             vec!["one".into(), "two".into(), "three".into(), "four".into()],
         );
 
-        let classifier = KnnIntentClassifier::new(client.clone(), exemplars, 5, 0.55)
-            .await
-            .expect("construct");
+        let classifier = KnnIntentClassifier::new(client.clone(), exemplars, 5, 0.55);
+        assert_eq!(classifier.exemplar_count(), 12);
 
-        assert_eq!(classifier.bank_size(), 12, "12 exemplars in bank");
+        // Construction itself triggers zero embed calls.
         assert_eq!(
             client.calls.load(Ordering::SeqCst),
-            1,
-            "exactly one batch embed call at construction"
+            0,
+            "construction is sync and does not embed"
         );
+
+        // First classify triggers the bank build (1 batch with 12 texts)
+        // plus the query embed (1 batch with 1 text) = 2 calls, 13 texts.
+        let _ = classifier.classify("query").await;
+        assert_eq!(client.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(client.texts_seen.load(Ordering::SeqCst), 13);
+
+        // Second classify reuses the cached bank — only the query is
+        // re-embedded.
+        let _ = classifier.classify("another").await;
         assert_eq!(
-            client.texts_seen.load(Ordering::SeqCst),
-            12,
-            "all 12 exemplars sent in the single batch"
+            client.calls.load(Ordering::SeqCst),
+            3,
+            "bank not re-built on subsequent calls"
         );
+        assert_eq!(client.texts_seen.load(Ordering::SeqCst), 14);
     }
 
     #[tokio::test]
     async fn knn_constructor_empty_exemplars_yields_empty_bank() {
         let client = Arc::new(CountingEmbeddingClient::new(vec![1.0, 0.0]));
-        let classifier = KnnIntentClassifier::new(client.clone(), HashMap::new(), 5, 0.55)
-            .await
-            .expect("construct");
+        let classifier = KnnIntentClassifier::new(client.clone(), HashMap::new(), 5, 0.55);
 
-        assert_eq!(classifier.bank_size(), 0);
-        // Empty bank short-circuits: no embed call needed.
-        assert_eq!(client.calls.load(Ordering::SeqCst), 0);
-        // And classify always returns None.
+        assert_eq!(classifier.exemplar_count(), 0);
+        // classify short-circuits: empty bank means no query embed either.
         assert_eq!(classifier.classify("anything").await, None);
+        assert_eq!(client.calls.load(Ordering::SeqCst), 0);
     }
 
     // --- KnnIntentClassifier::classify ------------------------------------
@@ -456,9 +490,7 @@ mod tests {
             vec!["code one".into(), "code two".into(), "code three".into()],
         );
 
-        let classifier = KnnIntentClassifier::new(client, exemplars, 3, 0.55)
-            .await
-            .unwrap();
+        let classifier = KnnIntentClassifier::new(client, exemplars, 3, 0.55);
         let label = classifier.classify("factoid lookup query").await;
         assert_eq!(label, Some("factoid-lookup".to_string()));
     }
@@ -480,9 +512,7 @@ mod tests {
             vec!["factoid one".into(), "factoid two".into()],
         );
 
-        let classifier = KnnIntentClassifier::new(client, exemplars, 3, 0.55)
-            .await
-            .unwrap();
+        let classifier = KnnIntentClassifier::new(client, exemplars, 3, 0.55);
         // "stuff" contains no "factoid" keyword → query embedding falls to default.
         assert_eq!(classifier.classify("stuff").await, None);
     }

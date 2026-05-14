@@ -221,6 +221,36 @@ fn sync_reconcile_vec_dim_at_boot(
 }
 
 impl AppState {
+    /// Load the intent-router exemplar bank (MEM-008).
+    ///
+    /// Expects the file to contain `{"intents": { "<label>": ["utterance", ...] }}`.
+    /// Returns the parsed `HashMap<label, Vec<utterance>>`. Any parse or shape
+    /// error bubbles up as a `String`; callers degrade to "no router".
+    fn load_intent_exemplars(
+        path: &std::path::Path,
+    ) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
+        let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let v: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+        let intents_obj = v
+            .get("intents")
+            .and_then(|x| x.as_object())
+            .ok_or_else(|| "missing top-level `intents` object".to_string())?;
+        let mut out = std::collections::HashMap::new();
+        for (label, list) in intents_obj {
+            let arr = list
+                .as_array()
+                .ok_or_else(|| format!("intent `{label}` value is not an array"))?;
+            let utterances: Vec<String> = arr
+                .iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect();
+            if !utterances.is_empty() {
+                out.insert(label.clone(), utterances);
+            }
+        }
+        Ok(out)
+    }
+
     /// Create a new application state.
     ///
     /// This creates a fully initialized state with execution runner and SQLite database.
@@ -418,6 +448,22 @@ impl AppState {
             tracing::info!(?rerank_override, "settings.json rerank override applied");
             recall_config.rerank = rerank_override;
         }
+        // Overlay user-facing intent router knobs from settings.json
+        // (execution.memory.intentRouter). Same precedence as MMR/rerank
+        // overlays: settings.json wins over recall_config.json. Only the
+        // scalar knobs (k, confidence_threshold) live here; exemplar +
+        // profile banks are loaded as JSON files below (MEM-008).
+        if let Some(router_override) = settings
+            .get_execution_settings()
+            .ok()
+            .and_then(|s| s.memory.intent_router.clone())
+        {
+            tracing::info!(
+                ?router_override,
+                "settings.json intent_router override applied"
+            );
+            recall_config.intent_router = router_override;
+        }
         let recall_config = Arc::new(recall_config);
 
         // Build the cross-encoder reranker (MEM-007) once at startup when
@@ -452,6 +498,102 @@ impl AppState {
             None
         };
 
+        // Build the semantic intent router (MEM-008). Both JSON files are
+        // optional: missing exemplars → no classifier (every query uses
+        // base config); missing profiles → classifier still runs but every
+        // intent maps to base config (functionally a no-op). Construct
+        // failures degrade to "no router" rather than crashing — the
+        // recall pipeline must always work.
+        let intent_router_dir = paths.vault_dir().join("config").join("memory");
+        let intent_classifier: Option<Arc<dyn gateway_memory::IntentClassifier>> = {
+            let exemplars_path = intent_router_dir.join("intent_exemplars.json");
+            if exemplars_path.exists() {
+                match Self::load_intent_exemplars(&exemplars_path) {
+                    Ok(exemplars) if !exemplars.is_empty() => match embedding_client.as_ref() {
+                        Some(client) => {
+                            // Construction is sync — the bank embeds lazily
+                            // on the first classify() call and caches forever
+                            // (OnceCell).
+                            let c = gateway_memory::KnnIntentClassifier::new(
+                                client.clone(),
+                                exemplars,
+                                recall_config.intent_router.k,
+                                recall_config.intent_router.confidence_threshold,
+                            );
+                            tracing::info!(
+                                exemplar_count = c.exemplar_count(),
+                                k = recall_config.intent_router.k,
+                                threshold = recall_config.intent_router.confidence_threshold,
+                                "Intent classifier ready (bank builds on first query)"
+                            );
+                            Some(Arc::new(c) as Arc<dyn gateway_memory::IntentClassifier>)
+                        }
+                        None => {
+                            tracing::warn!("No embedding client — intent router disabled");
+                            None
+                        }
+                    },
+                    Ok(_) => {
+                        tracing::info!("intent_exemplars.json was empty — router disabled");
+                        None
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %exemplars_path.display(),
+                            error = %e,
+                            "Failed to load intent_exemplars.json — router disabled"
+                        );
+                        None
+                    }
+                }
+            } else {
+                tracing::debug!(
+                    path = %exemplars_path.display(),
+                    "No intent_exemplars.json — router disabled (this is fine)"
+                );
+                None
+            }
+        };
+        let intent_profiles: Option<Arc<gateway_memory::IntentProfiles>> = {
+            let profiles_path = intent_router_dir.join("intent_profiles.json");
+            if profiles_path.exists() {
+                match std::fs::read_to_string(&profiles_path) {
+                    Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
+                        Ok(v) => {
+                            let profiles = gateway_memory::IntentProfiles::from_json(v);
+                            tracing::info!(
+                                profile_count = profiles.len(),
+                                "Intent profile bank ready"
+                            );
+                            Some(Arc::new(profiles))
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                path = %profiles_path.display(),
+                                error = %e,
+                                "intent_profiles.json malformed — no overlays applied"
+                            );
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %profiles_path.display(),
+                            error = %e,
+                            "Failed to read intent_profiles.json — no overlays applied"
+                        );
+                        None
+                    }
+                }
+            } else {
+                tracing::debug!(
+                    path = %profiles_path.display(),
+                    "No intent_profiles.json — no per-intent overlays"
+                );
+                None
+            }
+        };
+
         // Create session archiver for offloading old transcripts to compressed files
         let archive_path = paths
             .data_dir()
@@ -483,6 +625,17 @@ impl AppState {
         // is false this is a no-op (`reranker` is None).
         if let (Some(recall), Some(r)) = (memory_recall_inner.as_mut(), reranker.as_ref()) {
             recall.set_reranker(r.clone());
+        }
+        // Wire the intent classifier (MEM-008) onto MemoryRecall when one
+        // was constructed. When no exemplars exist or construction failed
+        // this is a no-op (classifier is None) and the pipeline uses the
+        // base RecallConfig for every query.
+        if let (Some(recall), Some(c)) = (memory_recall_inner.as_mut(), intent_classifier.as_ref())
+        {
+            recall.set_intent_classifier(c.clone());
+        }
+        if let (Some(recall), Some(p)) = (memory_recall_inner.as_mut(), intent_profiles.as_ref()) {
+            recall.set_intent_profiles(p.clone());
         }
         // Wire trait-routed episode_store wrapping the SQLite EpisodeRepository.
         if let Some(recall) = memory_recall_inner.as_mut() {
@@ -867,6 +1020,12 @@ impl AppState {
                             conflict_interval_hours as u64 * 3600,
                         ),
                         decay_config: gateway_memory::sleep::DecayConfig::default(),
+                        // Intent router fields pass through MemoryServicesConfig
+                        // for completeness; the sleep-time worker (which is
+                        // what MemoryServices owns) doesn't consume them —
+                        // they're wired directly onto MemoryRecall above.
+                        intent_classifier: intent_classifier.clone(),
+                        intent_profiles: intent_profiles.clone(),
                     });
                 Some(memory_services.sleep_time_worker.clone())
             }
