@@ -28,6 +28,31 @@ use crate::RecallConfig;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use zero_stores_domain::{MemoryFact, Procedure, ScoredFact};
 
+/// Cosine similarity between two `f32` vectors.
+///
+/// Returns `0.0` for empty or length-mismatched inputs (caller treats
+/// as maximally novel rather than dropping the candidate).
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+    if a.is_empty() || a.len() != b.len() {
+        return 0.0;
+    }
+    let mut dot = 0.0_f64;
+    let mut na = 0.0_f64;
+    let mut nb = 0.0_f64;
+    for i in 0..a.len() {
+        let ai = a[i] as f64;
+        let bi = b[i] as f64;
+        dot += ai * bi;
+        na += ai * ai;
+        nb += bi * bi;
+    }
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na.sqrt() * nb.sqrt())
+    }
+}
+
 /// Retrieves relevant memory facts for injection at session start.
 ///
 /// Phase E6c: fully trait-routed. Every store dependency is an
@@ -536,6 +561,26 @@ fn temporal_decay(last_seen: chrono::DateTime<chrono::Utc>, half_life_days: f64)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cosine_identical_is_one() {
+        let v = vec![1.0_f32, 0.0, 0.0];
+        assert!((cosine_similarity(&v, &v) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cosine_orthogonal_is_zero() {
+        let a = vec![1.0_f32, 0.0, 0.0];
+        let b = vec![0.0_f32, 1.0, 0.0];
+        assert!(cosine_similarity(&a, &b).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cosine_mismatched_lengths_returns_zero() {
+        assert_eq!(cosine_similarity(&[1.0_f32], &[1.0_f32, 2.0_f32]), 0.0);
+        assert_eq!(cosine_similarity(&[] as &[f32], &[1.0_f32]), 0.0);
+        assert_eq!(cosine_similarity(&[1.0_f32], &[] as &[f32]), 0.0);
+    }
 
     fn mk_item(kind: ItemKind, id: &str, content: &str, score: f64) -> ScoredItem {
         ScoredItem {
