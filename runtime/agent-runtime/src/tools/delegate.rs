@@ -113,28 +113,32 @@ impl Tool for DelegateTool {
             .ok_or_else(|| zero_core::ZeroError::Tool("task is required".to_string()))?;
 
         // Guard: Limit task size to prevent context explosion
-        const MAX_TASK_CHARS: usize = 4000;
-        if task.len() > MAX_TASK_CHARS {
-            return Err(zero_core::ZeroError::Tool(format!(
-                "Task too large ({} chars). Maximum is {} chars. Be concise in your delegation.",
-                task.len(),
-                MAX_TASK_CHARS
-            )));
-        }
+        // DISABLED 2026-05-14: legitimate builder-agent delegations regularly exceeded 4000
+        // chars (5346, 10446 observed in real sessions). The guard fired more on real work
+        // than on runaway tasks. Restore (and make configurable via settings.json) if
+        // context-explosion bugs reappear downstream.
+        // const MAX_TASK_CHARS: usize = 4000;
+        // if task.len() > MAX_TASK_CHARS {
+        //     return Err(zero_core::ZeroError::Tool(format!(
+        //         "Task too large ({} chars). Maximum is {} chars. Be concise in your delegation.",
+        //         task.len(),
+        //         MAX_TASK_CHARS
+        //     )));
+        // }
 
         let context = args.get("context").cloned();
 
-        // Guard: Limit context size
-        if let Some(ctx_val) = &context {
-            let ctx_str = serde_json::to_string(ctx_val).unwrap_or_default();
-            if ctx_str.len() > MAX_TASK_CHARS {
-                return Err(zero_core::ZeroError::Tool(format!(
-                    "Context too large ({} chars). Maximum is {} chars. Only pass essential context.",
-                    ctx_str.len(),
-                    MAX_TASK_CHARS
-                )));
-            }
-        }
+        // Guard: Limit context size — disabled alongside task guard above.
+        // if let Some(ctx_val) = &context {
+        //     let ctx_str = serde_json::to_string(ctx_val).unwrap_or_default();
+        //     if ctx_str.len() > MAX_TASK_CHARS {
+        //         return Err(zero_core::ZeroError::Tool(format!(
+        //             "Context too large ({} chars). Maximum is {} chars. Only pass essential context.",
+        //             ctx_str.len(),
+        //             MAX_TASK_CHARS
+        //         )));
+        //     }
+        // }
 
         let wait_for_result = args
             .get("wait_for_result")
@@ -324,7 +328,10 @@ mod tests {
         assert!(format!("{err}").contains("task"));
     }
 
+    // DISABLED 2026-05-14 alongside the 4000-char guards in `execute`. Re-enable
+    // (and adjust the threshold) if the size guard is restored.
     #[tokio::test]
+    #[ignore = "size guard disabled — restore if 4000-char limit returns"]
     async fn oversized_task_is_rejected() {
         let tool = DelegateTool::new();
         let ctx = ctx_for("root");
@@ -339,6 +346,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "size guard disabled — restore if 4000-char limit returns"]
     async fn oversized_context_is_rejected() {
         let tool = DelegateTool::new();
         let ctx = ctx_for("root");
