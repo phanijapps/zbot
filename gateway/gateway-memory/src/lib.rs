@@ -68,6 +68,34 @@ impl Default for MidSessionRecallConfig {
     }
 }
 
+/// MMR (Maximal Marginal Relevance) diversity reranking configuration.
+///
+/// MMR re-orders top-N candidates to balance relevance and diversity:
+/// `score = λ · base_score − (1 − λ) · max_similarity_to_already_picked`.
+/// Applied after rescore but before the final truncate-to-top-K in
+/// `MemoryRecall::recall`. Carbonell & Goldstein 1998 (SIGIR).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MmrConfig {
+    /// Master toggle. When false, the recall pipeline skips MMR entirely.
+    pub enabled: bool,
+    /// Relevance-vs-diversity tradeoff. 1.0 = pure score-rank (no diversity),
+    /// 0.0 = pure novelty (ignore score). Default 0.6.
+    pub lambda: f64,
+    /// How many top-scored candidates to consider before MMR re-ordering.
+    /// Larger pool = more diversity opportunity at higher latency. Default 30.
+    pub candidate_pool: usize,
+}
+
+impl Default for MmrConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            lambda: 0.6,
+            candidate_pool: 30,
+        }
+    }
+}
+
 /// Graph traversal configuration — controls how related facts are discovered
 /// by walking knowledge-graph edges outward from directly recalled nodes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -210,6 +238,7 @@ pub struct RecallConfig {
     pub predictive_recall: PredictiveRecallConfig,
     pub session_offload: SessionOffloadConfig,
     pub kg_decay: KgDecayConfig,
+    pub mmr: MmrConfig,
 }
 
 impl Default for RecallConfig {
@@ -244,6 +273,7 @@ impl Default for RecallConfig {
             predictive_recall: PredictiveRecallConfig::default(),
             session_offload: SessionOffloadConfig::default(),
             kg_decay: KgDecayConfig::default(),
+            mmr: MmrConfig::default(),
         }
     }
 }
