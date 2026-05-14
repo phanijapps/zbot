@@ -683,6 +683,62 @@ mod tests {
         assert_eq!(cosine_similarity(&[1.0_f32], &[] as &[f32]), 0.0);
     }
 
+    #[test]
+    fn mmr_lambda_one_preserves_score_order() {
+        let scores = vec![1.0, 0.8, 0.6, 0.4];
+        // Identical embeddings — diversity term is at maximum but λ=1.0
+        // zeroes its contribution, so order is pure-score.
+        let embeddings: Vec<Option<Vec<f32>>> = vec![Some(vec![1.0_f32]); 4];
+        let order = mmr_pick_order(&scores, &embeddings, 1.0, 4);
+        assert_eq!(order, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn mmr_demotes_near_duplicate_of_top() {
+        // #1: high score, distinct embedding
+        // #2: slightly lower score, near-identical embedding to #1
+        // #3: lowest score, distinct embedding
+        let scores = vec![1.0, 0.95, 0.8];
+        let embeddings = vec![
+            Some(vec![1.0_f32, 0.0]),
+            Some(vec![0.99_f32, 0.14]), // near-duplicate of #1
+            Some(vec![0.0_f32, 1.0]),   // orthogonal to #1
+        ];
+        let order = mmr_pick_order(&scores, &embeddings, 0.6, 3);
+        assert_eq!(order[0], 0, "highest score wins first slot");
+        assert_eq!(order[1], 2, "diverse #3 beats near-duplicate #2");
+        assert_eq!(order[2], 1);
+    }
+
+    #[test]
+    fn mmr_lambda_zero_picks_most_novel() {
+        // λ=0 ignores score entirely. First pick is arbitrary (first in
+        // remaining order); then each subsequent pick is the most-novel
+        // relative to what's already picked.
+        let scores = vec![1.0, 0.9, 0.8];
+        let embeddings = vec![
+            Some(vec![1.0_f32, 0.0]),
+            Some(vec![0.95_f32, 0.31]), // similar to #1
+            Some(vec![0.0_f32, 1.0]),   // distinct from #1
+        ];
+        let order = mmr_pick_order(&scores, &embeddings, 0.0, 3);
+        assert_eq!(order[0], 0, "first pick (no diversity term yet)");
+        assert_eq!(order[1], 2, "most novel relative to #1");
+    }
+
+    #[test]
+    fn mmr_missing_embedding_treated_as_zero_similarity() {
+        // Candidate with None embedding: similarity term is 0 → looks
+        // maximally novel. It should NOT be dropped.
+        let scores = vec![1.0, 0.9];
+        let embeddings: Vec<Option<Vec<f32>>> = vec![Some(vec![1.0_f32, 0.0]), None];
+        let order = mmr_pick_order(&scores, &embeddings, 0.6, 2);
+        assert_eq!(order.len(), 2, "both included");
+        // With λ=0.6: candidate 0 first (no picks yet, only its score matters).
+        // Then candidate 1: 0.6*0.9 − 0.4*0 = 0.54. Score order wins.
+        assert_eq!(order, vec![0, 1]);
+    }
+
     fn mk_item(kind: ItemKind, id: &str, content: &str, score: f64) -> ScoredItem {
         ScoredItem {
             kind,
