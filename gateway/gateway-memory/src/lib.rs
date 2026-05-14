@@ -96,6 +96,51 @@ impl Default for MmrConfig {
     }
 }
 
+/// Cross-encoder reranker configuration (ONNX via fastembed-rs).
+///
+/// Cross-encoders score `(query, candidate)` pairs jointly through a
+/// transformer — more accurate than bi-encoder similarity but slower.
+/// Applied in `MemoryRecall::recall` after MMR and before the final
+/// truncate-to-top-K.
+///
+/// Disabled by default: enabling triggers a one-time ONNX model download
+/// (~280 MB for `BAAI/bge-reranker-base`) on the first recall.
+/// `BAAI/bge-reranker-base` reaches ~55 NDCG@10 on BEIR vs ~40 for raw
+/// bi-encoder recall; latency is ~5–15 ms/candidate on CPU.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RerankConfig {
+    /// Master toggle. When false, the recall pipeline skips reranking
+    /// entirely.
+    pub enabled: bool,
+    /// Model identifier passed to fastembed. Default
+    /// `"BAAI/bge-reranker-base"`. Other options:
+    /// `"BAAI/bge-reranker-v2-m3"`,
+    /// `"jinaai/jina-reranker-v1-turbo-en"`.
+    pub model_id: String,
+    /// How many top-scored candidates to actually run through the
+    /// reranker. Latency is O(N). Default 20.
+    pub candidate_pool: usize,
+    /// Final top-K after reranking. Default 10.
+    pub top_k_after: usize,
+    /// Drop candidates whose rerank score is below this threshold.
+    /// Default 0.0 (keep all reranked).
+    pub score_threshold: f64,
+}
+
+impl Default for RerankConfig {
+    fn default() -> Self {
+        Self {
+            // OFF by default — opt-in until validated. Enabling requires
+            // a 280 MB ONNX model download.
+            enabled: false,
+            model_id: "BAAI/bge-reranker-base".to_string(),
+            candidate_pool: 20,
+            top_k_after: 10,
+            score_threshold: 0.0,
+        }
+    }
+}
+
 /// Graph traversal configuration — controls how related facts are discovered
 /// by walking knowledge-graph edges outward from directly recalled nodes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,6 +284,7 @@ pub struct RecallConfig {
     pub session_offload: SessionOffloadConfig,
     pub kg_decay: KgDecayConfig,
     pub mmr: MmrConfig,
+    pub rerank: RerankConfig,
 }
 
 impl Default for RecallConfig {
@@ -274,6 +320,7 @@ impl Default for RecallConfig {
             session_offload: SessionOffloadConfig::default(),
             kg_decay: KgDecayConfig::default(),
             mmr: MmrConfig::default(),
+            rerank: RerankConfig::default(),
         }
     }
 }
