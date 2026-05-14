@@ -228,6 +228,22 @@ A missing file falls back to compiled defaults. A partial file deep-merges with 
 
 The MMR knobs (`mmr.enabled`, `mmr.lambda`, `mmr.candidate_pool`) are also configurable via `settings.json → execution.memory.mmr` for a unified config surface — `settings.json` wins if both are set.
 
+Cross-encoder reranking (BGE-reranker-base via fastembed-rs / ONNX) runs after MMR and before the final truncate. It is off by default because enabling triggers a one-time ~280 MB model download. Configure via `settings.json → execution.memory.rerank` or `recall_config.json` under the `rerank` key:
+
+```json
+{
+  "rerank": {
+    "enabled": true,
+    "model_id": "BAAI/bge-reranker-base",
+    "candidate_pool": 20,
+    "top_k_after": 10,
+    "score_threshold": 0.0
+  }
+}
+```
+
+Same precedence as MMR: `settings.json` wins. Model load failures or inference errors log a warning and fall back to the un-reranked candidates — recall never breaks because of reranking.
+
 ## A closed-loop walkthrough
 
 One concrete trace, following a single correction through every stage of the system.
