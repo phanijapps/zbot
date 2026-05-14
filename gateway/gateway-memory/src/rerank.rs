@@ -275,4 +275,56 @@ mod tests {
         let output = reranker.rerank("query", Vec::new()).await;
         assert!(output.is_empty());
     }
+
+    /// Test-only reranker that scores candidates by counting how many
+    /// whitespace-separated query tokens appear in the candidate
+    /// content (case-insensitive). Higher token-match count → earlier
+    /// in the output.
+    struct MockKeywordReranker;
+
+    #[async_trait]
+    impl CrossEncoderReranker for MockKeywordReranker {
+        async fn rerank(
+            &self,
+            query: &str,
+            mut candidates: Vec<ScoredFact>,
+        ) -> Vec<ScoredFact> {
+            let q = query.to_lowercase();
+            let tokens: Vec<&str> = q.split_whitespace().collect();
+            candidates.sort_by(|a, b| {
+                let count = |c: &ScoredFact| {
+                    let lower = c.fact.content.to_lowercase();
+                    tokens.iter().filter(|t| lower.contains(*t)).count()
+                };
+                count(b).cmp(&count(a))
+            });
+            candidates
+        }
+    }
+
+    #[tokio::test]
+    async fn mock_reranker_reorders_by_keyword_match() {
+        let reranker = MockKeywordReranker;
+        // Pre-rerank order by base score: a (0.9) > b (0.7) > c (0.5).
+        // Query "rust trait" should push b and c (both keyword-matching)
+        // above a (no match).
+        let candidates = vec![
+            mk_scored("a", 0.9, "completely unrelated content"),
+            mk_scored("b", 0.7, "contains rust keyword"),
+            mk_scored("c", 0.5, "also has rust and trait mentions"),
+        ];
+        let output = reranker.rerank("rust trait", candidates).await;
+        assert_eq!(output.len(), 3, "no candidates dropped");
+        // c matches both tokens (rust + trait) → highest position
+        assert_eq!(output[0].fact.id, "c", "c (2 token matches) should top");
+        assert_eq!(output[1].fact.id, "b", "b (1 token match) second");
+        assert_eq!(output[2].fact.id, "a", "a (no match) last");
+    }
+
+    #[tokio::test]
+    async fn mock_reranker_empty_input_returns_empty() {
+        let reranker = MockKeywordReranker;
+        let output = reranker.rerank("anything", Vec::new()).await;
+        assert!(output.is_empty(), "empty input → empty output");
+    }
 }
