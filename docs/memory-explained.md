@@ -285,3 +285,31 @@ The reference book gets smaller, sharper, and more consistent with each cycle. R
 - **Background:** an hourly worker compacts the graph, abstracts schemas, resolves conflicts, decays confidence, and archives orphans.
 
 The daily log records everything. The reference book is what the agent reads.
+
+## Optional: semantic intent router (MEM-008)
+
+Default off. To enable per-query intent routing — different category weights for factoid queries vs correction-recall queries vs code-help queries — copy the bundled defaults into your vault:
+
+```
+assets/memory/intent_exemplars.json → <vault>/config/memory/intent_exemplars.json
+assets/memory/intent_profiles.json  → <vault>/config/memory/intent_profiles.json
+```
+
+(There's no auto-seeding for these yet — drop the files in manually if you want the router active. Both files are optional: present-and-loadable enables routing; missing or malformed silently disables it and the pipeline degrades to the base config.)
+
+Tune the scalar knobs in `settings.json` under `execution.memory.intentRouter`:
+
+```json
+{
+  "execution": {
+    "memory": {
+      "intentRouter": {
+        "k": 5,
+        "confidence_threshold": 0.55
+      }
+    }
+  }
+}
+```
+
+`k` is the kNN vote depth. `confidence_threshold` is the minimum cosine to the nearest exemplar — below this, the router emits no intent label and the query uses the base config unchanged.

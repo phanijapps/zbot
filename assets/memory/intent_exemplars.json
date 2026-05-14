@@ -1,0 +1,63 @@
+{
+  "intents": {
+    "factoid-lookup": [
+      "what is my openai api key path",
+      "what is the daemon port",
+      "when did I last commit to feature foo",
+      "where is the daemon config stored",
+      "what's the value of X",
+      "which model am I using right now",
+      "what version of zbot is installed"
+    ],
+    "how-to": [
+      "how do I run the daemon",
+      "how to disable telemetry",
+      "how do I add a new agent",
+      "how can I configure the embedding backend",
+      "how to enable the cross encoder reranker",
+      "how do I export my chat history"
+    ],
+    "domain-question": [
+      "explain conflict resolution",
+      "what does supersession mean",
+      "what is a ward in zbot",
+      "explain the sleep cycle",
+      "what is the difference between schema and correction memories",
+      "describe the recall pipeline",
+      "what does mmr stand for in memory recall"
+    ],
+    "user-fact": [
+      "what do I prefer for code style",
+      "what did I say about commit messages",
+      "what's my preferred shell",
+      "what name should you call me",
+      "what are my pinned project preferences",
+      "what's my time zone"
+    ],
+    "code-help": [
+      "why does this rust trait not compile",
+      "fix this error message",
+      "what's wrong with this typescript code",
+      "help debug this borrow checker error",
+      "why is this function returning the wrong type",
+      "how do I fix this lifetime issue",
+      "this test is failing with assertion error"
+    ],
+    "correction-recall": [
+      "did I tell you not to use Z",
+      "didn't we agree on Q",
+      "haven't I corrected this before",
+      "did I say no to that approach",
+      "what did I tell you to avoid",
+      "we already discussed this — what was the answer"
+    ],
+    "procedural": [
+      "walk me through how to A then B then C",
+      "show me the steps to deploy",
+      "guide me through setting up a new ward",
+      "what's the procedure for resetting the daemon",
+      "list the steps for adding a new skill",
+      "take me through the full sleep cycle one stage at a time"
+    ]
+  }
+}

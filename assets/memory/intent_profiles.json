@@ -1,0 +1,57 @@
+{
+  "factoid-lookup": {
+    "category_weights": {
+      "domain": 1.5,
+      "correction": 0.8
+    },
+    "graph_traversal": {
+      "enabled": false
+    },
+    "max_facts": 5
+  },
+  "how-to": {
+    "category_weights": {
+      "instruction": 1.6,
+      "pattern": 1.2
+    }
+  },
+  "domain-question": {
+    "category_weights": {
+      "domain": 1.6,
+      "schema": 1.8
+    },
+    "graph_traversal": {
+      "max_hops": 3
+    }
+  },
+  "user-fact": {
+    "category_weights": {
+      "user": 2.0
+    },
+    "max_facts": 6
+  },
+  "code-help": {
+    "category_weights": {
+      "pattern": 1.4,
+      "correction": 1.7
+    },
+    "graph_traversal": {
+      "max_hops": 3
+    },
+    "max_facts": 15
+  },
+  "correction-recall": {
+    "category_weights": {
+      "correction": 2.5,
+      "domain": 0.5
+    },
+    "max_facts": 20
+  },
+  "procedural": {
+    "category_weights": {
+      "strategy": 1.8,
+      "pattern": 1.4,
+      "instruction": 1.5
+    }
+  }
+}
