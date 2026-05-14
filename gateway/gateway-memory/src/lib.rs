@@ -1,6 +1,7 @@
 //! Memory subsystem configuration types. Owned by gateway-memory crate;
 //! re-exported through gateway-services for backward compat.
 
+pub mod intent_router;
 pub mod llm_factory;
 pub mod recall;
 pub mod rerank;
@@ -8,6 +9,7 @@ pub mod services;
 pub mod sleep;
 pub mod util;
 
+pub use intent_router::{IdentityClassifier, IntentClassifier};
 pub use llm_factory::{LlmClientConfig, MemoryLlmFactory};
 pub use rerank::{CrossEncoderReranker, FastembedReranker, IdentityReranker};
 pub use services::{MemoryServices, MemoryServicesConfig};
@@ -139,6 +141,33 @@ impl Default for RerankConfig {
             candidate_pool: 20,
             top_k_after: 10,
             score_threshold: 0.0,
+        }
+    }
+}
+
+/// Semantic intent router configuration (MEM-008).
+///
+/// Tunes the kNN classifier that picks an intent label per query for the
+/// per-intent profile overlay system. The exemplar and profile JSON files
+/// live at `<vault>/config/memory/intent_{exemplars,profiles}.json`; this
+/// struct only carries the two scalar knobs that don't belong in those
+/// bulky files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntentRouterConfig {
+    /// Top-K vote depth used by [`crate::KnnIntentClassifier`]. Default 5.
+    pub k: usize,
+    /// Minimum cosine similarity to the nearest exemplar required for a
+    /// confident classification. Below this, the classifier returns `None`
+    /// and the recall pipeline falls back to the base [`RecallConfig`].
+    /// Default 0.55.
+    pub confidence_threshold: f64,
+}
+
+impl Default for IntentRouterConfig {
+    fn default() -> Self {
+        Self {
+            k: 5,
+            confidence_threshold: 0.55,
         }
     }
 }
@@ -287,6 +316,12 @@ pub struct RecallConfig {
     pub kg_decay: KgDecayConfig,
     pub mmr: MmrConfig,
     pub rerank: RerankConfig,
+    /// Semantic intent router knobs (MEM-008). Bulky bits — exemplar bank
+    /// and per-intent profile overlays — live in separate JSON files under
+    /// `<vault>/config/memory/`; this struct only holds the two scalar
+    /// knobs (k, confidence_threshold).
+    #[serde(default)]
+    pub intent_router: IntentRouterConfig,
 }
 
 impl Default for RecallConfig {
@@ -323,6 +358,7 @@ impl Default for RecallConfig {
             kg_decay: KgDecayConfig::default(),
             mmr: MmrConfig::default(),
             rerank: RerankConfig::default(),
+            intent_router: IntentRouterConfig::default(),
         }
     }
 }
@@ -442,6 +478,12 @@ pub struct MemorySettings {
     /// `recall_config.json` (or compiled defaults — disabled by default).
     #[serde(default)]
     pub rerank: Option<RerankConfig>,
+    /// User-facing semantic intent router overrides (MEM-008). When `Some`,
+    /// replaces the corresponding field in `recall_config.json` at
+    /// startup. Only the scalar knobs (k, confidence_threshold) live here;
+    /// exemplar and profile JSON banks are read directly from the vault.
+    #[serde(default)]
+    pub intent_router: Option<IntentRouterConfig>,
 }
 
 pub fn default_corrections_abstractor_interval_hours() -> u32 {
@@ -459,6 +501,7 @@ impl Default for MemorySettings {
             conflict_resolver_interval_hours: default_conflict_resolver_interval_hours(),
             mmr: None,
             rerank: None,
+            intent_router: None,
         }
     }
 }
@@ -784,6 +827,47 @@ mod tests {
         }"#;
         let s: MemorySettings = serde_json::from_str(json).unwrap();
         assert!(s.rerank.is_none());
+    }
+
+    #[test]
+    fn intent_router_config_defaults() {
+        let c = IntentRouterConfig::default();
+        assert_eq!(c.k, 5);
+        assert!((c.confidence_threshold - 0.55).abs() < 1e-9);
+    }
+
+    #[test]
+    fn recall_config_includes_intent_router_default() {
+        let c = RecallConfig::default();
+        assert_eq!(c.intent_router.k, 5);
+        assert!((c.intent_router.confidence_threshold - 0.55).abs() < 1e-9);
+    }
+
+    #[test]
+    fn memory_settings_intent_router_missing_is_none() {
+        let json = r#"{
+            "correctionsAbstractorIntervalHours": 24,
+            "conflictResolverIntervalHours": 24
+        }"#;
+        let s: MemorySettings = serde_json::from_str(json).unwrap();
+        assert!(s.intent_router.is_none());
+    }
+
+    #[test]
+    fn memory_settings_deserializes_intent_router_override() {
+        // `MemorySettings` has `rename_all = "camelCase"` so the outer key
+        // is `intentRouter`. Inner `IntentRouterConfig` has no rename_all,
+        // so its fields stay snake_case (matching recall_config.json).
+        let json = r#"{
+            "correctionsAbstractorIntervalHours": 24,
+            "conflictResolverIntervalHours": 24,
+            "intentRouter": { "k": 7, "confidence_threshold": 0.7 }
+        }"#;
+        let s: MemorySettings = serde_json::from_str(json).unwrap();
+        assert!(s.intent_router.is_some());
+        let r = s.intent_router.unwrap();
+        assert_eq!(r.k, 7);
+        assert!((r.confidence_threshold - 0.7).abs() < 1e-9);
     }
 
     #[test]
