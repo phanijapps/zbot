@@ -284,11 +284,7 @@ mod tests {
 
     #[async_trait]
     impl CrossEncoderReranker for MockKeywordReranker {
-        async fn rerank(
-            &self,
-            query: &str,
-            mut candidates: Vec<ScoredFact>,
-        ) -> Vec<ScoredFact> {
+        async fn rerank(&self, query: &str, mut candidates: Vec<ScoredFact>) -> Vec<ScoredFact> {
             let q = query.to_lowercase();
             let tokens: Vec<&str> = q.split_whitespace().collect();
             candidates.sort_by(|a, b| {
