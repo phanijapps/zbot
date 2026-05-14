@@ -3,11 +3,13 @@
 
 pub mod llm_factory;
 pub mod recall;
+pub mod rerank;
 pub mod services;
 pub mod sleep;
 pub mod util;
 
 pub use llm_factory::{LlmClientConfig, MemoryLlmFactory};
+pub use rerank::{CrossEncoderReranker, IdentityReranker};
 pub use services::{MemoryServices, MemoryServicesConfig};
 pub use util::{parse_llm_json, strip_code_fence};
 
