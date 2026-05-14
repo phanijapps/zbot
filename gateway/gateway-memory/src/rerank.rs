@@ -8,6 +8,9 @@
 //! reranking went wrong. Failure should be logged at warn level and
 //! the input returned unchanged.
 
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
 use async_trait::async_trait;
 use zero_stores_domain::ScoredFact;
 
@@ -36,6 +39,181 @@ pub struct IdentityReranker;
 impl CrossEncoderReranker for IdentityReranker {
     async fn rerank(&self, _query: &str, candidates: Vec<ScoredFact>) -> Vec<ScoredFact> {
         candidates
+    }
+}
+
+/// Production cross-encoder reranker backed by fastembed-rs (ONNX).
+///
+/// Lazy-loads the model on first call. Both model download/load
+/// failures and inference errors log a warning and fall back to
+/// returning candidates unchanged — recall never fails hard because of
+/// reranking.
+///
+/// The model and tokenizer hold thread-bound state inside fastembed's
+/// `TextRerank` (an `ort::Session`), so the wrapped instance is held
+/// behind a `Mutex` and the inference call runs on `spawn_blocking`.
+pub struct FastembedReranker {
+    model_id: String,
+    candidate_pool: usize,
+    top_k_after: usize,
+    score_threshold: f64,
+    cache_dir: PathBuf,
+    /// Lazily-initialized fastembed reranker model. Wrapped in an
+    /// `Arc<Mutex<...>>` so blocking inference tasks can take a short
+    /// lock without holding the outer service mutex.
+    model: Mutex<Option<Arc<Mutex<fastembed::TextRerank>>>>,
+}
+
+impl FastembedReranker {
+    /// Construct a new reranker. Cheap — does NOT load the ONNX model.
+    /// The model loads on the first `rerank()` call.
+    pub fn new(
+        model_id: impl Into<String>,
+        candidate_pool: usize,
+        top_k_after: usize,
+        score_threshold: f64,
+        cache_dir: PathBuf,
+    ) -> Self {
+        Self {
+            model_id: model_id.into(),
+            candidate_pool,
+            top_k_after,
+            score_threshold,
+            cache_dir,
+            model: Mutex::new(None),
+        }
+    }
+
+    /// Get or initialize the model. Returns `None` if model parsing or
+    /// load fails. First call may take several seconds (model download).
+    fn get_or_init_model(&self) -> Option<Arc<Mutex<fastembed::TextRerank>>> {
+        // Hold the outer mutex only for the duration of the
+        // load — concurrent first-callers will serialize through here,
+        // which is fine; only one process-wide model load is wanted.
+        let mut guard = match self.model.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                tracing::warn!("FastembedReranker model mutex poisoned — recovering");
+                poisoned.into_inner()
+            }
+        };
+        if let Some(m) = guard.as_ref() {
+            return Some(m.clone());
+        }
+
+        let model_enum: fastembed::RerankerModel = match self.model_id.parse() {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(
+                    model_id = %self.model_id,
+                    error = %e,
+                    "Unknown reranker model — falling back to identity"
+                );
+                return None;
+            }
+        };
+
+        let init_opts = fastembed::RerankInitOptions::new(model_enum)
+            .with_cache_dir(self.cache_dir.clone())
+            .with_show_download_progress(false);
+
+        match fastembed::TextRerank::try_new(init_opts) {
+            Ok(model) => {
+                tracing::info!(
+                    model_id = %self.model_id,
+                    cache_dir = %self.cache_dir.display(),
+                    "Cross-encoder reranker model loaded"
+                );
+                let arc = Arc::new(Mutex::new(model));
+                *guard = Some(arc.clone());
+                Some(arc)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    model_id = %self.model_id,
+                    "fastembed reranker load failed — falling back to identity"
+                );
+                None
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl CrossEncoderReranker for FastembedReranker {
+    async fn rerank(&self, query: &str, candidates: Vec<ScoredFact>) -> Vec<ScoredFact> {
+        if candidates.is_empty() {
+            return candidates;
+        }
+
+        // 1. Truncate to candidate_pool before invoking the model.
+        let pool_size = self.candidate_pool.min(candidates.len());
+        let mut pool: Vec<ScoredFact> = candidates;
+        pool.truncate(pool_size);
+
+        // 2. Get or lazy-init the model. If it fails, return the pool
+        // unchanged so the caller still sees the (already top-scored)
+        // candidates.
+        let model = match self.get_or_init_model() {
+            Some(m) => m,
+            None => return pool,
+        };
+
+        // 3. Run inference on a blocking thread. Fastembed's `rerank`
+        // is CPU-bound (ONNX inference + tokenization with rayon).
+        let documents: Vec<String> = pool.iter().map(|sf| sf.fact.content.clone()).collect();
+        let query_owned = query.to_string();
+
+        let inference_result = tokio::task::spawn_blocking(move || {
+            let guard = match model.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            // batch_size = None lets fastembed use its default.
+            // return_documents = false — we don't need the docs back,
+            // we map by index onto `pool`.
+            guard.rerank(query_owned, documents, false, None)
+        })
+        .await;
+
+        let results = match inference_result {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    error = %e,
+                    "fastembed rerank inference failed — falling back to identity"
+                );
+                return pool;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "fastembed rerank blocking task panicked — falling back to identity"
+                );
+                return pool;
+            }
+        };
+
+        // 4. Map scores back onto pool by index, then sort + filter +
+        // truncate to `top_k_after`. fastembed returns the list already
+        // sorted descending by score, so we walk it in order.
+        let mut out: Vec<ScoredFact> = Vec::with_capacity(results.len().min(self.top_k_after));
+        for r in results {
+            if (r.score as f64) < self.score_threshold {
+                continue;
+            }
+            if r.index >= pool.len() {
+                continue;
+            }
+            let mut item = pool[r.index].clone();
+            item.score = r.score as f64;
+            out.push(item);
+            if out.len() >= self.top_k_after {
+                break;
+            }
+        }
+        out
     }
 }
 

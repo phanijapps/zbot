@@ -9,7 +9,7 @@ pub mod sleep;
 pub mod util;
 
 pub use llm_factory::{LlmClientConfig, MemoryLlmFactory};
-pub use rerank::{CrossEncoderReranker, IdentityReranker};
+pub use rerank::{CrossEncoderReranker, FastembedReranker, IdentityReranker};
 pub use services::{MemoryServices, MemoryServicesConfig};
 pub use util::{parse_llm_json, strip_code_fence};
 
