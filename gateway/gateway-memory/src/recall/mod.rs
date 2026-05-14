@@ -414,6 +414,17 @@ impl MemoryRecall {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         results.retain(|sf| sf.score >= self.config.min_score);
+
+        // 9.5 MMR diversity reranking (MEM-006). Reorders the top-N pool to
+        // demote near-duplicates of items already picked. Internal truncation
+        // brings the list down to `limit`; the explicit truncate below stays
+        // as a defensive no-op.
+        if self.config.mmr.enabled {
+            if let Some(store) = self.memory_store.as_ref() {
+                mmr_rerank(&mut results, store, &self.config.mmr, limit).await?;
+            }
+        }
+
         results.truncate(limit);
 
         Ok(results)
