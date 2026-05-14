@@ -24,6 +24,7 @@ pub use scored_item::{intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, S
 
 use std::sync::Arc;
 
+use crate::intent_router::{IntentClassifier, IntentProfiles};
 use crate::rerank::CrossEncoderReranker;
 use crate::RecallConfig;
 use agent_runtime::llm::embedding::EmbeddingClient;
@@ -162,6 +163,8 @@ pub struct MemoryRecall {
     wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>>,
     procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
     reranker: Option<Arc<dyn CrossEncoderReranker>>,
+    classifier: Option<Arc<dyn IntentClassifier>>,
+    profiles: Option<Arc<IntentProfiles>>,
     config: Arc<RecallConfig>,
 }
 
@@ -181,6 +184,8 @@ impl MemoryRecall {
             wiki_store: None,
             procedure_store: None,
             reranker: None,
+            classifier: None,
+            profiles: None,
             config,
         }
     }
@@ -190,6 +195,23 @@ impl MemoryRecall {
     /// and before the final truncate-to-top-K in [`Self::recall`].
     pub fn set_reranker(&mut self, reranker: Arc<dyn CrossEncoderReranker>) {
         self.reranker = Some(reranker);
+    }
+
+    /// Wire the intent classifier (MEM-008). When set, `recall()` calls
+    /// `classify(query)` at the start of the pipeline; a `Some(intent)`
+    /// result is looked up in [`Self::set_intent_profiles`] to produce a
+    /// per-query effective [`RecallConfig`]. `None` means router-disabled
+    /// (every query uses base config).
+    pub fn set_intent_classifier(&mut self, classifier: Arc<dyn IntentClassifier>) {
+        self.classifier = Some(classifier);
+    }
+
+    /// Wire the per-intent profile bank (MEM-008). When set alongside
+    /// [`Self::set_intent_classifier`], the classifier's intent label is
+    /// used to overlay partial [`RecallConfig`] fields onto the base for
+    /// that query only.
+    pub fn set_intent_profiles(&mut self, profiles: Arc<IntentProfiles>) {
+        self.profiles = Some(profiles);
     }
 
     /// Access the recall configuration.
@@ -258,6 +280,27 @@ impl MemoryRecall {
         limit: usize,
         ward_id: Option<&str>,
     ) -> Result<Vec<ScoredFact>, String> {
+        // 0. Intent routing (MEM-008). When a classifier + profile bank are
+        //    wired, derive a per-query effective config by overlaying the
+        //    intent's profile on top of the base. Every downstream stage
+        //    reads from `effective_config` instead of `self.config` so the
+        //    overlay applies to category weights, ward affinity, temporal
+        //    decay, contradiction, supersession, min_score, MMR, reranker.
+        //    Missing classifier / no confident intent / unknown intent →
+        //    effective_config equals base.
+        let effective_config: RecallConfig =
+            match (self.classifier.as_ref(), self.profiles.as_ref()) {
+                (Some(classifier), Some(profiles)) => {
+                    if let Some(intent) = classifier.classify(user_message).await {
+                        tracing::debug!(intent = %intent, "intent router selected profile overlay");
+                        profiles.apply(&self.config, &intent)
+                    } else {
+                        (*self.config).clone()
+                    }
+                }
+                _ => (*self.config).clone(),
+            };
+
         // 1. Embed the user message for vector search
         let query_embedding = self.embed_query(user_message).await;
 
@@ -301,7 +344,7 @@ impl MemoryRecall {
             Some(store) => store
                 .get_high_confidence_facts(
                     Some(agent_id),
-                    self.config.high_confidence_threshold,
+                    effective_config.high_confidence_threshold,
                     limit,
                 )
                 .await
@@ -357,7 +400,7 @@ impl MemoryRecall {
 
         // 5. Apply category weights from config
         for sf in &mut results {
-            let category_weight = self.config.category_weight(&sf.fact.category);
+            let category_weight = effective_config.category_weight(&sf.fact.category);
             sf.score *= category_weight;
         }
 
@@ -369,21 +412,20 @@ impl MemoryRecall {
                 let ward_prefix = format!("{}/", current_ward);
                 for sf in &mut results {
                     if sf.fact.key.starts_with(&ward_prefix) || sf.fact.category == "ward" {
-                        sf.score *= self.config.ward_affinity_boost;
+                        sf.score *= effective_config.ward_affinity_boost;
                     }
                 }
             }
         }
 
         // 7. Apply temporal decay — older facts score lower based on per-category half-lives
-        if self.config.temporal_decay.enabled {
+        if effective_config.temporal_decay.enabled {
             for sf in &mut results {
                 // Skill/agent indices don't decay (re-indexed each session)
                 if sf.fact.category == "skill" || sf.fact.category == "agent" {
                     continue;
                 }
-                let half_life = self
-                    .config
+                let half_life = effective_config
                     .temporal_decay
                     .half_life_days
                     .get(&sf.fact.category)
@@ -401,7 +443,7 @@ impl MemoryRecall {
         // 8. Penalize contradicted facts
         for sf in &mut results {
             if sf.fact.contradicted_by.is_some() {
-                sf.score *= self.config.contradiction_penalty;
+                sf.score *= effective_config.contradiction_penalty;
             }
         }
 
@@ -426,15 +468,15 @@ impl MemoryRecall {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        results.retain(|sf| sf.score >= self.config.min_score);
+        results.retain(|sf| sf.score >= effective_config.min_score);
 
         // 9.5 MMR diversity reranking (MEM-006). Reorders the top-N pool to
         // demote near-duplicates of items already picked. Internal truncation
         // brings the list down to `limit`; the explicit truncate below stays
         // as a defensive no-op.
-        if self.config.mmr.enabled {
+        if effective_config.mmr.enabled {
             if let Some(store) = self.memory_store.as_ref() {
-                mmr_rerank(&mut results, store, &self.config.mmr, limit).await?;
+                mmr_rerank(&mut results, store, &effective_config.mmr, limit).await?;
             }
         }
 
@@ -442,7 +484,7 @@ impl MemoryRecall {
         // model sees a diversity-reordered pool. The reranker's own
         // top_k_after caps the output; we still truncate to `limit`
         // below in case top_k_after > limit.
-        if self.config.rerank.enabled {
+        if effective_config.rerank.enabled {
             if let Some(reranker) = self.reranker.as_ref() {
                 results = reranker.rerank(user_message, results).await;
             }
