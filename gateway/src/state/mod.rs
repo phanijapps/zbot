@@ -407,7 +407,50 @@ impl AppState {
             tracing::info!(?mmr_override, "settings.json mmr override applied");
             recall_config.mmr = mmr_override;
         }
+        // Overlay user-facing cross-encoder reranker knobs from
+        // settings.json (execution.memory.rerank). Same precedence as
+        // the MMR overlay: settings.json wins over recall_config.json.
+        if let Some(rerank_override) = settings
+            .get_execution_settings()
+            .ok()
+            .and_then(|s| s.memory.rerank.clone())
+        {
+            tracing::info!(?rerank_override, "settings.json rerank override applied");
+            recall_config.rerank = rerank_override;
+        }
         let recall_config = Arc::new(recall_config);
+
+        // Build the cross-encoder reranker (MEM-007) once at startup when
+        // enabled. The model lazy-loads on the first rerank() call — this
+        // construction is cheap. When disabled, we leave the recall path
+        // identity (no reranker injected).
+        let reranker: Option<Arc<dyn gateway_memory::CrossEncoderReranker>> = if recall_config
+            .rerank
+            .enabled
+        {
+            let cache_dir = paths.data_dir().join("models");
+            if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+                tracing::warn!(
+                    error = %e,
+                    cache_dir = %cache_dir.display(),
+                    "Failed to create rerank model cache dir — reranker may fail to download model"
+                );
+            }
+            tracing::info!(
+                model_id = %recall_config.rerank.model_id,
+                cache_dir = %cache_dir.display(),
+                "Constructing cross-encoder reranker (model loads lazily on first recall)"
+            );
+            Some(Arc::new(gateway_memory::FastembedReranker::new(
+                recall_config.rerank.model_id.clone(),
+                recall_config.rerank.candidate_pool,
+                recall_config.rerank.top_k_after,
+                recall_config.rerank.score_threshold,
+                cache_dir,
+            )))
+        } else {
+            None
+        };
 
         // Create session archiver for offloading old transcripts to compressed files
         let archive_path = paths
@@ -435,6 +478,12 @@ impl AppState {
         } else {
             None
         };
+        // Wire the cross-encoder reranker (MEM-007) onto MemoryRecall
+        // when one was constructed. When `recall_config.rerank.enabled`
+        // is false this is a no-op (`reranker` is None).
+        if let (Some(recall), Some(r)) = (memory_recall_inner.as_mut(), reranker.as_ref()) {
+            recall.set_reranker(r.clone());
+        }
         // Wire trait-routed episode_store wrapping the SQLite EpisodeRepository.
         if let Some(recall) = memory_recall_inner.as_mut() {
             let store_opt: Option<Arc<dyn zero_stores_traits::EpisodeStore>> =

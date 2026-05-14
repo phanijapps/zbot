@@ -1997,6 +1997,7 @@ dependencies = [
  "agent-runtime",
  "async-trait",
  "chrono",
+ "fastembed",
  "gateway-services",
  "knowledge-graph",
  "rusqlite",

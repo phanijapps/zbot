@@ -436,6 +436,12 @@ pub struct MemorySettings {
     /// (or compiled defaults).
     #[serde(default)]
     pub mmr: Option<MmrConfig>,
+    /// User-facing cross-encoder reranker overrides. When `Some`,
+    /// replaces the corresponding field in `recall_config.json` at
+    /// startup. `None` (default) means use whatever's in
+    /// `recall_config.json` (or compiled defaults — disabled by default).
+    #[serde(default)]
+    pub rerank: Option<RerankConfig>,
 }
 
 pub fn default_corrections_abstractor_interval_hours() -> u32 {
@@ -452,6 +458,7 @@ impl Default for MemorySettings {
             corrections_abstractor_interval_hours: default_corrections_abstractor_interval_hours(),
             conflict_resolver_interval_hours: default_conflict_resolver_interval_hours(),
             mmr: None,
+            rerank: None,
         }
     }
 }
@@ -742,5 +749,52 @@ mod tests {
         }"#;
         let s: MemorySettings = serde_json::from_str(json).unwrap();
         assert!(s.mmr.is_none());
+    }
+
+    #[test]
+    fn memory_settings_deserializes_rerank_override() {
+        // Inner RerankConfig has no `rename_all`, so its fields are read
+        // as snake_case (matching recall_config.json conventions).
+        let json = r#"{
+            "correctionsAbstractorIntervalHours": 24,
+            "conflictResolverIntervalHours": 24,
+            "rerank": {
+                "enabled": true,
+                "model_id": "BAAI/bge-reranker-base",
+                "candidate_pool": 15,
+                "top_k_after": 8,
+                "score_threshold": 0.5
+            }
+        }"#;
+        let s: MemorySettings = serde_json::from_str(json).unwrap();
+        assert!(s.rerank.is_some());
+        let r = s.rerank.unwrap();
+        assert!(r.enabled);
+        assert_eq!(r.model_id, "BAAI/bge-reranker-base");
+        assert_eq!(r.candidate_pool, 15);
+        assert_eq!(r.top_k_after, 8);
+        assert_eq!(r.score_threshold, 0.5);
+    }
+
+    #[test]
+    fn memory_settings_rerank_missing_is_none() {
+        let json = r#"{
+            "correctionsAbstractorIntervalHours": 24,
+            "conflictResolverIntervalHours": 24
+        }"#;
+        let s: MemorySettings = serde_json::from_str(json).unwrap();
+        assert!(s.rerank.is_none());
+    }
+
+    #[test]
+    fn rerank_config_defaults_are_safe() {
+        // MEM-007 contract: enabling triggers a 280 MB download, so the
+        // default must be off.
+        let c = RecallConfig::default();
+        assert!(!c.rerank.enabled, "rerank disabled by default");
+        assert_eq!(c.rerank.model_id, "BAAI/bge-reranker-base");
+        assert_eq!(c.rerank.candidate_pool, 20);
+        assert_eq!(c.rerank.top_k_after, 10);
+        assert_eq!(c.rerank.score_threshold, 0.0);
     }
 }
