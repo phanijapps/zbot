@@ -123,7 +123,10 @@ async fn mmr_rerank(
 ///
 /// Returns `0.0` for empty or length-mismatched inputs (caller treats
 /// as maximally novel rather than dropping the candidate).
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+///
+/// Exposed as `pub(crate)` so [`crate::intent_router::KnnIntentClassifier`]
+/// can reuse the same arithmetic as MMR.
+pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     if a.is_empty() || a.len() != b.len() {
         return 0.0;
     }

@@ -9,7 +9,7 @@ pub mod services;
 pub mod sleep;
 pub mod util;
 
-pub use intent_router::{IdentityClassifier, IntentClassifier};
+pub use intent_router::{IdentityClassifier, IntentClassifier, KnnIntentClassifier};
 pub use llm_factory::{LlmClientConfig, MemoryLlmFactory};
 pub use rerank::{CrossEncoderReranker, FastembedReranker, IdentityReranker};
 pub use services::{MemoryServices, MemoryServicesConfig};
