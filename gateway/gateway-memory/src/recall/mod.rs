@@ -1128,4 +1128,185 @@ mod tests {
         assert!(kept.iter().any(|f| f.id == "c"));
         assert!(!kept.iter().any(|f| f.id == "b"));
     }
+
+    // ========================================================================
+    // MEM-008 — intent router integration tests
+    // ========================================================================
+
+    /// `MemoryFactStore` that serves a single canned correction fact via
+    /// `get_facts_by_category("correction", ...)`. Lets the recall
+    /// pipeline materialize a fact whose score we can then inspect.
+    struct OneCorrectionStore {
+        fact: MemoryFact,
+    }
+
+    #[async_trait::async_trait]
+    impl zero_stores::MemoryFactStore for OneCorrectionStore {
+        async fn save_fact(
+            &self,
+            _agent_id: &str,
+            _category: &str,
+            _key: &str,
+            _content: &str,
+            _confidence: f64,
+            _session_id: Option<&str>,
+        ) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!({}))
+        }
+
+        async fn recall_facts(
+            &self,
+            _agent_id: &str,
+            _query: &str,
+            _limit: usize,
+        ) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!([]))
+        }
+
+        async fn get_facts_by_category(
+            &self,
+            _agent_id: &str,
+            category: &str,
+            _limit: usize,
+        ) -> Result<Vec<MemoryFact>, String> {
+            if category == "correction" {
+                Ok(vec![self.fact.clone()])
+            } else {
+                Ok(Vec::new())
+            }
+        }
+    }
+
+    /// Classifier that returns a hardcoded intent label (or `None`).
+    struct StaticClassifier(Option<String>);
+
+    #[async_trait::async_trait]
+    impl crate::intent_router::IntentClassifier for StaticClassifier {
+        async fn classify(&self, _query: &str) -> Option<String> {
+            self.0.clone()
+        }
+    }
+
+    fn correction_fact(content: &str) -> MemoryFact {
+        let now = chrono::Utc::now().to_rfc3339();
+        MemoryFact {
+            id: "corr-1".to_string(),
+            session_id: None,
+            agent_id: "agent-1".to_string(),
+            scope: "agent".to_string(),
+            category: "correction".to_string(),
+            key: "test.corr-1".to_string(),
+            content: content.to_string(),
+            confidence: 1.0,
+            mention_count: 1,
+            source_summary: None,
+            embedding: None,
+            ward_id: "__global__".to_string(),
+            contradicted_by: None,
+            created_at: now.clone(),
+            updated_at: now,
+            expires_at: None,
+            valid_from: None,
+            valid_until: None,
+            superseded_by: None,
+            pinned: false,
+            // Convention class so the supersession-penalty branch is a
+            // no-op even with `valid_until` set — keeps the test focused
+            // on the category-weight delta from the intent router.
+            epistemic_class: Some("convention".to_string()),
+            source_episode_id: None,
+            source_ref: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn recall_pipeline_uses_effective_config_when_classifier_present() {
+        // Setup: one correction fact with confidence 1.0. The recall path
+        // pre-boosts corrections by 1.5x (line ~395), then multiplies by
+        // the `correction` category weight. With base config that's
+        // 1.0 * 1.5 * 1.5 = 2.25. With a "correction-recall" intent that
+        // overlays `correction: 2.5`, it becomes 1.0 * 1.5 * 2.5 = 3.75.
+        let mut config = RecallConfig::default();
+        // Turn off MMR + temporal decay so the test isolates the
+        // category-weight delta. Decay is technically near-1.0 anyway
+        // (we just wrote `updated_at = now()`), but explicit > implicit.
+        config.mmr.enabled = false;
+        config.temporal_decay.enabled = false;
+        let config = Arc::new(config);
+
+        let store: Arc<dyn zero_stores::MemoryFactStore> = Arc::new(OneCorrectionStore {
+            fact: correction_fact("never use foo"),
+        });
+
+        let classifier: Arc<dyn crate::intent_router::IntentClassifier> =
+            Arc::new(StaticClassifier(Some("correction-recall".to_string())));
+        let profiles = Arc::new(crate::intent_router::IntentProfiles::from_json(
+            serde_json::json!({
+                "correction-recall": {
+                    "category_weights": { "correction": 2.5 }
+                }
+            }),
+        ));
+
+        let mut recall = MemoryRecall::new(None, config.clone());
+        recall.set_memory_store(store);
+        recall.set_intent_classifier(classifier);
+        recall.set_intent_profiles(profiles);
+
+        let results = recall
+            .recall("agent-1", "did I tell you not to use foo", 10, None)
+            .await
+            .expect("recall ok");
+
+        assert_eq!(results.len(), 1, "single correction in results");
+        let score = results[0].score;
+        // Expect 1.0 * 1.5 (pre-boost) * 2.5 (overlay weight) = 3.75.
+        assert!(
+            (score - 3.75).abs() < 1e-6,
+            "expected overlay score 3.75, got {score}"
+        );
+    }
+
+    #[tokio::test]
+    async fn recall_pipeline_uses_base_config_when_classifier_returns_none() {
+        // Same setup but classifier returns None. The pipeline must run
+        // unchanged: 1.0 * 1.5 * 1.5 = 2.25.
+        let mut config = RecallConfig::default();
+        config.mmr.enabled = false;
+        config.temporal_decay.enabled = false;
+        let config = Arc::new(config);
+
+        let store: Arc<dyn zero_stores::MemoryFactStore> = Arc::new(OneCorrectionStore {
+            fact: correction_fact("never use foo"),
+        });
+
+        let classifier: Arc<dyn crate::intent_router::IntentClassifier> =
+            Arc::new(StaticClassifier(None));
+        // Profiles wired but classifier returns None → no overlay path.
+        let profiles = Arc::new(crate::intent_router::IntentProfiles::from_json(
+            serde_json::json!({
+                "correction-recall": {
+                    "category_weights": { "correction": 2.5 }
+                }
+            }),
+        ));
+
+        let mut recall = MemoryRecall::new(None, config.clone());
+        recall.set_memory_store(store);
+        recall.set_intent_classifier(classifier);
+        recall.set_intent_profiles(profiles);
+
+        let results = recall
+            .recall("agent-1", "anything", 10, None)
+            .await
+            .expect("recall ok");
+
+        assert_eq!(results.len(), 1);
+        let score = results[0].score;
+        // Expect 1.0 * 1.5 * 1.5 = 2.25 (base correction weight).
+        assert!(
+            (score - 2.25).abs() < 1e-6,
+            "expected base score 2.25, got {score}"
+        );
+    }
 }
