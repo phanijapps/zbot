@@ -381,6 +381,12 @@ pub struct MemorySettings {
     /// Default: 24. Set to 0 to run on every sleep cycle (hourly).
     #[serde(default = "default_conflict_resolver_interval_hours")]
     pub conflict_resolver_interval_hours: u32,
+    /// User-facing MMR overrides. When `Some`, replaces the
+    /// corresponding field in `recall_config.json` at startup.
+    /// `None` (default) means use whatever's in `recall_config.json`
+    /// (or compiled defaults).
+    #[serde(default)]
+    pub mmr: Option<MmrConfig>,
 }
 
 pub fn default_corrections_abstractor_interval_hours() -> u32 {
@@ -396,6 +402,7 @@ impl Default for MemorySettings {
         Self {
             corrections_abstractor_interval_hours: default_corrections_abstractor_interval_hours(),
             conflict_resolver_interval_hours: default_conflict_resolver_interval_hours(),
+            mmr: None,
         }
     }
 }
@@ -659,5 +666,32 @@ mod tests {
             m.corrections_abstractor_interval_hours, 24,
             "default preserved"
         );
+    }
+
+    #[test]
+    fn memory_settings_deserializes_mmr_override() {
+        // Inner MmrConfig has no `rename_all = "camelCase"`, so its fields
+        // are read as snake_case (matching recall_config.json conventions).
+        let json = r#"{
+            "correctionsAbstractorIntervalHours": 24,
+            "conflictResolverIntervalHours": 24,
+            "mmr": { "enabled": false, "lambda": 0.5, "candidate_pool": 20 }
+        }"#;
+        let s: MemorySettings = serde_json::from_str(json).unwrap();
+        assert!(s.mmr.is_some());
+        let mmr = s.mmr.unwrap();
+        assert!(!mmr.enabled);
+        assert_eq!(mmr.lambda, 0.5);
+        assert_eq!(mmr.candidate_pool, 20);
+    }
+
+    #[test]
+    fn memory_settings_mmr_missing_is_none() {
+        let json = r#"{
+            "correctionsAbstractorIntervalHours": 24,
+            "conflictResolverIntervalHours": 24
+        }"#;
+        let s: MemorySettings = serde_json::from_str(json).unwrap();
+        assert!(s.mmr.is_none());
     }
 }
