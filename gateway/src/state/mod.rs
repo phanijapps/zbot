@@ -390,10 +390,24 @@ impl AppState {
             embedding_service.dimensions()
         );
 
+        // Create settings service early so we can overlay user-facing knobs
+        // (e.g. execution.memory.mmr) onto recall_config below.
+        let settings = Arc::new(SettingsService::new(paths.clone()));
+
         // Load recall configuration (compiled defaults merged with optional user overrides)
-        let recall_config = Arc::new(gateway_services::RecallConfig::load_from_path(
-            paths.vault_dir(),
-        ));
+        let mut recall_config = gateway_services::RecallConfig::load_from_path(paths.vault_dir());
+        // Overlay user-facing MMR knobs from settings.json (execution.memory.mmr).
+        // When present, settings.json wins over recall_config.json so users have a
+        // single unified surface for the common knobs.
+        if let Some(mmr_override) = settings
+            .get_execution_settings()
+            .ok()
+            .and_then(|s| s.memory.mmr.clone())
+        {
+            tracing::info!(?mmr_override, "settings.json mmr override applied");
+            recall_config.mmr = mmr_override;
+        }
+        let recall_config = Arc::new(recall_config);
 
         // Create session archiver for offloading old transcripts to compressed files
         let archive_path = paths
@@ -566,9 +580,6 @@ impl AppState {
         let memory_store = early_memory_store;
 
         let episode_repo_ref = episode_repo.clone();
-
-        // Create settings service (before distiller & runtime, so we can read execution settings)
-        let settings = Arc::new(SettingsService::new(paths.clone()));
 
         // SessionDistiller (Phase E3): builds in BOTH backends.
         //

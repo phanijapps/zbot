@@ -226,6 +226,8 @@ Set either to `0` to run on every hourly cycle.
 
 A missing file falls back to compiled defaults. A partial file deep-merges with defaults — user values win per key, missing keys keep their default. A corrupted file logs a warning and uses defaults.
 
+The MMR knobs (`mmr.enabled`, `mmr.lambda`, `mmr.candidate_pool`) are also configurable via `settings.json → execution.memory.mmr` for a unified config surface — `settings.json` wins if both are set.
+
 ## A closed-loop walkthrough
 
 One concrete trace, following a single correction through every stage of the system.
