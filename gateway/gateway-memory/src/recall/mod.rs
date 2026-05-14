@@ -28,6 +28,96 @@ use crate::RecallConfig;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use zero_stores_domain::{MemoryFact, Procedure, ScoredFact};
 
+/// Greedy MMR pick-order over a scored candidate pool.
+///
+/// Pure synchronous core of [`mmr_rerank`] — exposed as its own helper
+/// so the math can be unit-tested without standing up a store mock.
+/// Returns indices into `scores`/`embeddings`, in the order they were
+/// picked. Candidates with `None` embeddings contribute similarity
+/// `0.0` against everyone (maximally novel — never dropped).
+fn mmr_pick_order(
+    scores: &[f64],
+    embeddings: &[Option<Vec<f32>>],
+    lambda: f64,
+    limit: usize,
+) -> Vec<usize> {
+    let n = scores.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let take = limit.min(n);
+    let mut picked: Vec<usize> = Vec::with_capacity(take);
+    let mut remaining: Vec<usize> = (0..n).collect();
+    while picked.len() < take && !remaining.is_empty() {
+        let mut best_idx_in_remaining = 0;
+        let mut best_score = f64::MIN;
+        for (i, &cand) in remaining.iter().enumerate() {
+            let max_sim = picked
+                .iter()
+                .map(|&p| match (&embeddings[cand], &embeddings[p]) {
+                    (Some(a), Some(b)) => cosine_similarity(a, b),
+                    _ => 0.0,
+                })
+                .fold(0.0_f64, f64::max);
+            let mmr_score = lambda * scores[cand] - (1.0 - lambda) * max_sim;
+            if mmr_score > best_score {
+                best_score = mmr_score;
+                best_idx_in_remaining = i;
+            }
+        }
+        picked.push(remaining.swap_remove(best_idx_in_remaining));
+    }
+    picked
+}
+
+/// Reorder candidates to balance relevance and diversity (MMR).
+///
+/// Greedy O(K²) selection: at each step, pick the candidate that
+/// maximizes `λ · score − (1 − λ) · max(cosine(candidate, already_picked))`.
+///
+/// Hydrates missing embeddings via [`MemoryFactStore::get_fact_embedding`].
+/// Candidates whose embedding can't be hydrated still get included with a
+/// similarity term of 0.0 — better than silently dropping them.
+async fn mmr_rerank(
+    candidates: &mut Vec<ScoredFact>,
+    memory_store: &Arc<dyn zero_stores::MemoryFactStore>,
+    cfg: &crate::MmrConfig,
+    limit: usize,
+) -> Result<(), String> {
+    if !cfg.enabled || candidates.len() <= limit {
+        return Ok(());
+    }
+
+    // 1. Truncate to candidate_pool to bound the greedy loop.
+    let pool_size = cfg.candidate_pool.min(candidates.len());
+    candidates.truncate(pool_size);
+
+    // 2. Hydrate missing embeddings.
+    let mut embeddings: Vec<Option<Vec<f32>>> = Vec::with_capacity(pool_size);
+    for sf in candidates.iter() {
+        if let Some(emb) = sf.fact.embedding.clone() {
+            embeddings.push(Some(emb));
+        } else {
+            let hydrated = memory_store
+                .get_fact_embedding(&sf.fact.id)
+                .await
+                .ok()
+                .flatten();
+            embeddings.push(hydrated);
+        }
+    }
+
+    // 3. Greedy pick using the pure helper.
+    let scores: Vec<f64> = candidates.iter().map(|sf| sf.score).collect();
+    let picked = mmr_pick_order(&scores, &embeddings, cfg.lambda, limit);
+
+    // 4. Replace `candidates` with the picked order.
+    let reordered: Vec<ScoredFact> = picked.iter().map(|&idx| candidates[idx].clone()).collect();
+    *candidates = reordered;
+
+    Ok(())
+}
+
 /// Cosine similarity between two `f32` vectors.
 ///
 /// Returns `0.0` for empty or length-mismatched inputs (caller treats
