@@ -598,7 +598,7 @@ impl MemoryTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ZeroError::Tool("Missing 'query' for recall".to_string()))?;
 
-        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
 
         // Use DB-backed fact store if available — prioritized recall
         match &self.fact_store {
