@@ -279,6 +279,22 @@ pub struct KgDecayConfig {
     pub min_confidence: f64,
     /// Skip rows whose `last_seen_at` is within this many hours.
     pub skip_recent_hours: i64,
+    /// Minimum age (in days, by `last_seen_at`) before an orphan entity
+    /// becomes a prune candidate. Default 30. Lower for more aggressive
+    /// cleanup of transient mentions.
+    #[serde(default = "default_prune_min_age_days")]
+    pub prune_min_age_days: i64,
+    /// Maximum prune candidates returned per sleep cycle. Default 100.
+    #[serde(default = "default_prune_limit")]
+    pub prune_limit: u32,
+}
+
+pub fn default_prune_min_age_days() -> i64 {
+    30
+}
+
+pub fn default_prune_limit() -> u32 {
+    100
 }
 
 impl Default for KgDecayConfig {
@@ -289,6 +305,8 @@ impl Default for KgDecayConfig {
             relationship_half_life_days: 90.0,
             min_confidence: 0.01,
             skip_recent_hours: 24,
+            prune_min_age_days: default_prune_min_age_days(),
+            prune_limit: default_prune_limit(),
         }
     }
 }
@@ -489,6 +507,15 @@ pub struct MemorySettings {
     /// exemplar and profile JSON banks are read directly from the vault.
     #[serde(default)]
     pub intent_router: Option<IntentRouterConfig>,
+    /// User-facing KG decay + prune overrides. When `Some`, replaces the
+    /// corresponding field in `recall_config.json` at startup. Same
+    /// precedence as the MMR/rerank overlays: `settings.json` wins. Holds
+    /// both the confidence-decay knobs (entity/relationship half-lives,
+    /// min_confidence, skip_recent_hours) and the prune candidate knobs
+    /// (prune_min_age_days, prune_limit) since both are governed by
+    /// `DecayEngine`.
+    #[serde(default)]
+    pub kg_decay: Option<KgDecayConfig>,
 }
 
 pub fn default_corrections_abstractor_interval_hours() -> u32 {
@@ -507,6 +534,7 @@ impl Default for MemorySettings {
             mmr: None,
             rerank: None,
             intent_router: None,
+            kg_decay: None,
         }
     }
 }
@@ -736,6 +764,61 @@ mod tests {
         assert_eq!(c.kg_decay.relationship_half_life_days, 90.0);
         assert_eq!(c.kg_decay.min_confidence, 0.01);
         assert_eq!(c.kg_decay.skip_recent_hours, 24);
+    }
+
+    #[test]
+    fn kg_decay_config_defaults_include_prune() {
+        let c = KgDecayConfig::default();
+        assert_eq!(c.prune_min_age_days, 30);
+        assert_eq!(c.prune_limit, 100);
+    }
+
+    #[test]
+    fn kg_decay_config_deserializes_partial_prune_override() {
+        // Inner `KgDecayConfig` has no `rename_all`, so its fields are read
+        // as snake_case (matching recall_config.json conventions).
+        let json = r#"{"enabled": true, "entity_half_life_days": 90.0,
+                       "relationship_half_life_days": 90.0,
+                       "min_confidence": 0.01, "skip_recent_hours": 24,
+                       "prune_min_age_days": 7}"#;
+        let c: KgDecayConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(c.prune_min_age_days, 7);
+        assert_eq!(c.prune_limit, 100); // default preserved
+    }
+
+    #[test]
+    fn memory_settings_kg_decay_missing_is_none() {
+        let json = r#"{
+            "correctionsAbstractorIntervalHours": 24,
+            "conflictResolverIntervalHours": 24
+        }"#;
+        let s: MemorySettings = serde_json::from_str(json).unwrap();
+        assert!(s.kg_decay.is_none());
+    }
+
+    #[test]
+    fn memory_settings_deserializes_kg_decay_override() {
+        // `MemorySettings` has `rename_all = "camelCase"` so the outer key
+        // is `kgDecay`. Inner `KgDecayConfig` has no `rename_all`, so its
+        // fields stay snake_case (matching recall_config.json).
+        let json = r#"{
+            "correctionsAbstractorIntervalHours": 24,
+            "conflictResolverIntervalHours": 24,
+            "kgDecay": {
+                "enabled": true,
+                "entity_half_life_days": 90.0,
+                "relationship_half_life_days": 90.0,
+                "min_confidence": 0.01,
+                "skip_recent_hours": 24,
+                "prune_min_age_days": 7,
+                "prune_limit": 50
+            }
+        }"#;
+        let s: MemorySettings = serde_json::from_str(json).unwrap();
+        assert!(s.kg_decay.is_some());
+        let kg = s.kg_decay.unwrap();
+        assert_eq!(kg.prune_min_age_days, 7);
+        assert_eq!(kg.prune_limit, 50);
     }
 
     #[test]

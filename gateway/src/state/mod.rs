@@ -464,6 +464,24 @@ impl AppState {
             );
             recall_config.intent_router = router_override;
         }
+        // Overlay user-facing KG decay + prune knobs from settings.json
+        // (execution.memory.kgDecay). Same precedence as the MMR/rerank
+        // overlays: settings.json wins over recall_config.json. Covers
+        // both confidence decay (entity/relationship half-lives, min
+        // confidence, skip_recent_hours) and prune candidate selection
+        // (prune_min_age_days, prune_limit) since both are governed by
+        // DecayEngine.
+        if let Some(kg_decay_override) = settings
+            .get_execution_settings()
+            .ok()
+            .and_then(|s| s.memory.kg_decay.clone())
+        {
+            tracing::info!(
+                ?kg_decay_override,
+                "settings.json kg_decay override applied"
+            );
+            recall_config.kg_decay = kg_decay_override;
+        }
         let recall_config = Arc::new(recall_config);
 
         // Build the cross-encoder reranker (MEM-007) once at startup when
@@ -1033,7 +1051,10 @@ impl AppState {
                         conflict_resolver_interval: std::time::Duration::from_secs(
                             conflict_interval_hours as u64 * 3600,
                         ),
-                        decay_config: gateway_memory::sleep::DecayConfig::default(),
+                        decay_config: gateway_memory::sleep::DecayConfig {
+                            min_age_days: recall_config.kg_decay.prune_min_age_days,
+                            limit: recall_config.kg_decay.prune_limit as usize,
+                        },
                         // Intent router fields pass through MemoryServicesConfig
                         // for completeness; the sleep-time worker (which is
                         // what MemoryServices owns) doesn't consume them —

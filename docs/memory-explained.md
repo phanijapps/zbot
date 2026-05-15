@@ -221,6 +221,8 @@ Set either to `0` to run on every hourly cycle.
 | `kg_decay.relationship_half_life_days` | `90` | Relationship confidence half-life |
 | `kg_decay.min_confidence` | `0.01` | Confidence floor |
 | `kg_decay.skip_recent_hours` | `24` | Don't decay rows touched recently |
+| `kg_decay.prune_min_age_days` | `30` | Days an orphan must sit before becoming a prune candidate |
+| `kg_decay.prune_limit` | `100` | Max prune candidates returned per sleep cycle |
 | `mid_session_recall.every_n_turns` | `5` | Mid-session recall cadence |
 | `mid_session_recall.min_novelty_score` | `0.3` | Score floor for mid-session injection |
 
