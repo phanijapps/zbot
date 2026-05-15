@@ -487,7 +487,7 @@ pub fn format_scored_items(items: &[ScoredItem]) -> String {
 }
 
 /// Apply class-aware penalty to a scored fact based on its epistemic class
-/// and whether it has been superseded (`valid_until` set).
+/// and whether it has been superseded (`superseded_by` set).
 ///
 /// - `archival` → `0.3x` if superseded (corrected), otherwise no penalty.
 ///   Archival facts are historical records; their age is not a defect.
@@ -500,7 +500,7 @@ fn apply_class_aware_penalty(sf: &mut ScoredFact) {
     // unknown-class branch (0.3x on supersession) — a conservative default
     // rather than assuming `current` (which implies 0.1x).
     let class = sf.fact.epistemic_class.as_deref().unwrap_or("");
-    let is_superseded = sf.fact.valid_until.is_some();
+    let is_superseded = sf.fact.superseded_by.is_some();
     match class {
         "archival" => {
             if is_superseded {
@@ -585,7 +585,11 @@ mod tests {
         assert!(out.contains("- [episode] ep content"));
     }
 
-    fn make_scored_fact(class: Option<&str>, valid_until: Option<&str>, score: f64) -> ScoredFact {
+    fn make_scored_fact(
+        class: Option<&str>,
+        superseded_by: Option<&str>,
+        score: f64,
+    ) -> ScoredFact {
         ScoredFact {
             fact: MemoryFact {
                 id: "fact-test".to_string(),
@@ -605,8 +609,8 @@ mod tests {
                 updated_at: String::new(),
                 expires_at: None,
                 valid_from: None,
-                valid_until: valid_until.map(|s| s.to_string()),
-                superseded_by: None,
+                valid_until: None,
+                superseded_by: superseded_by.map(|s| s.to_string()),
                 pinned: false,
                 epistemic_class: class.map(|s| s.to_string()),
                 source_episode_id: None,
@@ -691,6 +695,20 @@ mod tests {
         let mut sf = make_scored_fact(None, Some("2026-01-01"), 1.0);
         apply_class_aware_penalty(&mut sf);
         assert!((sf.score - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bitemporal_bounded_fact_not_penalised_when_not_superseded() {
+        // valid_until set (fact's truth interval ended in the world)
+        // but superseded_by is None (no newer fact replaces it).
+        // This is bi-temporal history — should NOT be penalized.
+        let mut sf = make_scored_fact(Some("current"), None, 1.0);
+        sf.fact.valid_until = Some("2026-03-01".to_string());
+        apply_class_aware_penalty(&mut sf);
+        assert!(
+            (sf.score - 1.0).abs() < 1e-6,
+            "bi-temporal history (valid_until set, superseded_by None) should not be penalized"
+        );
     }
 
     #[test]
