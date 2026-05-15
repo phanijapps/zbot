@@ -78,10 +78,44 @@ pub struct ExecutionSettings {
     /// Background memory worker configuration.
     #[serde(default)]
     pub memory: MemorySettings,
+    /// Delegation tool guardrails (task/context size limits).
+    #[serde(default)]
+    pub delegation: DelegationConfig,
     /// Experimental UI feature flags. Free-form bag persisted verbatim so
     /// we can gate beta surfaces without schema churn.
     #[serde(default)]
     pub feature_flags: std::collections::HashMap<String, bool>,
+}
+
+/// Delegation tool guardrails.
+///
+/// The `delegate_to_agent` tool rejects calls whose serialized `task` or
+/// `context` exceeds `max_task_chars`. Reintroduced 2026-05-15 after a
+/// builder-agent run pushed 581K input tokens into the model and crashed —
+/// the previous hardcoded 4000-char limit had been disabled because real
+/// builder work regularly crossed it, so the new default is 16000 (4×) and
+/// users can tune it further via `settings.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DelegationConfig {
+    /// Maximum char length of the `task` or `context` argument to the
+    /// delegate tool. Default 16000. Below this, the call is allowed.
+    /// Above, the tool returns "Task too large" so the orchestrator can
+    /// retry with a shorter description.
+    #[serde(default = "default_max_task_chars")]
+    pub max_task_chars: u32,
+}
+
+fn default_max_task_chars() -> u32 {
+    16000
+}
+
+impl Default for DelegationConfig {
+    fn default() -> Self {
+        Self {
+            max_task_chars: default_max_task_chars(),
+        }
+    }
 }
 
 /// Root agent (orchestrator) configuration.
@@ -230,6 +264,7 @@ impl Default for ExecutionSettings {
             chat: ChatConfig::default(),
             wiki: WikiConfig::default(),
             memory: MemorySettings::default(),
+            delegation: DelegationConfig::default(),
             feature_flags: std::collections::HashMap::new(),
         }
     }

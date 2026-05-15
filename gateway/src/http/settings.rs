@@ -302,6 +302,9 @@ pub struct UpdateExecutionSettingsRequest {
     /// Background memory worker configuration.
     #[serde(default)]
     pub memory: Option<gateway_services::MemorySettings>,
+    /// Delegation tool guardrails (max task/context size).
+    #[serde(default)]
+    pub delegation: Option<gateway_services::DelegationConfig>,
     /// Experimental UI feature flags (free-form bag).
     #[serde(default)]
     pub feature_flags: std::collections::HashMap<String, bool>,
@@ -346,6 +349,9 @@ impl UpdateExecutionSettingsRequest {
 
             // User-configurable with fallback to existing
             memory: self.memory.unwrap_or_else(|| existing.memory.clone()),
+            delegation: self
+                .delegation
+                .unwrap_or_else(|| existing.delegation.clone()),
 
             // Runtime state (preserved from existing settings)
             chat: existing.chat.clone(),
@@ -496,6 +502,7 @@ mod tests {
             distillation: None,
             multimodal: None,
             memory: None,
+            delegation: None,
             feature_flags: std::collections::HashMap::new(),
         }
     }

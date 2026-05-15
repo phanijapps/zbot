@@ -842,6 +842,20 @@ impl AppState {
             .unwrap_or(2);
         tracing::info!(max_parallel_agents, "Execution settings loaded");
 
+        // Configure the delegation tool's runtime char-limit guard from
+        // `execution.delegation.maxTaskChars`. The constant lives in
+        // `agent-runtime` (no `gateway-services` dep), so we cross the
+        // boundary via a process-wide `AtomicUsize` setter called once
+        // here at startup. A missing/invalid setting falls back to the
+        // built-in default (16000); zero is treated as "use default" by
+        // the setter to prevent the guard from being silently disabled.
+        let max_task_chars = settings
+            .get_execution_settings()
+            .map(|s| s.delegation.max_task_chars as usize)
+            .unwrap_or(16000);
+        agent_runtime::tools::delegate::set_max_task_chars(max_task_chars);
+        tracing::info!(max_task_chars, "delegate.rs max_task_chars configured");
+
         // Create streaming ingestion queue + backpressure BEFORE the runtime so the
         // runner can be wired with an IngestionAdapter.
         //

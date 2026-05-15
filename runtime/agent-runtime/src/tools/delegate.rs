@@ -9,8 +9,33 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use zero_core::{Tool, ToolContext};
+
+/// Maximum size of a delegation `task` or `context` argument in chars.
+/// Configurable at runtime via [`set_max_task_chars`]. Defaults to 16000
+/// — 4× the original 4000 which proved too tight for legitimate builder
+/// work, but well below typical model context (32K+) so runaway tasks
+/// still get caught before they crash the child agent.
+static MAX_TASK_CHARS: AtomicUsize = AtomicUsize::new(16000);
+
+/// Update the runtime delegation char limit. Called once at gateway
+/// startup with the value from `settings.json → execution.delegation.maxTaskChars`.
+///
+/// Values of `0` are ignored (treated as "use default") so a misconfigured
+/// setting cannot silently disable the guard.
+pub fn set_max_task_chars(n: usize) {
+    if n == 0 {
+        return;
+    }
+    MAX_TASK_CHARS.store(n, Ordering::Relaxed);
+}
+
+/// Read the current limit.
+fn current_max_task_chars() -> usize {
+    MAX_TASK_CHARS.load(Ordering::Relaxed)
+}
 
 /// Tool for delegating tasks to subagents.
 ///
@@ -112,33 +137,30 @@ impl Tool for DelegateTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("task is required".to_string()))?;
 
-        // Guard: Limit task size to prevent context explosion
-        // DISABLED 2026-05-14: legitimate builder-agent delegations regularly exceeded 4000
-        // chars (5346, 10446 observed in real sessions). The guard fired more on real work
-        // than on runaway tasks. Restore (and make configurable via settings.json) if
-        // context-explosion bugs reappear downstream.
-        // const MAX_TASK_CHARS: usize = 4000;
-        // if task.len() > MAX_TASK_CHARS {
-        //     return Err(zero_core::ZeroError::Tool(format!(
-        //         "Task too large ({} chars). Maximum is {} chars. Be concise in your delegation.",
-        //         task.len(),
-        //         MAX_TASK_CHARS
-        //     )));
-        // }
+        // Guard: Limit task size to prevent context explosion.
+        // Reintroduced 2026-05-15 at 16000 (was 4000, which fired on real work).
+        // Configurable via settings.json `execution.delegation.maxTaskChars`.
+        let max_chars = current_max_task_chars();
+        if task.len() > max_chars {
+            return Err(zero_core::ZeroError::Tool(format!(
+                "Task too large ({} chars). Maximum is {} chars. Be concise in your delegation.",
+                task.len(),
+                max_chars
+            )));
+        }
 
         let context = args.get("context").cloned();
 
-        // Guard: Limit context size — disabled alongside task guard above.
-        // if let Some(ctx_val) = &context {
-        //     let ctx_str = serde_json::to_string(ctx_val).unwrap_or_default();
-        //     if ctx_str.len() > MAX_TASK_CHARS {
-        //         return Err(zero_core::ZeroError::Tool(format!(
-        //             "Context too large ({} chars). Maximum is {} chars. Only pass essential context.",
-        //             ctx_str.len(),
-        //             MAX_TASK_CHARS
-        //         )));
-        //     }
-        // }
+        if let Some(ctx_val) = &context {
+            let ctx_str = serde_json::to_string(ctx_val).unwrap_or_default();
+            if ctx_str.len() > max_chars {
+                return Err(zero_core::ZeroError::Tool(format!(
+                    "Context too large ({} chars). Maximum is {} chars. Only pass essential context.",
+                    ctx_str.len(),
+                    max_chars
+                )));
+            }
+        }
 
         let wait_for_result = args
             .get("wait_for_result")
@@ -275,6 +297,16 @@ impl Tool for DelegateTool {
 mod tests {
     use super::*;
     use crate::tools::context::ToolContext as ConcreteCtx;
+    use tokio::sync::Mutex;
+
+    /// Tests that read/write `MAX_TASK_CHARS` must serialize against each
+    /// other so they don't race when cargo runs tokio tests in parallel.
+    /// Tests that don't touch the atomic don't need this lock.
+    ///
+    /// `tokio::sync::Mutex` (rather than `std::sync::Mutex`) so the guard
+    /// can be safely held across `await` points — clippy's
+    /// `await_holding_lock` rule rejects the std variant.
+    static MAX_CHARS_TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
     fn ctx_for(parent_agent: &str) -> Arc<dyn ToolContext> {
         let cc = ConcreteCtx::full_with_state(
@@ -328,30 +360,33 @@ mod tests {
         assert!(format!("{err}").contains("task"));
     }
 
-    // DISABLED 2026-05-14 alongside the 4000-char guards in `execute`. Re-enable
-    // (and adjust the threshold) if the size guard is restored.
+    // Guard reintroduced 2026-05-15 at 16000-char default. Configurable via
+    // `set_max_task_chars` (gateway wires it from `execution.delegation.maxTaskChars`).
     #[tokio::test]
-    #[ignore = "size guard disabled — restore if 4000-char limit returns"]
     async fn oversized_task_is_rejected() {
+        let _guard = MAX_CHARS_TEST_LOCK.lock().await;
+        // Ensure default is in effect (other tests in this file mutate the atomic).
+        super::set_max_task_chars(16000);
         let tool = DelegateTool::new();
         let ctx = ctx_for("root");
-        let big = "x".repeat(4001);
+        let big = "x".repeat(16001);
         let res = tool
             .execute(ctx, json!({ "agent_id": "writer-agent", "task": big }))
             .await;
-        let err = res.expect_err("must error on >4000 chars");
+        let err = res.expect_err("must error on >16000 chars");
         let msg = format!("{err}");
         assert!(msg.contains("Task too large"));
-        assert!(msg.contains("4000"));
+        assert!(msg.contains("16000"));
     }
 
     #[tokio::test]
-    #[ignore = "size guard disabled — restore if 4000-char limit returns"]
     async fn oversized_context_is_rejected() {
+        let _guard = MAX_CHARS_TEST_LOCK.lock().await;
+        super::set_max_task_chars(16000);
         let tool = DelegateTool::new();
         let ctx = ctx_for("root");
-        // Build a context object whose serialized form > 4000 chars.
-        let big_string = "y".repeat(4100);
+        // Build a context object whose serialized form > 16000 chars.
+        let big_string = "y".repeat(16100);
         let res = tool
             .execute(
                 ctx,
@@ -364,6 +399,39 @@ mod tests {
             .await;
         let err = res.expect_err("must error on oversized context");
         assert!(format!("{err}").contains("Context too large"));
+    }
+
+    #[tokio::test]
+    async fn max_task_chars_is_configurable_at_runtime() {
+        use super::set_max_task_chars;
+        let _guard = MAX_CHARS_TEST_LOCK.lock().await;
+        // Set low limit for this test.
+        set_max_task_chars(100);
+        let tool = DelegateTool::new();
+        let ctx = ctx_for("root");
+        let big = "x".repeat(150);
+        let res = tool
+            .execute(ctx, json!({ "agent_id": "writer-agent", "task": big }))
+            .await;
+        let err = res.expect_err("must error when over configured limit");
+        assert!(format!("{err}").contains("Task too large"));
+        assert!(format!("{err}").contains("100"));
+        // Reset to default for other tests (test isolation).
+        set_max_task_chars(16000);
+    }
+
+    #[tokio::test]
+    async fn set_max_task_chars_ignores_zero() {
+        use super::{current_max_task_chars, set_max_task_chars};
+        let _guard = MAX_CHARS_TEST_LOCK.lock().await;
+        // Establish a known value.
+        set_max_task_chars(1234);
+        assert_eq!(current_max_task_chars(), 1234);
+        // Zero must be ignored (not disable the guard).
+        set_max_task_chars(0);
+        assert_eq!(current_max_task_chars(), 1234);
+        // Restore default for other tests.
+        set_max_task_chars(16000);
     }
 
     #[tokio::test]
