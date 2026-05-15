@@ -72,6 +72,25 @@ const FACT_COLUMNS_MF: &str = "mf.id, mf.session_id, mf.agent_id, mf.scope, mf.c
     mf.created_at, mf.updated_at, mf.expires_at, mf.valid_from, mf.valid_until, mf.superseded_by, \
     mf.pinned, mf.epistemic_class, mf.source_episode_id, mf.source_ref";
 
+/// Bi-temporal point-in-time recall filter. Returns the SQL WHERE fragment
+/// (column-prefixed for joined queries; pass `""` for un-aliased queries) and
+/// the resolved RFC3339 timestamp the caller must bind once. `as_of = None`
+/// defaults to `Utc::now()` — Option A from the bi-temporal design doc:
+/// default recall always excludes facts whose `valid_until` is in the past,
+/// fixing the latent bug where time-bounded-past facts were still returned.
+fn as_of_filter(
+    as_of: Option<chrono::DateTime<chrono::Utc>>,
+    column_prefix: &str,
+) -> (String, String) {
+    let ts = as_of.unwrap_or_else(chrono::Utc::now).to_rfc3339();
+    let filter = format!(
+        "({prefix}valid_from IS NULL OR {prefix}valid_from <= ?) \
+         AND ({prefix}valid_until IS NULL OR {prefix}valid_until > ?)",
+        prefix = column_prefix,
+    );
+    (filter, ts)
+}
+
 /// Repository for memory fact operations.
 pub struct MemoryRepository {
     db: Arc<KnowledgeDatabase>,
@@ -691,8 +710,10 @@ impl MemoryRepository {
         limit: usize,
         ward_id: Option<&str>,
     ) -> Result<Vec<ScoredFact>, String> {
+        // Contradiction detection compares against currently-valid facts; the
+        // bi-temporal filter defaults to Utc::now() (Option A).
         let mut results =
-            self.search_memory_facts_vector(query_embedding, agent_id, limit, ward_id)?;
+            self.search_memory_facts_vector(query_embedding, agent_id, limit, ward_id, None)?;
         results.retain(|sf| sf.score >= min_similarity);
         Ok(results)
     }
@@ -777,6 +798,7 @@ impl MemoryRepository {
         agent_id: Option<&str>,
         limit: usize,
         ward_id: Option<&str>,
+        as_of: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<ScoredFact>, String> {
         // Sanitize query for FTS5: extract alphanumeric words, join with OR.
         // Raw user messages contain commas, parens, dashes that break FTS5 syntax.
@@ -787,6 +809,12 @@ impl MemoryRepository {
         }
         let query = &sanitized_query;
 
+        // Bi-temporal point-in-time gate. Option A: always apply (defaults to
+        // Utc::now()) so facts with valid_until in the past are correctly
+        // excluded from default recall. The fragment binds the `as_of`
+        // timestamp twice (once per inequality).
+        let (as_of_clause, as_of_ts) = as_of_filter(as_of, "mf.");
+
         self.db.with_connection(|conn| {
             let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
                 match (agent_id, ward_id) {
@@ -795,16 +823,19 @@ impl MemoryRepository {
                             "SELECT {FACT_COLUMNS_MF}, rank
                              FROM memory_facts_fts fts
                              JOIN memory_facts mf ON mf.rowid = fts.rowid
-                             WHERE memory_facts_fts MATCH ?1
-                               AND ((mf.agent_id = ?2 AND mf.scope = 'agent') OR mf.scope = 'global')
-                               AND (mf.ward_id = '__global__' OR mf.ward_id = ?3)
+                             WHERE memory_facts_fts MATCH ?
+                               AND ((mf.agent_id = ? AND mf.scope = 'agent') OR mf.scope = 'global')
+                               AND (mf.ward_id = '__global__' OR mf.ward_id = ?)
+                               AND {as_of_clause}
                              ORDER BY rank
-                             LIMIT ?4"
+                             LIMIT ?"
                         ),
                         vec![
                             Box::new(query.to_string()),
                             Box::new(a.to_string()),
                             Box::new(w.to_string()),
+                            Box::new(as_of_ts.clone()),
+                            Box::new(as_of_ts.clone()),
                             Box::new(limit as i64),
                         ],
                     ),
@@ -813,14 +844,17 @@ impl MemoryRepository {
                             "SELECT {FACT_COLUMNS_MF}, rank
                              FROM memory_facts_fts fts
                              JOIN memory_facts mf ON mf.rowid = fts.rowid
-                             WHERE memory_facts_fts MATCH ?1
-                               AND ((mf.agent_id = ?2 AND mf.scope = 'agent') OR mf.scope = 'global')
+                             WHERE memory_facts_fts MATCH ?
+                               AND ((mf.agent_id = ? AND mf.scope = 'agent') OR mf.scope = 'global')
+                               AND {as_of_clause}
                              ORDER BY rank
-                             LIMIT ?3"
+                             LIMIT ?"
                         ),
                         vec![
                             Box::new(query.to_string()),
                             Box::new(a.to_string()),
+                            Box::new(as_of_ts.clone()),
+                            Box::new(as_of_ts.clone()),
                             Box::new(limit as i64),
                         ],
                     ),
@@ -829,14 +863,17 @@ impl MemoryRepository {
                             "SELECT {FACT_COLUMNS_MF}, rank
                              FROM memory_facts_fts fts
                              JOIN memory_facts mf ON mf.rowid = fts.rowid
-                             WHERE memory_facts_fts MATCH ?1
-                               AND (mf.ward_id = '__global__' OR mf.ward_id = ?2)
+                             WHERE memory_facts_fts MATCH ?
+                               AND (mf.ward_id = '__global__' OR mf.ward_id = ?)
+                               AND {as_of_clause}
                              ORDER BY rank
-                             LIMIT ?3"
+                             LIMIT ?"
                         ),
                         vec![
                             Box::new(query.to_string()),
                             Box::new(w.to_string()),
+                            Box::new(as_of_ts.clone()),
+                            Box::new(as_of_ts.clone()),
                             Box::new(limit as i64),
                         ],
                     ),
@@ -845,11 +882,17 @@ impl MemoryRepository {
                             "SELECT {FACT_COLUMNS_MF}, rank
                              FROM memory_facts_fts fts
                              JOIN memory_facts mf ON mf.rowid = fts.rowid
-                             WHERE memory_facts_fts MATCH ?1
+                             WHERE memory_facts_fts MATCH ?
+                               AND {as_of_clause}
                              ORDER BY rank
-                             LIMIT ?2"
+                             LIMIT ?"
                         ),
-                        vec![Box::new(query.to_string()), Box::new(limit as i64)],
+                        vec![
+                            Box::new(query.to_string()),
+                            Box::new(as_of_ts.clone()),
+                            Box::new(as_of_ts.clone()),
+                            Box::new(limit as i64),
+                        ],
                     ),
                 };
 
@@ -899,6 +942,7 @@ impl MemoryRepository {
         _vector_weight: f64,
         _bm25_weight: f64,
         ward_id: Option<&str>,
+        as_of: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<(Vec<ScoredFact>, Vec<(String, &'static str)>), String> {
         // Standard RRF constant. Dampens the rank-1 vs rank-20 gap so that
         // showing up in both arms (even mid-rank) outranks a single-arm top-1.
@@ -909,12 +953,12 @@ impl MemoryRepository {
 
         // Step 1: FTS5 keyword results.
         let fts_results = self
-            .search_memory_facts_fts(query_text, agent_id, retrieval_k, ward_id)
+            .search_memory_facts_fts(query_text, agent_id, retrieval_k, ward_id, as_of)
             .unwrap_or_default();
 
         // Step 2: Vector results (if embedding provided).
         let vec_results = if let Some(qe) = query_embedding {
-            self.search_memory_facts_vector(qe, agent_id, retrieval_k, ward_id)?
+            self.search_memory_facts_vector(qe, agent_id, retrieval_k, ward_id, as_of)?
         } else {
             Vec::new()
         };
@@ -1006,8 +1050,10 @@ impl MemoryRepository {
         agent_id: Option<&str>,
         limit: usize,
         ward_id: Option<&str>,
+        as_of: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<ScoredFact>, String> {
-        // Over-fetch so post-filtering by agent/ward still returns `limit` hits.
+        // Over-fetch so post-filtering by agent/ward (and bi-temporal as_of)
+        // still returns `limit` hits.
         let fetch = limit.saturating_mul(4).max(limit);
         let nearest = self.vec_index.query_nearest(query_embedding, fetch)?;
         if nearest.is_empty() {
@@ -1022,12 +1068,24 @@ impl MemoryRepository {
             .map(|i| format!("?{}", i + 1))
             .collect::<Vec<_>>()
             .join(",");
-        let sql = format!("SELECT {FACT_COLUMNS} FROM memory_facts WHERE id IN ({placeholders})");
+        // Bi-temporal point-in-time gate. The two `?` placeholders bind the
+        // same `as_of` timestamp; they sit AFTER the id placeholders so the
+        // existing positional binding for `ids` is preserved.
+        let (as_of_clause, as_of_ts) = as_of_filter(as_of, "");
+        let sql = format!(
+            "SELECT {FACT_COLUMNS} FROM memory_facts WHERE id IN ({placeholders}) AND {as_of_clause}"
+        );
 
         let facts: Vec<MemoryFact> = self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(&sql)?;
-            let params_iter = rusqlite::params_from_iter(ids.iter());
-            let rows = stmt.query_map(params_iter, row_to_memory_fact)?;
+            // Bind: id_1, ..., id_n, as_of, as_of
+            let mut param_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
+                ids.iter().map(|i| Box::new(i.clone()) as _).collect();
+            param_vec.push(Box::new(as_of_ts.clone()));
+            param_vec.push(Box::new(as_of_ts.clone()));
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                param_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt.query_map(param_refs.as_slice(), row_to_memory_fact)?;
             rows.collect::<Result<Vec<_>, _>>()
         })?;
 
@@ -1603,7 +1661,7 @@ mod tests {
         .expect("upsert 3");
 
         let results = repo
-            .search_memory_facts_fts("Rust", Some("agent-1"), 10, None)
+            .search_memory_facts_fts("Rust", Some("agent-1"), 10, None, None)
             .expect("fts");
         assert!(
             results.len() >= 2,
@@ -1628,7 +1686,16 @@ mod tests {
         // Query close to fact1.
         let query = normalized_384(0.9, 0.1, 0.0);
         let (results, sources) = repo
-            .search_memory_facts_hybrid("hello", Some(&query), Some("agent-1"), 10, 0.7, 0.3, None)
+            .search_memory_facts_hybrid(
+                "hello",
+                Some(&query),
+                Some("agent-1"),
+                10,
+                0.7,
+                0.3,
+                None,
+                None,
+            )
             .expect("hybrid");
 
         assert!(!results.is_empty(), "Should find at least one result");

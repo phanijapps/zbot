@@ -713,7 +713,7 @@ pub async fn memory_hybrid_search_finds_match<S: MemoryFactStore>(store: &S) {
         .unwrap();
 
     let results = store
-        .search_memory_facts_hybrid(Some("conf-hybrid"), "coffee", "fts", 10, None, None)
+        .search_memory_facts_hybrid(Some("conf-hybrid"), "coffee", "fts", 10, None, None, None)
         .await
         .expect("hybrid search should not error");
     assert!(

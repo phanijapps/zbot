@@ -242,6 +242,7 @@ pub async fn search_memory_facts(
             query.limit,
             ward_id,
             qe_opt.as_deref(),
+            None, // as_of — HTTP search defaults to "now"; point-in-time is exposed via the agent tool
         )
         .await
         .map_err(|e| search_err("Failed to search memory facts", e))?;
@@ -522,7 +523,7 @@ pub async fn search_all_memory_facts(
     };
 
     let raw = memory_store
-        .search_memory_facts_hybrid(None, &query.q, "fts", query.limit, None, None)
+        .search_memory_facts_hybrid(None, &query.q, "fts", query.limit, None, None, None)
         .await
         .map_err(|e| {
             (

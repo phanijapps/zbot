@@ -256,6 +256,11 @@ impl Tool for MemoryTool {
                 "tag_filter": {
                     "type": "string",
                     "description": "Filter by tag (for list action)"
+                },
+                "as_of": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO-8601 timestamp (for recall action). When set, returns facts that were valid at this time. When omitted, returns currently-valid facts."
                 }
             },
             "required": ["action"]
@@ -603,10 +608,28 @@ impl MemoryTool {
 
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
 
+        // Optional bi-temporal point-in-time cutoff (ISO-8601 / RFC3339).
+        // Omitting `as_of` defaults to "now" via the trait + SQL helper.
+        let as_of: Option<chrono::DateTime<chrono::Utc>> = match args
+            .get("as_of")
+            .and_then(|v| v.as_str())
+        {
+            Some(s) => Some(
+                chrono::DateTime::parse_from_rfc3339(s)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .map_err(|_| {
+                        ZeroError::Tool("invalid as_of timestamp, expected ISO-8601".to_string())
+                    })?,
+            ),
+            None => None,
+        };
+
         // Use DB-backed fact store if available — prioritized recall
         match &self.fact_store {
             Some(store) => {
-                let result = store.recall_facts_prioritized(agent_id, query, limit).await;
+                let result = store
+                    .recall_facts_prioritized(agent_id, query, limit, as_of)
+                    .await;
                 match result {
                     Ok(v) => Ok(v),
                     Err(e) => {
@@ -1258,6 +1281,7 @@ mod tests {
                 _agent_id: &str,
                 _query: &str,
                 _limit: usize,
+                _as_of: Option<chrono::DateTime<chrono::Utc>>,
             ) -> std::result::Result<Value, String> {
                 Err("Knowledge DB operation failed: no such table: memory_facts_index".to_string())
             }
@@ -1334,6 +1358,152 @@ mod tests {
             "got: {result}"
         );
         assert_eq!(result["results"], json!([]));
+    }
+
+    /// Phase 2 (test E): the agent-callable `recall` action accepts an
+    /// `as_of` JSON parameter, parses it as RFC3339, and threads the
+    /// resulting `DateTime<Utc>` into the store's `recall_facts_prioritized`.
+    /// Deep retrieval behavior is covered by the SQLite-backed tests; this
+    /// test only proves the schema accepts the field, parsing succeeds, and
+    /// the value reaches the store layer.
+    #[tokio::test]
+    async fn action_recall_threads_as_of_into_store() {
+        use async_trait::async_trait;
+        use std::sync::Mutex;
+        use zero_stores_traits::MemoryFactStore;
+
+        /// Captures the `as_of` argument observed on the most recent
+        /// `recall_facts_prioritized` call so the test can assert against it.
+        struct CapturingStore {
+            captured_as_of: Mutex<Option<Option<chrono::DateTime<chrono::Utc>>>>,
+        }
+
+        #[async_trait]
+        impl MemoryFactStore for CapturingStore {
+            async fn save_fact(
+                &self,
+                _agent_id: &str,
+                _category: &str,
+                _key: &str,
+                _content: &str,
+                _confidence: f64,
+                _session_id: Option<&str>,
+                _valid_from: Option<chrono::DateTime<chrono::Utc>>,
+            ) -> std::result::Result<Value, String> {
+                Ok(json!({"success": true}))
+            }
+
+            async fn recall_facts(
+                &self,
+                _agent_id: &str,
+                query: &str,
+                _limit: usize,
+            ) -> std::result::Result<Value, String> {
+                Ok(json!({"query": query, "results": [], "count": 0}))
+            }
+
+            async fn recall_facts_prioritized(
+                &self,
+                _agent_id: &str,
+                query: &str,
+                _limit: usize,
+                as_of: Option<chrono::DateTime<chrono::Utc>>,
+            ) -> std::result::Result<Value, String> {
+                *self.captured_as_of.lock().unwrap() = Some(as_of);
+                Ok(json!({"query": query, "results": [], "count": 0}))
+            }
+        }
+
+        use zero_core::{CallbackContext, Content, EventActions, ReadonlyContext, ToolContext};
+
+        struct Ctx;
+        impl ReadonlyContext for Ctx {
+            fn invocation_id(&self) -> &str {
+                "test"
+            }
+            fn agent_name(&self) -> &str {
+                "test"
+            }
+            fn user_id(&self) -> &str {
+                "test"
+            }
+            fn app_name(&self) -> &str {
+                "test"
+            }
+            fn session_id(&self) -> &str {
+                "sess-as-of"
+            }
+            fn branch(&self) -> &str {
+                "test"
+            }
+            fn user_content(&self) -> &Content {
+                use std::sync::LazyLock;
+                static C: LazyLock<Content> = LazyLock::new(|| Content {
+                    role: "user".to_string(),
+                    parts: vec![],
+                });
+                &C
+            }
+        }
+        impl CallbackContext for Ctx {
+            fn get_state(&self, _key: &str) -> Option<Value> {
+                None
+            }
+            fn set_state(&self, _key: String, _value: Value) {}
+        }
+        impl ToolContext for Ctx {
+            fn function_call_id(&self) -> String {
+                "test".to_string()
+            }
+            fn actions(&self) -> EventActions {
+                EventActions::default()
+            }
+            fn set_actions(&self, _actions: EventActions) {}
+        }
+
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
+        let store = Arc::new(CapturingStore {
+            captured_as_of: Mutex::new(None),
+        });
+        let store_dyn: Arc<dyn MemoryFactStore> = store.clone();
+        let tool = MemoryTool::new(fs, Some(store_dyn));
+        let ctx = Ctx;
+
+        // ---- Happy path: well-formed RFC3339 timestamp parses through. ----
+        let args = json!({
+            "query": "anything",
+            "as_of": "2026-03-01T12:34:56Z",
+        });
+        let _ = tool.action_recall(&ctx, "root", &args).await.unwrap();
+
+        let captured = *store.captured_as_of.lock().unwrap();
+        let expected = chrono::DateTime::parse_from_rfc3339("2026-03-01T12:34:56Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(
+            captured,
+            Some(Some(expected)),
+            "as_of should be parsed and threaded into recall_facts_prioritized"
+        );
+
+        // ---- Omitting as_of should reach the store as None. ----
+        *store.captured_as_of.lock().unwrap() = None;
+        let args = json!({ "query": "anything" });
+        let _ = tool.action_recall(&ctx, "root", &args).await.unwrap();
+        assert_eq!(
+            *store.captured_as_of.lock().unwrap(),
+            Some(None),
+            "omitted as_of must surface as None at the store layer"
+        );
+
+        // ---- Malformed as_of returns a clean tool error, not a panic. ----
+        let args = json!({ "query": "anything", "as_of": "not-a-timestamp" });
+        let err = tool.action_recall(&ctx, "root", &args).await;
+        assert!(
+            err.is_err(),
+            "malformed as_of must produce a tool error, got: {err:?}"
+        );
     }
 
     #[test]
