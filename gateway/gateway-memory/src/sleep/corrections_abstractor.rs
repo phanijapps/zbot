@@ -139,6 +139,7 @@ impl CorrectionsAbstractor {
                 &resp.key_fact,
                 resp.confidence,
                 None,
+                None, // valid_from: defaults to Utc::now() in store impl
             )
             .await
         {
@@ -335,6 +336,7 @@ mod tests {
                     &format!("corr-{i}"),
                     &format!("Don't do X when Y — correction {i}"),
                     0.9,
+                    None,
                     None,
                 )
                 .await

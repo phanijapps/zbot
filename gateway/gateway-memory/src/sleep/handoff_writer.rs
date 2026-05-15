@@ -276,6 +276,7 @@ impl HandoffWriter {
                 &json,
                 1.0,
                 Some(session_id),
+                None, // valid_from: defaults to Utc::now() in store impl
             )
             .await
             .map_err(|e| format!("save handoff.latest: {e}"))?;
@@ -287,6 +288,7 @@ impl HandoffWriter {
                 &json,
                 1.0,
                 Some(session_id),
+                None, // valid_from: defaults to Utc::now() in store impl
             )
             .await
             .map_err(|e| format!("save handoff.{session_id}: {e}"))?;
@@ -388,6 +390,7 @@ mod tests {
             content: &str,
             _confidence: f64,
             _session_id: Option<&str>,
+            _valid_from: Option<chrono::DateTime<chrono::Utc>>,
         ) -> Result<serde_json::Value, String> {
             self.facts
                 .lock()

@@ -17,6 +17,7 @@ edition = "2021"
 
 [dependencies]
 async-trait = { workspace = true }
+chrono = { workspace = true }
 serde_json = { workspace = true }
 # Pure-data domain types — port request/response shapes live there so
 # the trait surface stays decoupled from concrete backends but consumers
