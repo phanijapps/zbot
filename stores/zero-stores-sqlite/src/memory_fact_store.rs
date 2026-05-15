@@ -319,7 +319,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         for fact in corrections {
             if seen_keys.insert(fact.key.clone()) {
                 merged.push(crate::memory_repository::ScoredFact {
-                    score: fact.confidence * 1.5,
+                    score: fact.confidence,
                     fact,
                 });
             }
@@ -1405,6 +1405,86 @@ mod tests {
             count_table(&store, "memory_facts_index"),
             0,
             "trg_facts_delete_vec must have cleaned the vec0 row"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_recall_prioritized_user_fact_not_crowded_by_corrections() {
+        // Regression: a high-confidence (1.0) `user` fact must not be
+        // crowded out of the merged recall pool by lower-confidence (0.9)
+        // `correction` facts. Earlier, corrections were pre-boosted in the
+        // merge step (`score = conf * 1.5`) AND then multiplied by the
+        // `correction` category weight (1.5x), yielding a 2.25x effective
+        // multiplier versus 1.3x for `user`. With `limit=5` and ≥5
+        // corrections that always inject, the user fact got truncated.
+        let store = create_test_store();
+
+        // High-confidence user fact (what we want to surface).
+        store
+            .save_fact(
+                "agent-1",
+                "user",
+                "user.location",
+                "User lives in Mason, Ohio (OH)",
+                1.0,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Corrections that do NOT semantically match "location".
+        store
+            .save_fact(
+                "agent-1",
+                "correction",
+                "correction.cite-sources",
+                "Always cite sources",
+                0.9,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .save_fact(
+                "agent-1",
+                "correction",
+                "correction.no-mocks",
+                "Never use mocks in integration tests",
+                0.9,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .save_fact(
+                "agent-1",
+                "correction",
+                "correction.verify-success",
+                "Verify before claiming success",
+                0.9,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let recall = store
+            .recall_facts_prioritized("agent-1", "where do I live", 5)
+            .await
+            .unwrap();
+
+        let formatted = recall["formatted"].as_str().unwrap_or("");
+        assert!(
+            formatted.contains("Mason, Ohio"),
+            "formatted output must contain the user location; got:\n{formatted}"
+        );
+
+        let results = recall["results"].as_array().expect("results array");
+        let has_user_location = results
+            .iter()
+            .any(|r| r["key"].as_str() == Some("user.location"));
+        assert!(
+            has_user_location,
+            "user.location must be present in merged results; got: {results:?}"
         );
     }
 
