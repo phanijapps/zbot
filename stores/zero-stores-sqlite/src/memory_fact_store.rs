@@ -211,6 +211,8 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         let query_embedding = self.embed_text(query).await;
 
         // Fetch extra rows so the ctx filter doesn't shrink us below limit.
+        // `as_of = None` → bi-temporal filter defaults to Utc::now(), which
+        // correctly excludes facts whose `valid_until` is already in the past.
         let (results, _sources) = self.memory_repo.search_memory_facts_hybrid(
             query,
             query_embedding.as_deref(),
@@ -219,6 +221,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             0.7,  // vector weight
             0.3,  // bm25 weight
             None, // ward_id — no ward filtering from trait method
+            None, // as_of — default "now" via Option A
         )?;
 
         // Ctx facts are session-canonical state (intent/prompt/plan/handoff).
@@ -258,6 +261,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         agent_id: &str,
         query: &str,
         limit: usize,
+        as_of: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Value, String> {
         // Generate embedding for the query
         let query_embedding = self.embed_text(query).await;
@@ -265,6 +269,8 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         // Fetch more results than needed so we can re-rank. Ctx facts are
         // excluded here too — they reach readers only via `get_ctx_fact`,
         // never via fuzzy recall. See `recall_facts` for the rationale.
+        //
+        // `as_of` is the bi-temporal point-in-time cutoff (None = now).
         let (mut results, _sources) = self.memory_repo.search_memory_facts_hybrid(
             query,
             query_embedding.as_deref(),
@@ -273,21 +279,34 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             0.7,  // vector weight
             0.3,  // bm25 weight
             None, // ward_id — no ward filtering from trait method
+            as_of,
         )?;
         results.retain(|sf| sf.fact.category != CTX_CATEGORY);
 
+        // Bi-temporal cutoff for the supplementary paths below. The hybrid
+        // search above filters at the SQL layer; the high-confidence and
+        // corrections sub-queries don't, so we apply the same predicate in
+        // Rust to keep retrieval semantics consistent across all paths.
+        let cutoff = as_of.unwrap_or_else(chrono::Utc::now);
+
         // Also fetch high-confidence facts (>= 0.9) — always relevant
-        let high_conf_facts = self
+        let high_conf_facts: Vec<_> = self
             .memory_repo
             .get_high_confidence_facts(Some(agent_id), 0.9, limit)
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| fact_valid_at(f, cutoff))
+            .collect();
 
         // Include relevant corrections — filter by minimum cosine similarity
         // to avoid injecting "WiZ lights" corrections for currency questions.
-        let all_corrections = self
+        let all_corrections: Vec<_> = self
             .memory_repo
             .get_facts_by_category(agent_id, "correction", 10)
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| fact_valid_at(f, cutoff))
+            .collect();
         let corrections: Vec<_> = if let Some(ref qe) = query_embedding {
             all_corrections
                 .into_iter()
@@ -722,6 +741,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         limit: usize,
         ward_id: Option<&str>,
         query_embedding: Option<&[f32]>,
+        as_of: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<Value>, String> {
         let typed = self
             .search_memory_facts_hybrid_typed(
@@ -731,6 +751,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
                 limit,
                 ward_id,
                 query_embedding,
+                as_of,
             )
             .await?;
         typed
@@ -754,18 +775,23 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         limit: usize,
         ward_id: Option<&str>,
         query_embedding: Option<&[f32]>,
+        as_of: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<(MemoryFact, f64, String)>, String> {
         let scored: Vec<(crate::memory_repository::ScoredFact, &'static str)> = match mode {
             "fts" => {
                 let rows = self
                     .memory_repo
-                    .search_memory_facts_fts(query, agent_id, limit, ward_id)?;
+                    .search_memory_facts_fts(query, agent_id, limit, ward_id, as_of)?;
                 rows.into_iter().map(|sf| (sf, "fts")).collect()
             }
             "semantic" => {
                 let Some(emb) = query_embedding else {
                     return Ok(Vec::new());
                 };
+                // Bi-temporal filter applies through search_memory_facts_vector,
+                // which we reach via search_similar_facts with min_similarity=0.
+                // search_similar_facts always defaults to "now" — that's the
+                // correct semantic for the semantic-only retrieval surface.
                 let rows = self
                     .memory_repo
                     .search_similar_facts(emb, agent_id, 0.0, limit, ward_id)?;
@@ -782,6 +808,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
                     0.5,
                     0.5,
                     ward_id,
+                    as_of,
                 )?;
                 let src_map: std::collections::HashMap<String, &'static str> =
                     sources.into_iter().collect();
@@ -951,6 +978,31 @@ impl MemoryFactStore for GatewayMemoryFactStore {
 }
 
 // ---- Helpers --------------------------------------------------------------
+
+/// Bi-temporal point-in-time predicate. Returns `true` when `fact` was valid
+/// at `cutoff` — its `valid_from <= cutoff < valid_until`. Used by
+/// `recall_facts_prioritized` to gate the supplementary high-confidence and
+/// corrections paths that don't hit the SQL filter directly. Unparseable
+/// timestamps degrade to "treat as missing" so a corrupt row never blocks
+/// recall of an otherwise-relevant fact.
+fn fact_valid_at(fact: &MemoryFact, cutoff: chrono::DateTime<chrono::Utc>) -> bool {
+    let parse = |s: &str| {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .ok()
+    };
+    if let Some(vf) = fact.valid_from.as_deref().and_then(parse) {
+        if vf > cutoff {
+            return false;
+        }
+    }
+    if let Some(vu) = fact.valid_until.as_deref().and_then(parse) {
+        if vu <= cutoff {
+            return false;
+        }
+    }
+    true
+}
 
 /// Cosine similarity in `f64` precision. Matches the synthesizer's
 /// historical computation; pulled in here so the strategy-similarity
@@ -1587,6 +1639,209 @@ mod tests {
         assert_eq!(
             backfilled, created_at,
             "v25 backfill must set valid_from = created_at"
+        );
+    }
+
+    // =========================================================================
+    // Bi-temporal phase 2: point-in-time recall via `as_of`
+    // =========================================================================
+
+    /// Force a fact's bi-temporal interval to a known shape. `save_fact` only
+    /// accepts `valid_from`; `valid_until` must be poked in directly via SQL.
+    fn set_bi_temporal_interval(
+        store: &GatewayMemoryFactStore,
+        key: &str,
+        valid_from: chrono::DateTime<chrono::Utc>,
+        valid_until: Option<chrono::DateTime<chrono::Utc>>,
+    ) {
+        let valid_from_str = valid_from.to_rfc3339();
+        let valid_until_str = valid_until.map(|t| t.to_rfc3339());
+        store
+            .knowledge_db_for_tests()
+            .with_connection(|conn| {
+                conn.execute(
+                    "UPDATE memory_facts SET valid_from = ?1, valid_until = ?2 WHERE key = ?3",
+                    rusqlite::params![valid_from_str, valid_until_str, key],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    /// Test A — fact valid in the future is excluded from a past-cutoff query.
+    /// `valid_from = 2026-06-01`, `as_of = 2026-05-15` → not retrieved.
+    #[tokio::test]
+    async fn recall_as_of_excludes_future_facts() {
+        let store = create_test_store();
+
+        // Unique phrase keeps the test isolated from any other seeded fact.
+        store
+            .save_fact(
+                "agent-bt",
+                "domain",
+                "k.future",
+                "phaserblossom future-only knowledge",
+                0.9,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let future_from = chrono::DateTime::parse_from_rfc3339("2026-06-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        set_bi_temporal_interval(&store, "k.future", future_from, None);
+
+        let as_of = Some(
+            chrono::DateTime::parse_from_rfc3339("2026-05-15T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
+
+        let recall = store
+            .recall_facts_prioritized("agent-bt", "phaserblossom", 10, as_of)
+            .await
+            .unwrap();
+
+        let results = recall["results"].as_array().expect("results array");
+        assert!(
+            !results.iter().any(|r| r["key"] == "k.future"),
+            "future-only fact must be excluded when querying before its valid_from; got: {:?}",
+            results
+        );
+    }
+
+    /// Test B — fact whose `valid_until` is before the cutoff is excluded.
+    /// `valid_from = 2026-01-01`, `valid_until = 2026-04-01`, `as_of = 2026-05-15` → not retrieved.
+    #[tokio::test]
+    async fn recall_as_of_excludes_past_facts() {
+        let store = create_test_store();
+
+        store
+            .save_fact(
+                "agent-bt",
+                "domain",
+                "k.past",
+                "phaserblossom past-bounded knowledge",
+                0.9,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let from = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let until = chrono::DateTime::parse_from_rfc3339("2026-04-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        set_bi_temporal_interval(&store, "k.past", from, Some(until));
+
+        let as_of = Some(
+            chrono::DateTime::parse_from_rfc3339("2026-05-15T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
+
+        let recall = store
+            .recall_facts_prioritized("agent-bt", "phaserblossom", 10, as_of)
+            .await
+            .unwrap();
+
+        let results = recall["results"].as_array().expect("results array");
+        assert!(
+            !results.iter().any(|r| r["key"] == "k.past"),
+            "fact with valid_until before cutoff must be excluded; got: {:?}",
+            results
+        );
+    }
+
+    /// Test C — fact whose interval brackets the cutoff is included.
+    /// `valid_from = 2026-03-01`, `valid_until = 2026-06-01`, `as_of = 2026-05-15` → retrieved.
+    #[tokio::test]
+    async fn recall_as_of_includes_active_facts() {
+        let store = create_test_store();
+
+        store
+            .save_fact(
+                "agent-bt",
+                "domain",
+                "k.active",
+                "phaserblossom currently-valid knowledge",
+                0.9,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let from = chrono::DateTime::parse_from_rfc3339("2026-03-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let until = chrono::DateTime::parse_from_rfc3339("2026-06-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        set_bi_temporal_interval(&store, "k.active", from, Some(until));
+
+        let as_of = Some(
+            chrono::DateTime::parse_from_rfc3339("2026-05-15T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
+
+        let recall = store
+            .recall_facts_prioritized("agent-bt", "phaserblossom", 10, as_of)
+            .await
+            .unwrap();
+
+        let results = recall["results"].as_array().expect("results array");
+        assert!(
+            results.iter().any(|r| r["key"] == "k.active"),
+            "fact whose interval contains the cutoff must be returned; got: {:?}",
+            results
+        );
+    }
+
+    /// Test D — REGRESSION for the latent bug. Default query (no `as_of`)
+    /// must exclude facts whose `valid_until` already lies in the past.
+    /// Before Option A, such facts surfaced because no recall path filtered
+    /// `valid_until > now`. After Option A this fact is correctly excluded.
+    #[tokio::test]
+    async fn recall_default_excludes_time_bounded_past() {
+        let store = create_test_store();
+
+        store
+            .save_fact(
+                "agent-bt",
+                "domain",
+                "k.expired",
+                "phaserblossom expired knowledge",
+                0.9,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // valid_until = (now - 1 day). The fact has ended; default recall
+        // (as_of = None → Utc::now()) must NOT return it.
+        let now = chrono::Utc::now();
+        let one_day_ago = now - chrono::Duration::days(1);
+        let one_year_ago = now - chrono::Duration::days(365);
+        set_bi_temporal_interval(&store, "k.expired", one_year_ago, Some(one_day_ago));
+
+        let recall = store
+            .recall_facts_prioritized("agent-bt", "phaserblossom", 10, None)
+            .await
+            .unwrap();
+
+        let results = recall["results"].as_array().expect("results array");
+        assert!(
+            !results.iter().any(|r| r["key"] == "k.expired"),
+            "time-bounded-past fact must be excluded from default recall; got: {:?}",
+            results
         );
     }
 }

@@ -144,6 +144,7 @@ impl MemoryRecall {
                     limit * 2,
                     None,
                     query_embedding.as_deref(),
+                    None, // as_of — default "now" recall; point-in-time is opt-in via the agent tool
                 )
                 .await?;
             // Decode each Value back to a ScoredFact-compatible shape. The
@@ -335,6 +336,7 @@ impl MemoryRecall {
                     10,
                     ward_id,
                     query_emb.as_deref(),
+                    None, // as_of — default "now" recall
                 )
                 .await
                 .unwrap_or_default()
