@@ -349,8 +349,17 @@ pub trait MemoryFactStore: Send + Sync {
     }
 
     /// Mark a fact as superseded by a newer fact. Both ids should already
-    /// exist. Default returns no-op error so misuse is loud.
-    async fn supersede_fact(&self, _old_id: &str, _new_id: &str) -> Result<(), String> {
+    /// exist. `transition_time` is the moment at which the old fact stops
+    /// being valid — typically `Utc::now()` for distillation paths, or the
+    /// winner's `created_at` for bi-temporal conflict resolution where the
+    /// system actually learned otherwise when the winning fact was recorded.
+    /// Default returns no-op error so misuse is loud.
+    async fn supersede_fact(
+        &self,
+        _old_id: &str,
+        _new_id: &str,
+        _transition_time: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), String> {
         Err("supersede_fact not implemented for this store".to_string())
     }
 
