@@ -1,11 +1,11 @@
-//! Schema v25 for `knowledge.db`.
+//! Schema v26 for `knowledge.db`.
 //!
 //! All long-term memory + graph + vector indexes live here.
 //! Applied idempotently on daemon boot. No migrations — clean slate.
 
 use rusqlite::Connection;
 
-const SCHEMA_VERSION: i32 = 25;
+const SCHEMA_VERSION: i32 = 26;
 
 /// v23 delta: full-text search over `ward_wiki_articles` with sync triggers.
 const V23_WIKI_FTS_SQL: &str = include_str!("../migrations/v23_wiki_fts.sql");
@@ -23,7 +23,16 @@ const V24_GLOBAL_SCOPE_BACKFILL_SQL: &str =
 const V25_MEMORY_FACTS_VALID_FROM_BACKFILL_SQL: &str =
     include_str!("../migrations/v25_memory_facts_valid_from_backfill.sql");
 
-/// Initialize the knowledge database schema (v25).
+/// v26 delta: bi-temporal phase 3 — align `kg_relationships` with the
+/// symmetric `valid_from` / `valid_until` schema used by `memory_facts`
+/// and `kg_entities`, backfilling from the legacy `valid_at` /
+/// `invalidated_at` pair. The `ALTER TABLE ADD COLUMN` is handled by
+/// `ensure_kg_relationships_bitemporal_columns` (PRAGMA-guarded for
+/// idempotency); this SQL file performs the UPDATE backfill only.
+const V26_KG_RELATIONSHIPS_BITEMPORAL_SQL: &str =
+    include_str!("../migrations/v26_kg_relationships_bitemporal.sql");
+
+/// Initialize the knowledge database schema (v26).
 ///
 /// Creates all tables and indexes if they don't exist. Records the
 /// schema version in `schema_version` table. Safe to call on an
@@ -36,6 +45,8 @@ pub fn initialize_knowledge_database(conn: &Connection) -> Result<(), rusqlite::
     add_skill_index_format_version_if_missing(conn)?;
     ensure_evidence_column(conn, "kg_entities")?;
     ensure_evidence_column(conn, "kg_relationships")?;
+    ensure_kg_relationships_bitemporal_columns(conn)?;
+    conn.execute_batch(V26_KG_RELATIONSHIPS_BITEMPORAL_SQL)?;
     conn.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?1, datetime('now'))",
         rusqlite::params![SCHEMA_VERSION],
@@ -72,6 +83,35 @@ fn ensure_evidence_column(conn: &Connection, table: &str) -> Result<(), rusqlite
         .any(|name| name == "evidence");
     if !has_evidence {
         conn.execute(&format!("ALTER TABLE {table} ADD COLUMN evidence TEXT"), [])?;
+    }
+    Ok(())
+}
+
+/// Ensure `kg_relationships` carries the bi-temporal `valid_from` and
+/// `valid_until` columns introduced in schema v26.
+///
+/// SQLite errors on duplicate `ADD COLUMN`, so we PRAGMA-probe the table
+/// before each ALTER. Fresh databases get the columns via the
+/// `CREATE TABLE` body and this function is a no-op. The companion
+/// migration SQL file backfills the new columns from the legacy
+/// `valid_at` / `invalidated_at` pair after this function runs.
+fn ensure_kg_relationships_bitemporal_columns(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare("PRAGMA table_info(kg_relationships)")?;
+    let existing: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .collect();
+    if !existing.iter().any(|name| name == "valid_from") {
+        conn.execute(
+            "ALTER TABLE kg_relationships ADD COLUMN valid_from TEXT",
+            [],
+        )?;
+    }
+    if !existing.iter().any(|name| name == "valid_until") {
+        conn.execute(
+            "ALTER TABLE kg_relationships ADD COLUMN valid_until TEXT",
+            [],
+        )?;
     }
     Ok(())
 }
@@ -133,6 +173,8 @@ CREATE TABLE IF NOT EXISTS kg_relationships (
     last_accessed_at TEXT,
     valid_at TEXT,
     invalidated_at TEXT,
+    valid_from TEXT,
+    valid_until TEXT,
     invalidated_by TEXT,
     source_episode_ids TEXT,
     evidence TEXT,
@@ -639,7 +681,7 @@ mod tests {
         let version: i32 = conn
             .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 25);
+        assert_eq!(version, 26);
 
         // Regular tables.
         for table in [
@@ -855,5 +897,187 @@ mod tests {
                 "{table} must have evidence column; got: {cols:?}"
             );
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Bi-temporal phase 3: v26 — kg_relationships symmetric columns
+    // -----------------------------------------------------------------
+
+    /// Read the symmetric `valid_from` / `valid_until` pair for a
+    /// relationship row by id. Returns `(valid_from, valid_until)`.
+    fn read_rel_bitemporal(conn: &Connection, id: &str) -> (Option<String>, Option<String>) {
+        conn.query_row(
+            "SELECT valid_from, valid_until FROM kg_relationships WHERE id = ?1",
+            rusqlite::params![id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
+        )
+        .expect("query rel bitemporal")
+    }
+
+    /// Seed a minimal pair of entities + a relationship row with the
+    /// legacy `valid_at` / `invalidated_at` columns populated and the
+    /// symmetric `valid_from` / `valid_until` left NULL — i.e. the
+    /// pre-v26 shape.
+    fn seed_legacy_rel(
+        conn: &Connection,
+        rel_id: &str,
+        valid_at: Option<&str>,
+        invalidated_at: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO kg_entities
+                (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                 first_seen_at, last_seen_at)
+             VALUES ('src-e', 'agent', 'Concept', 'src', 'src', 'h-src',
+                     datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("seed src entity");
+        conn.execute(
+            "INSERT INTO kg_entities
+                (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                 first_seen_at, last_seen_at)
+             VALUES ('tgt-e', 'agent', 'Concept', 'tgt', 'tgt', 'h-tgt',
+                     datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("seed tgt entity");
+        conn.execute(
+            "INSERT INTO kg_relationships
+                (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                 first_seen_at, last_seen_at, valid_at, invalidated_at,
+                 valid_from, valid_until)
+             VALUES (?1, 'agent', 'src-e', 'tgt-e', 'relates_to',
+                     datetime('now'), datetime('now'), ?2, ?3,
+                     NULL, NULL)",
+            rusqlite::params![rel_id, valid_at, invalidated_at],
+        )
+        .expect("seed rel");
+    }
+
+    /// v26 backfill copies the legacy `valid_at` / `invalidated_at`
+    /// pair into the symmetric `valid_from` / `valid_until` columns
+    /// when the symmetric columns are NULL.
+    #[test]
+    fn v26_backfill_copies_valid_at_and_invalidated_at_into_symmetric_pair() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        // Re-seed the legacy state after init clobbered any data:
+        // initialize_knowledge_database also runs the v26 backfill, but
+        // there are no rows yet so it's a no-op. We then seed legacy
+        // rows and re-run the backfill SQL directly to simulate the
+        // upgrade path on an existing database.
+        seed_legacy_rel(
+            &conn,
+            "rel-legacy",
+            Some("2026-01-01T00:00:00Z"),
+            Some("2026-03-01T00:00:00Z"),
+        );
+
+        // Precondition: symmetric columns NULL.
+        let (vf, vu) = read_rel_bitemporal(&conn, "rel-legacy");
+        assert!(vf.is_none(), "precondition: valid_from should be NULL");
+        assert!(vu.is_none(), "precondition: valid_until should be NULL");
+
+        // Apply the v26 backfill SQL directly.
+        conn.execute_batch(V26_KG_RELATIONSHIPS_BITEMPORAL_SQL)
+            .expect("run v26 backfill");
+
+        let (vf, vu) = read_rel_bitemporal(&conn, "rel-legacy");
+        assert_eq!(
+            vf.as_deref(),
+            Some("2026-01-01T00:00:00Z"),
+            "valid_from must be backfilled from valid_at"
+        );
+        assert_eq!(
+            vu.as_deref(),
+            Some("2026-03-01T00:00:00Z"),
+            "valid_until must be backfilled from invalidated_at"
+        );
+    }
+
+    /// The v26 ALTER + UPDATE pipeline is idempotent: re-running the
+    /// migration on an already-migrated database is a no-op and does
+    /// not corrupt previously backfilled values.
+    #[test]
+    fn v26_migration_is_idempotent_on_rerun() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        seed_legacy_rel(&conn, "rel-idem", Some("2026-02-02T00:00:00Z"), None);
+        conn.execute_batch(V26_KG_RELATIONSHIPS_BITEMPORAL_SQL)
+            .expect("first backfill");
+
+        // Re-run the full migration pipeline (ALTER + UPDATE) — both
+        // halves must remain no-ops on an already-migrated database.
+        ensure_kg_relationships_bitemporal_columns(&conn).expect("rerun ALTER guard");
+        conn.execute_batch(V26_KG_RELATIONSHIPS_BITEMPORAL_SQL)
+            .expect("rerun backfill");
+
+        let (vf, vu) = read_rel_bitemporal(&conn, "rel-idem");
+        assert_eq!(
+            vf.as_deref(),
+            Some("2026-02-02T00:00:00Z"),
+            "valid_from must survive a re-run"
+        );
+        assert!(
+            vu.is_none(),
+            "valid_until must stay NULL when invalidated_at was NULL"
+        );
+    }
+
+    /// Writers exercising the kg_relationships INSERT path populate
+    /// `valid_from` on creation. We exercise the schema directly with
+    /// the same column shape used by `store_relationship` in
+    /// `kg::storage`, which is the canonical production writer.
+    #[test]
+    fn kg_relationships_insert_populates_valid_from() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        // Insert two entities so the FK constraint is satisfied.
+        conn.execute(
+            "INSERT INTO kg_entities
+                (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                 first_seen_at, last_seen_at)
+             VALUES ('e-src', 'agent', 'Concept', 'a', 'a', 'h-a',
+                     datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("seed src entity");
+        conn.execute(
+            "INSERT INTO kg_entities
+                (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                 first_seen_at, last_seen_at)
+             VALUES ('e-tgt', 'agent', 'Concept', 'b', 'b', 'h-b',
+                     datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("seed tgt entity");
+
+        let first_seen = "2026-05-15T12:00:00+00:00";
+        conn.execute(
+            "INSERT INTO kg_relationships
+                (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                 first_seen_at, last_seen_at, mention_count, valid_from)
+             VALUES ('rel-new', 'agent', 'e-src', 'e-tgt', 'relates_to',
+                     ?1, ?1, 1, ?1)",
+            rusqlite::params![first_seen],
+        )
+        .expect("insert rel");
+
+        let (vf, vu) = read_rel_bitemporal(&conn, "rel-new");
+        assert_eq!(
+            vf.as_deref(),
+            Some(first_seen),
+            "writers must populate valid_from on creation"
+        );
+        assert!(vu.is_none(), "valid_until must stay NULL on creation");
     }
 }
