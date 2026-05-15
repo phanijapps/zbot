@@ -542,6 +542,34 @@ impl AppState {
             recall.set_kg_store(ks.clone());
         }
 
+        // Self-RAG retrieval gate (opt-in via `memory.queryGate.enabled` in
+        // settings.json). Reads settings eagerly here so the gate is attached
+        // before MemoryRecall is sealed in Arc below. When the block is
+        // missing, disabled, or unreadable, the gate stays None and recall
+        // behaves identically to pre-gate behavior.
+        let query_gate_cfg: gateway_memory::QueryGateConfig =
+            gateway_services::SettingsService::new(paths.clone())
+                .load()
+                .map(|s| s.execution.memory.query_gate.clone())
+                .unwrap_or_default();
+        if query_gate_cfg.enabled {
+            let llm = Arc::new(gateway_memory::LlmQueryGate::new(
+                memory_llm_factory.clone(),
+            ));
+            let gate = Arc::new(gateway_memory::QueryGate::new(llm, query_gate_cfg.clone()));
+            if let Some(recall) = memory_recall_inner.as_mut() {
+                recall.set_query_gate(gate);
+            }
+            tracing::info!(
+                "Memory query gate: enabled (model={:?}, max_subqueries={}, timeout_ms={})",
+                query_gate_cfg.model_id,
+                query_gate_cfg.max_subqueries,
+                query_gate_cfg.timeout_ms,
+            );
+        } else {
+            tracing::info!("Memory query gate: disabled");
+        }
+
         let memory_recall: Option<Arc<MemoryRecall>> = memory_recall_inner.map(Arc::new);
 
         // Clone embedding client before it's moved into distiller — the runner

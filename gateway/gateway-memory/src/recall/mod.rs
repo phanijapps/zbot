@@ -19,7 +19,9 @@
 
 pub mod adapters;
 pub mod previous_episodes;
+pub mod query_gate;
 pub mod scored_item;
+pub use query_gate::{GateResponse, LlmQueryGate, QueryGate, QueryGateLlm, RetrievalDecision};
 pub use scored_item::{intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, ScoredItem};
 
 use std::sync::Arc;
@@ -42,6 +44,9 @@ pub struct MemoryRecall {
     episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>>,
     wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>>,
     procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    /// Self-RAG retrieval gate. When `None`, recall behaves identically to
+    /// pre-gate behavior (raw user message → hybrid search).
+    query_gate: Option<Arc<QueryGate>>,
     config: Arc<RecallConfig>,
 }
 
@@ -60,8 +65,16 @@ impl MemoryRecall {
             episode_store: None,
             wiki_store: None,
             procedure_store: None,
+            query_gate: None,
             config,
         }
+    }
+
+    /// Wire the Self-RAG retrieval gate. When set, `recall()` consults the
+    /// gate before running hybrid search. The always-inject corrections path
+    /// (bootstrap) is unaffected.
+    pub fn set_query_gate(&mut self, gate: Arc<QueryGate>) {
+        self.query_gate = Some(gate);
     }
 
     /// Access the recall configuration.
@@ -130,44 +143,18 @@ impl MemoryRecall {
         limit: usize,
         ward_id: Option<&str>,
     ) -> Result<Vec<ScoredFact>, String> {
-        // 1. Embed the user message for vector search
-        let query_embedding = self.embed_query(user_message).await;
-
-        // 2. Run hybrid search (FTS5 + vector). Trait-routed when
-        //    memory_store is wired .
-        let hybrid_results: Vec<ScoredFact> = if let Some(store) = &self.memory_store {
-            let raw = store
-                .search_memory_facts_hybrid(
-                    Some(agent_id),
-                    user_message,
-                    "hybrid",
-                    limit * 2,
-                    None,
-                    query_embedding.as_deref(),
-                    None, // as_of — default "now" recall; point-in-time is opt-in via the agent tool
-                )
-                .await?;
-            // Decode each Value back to a ScoredFact-compatible shape. The
-            // trait emits MemoryFactResponse-shaped JSON; we wrap each in a
-            // ScoredFact with score=0.0 (the trait doesn't preserve per-row
-            // scores yet — captured in the portability doc as a follow-up).
-            raw.into_iter()
-                .filter_map(|v| {
-                    // `zero_stores_sqlite::MemoryFact` re-exports the same
-                    // struct from `zero_stores_domain`; using the domain
-                    // path keeps gateway-memory off the sqlite crate (the
-                    // sqlite crate depends on gateway-services, which would
-                    // cycle back through gateway-memory).
-                    serde_json::from_value::<MemoryFact>(v)
-                        .ok()
-                        .map(|fact| ScoredFact { fact, score: 0.0 })
-                })
-                .collect()
-        } else {
-            // Phase E6c: memory_store is the only path. Defensive empty
-            // when not wired (production composition root always wires it).
-            Vec::new()
+        // 1. Self-RAG retrieval gate (opt-in via `memory.queryGate.enabled`).
+        //    When absent, the gate defaults to Direct(user_message) — keeping
+        //    behavior identical to pre-gate recall. The gate scopes ONLY the
+        //    hybrid search call below; high-confidence facts, in-recall
+        //    corrections, and the bootstrap always-inject path are unaffected.
+        let decision = match &self.query_gate {
+            Some(gate) => gate.reformulate(user_message).await,
+            None => RetrievalDecision::Direct(user_message.to_string()),
         };
+
+        // 2. Run hybrid search according to the gate decision.
+        let hybrid_results = self.hybrid_for_decision(agent_id, &decision, limit).await?;
 
         // 3. Also fetch high-confidence facts (always relevant).
         let high_conf_facts: Vec<MemoryFact> = match self.memory_store.as_ref() {
@@ -444,6 +431,70 @@ impl MemoryRecall {
             Err(e) => {
                 tracing::warn!("Failed to embed query for recall: {}", e);
                 None
+            }
+        }
+    }
+
+    /// Run one hybrid search call against the trait-routed memory store.
+    /// Returns an empty vector when no memory store is wired (defensive).
+    async fn run_hybrid_search(
+        &self,
+        agent_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ScoredFact>, String> {
+        let store = match &self.memory_store {
+            Some(s) => s,
+            None => return Ok(Vec::new()),
+        };
+        let query_embedding = self.embed_query(query).await;
+        let raw = store
+            .search_memory_facts_hybrid(
+                Some(agent_id),
+                query,
+                "hybrid",
+                limit * 2,
+                None,
+                query_embedding.as_deref(),
+                None, // as_of — default "now" recall; point-in-time is opt-in
+            )
+            .await?;
+        Ok(raw
+            .into_iter()
+            .filter_map(|v| {
+                serde_json::from_value::<MemoryFact>(v)
+                    .ok()
+                    .map(|fact| ScoredFact { fact, score: 0.0 })
+            })
+            .collect())
+    }
+
+    /// Apply the gate decision: run zero, one, or several hybrid searches and
+    /// dedup-merge the results by fact key. `Skip` returns an empty vector
+    /// (high-confidence facts + in-recall corrections are added by the caller).
+    async fn hybrid_for_decision(
+        &self,
+        agent_id: &str,
+        decision: &RetrievalDecision,
+        limit: usize,
+    ) -> Result<Vec<ScoredFact>, String> {
+        match decision {
+            RetrievalDecision::Skip => Ok(Vec::new()),
+            RetrievalDecision::Direct(q) => self.run_hybrid_search(agent_id, q, limit).await,
+            RetrievalDecision::Split(subqueries) => {
+                let mut merged: Vec<ScoredFact> = Vec::new();
+                let mut seen = std::collections::HashSet::new();
+                for sq in subqueries {
+                    let sub = self.run_hybrid_search(agent_id, sq, limit).await?;
+                    for sf in sub {
+                        // Dedup by fact id (more reliable than `key`, which can
+                        // collide across scopes); preserve first occurrence.
+                        if seen.insert(sf.fact.id.clone()) {
+                            merged.push(sf);
+                        }
+                    }
+                }
+                Ok(merged)
             }
         }
     }
@@ -788,5 +839,126 @@ mod tests {
         assert!(kept.iter().any(|f| f.id == "a"));
         assert!(kept.iter().any(|f| f.id == "c"));
         assert!(!kept.iter().any(|f| f.id == "b"));
+    }
+
+    // ========================================================================
+    // Test H — Query gate integration: Skip decision still surfaces
+    // in-recall corrections + high-confidence facts; only the hybrid-search
+    // portion is suppressed.
+    // ========================================================================
+    use crate::recall::query_gate::{GateResponse, QueryGateLlm};
+    use async_trait::async_trait;
+    use gateway_services::VaultPaths;
+    use std::sync::Mutex;
+    use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+    use zero_stores_sqlite::{GatewayMemoryFactStore, KnowledgeDatabase, MemoryRepository};
+
+    struct FixedDecisionLlm {
+        decision: Mutex<&'static str>,
+    }
+
+    #[async_trait]
+    impl QueryGateLlm for FixedDecisionLlm {
+        async fn reformulate(&self, _raw: &str) -> Result<GateResponse, String> {
+            let d = *self.decision.lock().unwrap();
+            Ok(GateResponse {
+                decision: d.to_string(),
+                query: None,
+                subqueries: None,
+            })
+        }
+    }
+
+    fn make_skip_gate() -> Arc<QueryGate> {
+        let llm: Arc<dyn QueryGateLlm> = Arc::new(FixedDecisionLlm {
+            decision: Mutex::new("skip"),
+        });
+        let cfg = crate::QueryGateConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        Arc::new(QueryGate::new(llm, cfg))
+    }
+
+    #[tokio::test]
+    async fn corrections_still_inject_when_gate_returns_skip() {
+        // Setup: build a real SQLite-backed memory store, seed a correction
+        // and a non-correction fact, attach a gate that always returns Skip.
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
+        let db = Arc::new(KnowledgeDatabase::new(paths).expect("db"));
+        let vec_index: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(db.clone(), "memory_facts_index", "fact_id")
+                .expect("vec index init"),
+        );
+        let memory_repo = Arc::new(MemoryRepository::new(db, vec_index));
+        let memory_store: Arc<dyn zero_stores::MemoryFactStore> =
+            Arc::new(GatewayMemoryFactStore::new(memory_repo, None));
+
+        let agent_id = "agent-test-h";
+
+        // Correction fact — should always come through (in-recall path).
+        memory_store
+            .save_fact(
+                agent_id,
+                "correction",
+                "corr.hard_rule",
+                "Always validate user input before processing",
+                0.95,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Domain (non-correction) fact — would only surface via hybrid search.
+        memory_store
+            .save_fact(
+                agent_id,
+                "domain",
+                "domain.misc_topic",
+                "Some unrelated domain knowledge about geography",
+                0.8,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Build recall with the skip gate attached.
+        let config = Arc::new(RecallConfig::default());
+        let mut recall = MemoryRecall::new(None, config);
+        recall.set_memory_store(memory_store.clone());
+        recall.set_query_gate(make_skip_gate());
+
+        // Use a query that would never match the domain fact under hybrid
+        // search anyway — the gate's Skip means we don't even try.
+        let results = recall.recall(agent_id, "thanks!", 10, None).await.unwrap();
+
+        // The correction must be present even under Skip — it comes from the
+        // in-recall corrections path (step 3b), not from hybrid search.
+        let correction_present = results
+            .iter()
+            .any(|sf| sf.fact.key == "corr.hard_rule" && sf.fact.category == "correction");
+        assert!(
+            correction_present,
+            "in-recall corrections must survive gate Skip — got keys: {:?}",
+            results.iter().map(|sf| &sf.fact.key).collect::<Vec<_>>()
+        );
+
+        // High-confidence path (confidence >= 0.9): the correction qualifies
+        // there too, so we don't assert absence of the domain fact (it has
+        // confidence 0.8 — below the high-conf threshold of 0.9 and won't
+        // come through that path).
+        // What we DO want to check: hybrid search did not run, so the only
+        // way the domain fact would appear is via high-conf (it can't) or
+        // via the corrections category (it's not a correction). So it must
+        // be absent.
+        let domain_present = results.iter().any(|sf| sf.fact.key == "domain.misc_topic");
+        assert!(
+            !domain_present,
+            "non-correction fact below high-conf threshold must NOT appear under Skip (gate suppressed hybrid search)"
+        );
     }
 }
