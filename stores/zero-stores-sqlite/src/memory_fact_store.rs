@@ -716,8 +716,14 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         self.memory_repo.upsert_memory_fact(&typed)
     }
 
-    async fn supersede_fact(&self, old_id: &str, new_id: &str) -> Result<(), String> {
-        self.memory_repo.supersede_fact(old_id, new_id)
+    async fn supersede_fact(
+        &self,
+        old_id: &str,
+        new_id: &str,
+        transition_time: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), String> {
+        self.memory_repo
+            .supersede_fact(old_id, new_id, transition_time)
     }
 
     async fn archive_fact(&self, fact_id: &str) -> Result<bool, String> {

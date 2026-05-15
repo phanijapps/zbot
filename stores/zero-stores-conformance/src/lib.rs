@@ -641,7 +641,7 @@ pub async fn memory_supersede_fact_succeeds<S: MemoryFactStore>(store: &S) {
     let old_id = listed[0]["id"].as_str().expect("id should be a string");
 
     store
-        .supersede_fact(old_id, "replacement-fact-id")
+        .supersede_fact(old_id, "replacement-fact-id", chrono::Utc::now())
         .await
         .expect("supersede should not error");
 }

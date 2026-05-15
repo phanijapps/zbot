@@ -9,7 +9,7 @@
 // to the injected `VectorIndex`.
 // ============================================================================
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rusqlite::params;
 use std::sync::Arc;
 
@@ -480,12 +480,22 @@ impl MemoryRepository {
 
     /// Mark an existing fact as superseded by a newer fact.
     ///
-    /// Sets `valid_until` to now and records the new fact's ID in `superseded_by`.
-    pub fn supersede_fact(&self, old_id: &str, new_id: &str) -> Result<(), String> {
+    /// Sets `valid_until = transition_time` and records the new fact's ID in
+    /// `superseded_by`. `transition_time` is the moment the old fact stops
+    /// being valid — usually `Utc::now()` (distillation), but the
+    /// ConflictResolver passes the winner's `created_at` so the old fact's
+    /// truth-interval closes at the precise moment the contradicting belief
+    /// arrived. That preserves bi-temporal continuity: no gap, no overlap.
+    pub fn supersede_fact(
+        &self,
+        old_id: &str,
+        new_id: &str,
+        transition_time: DateTime<Utc>,
+    ) -> Result<(), String> {
         self.db.with_connection(|conn| {
             conn.execute(
                 "UPDATE memory_facts SET valid_until = ?3, superseded_by = ?1 WHERE id = ?2",
-                params![new_id, old_id, Utc::now().to_rfc3339()],
+                params![new_id, old_id, transition_time.to_rfc3339()],
             )?;
             Ok(())
         })
@@ -1790,5 +1800,208 @@ mod tests {
             .expect("high conf");
         assert_eq!(facts.len(), 1);
         assert_eq!(facts[0].key, "important");
+    }
+
+    // ========================================================================
+    // BI-TEMPORAL CONFLICT TRANSITION (Phase 4)
+    // ========================================================================
+
+    /// Helper: insert a fact at a specific RFC3339 created_at/updated_at and
+    /// optionally a valid_from. The fact otherwise mirrors `make_fact`.
+    fn make_fact_at(
+        agent_id: &str,
+        key: &str,
+        content: &str,
+        created_at: &str,
+        valid_from: Option<&str>,
+    ) -> MemoryFact {
+        MemoryFact {
+            id: format!("fact-{}", uuid::Uuid::new_v4()),
+            session_id: None,
+            agent_id: agent_id.to_string(),
+            scope: "agent".to_string(),
+            category: "schema".to_string(),
+            key: key.to_string(),
+            content: content.to_string(),
+            confidence: 0.8,
+            mention_count: 1,
+            source_summary: None,
+            embedding: None,
+            ward_id: "__global__".to_string(),
+            contradicted_by: None,
+            created_at: created_at.to_string(),
+            updated_at: created_at.to_string(),
+            expires_at: None,
+            valid_from: valid_from.map(|s| s.to_string()),
+            valid_until: None,
+            superseded_by: None,
+            pinned: false,
+            epistemic_class: Some("current".to_string()),
+            source_episode_id: None,
+            source_ref: None,
+        }
+    }
+
+    /// Test A — `supersede_fact` respects the passed `transition_time` rather
+    /// than always using `Utc::now()`. With path (b), ConflictResolver passes
+    /// the winner's `created_at`; the loser's `valid_until` must match exactly.
+    #[test]
+    fn supersede_fact_respects_transition_time() {
+        let (_tmp, repo) = setup();
+
+        let a = make_fact_at(
+            "agent-bt",
+            "policy.rebase",
+            "Always rebase",
+            "2026-01-01T00:00:00+00:00",
+            Some("2026-01-01T00:00:00+00:00"),
+        );
+        let b = make_fact_at(
+            "agent-bt",
+            "policy.rebase.b",
+            "Never rebase",
+            "2026-02-01T00:00:00+00:00",
+            Some("2026-02-01T00:00:00+00:00"),
+        );
+        repo.upsert_memory_fact(&a).expect("upsert a");
+        repo.upsert_memory_fact(&b).expect("upsert b");
+
+        let b_created_at = DateTime::parse_from_rfc3339(&b.created_at)
+            .expect("parse b.created_at")
+            .with_timezone(&Utc);
+
+        repo.supersede_fact(&a.id, &b.id, b_created_at)
+            .expect("supersede");
+
+        let loaded_a = repo
+            .get_memory_fact_by_id(&a.id)
+            .expect("load a")
+            .expect("a present");
+        assert_eq!(
+            loaded_a.superseded_by.as_deref(),
+            Some(b.id.as_str()),
+            "loser.superseded_by must point at winner"
+        );
+        let valid_until = loaded_a.valid_until.expect("valid_until set");
+        let parsed = DateTime::parse_from_rfc3339(&valid_until)
+            .expect("valid_until parses")
+            .with_timezone(&Utc);
+        assert_eq!(
+            parsed, b_created_at,
+            "loser.valid_until must equal winner.created_at (bi-temporal transition)"
+        );
+    }
+
+    /// Test B — point-in-time recall returns the correct fact across the
+    /// transition. Before the transition: only A is valid. After: only B.
+    /// No overlap interval exists.
+    #[test]
+    fn point_in_time_recall_across_conflict_transition() {
+        let (_tmp, repo) = setup();
+
+        // Different keys so the upsert ON CONFLICT clause doesn't merge them.
+        let a = make_fact_at(
+            "agent-pit",
+            "policy.a",
+            "Belief A",
+            "2026-01-01T00:00:00+00:00",
+            Some("2026-01-01T00:00:00+00:00"),
+        );
+        let b = make_fact_at(
+            "agent-pit",
+            "policy.b",
+            "Belief B",
+            "2026-02-01T00:00:00+00:00",
+            Some("2026-02-01T00:00:00+00:00"),
+        );
+        repo.upsert_memory_fact(&a).expect("upsert a");
+        repo.upsert_memory_fact(&b).expect("upsert b");
+
+        let b_created_at = DateTime::parse_from_rfc3339(&b.created_at)
+            .unwrap()
+            .with_timezone(&Utc);
+        repo.supersede_fact(&a.id, &b.id, b_created_at)
+            .expect("supersede");
+
+        // Query helper: returns the set of fact ids visible at `as_of` by
+        // applying the same bi-temporal predicate the recall paths use.
+        let db = repo.db_for_tests();
+        let visible_at = |as_of: DateTime<Utc>| -> Vec<String> {
+            let ts = as_of.to_rfc3339();
+            db.with_connection(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id FROM memory_facts \
+                     WHERE agent_id = ?1 \
+                     AND (valid_from IS NULL OR valid_from <= ?2) \
+                     AND (valid_until IS NULL OR valid_until > ?2)",
+                )?;
+                let rows =
+                    stmt.query_map(params!["agent-pit", ts], |row| row.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()
+            })
+            .expect("query")
+        };
+
+        // Mid-January: only A is valid.
+        let mid_jan = DateTime::parse_from_rfc3339("2026-01-15T00:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        let jan = visible_at(mid_jan);
+        assert!(jan.contains(&a.id), "A must be visible mid-January");
+        assert!(!jan.contains(&b.id), "B must NOT be visible mid-January");
+
+        // Mid-February: only B is valid.
+        let mid_feb = DateTime::parse_from_rfc3339("2026-02-15T00:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        let feb = visible_at(mid_feb);
+        assert!(feb.contains(&b.id), "B must be visible mid-February");
+        assert!(!feb.contains(&a.id), "A must NOT be visible mid-February");
+
+        // Exactly at the transition (B.created_at): A.valid_until = B.created_at
+        // so the half-open interval `valid_until > as_of` excludes A; B is
+        // already valid (valid_from = B.created_at). No overlap.
+        let at_transition = b_created_at;
+        let transition = visible_at(at_transition);
+        assert!(
+            !transition.contains(&a.id),
+            "A must NOT be visible at the transition instant (valid_until is exclusive)"
+        );
+        assert!(
+            transition.contains(&b.id),
+            "B must be visible at the transition instant (valid_from is inclusive)"
+        );
+    }
+
+    /// Test C — backward compatibility: the distillation-style call with
+    /// `transition_time = Utc::now()` still produces the pre-Phase-4 semantics
+    /// (loser's `valid_until` is approximately "now").
+    #[test]
+    fn supersede_fact_with_now_preserves_default_semantics() {
+        let (_tmp, repo) = setup();
+
+        let a = make_fact("agent-now", "k.a", "A", "schema");
+        let b = make_fact("agent-now", "k.b", "B", "schema");
+        repo.upsert_memory_fact(&a).expect("upsert a");
+        repo.upsert_memory_fact(&b).expect("upsert b");
+
+        let before = Utc::now();
+        repo.supersede_fact(&a.id, &b.id, Utc::now())
+            .expect("supersede");
+        let after = Utc::now();
+
+        let loaded_a = repo
+            .get_memory_fact_by_id(&a.id)
+            .expect("load a")
+            .expect("a present");
+        assert_eq!(loaded_a.superseded_by.as_deref(), Some(b.id.as_str()));
+        let valid_until = loaded_a.valid_until.expect("valid_until set");
+        let parsed = DateTime::parse_from_rfc3339(&valid_until)
+            .expect("valid_until parses")
+            .with_timezone(&Utc);
+        assert!(
+            parsed >= before && parsed <= after,
+            "valid_until must fall within the call window when transition_time = Utc::now()"
+        );
     }
 }

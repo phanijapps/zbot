@@ -162,9 +162,27 @@ impl ConflictResolver {
                 }
 
                 let (winner, loser) = pick_winner(&facts[i], &facts[j]);
+                // Bi-temporal transition: loser's truth-interval closes at the
+                // moment the system actually learned otherwise — i.e. when the
+                // winning fact was first recorded. Falls back to `now()` if the
+                // winner's `created_at` is unparseable so a malformed row
+                // can't break the resolution cycle.
+                let transition_time = match chrono::DateTime::parse_from_rfc3339(&winner.created_at)
+                {
+                    Ok(dt) => dt.with_timezone(&chrono::Utc),
+                    Err(e) => {
+                        tracing::warn!(
+                            winner_id = %winner.id,
+                            created_at = %winner.created_at,
+                            error = %e,
+                            "conflict-resolver: winner.created_at unparseable; falling back to now()"
+                        );
+                        chrono::Utc::now()
+                    }
+                };
                 if let Err(e) = self
                     .memory_store
-                    .supersede_fact(&loser.id, &winner.id)
+                    .supersede_fact(&loser.id, &winner.id, transition_time)
                     .await
                 {
                     tracing::warn!(

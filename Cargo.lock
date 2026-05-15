@@ -6101,6 +6101,7 @@ name = "zero-stores-conformance"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "knowledge-graph",
  "serde_json",
  "zero-stores",
