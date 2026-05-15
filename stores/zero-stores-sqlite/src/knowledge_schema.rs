@@ -1,11 +1,11 @@
-//! Schema v24 for `knowledge.db`.
+//! Schema v25 for `knowledge.db`.
 //!
 //! All long-term memory + graph + vector indexes live here.
 //! Applied idempotently on daemon boot. No migrations — clean slate.
 
 use rusqlite::Connection;
 
-const SCHEMA_VERSION: i32 = 24;
+const SCHEMA_VERSION: i32 = 25;
 
 /// v23 delta: full-text search over `ward_wiki_articles` with sync triggers.
 const V23_WIKI_FTS_SQL: &str = include_str!("../migrations/v23_wiki_fts.sql");
@@ -17,7 +17,13 @@ const V23_WIKI_FTS_SQL: &str = include_str!("../migrations/v23_wiki_fts.sql");
 const V24_GLOBAL_SCOPE_BACKFILL_SQL: &str =
     include_str!("../migrations/v24_global_scope_backfill.sql");
 
-/// Initialize the knowledge database schema (v24).
+/// v25 delta: bi-temporal phase 1 — backfill `valid_from` on legacy
+/// `memory_facts` rows so point-in-time queries can include pre-migration
+/// facts in "now" results without special-casing NULL.
+const V25_MEMORY_FACTS_VALID_FROM_BACKFILL_SQL: &str =
+    include_str!("../migrations/v25_memory_facts_valid_from_backfill.sql");
+
+/// Initialize the knowledge database schema (v25).
 ///
 /// Creates all tables and indexes if they don't exist. Records the
 /// schema version in `schema_version` table. Safe to call on an
@@ -26,6 +32,7 @@ pub fn initialize_knowledge_database(conn: &Connection) -> Result<(), rusqlite::
     conn.execute_batch(SCHEMA_SQL)?;
     conn.execute_batch(V23_WIKI_FTS_SQL)?;
     conn.execute_batch(V24_GLOBAL_SCOPE_BACKFILL_SQL)?;
+    conn.execute_batch(V25_MEMORY_FACTS_VALID_FROM_BACKFILL_SQL)?;
     add_skill_index_format_version_if_missing(conn)?;
     ensure_evidence_column(conn, "kg_entities")?;
     ensure_evidence_column(conn, "kg_relationships")?;
@@ -632,7 +639,7 @@ mod tests {
         let version: i32 = conn
             .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 24);
+        assert_eq!(version, 25);
 
         // Regular tables.
         for table in [

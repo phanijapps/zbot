@@ -679,7 +679,15 @@ async fn upsert_skill(
 ) {
     let key = format!("skill:{}", info.id);
     if let Err(e) = fact_store
-        .save_fact("root", "skill", &key, &info.indexed_content, 1.0, None)
+        .save_fact(
+            "root",
+            "skill",
+            &key,
+            &info.indexed_content,
+            1.0,
+            None,
+            None, // valid_from: defaults to Utc::now() in store impl
+        )
         .await
     {
         tracing::warn!("save_fact failed for skill {}: {}", info.id, e);
@@ -754,7 +762,7 @@ pub async fn index_resources(
                 let key = format!("agent:{}", agent.id);
                 let content = format!("{} | {}", agent.id, agent.description);
                 if let Err(e) = fact_store
-                    .save_fact("root", "agent", &key, &content, 1.0, None)
+                    .save_fact("root", "agent", &key, &content, 1.0, None, None)
                     .await
                 {
                     tracing::debug!("Failed to index agent {}: {}", agent.id, e);
@@ -797,7 +805,7 @@ pub async fn index_resources(
                     format!("{} | {}", name, purpose)
                 };
                 if let Err(e) = fact_store
-                    .save_fact("root", "ward", &key, &content, 1.0, None)
+                    .save_fact("root", "ward", &key, &content, 1.0, None, None)
                     .await
                 {
                     tracing::debug!("Failed to index ward {}: {}", name, e);
@@ -1138,6 +1146,7 @@ mod tests {
             _content: &str,
             _confidence: f64,
             _session_id: Option<&str>,
+            _valid_from: Option<chrono::DateTime<chrono::Utc>>,
         ) -> Result<Value, String> {
             Ok(serde_json::json!({"status": "ok"}))
         }
@@ -1214,6 +1223,7 @@ mod tests {
             content: &str,
             _confidence: f64,
             _session_id: Option<&str>,
+            _valid_from: Option<chrono::DateTime<chrono::Utc>>,
         ) -> Result<Value, String> {
             self.state
                 .lock()
@@ -1527,6 +1537,7 @@ mod tests {
                 _content: &str,
                 _confidence: f64,
                 _session_id: Option<&str>,
+                _valid_from: Option<chrono::DateTime<chrono::Utc>>,
             ) -> Result<Value, String> {
                 Err("simulated embedding failure".to_string())
             }

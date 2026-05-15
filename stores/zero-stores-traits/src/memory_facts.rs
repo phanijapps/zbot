@@ -81,6 +81,15 @@ pub trait MemoryFactStore: Send + Sync {
     ///
     /// On conflict (same agent_id + scope + key), updates content and bumps
     /// mention_count. Returns a JSON summary of the operation.
+    ///
+    /// `valid_from` records the bi-temporal "world time" at which the fact
+    /// became true. When `Some(t)`, the implementation persists `t` on the
+    /// row. When `None`, the implementation defaults to `Utc::now()`. Pass
+    /// `None` for procedural / convention facts that have always been true.
+    // Established signature: each field corresponds to a column on
+    // `memory_facts`, so collapsing into a builder/struct would buy
+    // little while breaking every existing call site.
+    #[allow(clippy::too_many_arguments)]
     async fn save_fact(
         &self,
         agent_id: &str,
@@ -89,6 +98,7 @@ pub trait MemoryFactStore: Send + Sync {
         content: &str,
         confidence: f64,
         session_id: Option<&str>,
+        valid_from: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Value, String>;
 
     /// Recall facts relevant to a query using hybrid search.

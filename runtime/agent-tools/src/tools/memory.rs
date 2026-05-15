@@ -538,7 +538,10 @@ impl MemoryTool {
         // Use DB-backed fact store if available
         match &self.fact_store {
             Some(store) => store
-                .save_fact(agent_id, category, key, content, confidence, None)
+                // valid_from=None ⇒ store defaults to Utc::now(). A
+                // first-class JSON parameter for valid_from is deferred
+                // to bi-temporal phase 2 (point-in-time recall API).
+                .save_fact(agent_id, category, key, content, confidence, None, None)
                 .await
                 .map_err(ZeroError::Tool),
             None => {
@@ -598,7 +601,7 @@ impl MemoryTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ZeroError::Tool("Missing 'query' for recall".to_string()))?;
 
-        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
+        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
 
         // Use DB-backed fact store if available — prioritized recall
         match &self.fact_store {
@@ -1236,6 +1239,7 @@ mod tests {
                 _content: &str,
                 _confidence: f64,
                 _session_id: Option<&str>,
+                _valid_from: Option<chrono::DateTime<chrono::Utc>>,
             ) -> std::result::Result<Value, String> {
                 Ok(json!({}))
             }
