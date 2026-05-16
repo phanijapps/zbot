@@ -163,6 +163,18 @@ pub struct AppState {
     /// backend that doesn't care can inherit them.
     pub compaction_store: Option<Arc<dyn zero_stores_traits::CompactionStore>>,
 
+    /// Trait-routed belief store (Belief Network Phase B-5 HTTP surface).
+    /// `Some(...)` only when `execution.memory.beliefNetwork.enabled = true`
+    /// AND the knowledge DB is wired. The HTTP handlers in
+    /// `http::beliefs` use this for 503-vs-200 disambiguation: a
+    /// `None` here means the Belief Network is disabled, not that the
+    /// data is missing.
+    pub belief_store: Option<Arc<dyn zero_stores_traits::BeliefStore>>,
+
+    /// Trait-routed belief-contradiction store (Belief Network Phase B-5
+    /// HTTP surface). Same opt-in gating as `belief_store`.
+    pub belief_contradiction_store: Option<Arc<dyn zero_stores_traits::BeliefContradictionStore>>,
+
     /// Model capabilities registry (bundled + local overrides).
     pub model_registry: Arc<ModelRegistry>,
 
@@ -818,6 +830,48 @@ impl AppState {
             }
         }
 
+        // Belief Network stores (Phase B-1/B-2 + B-5 HTTP surface).
+        //
+        // Two layers of gating:
+        //   1. Trait store handles can only be built when `knowledge_db`
+        //      is wired (SQLite-backed).
+        //   2. We only park them on `AppState` for the HTTP layer when
+        //      `execution.memory.beliefNetwork.enabled = true` — so the
+        //      `/api/beliefs/*` and `/api/contradictions/*` endpoints
+        //      cleanly return 503 when the feature is off.
+        //
+        // The sleep-time worker block below still gets to consume the
+        // handles either way (it has its own internal enable flag).
+        let belief_network_cfg = settings
+            .get_execution_settings()
+            .map(|s| s.memory.belief_network.clone())
+            .unwrap_or_default();
+        let belief_store_raw: Option<Arc<dyn zero_stores::BeliefStore>> =
+            knowledge_db.as_ref().map(|kdb| {
+                Arc::new(zero_stores_sqlite::SqliteBeliefStore::new(kdb.clone()))
+                    as Arc<dyn zero_stores::BeliefStore>
+            });
+        let belief_contradiction_store_raw: Option<Arc<dyn zero_stores::BeliefContradictionStore>> =
+            knowledge_db.as_ref().map(|kdb| {
+                Arc::new(zero_stores_sqlite::SqliteBeliefContradictionStore::new(
+                    kdb.clone(),
+                )) as Arc<dyn zero_stores::BeliefContradictionStore>
+            });
+        // HTTP surface only exposes the stores when the feature is on.
+        let belief_store_for_http: Option<Arc<dyn zero_stores_traits::BeliefStore>> =
+            if belief_network_cfg.enabled {
+                belief_store_raw.clone()
+            } else {
+                None
+            };
+        let belief_contradiction_store_for_http: Option<
+            Arc<dyn zero_stores_traits::BeliefContradictionStore>,
+        > = if belief_network_cfg.enabled {
+            belief_contradiction_store_raw.clone()
+        } else {
+            None
+        };
+
         // Sleep-time worker requires the entire SQLite knowledge cluster.
         // Build only when ALL of (compaction_repo, memory_repo, knowledge_db,
         // procedure_repo, kg_store, compaction_store) are present. The
@@ -843,30 +897,6 @@ impl AppState {
                     .get_execution_settings()
                     .map(|s| s.memory.conflict_resolver_interval_hours)
                     .unwrap_or(24);
-                let belief_network_cfg = settings
-                    .get_execution_settings()
-                    .map(|s| s.memory.belief_network.clone())
-                    .unwrap_or_default();
-                // BeliefStore is built only when the knowledge DB is wired.
-                // Opt-in: even when the DB is available, the synthesizer
-                // is omitted unless `belief_network.enabled = true`.
-                let belief_store: Option<Arc<dyn zero_stores::BeliefStore>> =
-                    knowledge_db.as_ref().map(|kdb| {
-                        Arc::new(zero_stores_sqlite::SqliteBeliefStore::new(kdb.clone()))
-                            as Arc<dyn zero_stores::BeliefStore>
-                    });
-                // Phase B-2: contradiction store mirrors the belief store
-                // — built only when the KG DB is wired. The detector
-                // wiring further gates on the shared `enabled` flag inside
-                // MemoryServices, so flipping `enabled: false` keeps the
-                // store-construction path harmless.
-                let belief_contradiction_store: Option<
-                    Arc<dyn zero_stores::BeliefContradictionStore>,
-                > = knowledge_db.as_ref().map(|kdb| {
-                    Arc::new(zero_stores_sqlite::SqliteBeliefContradictionStore::new(
-                        kdb.clone(),
-                    )) as Arc<dyn zero_stores::BeliefContradictionStore>
-                });
                 let memory_services =
                     gateway_memory::MemoryServices::new(gateway_memory::MemoryServicesConfig {
                         agent_id: "root".to_string(),
@@ -887,12 +917,12 @@ impl AppState {
                             conflict_interval_hours as u64 * 3600,
                         ),
                         decay_config: gateway_memory::sleep::DecayConfig::default(),
-                        belief_store,
+                        belief_store: belief_store_raw.clone(),
                         belief_network_enabled: belief_network_cfg.enabled,
                         belief_network_interval: std::time::Duration::from_secs(
                             belief_network_cfg.interval_hours as u64 * 3600,
                         ),
-                        belief_contradiction_store,
+                        belief_contradiction_store: belief_contradiction_store_raw.clone(),
                         belief_contradiction_neighborhood_prefix_depth: belief_network_cfg
                             .neighborhood_prefix_depth,
                         belief_contradiction_budget_per_cycle: belief_network_cfg
@@ -942,6 +972,8 @@ impl AppState {
             sleep_time_worker,
             compaction_repo,
             compaction_store,
+            belief_store: belief_store_for_http,
+            belief_contradiction_store: belief_contradiction_store_for_http,
             plugin_manager,
             model_registry,
             embedding_service,
@@ -1076,6 +1108,8 @@ impl AppState {
             sleep_time_worker: None,
             compaction_repo: None,
             compaction_store: None,
+            belief_store: None,
+            belief_contradiction_store: None,
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
             embedding_service: Arc::new(
                 EmbeddingService::with_config(paths.clone(), Default::default())
@@ -1213,6 +1247,8 @@ impl AppState {
             sleep_time_worker: None,
             compaction_repo: None,
             compaction_store: None,
+            belief_store: None,
+            belief_contradiction_store: None,
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
             embedding_service: Arc::new(
                 EmbeddingService::with_config(paths.clone(), Default::default())
