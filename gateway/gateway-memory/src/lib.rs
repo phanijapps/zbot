@@ -11,6 +11,9 @@ pub use llm_factory::{LlmClientConfig, MemoryLlmFactory};
 pub use services::{MemoryServices, MemoryServicesConfig};
 pub use util::{parse_llm_json, strip_code_fence};
 
+pub use recall::query_gate::{
+    GateResponse, LlmQueryGate, QueryGate, QueryGateLlm, RetrievalDecision,
+};
 pub use recall::scored_item::{
     intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, ScoredItem,
 };
@@ -351,6 +354,11 @@ pub struct MemorySettings {
     /// Default: 24. Set to 0 to run on every sleep cycle (hourly).
     #[serde(default = "default_conflict_resolver_interval_hours")]
     pub conflict_resolver_interval_hours: u32,
+    /// Self-RAG retrieval-gate configuration — controls whether a small LLM
+    /// pre-step decides skip/direct/split before the hybrid search runs.
+    /// Disabled by default; opt-in via `enabled: true`.
+    #[serde(default)]
+    pub query_gate: QueryGateConfig,
 }
 
 pub fn default_corrections_abstractor_interval_hours() -> u32 {
@@ -366,6 +374,70 @@ impl Default for MemorySettings {
         Self {
             corrections_abstractor_interval_hours: default_corrections_abstractor_interval_hours(),
             conflict_resolver_interval_hours: default_conflict_resolver_interval_hours(),
+            query_gate: QueryGateConfig::default(),
+        }
+    }
+}
+
+// ============================================================================
+// QUERY GATE CONFIG
+// Self-RAG retrieval gate — small LLM call that decides skip/direct/split
+// before the hybrid search runs. Reduces signal dilution on multi-topic queries.
+// ============================================================================
+
+/// Configuration for the Self-RAG retrieval gate.
+///
+/// When `enabled: true`, `MemoryRecall::recall` runs a small LLM call before
+/// the hybrid search. The LLM returns one of three decisions:
+///
+/// - `skip` — context already suffices; no hybrid search.
+/// - `direct` — single-topic query; use the reformulated query for hybrid search.
+/// - `split` — multi-topic input; run hybrid search per subquery and dedup-merge.
+///
+/// Always-inject corrections (driven from the bootstrap path) are unaffected
+/// by the gate decision. The gate scopes only the hybrid-search portion of recall.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryGateConfig {
+    /// Master switch. Default: `false` (opt-in).
+    #[serde(default)]
+    pub enabled: bool,
+    /// LLM model identifier. `None` = use the distillation/default model
+    /// resolved by `MemoryLlmFactory`.
+    #[serde(default)]
+    pub model_id: Option<String>,
+    /// Maximum number of subqueries accepted from a Split decision. Excess
+    /// subqueries are truncated to the first N.
+    #[serde(default = "default_max_subqueries")]
+    pub max_subqueries: usize,
+    /// Maximum character length of any single subquery. Longer subqueries
+    /// are truncated.
+    #[serde(default = "default_max_subquery_len")]
+    pub max_subquery_len: usize,
+    /// LLM call timeout in milliseconds. Kept for future use by the
+    /// production gate impl; the trait surface accepts the value verbatim.
+    #[serde(default = "default_query_gate_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+pub fn default_max_subqueries() -> usize {
+    4
+}
+pub fn default_max_subquery_len() -> usize {
+    200
+}
+pub fn default_query_gate_timeout_ms() -> u64 {
+    3000
+}
+
+impl Default for QueryGateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model_id: None,
+            max_subqueries: default_max_subqueries(),
+            max_subquery_len: default_max_subquery_len(),
+            timeout_ms: default_query_gate_timeout_ms(),
         }
     }
 }
@@ -629,5 +701,52 @@ mod tests {
             m.corrections_abstractor_interval_hours, 24,
             "default preserved"
         );
+    }
+
+    #[test]
+    fn query_gate_default_is_disabled() {
+        let cfg = QueryGateConfig::default();
+        assert!(!cfg.enabled, "query gate must default to disabled");
+        assert_eq!(cfg.max_subqueries, 4);
+        assert_eq!(cfg.max_subquery_len, 200);
+        assert_eq!(cfg.timeout_ms, 3000);
+        assert!(cfg.model_id.is_none());
+    }
+
+    #[test]
+    fn memory_settings_default_query_gate_disabled() {
+        let m = MemorySettings::default();
+        assert!(!m.query_gate.enabled);
+    }
+
+    #[test]
+    fn query_gate_deserializes_camel_case() {
+        let json = r#"{
+            "enabled": true,
+            "modelId": "gpt-4o-mini",
+            "maxSubqueries": 6,
+            "maxSubqueryLen": 120,
+            "timeoutMs": 5000
+        }"#;
+        let cfg: QueryGateConfig = serde_json::from_str(json).unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.model_id.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(cfg.max_subqueries, 6);
+        assert_eq!(cfg.max_subquery_len, 120);
+        assert_eq!(cfg.timeout_ms, 5000);
+    }
+
+    #[test]
+    fn memory_settings_with_query_gate_block_round_trips() {
+        let json = r#"{
+            "queryGate": { "enabled": true, "maxSubqueries": 3 }
+        }"#;
+        let m: MemorySettings = serde_json::from_str(json).unwrap();
+        assert!(m.query_gate.enabled);
+        assert_eq!(m.query_gate.max_subqueries, 3);
+        // unspecified fields keep defaults
+        assert_eq!(m.query_gate.max_subquery_len, 200);
+        assert_eq!(m.query_gate.timeout_ms, 3000);
+        assert!(m.query_gate.model_id.is_none());
     }
 }
