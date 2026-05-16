@@ -6565,7 +6565,11 @@
   flex-direction: column;
   gap: var(--spacing-3);
   padding: var(--spacing-4);
-  min-height: 100%;
+  /* Bound to parent so the list scrolls internally instead of pushing
+     content below the viewport. The .memory-deck parent is overflow:hidden
+     so without this the items just disappeared. */
+  height: 100%;
+  overflow-y: auto;
 }
 
 .beliefs-filter-bar {
@@ -6579,6 +6583,11 @@
   border-radius: var(--radius-md);
   font-size: var(--text-xs);
   color: var(--muted-foreground);
+  /* Stick to the top of the scrollable list so filtering stays
+     reachable while the user scrolls through 100s of cards. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .beliefs-filter-bar__chip {
