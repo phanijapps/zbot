@@ -408,7 +408,9 @@ Two files *can* own every knob. Both are optional — missing keys, missing file
 
       "beliefNetwork": {
         "enabled": false,
-        "intervalHours": 24
+        "intervalHours": 24,
+        "neighborhoodPrefixDepth": 1,
+        "contradictionBudgetPerCycle": 20
       },
 
       "mmr": {
@@ -444,7 +446,7 @@ What each block does:
 | `correctionsAbstractorIntervalHours` | `24` | Throttle for the CorrectionsAbstractor sleep job (distills 3+ similar corrections into a `schema` fragment). Set `0` to run every cycle. |
 | `conflictResolverIntervalHours` | `24` | Throttle for the ConflictResolver sleep job (LLM-judges contradicting `schema` fragments, marks loser `superseded_by`). Set `0` to run every cycle. |
 | `queryGate` | disabled | **Self-RAG retrieval gate.** Small LLM call before hybrid search that returns `Skip` (no recall needed), `Direct(reformulated_query)`, or `Split([sub1, sub2, ...])`. Fixes multi-topic query dilution. Failure-safe — any LLM error falls back to using the raw input. Adds ~200-800ms per recall when enabled. |
-| `beliefNetwork` | disabled | **Belief synthesis (Phase B-1).** Sleep-time worker that aggregates facts about the same subject into a single belief with derived confidence + provenance. Single-fact subjects short-circuit without an LLM call; multi-fact subjects invoke the synthesizer. `intervalHours` throttles the cycle (set `0` for every cycle). Beliefs are queryable via the `memory(action="belief", subject=...)` tool action. Recall integration (beliefs surfacing alongside facts) lands in Phase B-4. |
+| `beliefNetwork` | disabled | **Belief synthesis (B-1) + contradiction detection (B-2).** Two sleep-time workers gated on a single flag. **B-1** aggregates facts by subject into a belief; single-fact subjects short-circuit (no LLM); multi-fact subjects invoke the synthesizer LLM. **B-2** examines pairs of beliefs within subject-prefix topical neighborhoods and runs an LLM judge per pair, classifying each as `logical_contradiction` / `tension` / `compatible` / `duplicate`. Sub-fields: `intervalHours` throttles both workers (set `0` for every cycle); `neighborhoodPrefixDepth` (default `1`) controls neighborhood granularity (1 = first dot-component, e.g. `user.*`; 2 = `user.dietary.*`); `contradictionBudgetPerCycle` (default `20`) caps the detector's LLM calls per cycle, processed largest-neighborhood first. Queryable via `memory(action="belief", subject=...)` and `memory(action="contradictions", belief_id=...)`. Recall integration (beliefs surfacing alongside facts) lands in B-4. |
 | `mmr` | enabled | **Maximal Marginal Relevance** diversity reranking. `lambda` balances relevance vs diversity (1.0 = pure relevance, 0.0 = pure diversity). `candidate_pool` is the over-fetch size before MMR selection. |
 | `rerank` | disabled | **Cross-encoder reranker** via `fastembed-rs`. Loads a local reranker model (default BGE-reranker-base, ~280MB). Higher quality top-K than MMR alone; adds latency and disk. |
 | `intentRouter` | disabled | **kNN-based intent classifier** that picks per-intent category-weight profiles. `k` = nearest neighbours considered; `confidence_threshold` = minimum to apply a profile. When disabled, default category weights are used universally. |
