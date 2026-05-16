@@ -10,6 +10,7 @@ import { useGraphData } from "./graph-hooks";
 import { GraphCanvas } from "./GraphCanvas";
 import { EntityDetail } from "./EntityDetail";
 import { LearningHealthBar } from "./LearningHealthBar";
+import { BeliefNetworkPanel } from "./belief-network/BeliefNetworkPanel";
 
 // ============================================================================
 // Component
@@ -174,6 +175,10 @@ export function ObservatoryPage() {
           <EntityDetail entity={selectedEntity} onClose={handleCloseDetail} />
         )}
       </div>
+
+      {/* Belief Network worker stats (Phase B-6) — renders disabled
+          placeholder when the network is off. */}
+      <BeliefNetworkPanel />
 
       {/* Health bar */}
       <LearningHealthBar />
