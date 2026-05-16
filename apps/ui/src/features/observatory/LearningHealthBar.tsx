@@ -2,15 +2,20 @@
 // LEARNING HEALTH BAR — Bottom status bar for Observatory
 // ============================================================================
 
+import { useState } from "react";
 import { useGraphStats, useDistillationStatus, useBackfill } from "./graph-hooks";
 import { useBeliefNetworkStats } from "./belief-network/hooks";
+import { Slideover } from "@/components/Slideover";
+import { BeliefNetworkPanel } from "./belief-network/BeliefNetworkPanel";
 
 export function LearningHealthBar() {
   const { stats, loading: statsLoading } = useGraphStats();
   const { status, loading: distLoading, refetch: refetchStatus } = useDistillationStatus();
   // Belief Network totals fold into this strip so the page doesn't carry
-  // a separate 3-card panel. Details still available via the API + memory tab.
+  // a separate 3-card panel. The detail surface (3 cards + activity feed
+  // + propagation chain) lives in a slideover opened from the strip.
   const { stats: beliefStats } = useBeliefNetworkStats();
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const { run, isRunning, isDone, progress, error: backfillError } = useBackfill(
     refetchStatus
@@ -129,7 +134,32 @@ export function LearningHealthBar() {
             Backfill
           </button>
         )}
+
+        {/* Belief Network details drawer trigger \u2014 only when the
+            network is enabled. Opens a right-side slideover with
+            the 3 worker stats cards + activity feed + propagation
+            chain. Default state is closed so the strip stays clean. */}
+        {beliefStats?.enabled ? (
+          <button
+            type="button"
+            className="btn btn--sm btn--secondary"
+            onClick={() => setDetailsOpen(true)}
+            aria-label="Open belief network details"
+            title="Belief network worker stats, activity feed, propagation chain"
+          >
+            \u2197 details
+          </button>
+        ) : null}
       </div>
+
+      <Slideover
+        open={detailsOpen}
+        onClose={() => setDetailsOpen(false)}
+        title="Belief Network details"
+        subtitle="Worker stats \u00b7 activity feed \u00b7 propagation chain"
+      >
+        <BeliefNetworkPanel />
+      </Slideover>
     </div>
   );
 }
