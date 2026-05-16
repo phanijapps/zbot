@@ -7058,7 +7058,12 @@
 
 .belief-network-card__metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  /* Bumped from 80px to 110px minmax so long uppercase labels
+     ("short-circuited", "marked stale", "LLM calls") don't collide
+     in the narrow slideover viewport (~420px card width). 110px is
+     enough for 11–14 character uppercase 10px labels with the
+     0.05em letter-spacing we use. */
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: var(--spacing-2) var(--spacing-3);
 }
 
@@ -7074,6 +7079,11 @@
   color: var(--subtle-foreground);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  /* Defensive: if the slideover is even narrower than 420px on a
+     small viewport, let labels wrap rather than overflow into the
+     next column. */
+  overflow-wrap: anywhere;
+  line-height: 1.25;
 }
 
 .belief-network-card__metric-value {

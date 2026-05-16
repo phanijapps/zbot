@@ -3,6 +3,7 @@
 // ============================================================================
 
 import { useState } from "react";
+import { ArrowUpRight } from "lucide-react";
 import { useGraphStats, useDistillationStatus, useBackfill } from "./graph-hooks";
 import { useBeliefNetworkStats } from "./belief-network/hooks";
 import { Slideover } from "@/components/Slideover";
@@ -138,7 +139,10 @@ export function LearningHealthBar() {
         {/* Belief Network details drawer trigger \u2014 only when the
             network is enabled. Opens a right-side slideover with
             the 3 worker stats cards + activity feed + propagation
-            chain. Default state is closed so the strip stays clean. */}
+            chain. Default state is closed so the strip stays clean.
+            Using lucide's ArrowUpRight (same icon family as the rest
+            of the app) \u2014 the unicode arrow U+2197 rendered as a
+            fallback glyph in IBM Plex Sans. */}
         {beliefStats?.enabled ? (
           <button
             type="button"
@@ -146,8 +150,10 @@ export function LearningHealthBar() {
             onClick={() => setDetailsOpen(true)}
             aria-label="Open belief network details"
             title="Belief network worker stats, activity feed, propagation chain"
+            style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
           >
-            \u2197 details
+            <ArrowUpRight style={{ width: 14, height: 14 }} aria-hidden />
+            details
           </button>
         ) : null}
       </div>
