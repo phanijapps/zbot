@@ -148,24 +148,15 @@ interface SubTabBarProps {
 
 function SubTabBar({ active, onChange }: SubTabBarProps) {
   const tabs: MemorySubTab[] = ["facts", "beliefs", "contradictions"];
-  // Use the same `.memory-deck__tabs` + `.is-active` pattern as the inner
-  // Facts / Wiki / Procedures / Episodes content tabs below so the two tab
-  // rows render visually consistent. The earlier `.tab-bar` BEM convention
-  // was also valid CSS, but it diverged from the established memory-deck
-  // styling and produced a visible style mismatch.
   return (
-    <div
-      className="memory-deck__tabs memory-tab-deck__subtabs"
-      role="tablist"
-      aria-label="Memory sub-tabs"
-    >
+    <div className="tab-bar memory-tab-deck__subtabs" role="tablist" aria-label="Memory sub-tabs">
       {tabs.map((t) => (
         <button
           key={t}
           type="button"
           role="tab"
           aria-selected={active === t}
-          className={active === t ? "is-active" : ""}
+          className={`tab-bar__tab${active === t ? " tab-bar__tab--active" : ""}`}
           onClick={() => onChange(t)}
         >
           {SUB_TAB_LABELS[t]}
