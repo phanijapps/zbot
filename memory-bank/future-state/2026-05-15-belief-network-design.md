@@ -226,7 +226,23 @@ Recall returns beliefs alongside facts.
 - Agent prompt block: `## Active Beliefs` formatted on the gateway side (not in gateway-memory — per the audit, presentation belongs at the consumer layer)
 - Tests: beliefs surface for relevant queries, beliefs deduplicate against their source facts in results
 
-**Total estimated effort: ~10-14 days across 4 PRs.**
+### Phase B-5 — UI surface (~2-3 days)
+
+Beliefs + contradictions are exposed to the operator under the existing Memory tab.
+
+- New HTTP module `gateway/src/http/beliefs.rs` with 5 endpoints:
+  - `GET /api/beliefs/:agent_id` — paginated list per partition
+  - `GET /api/beliefs/:agent_id/:belief_id` — detail (belief + source-fact summaries + contradictions)
+  - `GET /api/beliefs/:agent_id/:belief_id/contradictions` — full list for a single belief
+  - `GET /api/contradictions/:agent_id` — recent contradictions in partition
+  - `POST /api/contradictions/:contradiction_id/resolve` — body `{"resolution": "a_won"|"b_won"|"compatible"}`
+- All endpoints return `503 Service Unavailable` (not `404`) when `execution.memory.beliefNetwork.enabled = false` — the route exists, the feature is dormant.
+- `AppState` gains `belief_store` + `belief_contradiction_store` fields (Option-wrapped, populated only when the feature flag is on).
+- React components under `apps/ui/src/features/memory/command-deck/beliefs/`: `BeliefsList`, `BeliefCard`, `BeliefDetailDrawer`, `ContradictionBadge`, `ContradictionResolver`, `ContradictionList`.
+- `MemoryTab` learns a 3-way sub-tab toggle (Facts / Beliefs / Contradictions). Facts remains default; existing Facts flow is unchanged.
+- Wire types live in `types.beliefs.ts`; tiny `beliefs/api.ts` does the fetches off the global transport (distinct from the main `Transport` interface to avoid surface-area churn).
+
+**Total estimated effort: ~12-17 days across 5 PRs.**
 
 ---
 
