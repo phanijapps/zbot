@@ -6,7 +6,7 @@
 //! consumed by `rrf_merge`.
 
 use crate::recall::scored_item::{ItemKind, Provenance, ScoredItem};
-use zero_stores_domain::{MemoryFact, Procedure, WikiArticle};
+use zero_stores_domain::{Belief, MemoryFact, Procedure, WikiArticle};
 
 /// Project a [`MemoryFact`] into a [`ScoredItem`].
 ///
@@ -42,6 +42,29 @@ pub fn wiki_to_item(article: &WikiArticle, score: f64) -> ScoredItem {
             source_id: article.id.clone(),
             session_id: None,
             ward_id: Some(article.ward_id.clone()),
+        },
+    }
+}
+
+/// Project a [`Belief`] into a [`ScoredItem`] (Phase B-4).
+///
+/// The content carries the belief's confidence inline so the consumer
+/// prompt formatter can surface it without re-loading the row. Score
+/// is the cosine similarity from `BeliefStore::search_beliefs`.
+pub fn belief_to_item(belief: &Belief, score: f64) -> ScoredItem {
+    ScoredItem {
+        kind: ItemKind::Belief,
+        id: belief.id.clone(),
+        content: format!(
+            "[belief {:.2}] {}: {}",
+            belief.confidence, belief.subject, belief.content
+        ),
+        score,
+        provenance: Provenance {
+            source: "kg_beliefs".to_string(),
+            source_id: belief.id.clone(),
+            session_id: None,
+            ward_id: Some(belief.partition_id.clone()),
         },
     }
 }

@@ -38,4 +38,6 @@ pub use procedures::{
     PatternProcedureInsert, Procedure, ProcedureStats, ProcedureStore, ProcedureSummary,
 };
 pub use wiki::{WikiStats, WikiStore};
-pub use zero_stores_domain::{Belief, BeliefContradiction, ContradictionType, Resolution};
+pub use zero_stores_domain::{
+    Belief, BeliefContradiction, ContradictionType, Resolution, ScoredBelief,
+};

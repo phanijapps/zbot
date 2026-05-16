@@ -185,13 +185,18 @@ impl MemoryServices {
             match (belief_network_enabled, belief_store) {
                 (true, Some(bs)) => {
                     let belief_llm = Arc::new(LlmBeliefSynthesizer::new(llm_factory.clone()));
-                    let synth = Some(Arc::new(BeliefSynthesizer::new(
-                        memory_store.clone(),
-                        bs.clone(),
-                        belief_llm,
-                        belief_network_interval,
-                        true,
-                    )));
+                    // B-4: thread the embedding client so synthesized
+                    // beliefs carry a semantic vector for recall.
+                    let synth = Some(Arc::new(
+                        BeliefSynthesizer::new(
+                            memory_store.clone(),
+                            bs.clone(),
+                            belief_llm,
+                            belief_network_interval,
+                            true,
+                        )
+                        .with_embedding_client(embedding_client.clone()),
+                    ));
                     // Detector requires both stores. If the contradiction
                     // store is missing we degrade to "synthesis only" rather
                     // than panicking.

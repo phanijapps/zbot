@@ -44,6 +44,11 @@ pub struct MemoryRecall {
     episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>>,
     wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>>,
     procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    /// Belief store for Phase B-4 recall integration. Wired only when
+    /// the Belief Network is enabled — when `None`, `recall_unified`
+    /// stays byte-for-byte identical to pre-B-4 behavior (no extra
+    /// fetch, no extra log).
+    belief_store: Option<Arc<dyn zero_stores_traits::BeliefStore>>,
     /// Self-RAG retrieval gate. When `None`, recall behaves identically to
     /// pre-gate behavior (raw user message → hybrid search).
     query_gate: Option<Arc<QueryGate>>,
@@ -65,9 +70,18 @@ impl MemoryRecall {
             episode_store: None,
             wiki_store: None,
             procedure_store: None,
+            belief_store: None,
             query_gate: None,
             config,
         }
+    }
+
+    /// Wire the belief store so `recall_unified` surfaces beliefs
+    /// alongside facts (Phase B-4). Caller is expected to attach this
+    /// only when `beliefNetwork.enabled = true`; when unset, beliefs
+    /// stay out of the recall pool entirely.
+    pub fn set_belief_store(&mut self, store: Arc<dyn zero_stores_traits::BeliefStore>) {
+        self.belief_store = Some(store);
     }
 
     /// Wire the Self-RAG retrieval gate. When set, `recall()` consults the
@@ -405,6 +419,30 @@ impl MemoryRecall {
             })
             .collect();
 
+        // 5b. Beliefs (Phase B-4). Only when both a belief_store is
+        // wired AND a query embedding was produced — beliefs are
+        // semantic-only (no FTS fallback). When the Belief Network is
+        // disabled or the embedder is unavailable, this list stays
+        // empty and `recall_unified` behaves byte-for-byte identically
+        // to pre-B-4. The partition_id used here is `agent_id`,
+        // mirroring how the synthesizer writes beliefs (one belief
+        // partition per agent).
+        let belief_items: Vec<ScoredItem> = match (self.belief_store.as_ref(), query_emb.as_ref()) {
+            (Some(store), Some(emb)) => store
+                .search_beliefs(agent_id, emb, 10)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|sb| {
+                    let weight = self.config.category_weight("belief");
+                    let mut item = adapters::belief_to_item(&sb.belief, sb.score);
+                    item.score *= weight;
+                    item
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+
         // Intent boost on non-goal lists.
         let mut all_lists = vec![
             fact_items,
@@ -412,6 +450,7 @@ impl MemoryRecall {
             procedure_items,
             graph_items,
             episode_items,
+            belief_items,
         ];
         for list in &mut all_lists {
             intent_boost(list, active_goals);
@@ -887,6 +926,206 @@ mod tests {
         assert!(
             !domain_present,
             "non-correction fact below high-conf threshold must NOT appear under Skip (gate suppressed hybrid search)"
+        );
+    }
+
+    // ========================================================================
+    // Phase B-4 — Belief recall integration tests
+    // ========================================================================
+
+    use agent_runtime::llm::embedding::{EmbeddingClient, EmbeddingError};
+    use zero_stores_domain::{Belief, ScoredBelief};
+    use zero_stores_traits::BeliefStore;
+
+    /// Test embedder that returns a fixed vector — only used for B-4
+    /// recall tests where the magnitudes don't matter, only presence.
+    struct TestEmbed;
+    #[async_trait]
+    impl EmbeddingClient for TestEmbed {
+        async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            Ok(texts.iter().map(|_| vec![1.0_f32, 0.0, 0.0]).collect())
+        }
+        fn dimensions(&self) -> usize {
+            3
+        }
+        fn model_name(&self) -> String {
+            "test".to_string()
+        }
+    }
+
+    /// In-memory belief store that returns a fixed list from
+    /// `search_beliefs` and records the call count. Other methods are
+    /// no-ops or empty — only what `recall_unified` calls matters.
+    struct StubBeliefStore {
+        canned: Vec<ScoredBelief>,
+        search_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl StubBeliefStore {
+        fn new(canned: Vec<ScoredBelief>) -> Self {
+            Self {
+                canned,
+                search_calls: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+        fn search_calls(&self) -> usize {
+            self.search_calls.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    #[async_trait]
+    impl BeliefStore for StubBeliefStore {
+        async fn get_belief(
+            &self,
+            _: &str,
+            _: &str,
+            _: Option<chrono::DateTime<chrono::Utc>>,
+        ) -> Result<Option<Belief>, String> {
+            Ok(None)
+        }
+        async fn list_beliefs(&self, _: &str, _: usize) -> Result<Vec<Belief>, String> {
+            Ok(vec![])
+        }
+        async fn upsert_belief(&self, _: &Belief) -> Result<(), String> {
+            Ok(())
+        }
+        async fn supersede_belief(
+            &self,
+            _: &str,
+            _: &str,
+            _: chrono::DateTime<chrono::Utc>,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        async fn mark_stale(&self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        async fn retract_belief(
+            &self,
+            _: &str,
+            _: chrono::DateTime<chrono::Utc>,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        async fn beliefs_referencing_fact(&self, _: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        async fn get_belief_by_id(&self, _: &str) -> Result<Option<Belief>, String> {
+            Ok(None)
+        }
+        async fn list_stale(&self, _: &str, _: usize) -> Result<Vec<Belief>, String> {
+            Ok(vec![])
+        }
+        async fn clear_stale(&self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        async fn search_beliefs(
+            &self,
+            _: &str,
+            _: &[f32],
+            _: usize,
+        ) -> Result<Vec<ScoredBelief>, String> {
+            self.search_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(self.canned.clone())
+        }
+    }
+
+    fn sample_belief(id: &str, subject: &str, content: &str) -> Belief {
+        let now = chrono::Utc::now();
+        Belief {
+            id: id.to_string(),
+            partition_id: "ag".to_string(),
+            subject: subject.to_string(),
+            content: content.to_string(),
+            confidence: 0.85,
+            valid_from: Some(now),
+            valid_until: None,
+            source_fact_ids: vec![],
+            synthesizer_version: 1,
+            reasoning: None,
+            created_at: now,
+            updated_at: now,
+            superseded_by: None,
+            stale: false,
+            embedding: None,
+        }
+    }
+
+    /// When a belief_store is wired AND a query embedding is produced,
+    /// `recall_unified` calls `search_beliefs` exactly once and the
+    /// returned items carry `ItemKind::Belief`.
+    #[tokio::test]
+    async fn recall_unified_fetches_beliefs_when_store_wired() {
+        let beliefs = vec![
+            ScoredBelief {
+                belief: sample_belief("b1", "user.location", "User lives in Mason, OH"),
+                score: 0.9,
+            },
+            ScoredBelief {
+                belief: sample_belief("b2", "user.diet", "User is vegetarian"),
+                score: 0.7,
+            },
+        ];
+        let stub: Arc<StubBeliefStore> = Arc::new(StubBeliefStore::new(beliefs));
+        let stub_dyn: Arc<dyn BeliefStore> = stub.clone();
+
+        let config = Arc::new(RecallConfig::default());
+        let embed: Arc<dyn EmbeddingClient> = Arc::new(TestEmbed);
+        let mut recall = MemoryRecall::new(Some(embed), config);
+        recall.set_belief_store(stub_dyn);
+
+        let out = recall
+            .recall_unified("ag", "where do I live?", None, &[], 20)
+            .await
+            .unwrap();
+
+        assert_eq!(stub.search_calls(), 1, "search_beliefs called exactly once");
+        let belief_count = out
+            .iter()
+            .filter(|i| matches!(i.kind, ItemKind::Belief))
+            .count();
+        assert_eq!(belief_count, 2, "both stub beliefs surface");
+    }
+
+    /// When no belief_store is wired, `recall_unified` produces zero
+    /// belief items — pre-B-4 behavior preserved byte-for-byte.
+    #[tokio::test]
+    async fn recall_unified_does_not_fetch_beliefs_when_store_absent() {
+        let config = Arc::new(RecallConfig::default());
+        let embed: Arc<dyn EmbeddingClient> = Arc::new(TestEmbed);
+        let recall = MemoryRecall::new(Some(embed), config);
+
+        let out = recall
+            .recall_unified("ag", "where do I live?", None, &[], 20)
+            .await
+            .unwrap();
+        assert!(
+            !out.iter().any(|i| matches!(i.kind, ItemKind::Belief)),
+            "no belief_store wired ⇒ no belief items"
+        );
+    }
+
+    /// Direct assertion on the category-weight map: belief = 1.5,
+    /// matching corrections and sitting below schema (1.6) — the
+    /// design doc Q4 decision.
+    #[test]
+    fn belief_category_weight_is_one_point_five() {
+        let config = RecallConfig::default();
+        assert!((config.category_weight("belief") - 1.5).abs() < f64::EPSILON);
+    }
+
+    /// Schemas (1.6) outrank beliefs (1.5) when both carry the same
+    /// raw score — proves the weight ordering survives rescore.
+    #[test]
+    fn schemas_outrank_beliefs_at_equal_raw_score() {
+        let config = RecallConfig::default();
+        let raw = 0.5_f64;
+        let schema_weighted = raw * config.category_weight("schema");
+        let belief_weighted = raw * config.category_weight("belief");
+        assert!(
+            schema_weighted > belief_weighted,
+            "schema ({schema_weighted}) must beat belief ({belief_weighted}) at equal raw score"
         );
     }
 }

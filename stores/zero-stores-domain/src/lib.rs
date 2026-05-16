@@ -29,7 +29,7 @@ pub mod procedure;
 pub mod session_episode;
 pub mod wiki;
 
-pub use belief::Belief;
+pub use belief::{Belief, ScoredBelief};
 pub use belief_contradiction::{BeliefContradiction, ContradictionType, Resolution};
 pub use distillation_ops::{DistillationStats, UndistilledSession};
 pub use goal::Goal;

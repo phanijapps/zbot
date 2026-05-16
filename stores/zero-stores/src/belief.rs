@@ -9,4 +9,4 @@
 //! import `zero_stores::BeliefStore` if they already depend on
 //! `zero-stores`.
 
-pub use zero_stores_traits::{Belief, BeliefStore};
+pub use zero_stores_traits::{Belief, BeliefStore, ScoredBelief};

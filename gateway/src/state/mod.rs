@@ -542,6 +542,34 @@ impl AppState {
             recall.set_kg_store(ks.clone());
         }
 
+        // Phase B-4: wire BeliefStore into MemoryRecall, gated on
+        // `execution.memory.beliefNetwork.enabled`. Reads settings
+        // eagerly here so the store is attached before MemoryRecall is
+        // sealed in `Arc::new` below. When the flag is off (default)
+        // OR the knowledge DB is missing, no store is wired and recall
+        // stays byte-for-byte identical to pre-B-4 behavior.
+        let belief_network_enabled_for_recall =
+            gateway_services::SettingsService::new(paths.clone())
+                .load()
+                .map(|s| s.execution.memory.belief_network.enabled)
+                .unwrap_or(false);
+        if belief_network_enabled_for_recall {
+            if let Some(kdb) = knowledge_db.as_ref() {
+                let belief_store_for_recall: Arc<dyn zero_stores_traits::BeliefStore> =
+                    Arc::new(zero_stores_sqlite::SqliteBeliefStore::new(kdb.clone()));
+                if let Some(recall) = memory_recall_inner.as_mut() {
+                    recall.set_belief_store(belief_store_for_recall);
+                }
+                tracing::info!("Belief Network recall: enabled (B-4 — beliefs in recall_unified)");
+            } else {
+                tracing::info!(
+                    "Belief Network recall: enabled in settings but knowledge DB unavailable; skipping"
+                );
+            }
+        } else {
+            tracing::debug!("Belief Network recall: disabled (default)");
+        }
+
         // Self-RAG retrieval gate (opt-in via `memory.queryGate.enabled` in
         // settings.json). Reads settings eagerly here so the gate is attached
         // before MemoryRecall is sealed in Arc below. When the block is

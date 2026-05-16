@@ -6,7 +6,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use zero_stores_domain::Belief;
+use zero_stores_domain::{Belief, ScoredBelief};
 
 /// Abstract interface for durable belief storage.
 ///
@@ -76,4 +76,23 @@ pub trait BeliefStore: Send + Sync {
     /// Clear the stale flag on a belief. Called by the synthesizer right
     /// after a successful re-synthesis pass.
     async fn clear_stale(&self, belief_id: &str) -> Result<(), String>;
+
+    /// Search beliefs by semantic similarity to a query embedding
+    /// (Phase B-4 — recall integration).
+    ///
+    /// Returns up to `limit` beliefs in `partition_id` scored by cosine
+    /// similarity, sorted descending. Filters out:
+    /// - superseded beliefs (`superseded_by IS NOT NULL`)
+    /// - retracted / historical beliefs whose interval doesn't cover "now"
+    ///   (`valid_until <= now`)
+    /// - beliefs with NULL embedding (cannot be scored semantically)
+    ///
+    /// Implementations may load all live beliefs in the partition and
+    /// score them in-memory — belief count is bounded by design.
+    async fn search_beliefs(
+        &self,
+        partition_id: &str,
+        query_embedding: &[f32],
+        limit: usize,
+    ) -> Result<Vec<ScoredBelief>, String>;
 }

@@ -299,6 +299,14 @@ mod tests {
             }
             Ok(())
         }
+        async fn search_beliefs(
+            &self,
+            _: &str,
+            _: &[f32],
+            _: usize,
+        ) -> Result<Vec<zero_stores_traits::ScoredBelief>, String> {
+            Ok(vec![])
+        }
     }
 
     fn make_belief(id: &str, sources: Vec<&str>) -> Belief {
@@ -318,6 +326,7 @@ mod tests {
             updated_at: now,
             superseded_by: None,
             stale: false,
+            embedding: None,
         }
     }
 

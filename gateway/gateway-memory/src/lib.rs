@@ -225,6 +225,10 @@ impl Default for RecallConfig {
     fn default() -> Self {
         let category_weights = HashMap::from([
             ("schema".to_string(), 1.6),
+            // B-4: beliefs share weight with corrections — both are
+            // distilled, agent-curated outputs. Schema (1.6) still wins
+            // because schemas are the most opinionated knowledge type.
+            ("belief".to_string(), 1.5),
             ("correction".to_string(), 1.5),
             ("strategy".to_string(), 1.4),
             ("user".to_string(), 1.3),
@@ -533,7 +537,9 @@ mod tests {
     fn default_config() {
         let config = RecallConfig::default();
 
-        assert_eq!(config.category_weights.len(), 10);
+        assert_eq!(config.category_weights.len(), 11);
+        assert_eq!(config.category_weights["schema"], 1.6);
+        assert_eq!(config.category_weights["belief"], 1.5);
         assert_eq!(config.category_weights["correction"], 1.5);
         assert_eq!(config.category_weights["strategy"], 1.4);
         assert_eq!(config.category_weights["user"], 1.3);
@@ -565,7 +571,7 @@ mod tests {
         // Should return defaults when file doesn't exist
         assert_eq!(config.max_recall_tokens, 3000);
         assert_eq!(config.max_facts, 10);
-        assert_eq!(config.category_weights.len(), 10);
+        assert_eq!(config.category_weights.len(), 11);
     }
 
     #[test]
@@ -638,7 +644,7 @@ mod tests {
         // Should fall back to defaults
         assert_eq!(config.max_recall_tokens, 3000);
         assert_eq!(config.max_facts, 10);
-        assert_eq!(config.category_weights.len(), 10);
+        assert_eq!(config.category_weights.len(), 11);
     }
 
     #[test]
