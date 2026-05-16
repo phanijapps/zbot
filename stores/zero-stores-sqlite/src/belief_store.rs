@@ -49,7 +49,7 @@ impl BeliefStore for SqliteBeliefStore {
                     "SELECT id, partition_id, subject, content, confidence,
                         valid_from, valid_until, source_fact_ids,
                         synthesizer_version, reasoning, created_at,
-                        updated_at, superseded_by
+                        updated_at, superseded_by, stale
                  FROM kg_beliefs
                  WHERE partition_id = ?1
                    AND subject = ?2
@@ -74,7 +74,7 @@ impl BeliefStore for SqliteBeliefStore {
                 "SELECT id, partition_id, subject, content, confidence,
                         valid_from, valid_until, source_fact_ids,
                         synthesizer_version, reasoning, created_at,
-                        updated_at, superseded_by
+                        updated_at, superseded_by, stale
                  FROM kg_beliefs
                  WHERE partition_id = ?1
                  ORDER BY updated_at DESC
@@ -106,6 +106,7 @@ impl BeliefStore for SqliteBeliefStore {
         let synthesizer_version = belief.synthesizer_version;
         let reasoning = belief.reasoning.clone();
         let superseded_by = belief.superseded_by.clone();
+        let stale = i32::from(belief.stale);
 
         self.db.with_connection(move |conn| {
             conn.execute(
@@ -113,9 +114,9 @@ impl BeliefStore for SqliteBeliefStore {
                     id, partition_id, subject, content, confidence,
                     valid_from, valid_until, source_fact_ids,
                     synthesizer_version, reasoning, created_at, updated_at,
-                    superseded_by
+                    superseded_by, stale
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
                 )
                 ON CONFLICT(partition_id, subject, valid_from) DO UPDATE SET
                     content = excluded.content,
@@ -125,7 +126,8 @@ impl BeliefStore for SqliteBeliefStore {
                     synthesizer_version = excluded.synthesizer_version,
                     reasoning = excluded.reasoning,
                     updated_at = excluded.updated_at,
-                    superseded_by = excluded.superseded_by",
+                    superseded_by = excluded.superseded_by,
+                    stale = excluded.stale",
                 params![
                     id,
                     partition_id,
@@ -140,6 +142,7 @@ impl BeliefStore for SqliteBeliefStore {
                     created_at,
                     updated_at,
                     superseded_by,
+                    stale,
                 ],
             )?;
             Ok(())
@@ -167,6 +170,107 @@ impl BeliefStore for SqliteBeliefStore {
             Ok(())
         })
     }
+
+    async fn mark_stale(&self, belief_id: &str) -> Result<(), String> {
+        let id = belief_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        self.db.with_connection(move |conn| {
+            conn.execute(
+                "UPDATE kg_beliefs SET stale = 1, updated_at = ?1 WHERE id = ?2",
+                params![now, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    async fn retract_belief(
+        &self,
+        belief_id: &str,
+        transition_time: DateTime<Utc>,
+    ) -> Result<(), String> {
+        let id = belief_id.to_string();
+        let ts = transition_time.to_rfc3339();
+        self.db.with_connection(move |conn| {
+            conn.execute(
+                "UPDATE kg_beliefs SET valid_until = ?1, updated_at = ?1 WHERE id = ?2",
+                params![ts, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    async fn get_belief_by_id(&self, belief_id: &str) -> Result<Option<Belief>, String> {
+        let belief_id = belief_id.to_string();
+        let row = self.db.with_connection(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, partition_id, subject, content, confidence,
+                        valid_from, valid_until, source_fact_ids,
+                        synthesizer_version, reasoning, created_at,
+                        updated_at, superseded_by, stale
+                 FROM kg_beliefs
+                 WHERE id = ?1
+                 LIMIT 1",
+            )?;
+            stmt.query_row(params![belief_id], row_to_belief).optional()
+        })?;
+        match row {
+            Some(Ok(b)) => Ok(Some(b)),
+            Some(Err(e)) => Err(e),
+            None => Ok(None),
+        }
+    }
+
+    async fn beliefs_referencing_fact(&self, fact_id: &str) -> Result<Vec<String>, String> {
+        let fact_id = fact_id.to_string();
+        self.db.with_connection(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT b.id FROM kg_beliefs b
+                 WHERE b.valid_until IS NULL
+                   AND EXISTS (
+                       SELECT 1 FROM json_each(b.source_fact_ids)
+                       WHERE json_each.value = ?1
+                   )",
+            )?;
+            let ids: Vec<String> = stmt
+                .query_map(params![fact_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(ids)
+        })
+    }
+
+    async fn list_stale(&self, partition_id: &str, limit: usize) -> Result<Vec<Belief>, String> {
+        let partition_id = partition_id.to_string();
+        let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = self.db.with_connection(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, partition_id, subject, content, confidence,
+                        valid_from, valid_until, source_fact_ids,
+                        synthesizer_version, reasoning, created_at,
+                        updated_at, superseded_by, stale
+                 FROM kg_beliefs
+                 WHERE partition_id = ?1 AND stale = 1
+                 ORDER BY updated_at ASC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt
+                .query_map(params![partition_id, limit_i64], row_to_belief)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })?;
+        rows.into_iter().collect()
+    }
+
+    async fn clear_stale(&self, belief_id: &str) -> Result<(), String> {
+        let id = belief_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        self.db.with_connection(move |conn| {
+            conn.execute(
+                "UPDATE kg_beliefs SET stale = 0, updated_at = ?1 WHERE id = ?2",
+                params![now, id],
+            )?;
+            Ok(())
+        })
+    }
 }
 
 /// Map one row of `kg_beliefs` to a `Belief`. The `source_fact_ids` JSON
@@ -186,6 +290,8 @@ fn row_to_belief(row: &rusqlite::Row) -> rusqlite::Result<Result<Belief, String>
     let created_at: String = row.get(10)?;
     let updated_at: String = row.get(11)?;
     let superseded_by: Option<String> = row.get(12)?;
+    let stale_int: i32 = row.get(13)?;
+    let stale = stale_int != 0;
 
     let source_fact_ids: Vec<String> = match serde_json::from_str(&source_fact_ids_json) {
         Ok(v) => v,
@@ -229,6 +335,7 @@ fn row_to_belief(row: &rusqlite::Row) -> rusqlite::Result<Result<Belief, String>
         created_at,
         updated_at,
         superseded_by,
+        stale,
     }))
 }
 
@@ -263,6 +370,7 @@ mod tests {
             created_at: now,
             updated_at: now,
             superseded_by: None,
+            stale: false,
         }
     }
 
@@ -375,5 +483,136 @@ mod tests {
             .await
             .unwrap();
         assert!(got.is_none());
+    }
+
+    // -----------------------------------------------------------------
+    // B-3: stale / retract / clear / referencing-fact / list-stale
+    // -----------------------------------------------------------------
+
+    /// `mark_stale` flips `stale` from false to true; round-trips through
+    /// `get_belief` / `list_beliefs`.
+    #[tokio::test]
+    async fn mark_stale_sets_the_flag() {
+        let (store, _tmp) = make_store();
+        let b = sample_belief("b-stale", "user.x", Some(Utc::now()));
+        store.upsert_belief(&b).await.unwrap();
+
+        let initial = store.list_beliefs("default", 10).await.unwrap();
+        assert!(!initial[0].stale, "precondition: belief starts not stale");
+
+        store.mark_stale("b-stale").await.unwrap();
+
+        let after = store.list_beliefs("default", 10).await.unwrap();
+        assert!(after[0].stale, "mark_stale must set stale=true");
+    }
+
+    /// `retract_belief` sets `valid_until` to the transition time without
+    /// touching `superseded_by` (that field is reserved for the
+    /// `supersede_belief` path). B-3 sole-source propagation uses this.
+    #[tokio::test]
+    async fn retract_belief_sets_valid_until() {
+        let (store, _tmp) = make_store();
+        let b = sample_belief("b-retract", "user.x", Some(Utc::now()));
+        store.upsert_belief(&b).await.unwrap();
+
+        let transition = DateTime::parse_from_rfc3339("2026-06-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        store.retract_belief("b-retract", transition).await.unwrap();
+
+        let listed = store.list_beliefs("default", 10).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].valid_until, Some(transition));
+        assert!(
+            listed[0].superseded_by.is_none(),
+            "retract is distinct from supersede: no replacement id set"
+        );
+    }
+
+    /// `beliefs_referencing_fact` finds beliefs whose JSON array of source
+    /// fact ids contains the queried fact. Excludes already-retracted
+    /// beliefs (`valid_until IS NOT NULL`).
+    #[tokio::test]
+    async fn beliefs_referencing_fact_finds_via_json_array() {
+        let (store, _tmp) = make_store();
+        let now = Utc::now();
+        let mut multi = sample_belief("b-multi", "user.x", Some(now));
+        multi.source_fact_ids = vec!["F1".into(), "F2".into()];
+        store.upsert_belief(&multi).await.unwrap();
+
+        let mut other = sample_belief("b-other", "user.y", Some(now));
+        other.source_fact_ids = vec!["F3".into()];
+        store.upsert_belief(&other).await.unwrap();
+
+        let hits_f1 = store.beliefs_referencing_fact("F1").await.unwrap();
+        assert_eq!(hits_f1, vec!["b-multi".to_string()]);
+
+        let hits_f2 = store.beliefs_referencing_fact("F2").await.unwrap();
+        assert_eq!(hits_f2, vec!["b-multi".to_string()]);
+
+        let hits_f3 = store.beliefs_referencing_fact("F3").await.unwrap();
+        assert_eq!(hits_f3, vec!["b-other".to_string()]);
+
+        let none = store.beliefs_referencing_fact("FX").await.unwrap();
+        assert!(none.is_empty());
+
+        // Retracted beliefs must be excluded — propagation has already
+        // closed them out.
+        store.retract_belief("b-multi", Utc::now()).await.unwrap();
+        let after_retract = store.beliefs_referencing_fact("F1").await.unwrap();
+        assert!(
+            after_retract.is_empty(),
+            "retracted beliefs are excluded from referencing_fact"
+        );
+    }
+
+    /// `list_stale` returns only stale beliefs in the requested partition.
+    /// Verifies both the flag filter and partition isolation.
+    #[tokio::test]
+    async fn list_stale_returns_only_stale_in_partition() {
+        let (store, _tmp) = make_store();
+        let now = Utc::now();
+
+        let mut s1 = sample_belief("b-s1", "user.x", Some(now));
+        s1.partition_id = "p1".into();
+        let mut s2 = sample_belief("b-s2", "user.y", Some(now));
+        s2.partition_id = "p1".into();
+        let mut fresh = sample_belief("b-fresh", "user.z", Some(now));
+        fresh.partition_id = "p1".into();
+        let mut other_partition = sample_belief("b-other", "user.x", Some(now));
+        other_partition.partition_id = "p2".into();
+        store.upsert_belief(&s1).await.unwrap();
+        store.upsert_belief(&s2).await.unwrap();
+        store.upsert_belief(&fresh).await.unwrap();
+        store.upsert_belief(&other_partition).await.unwrap();
+
+        store.mark_stale("b-s1").await.unwrap();
+        store.mark_stale("b-s2").await.unwrap();
+        store.mark_stale("b-other").await.unwrap();
+
+        let listed = store.list_stale("p1", 10).await.unwrap();
+        let ids: Vec<&str> = listed.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(listed.len(), 2, "exactly two stale beliefs in p1");
+        assert!(ids.contains(&"b-s1"));
+        assert!(ids.contains(&"b-s2"));
+        assert!(!ids.contains(&"b-fresh"), "fresh belief excluded");
+        assert!(
+            !ids.contains(&"b-other"),
+            "p2's stale belief excluded by partition filter"
+        );
+    }
+
+    /// `clear_stale` resets the flag — the inverse of `mark_stale`. Used
+    /// by the synthesizer after re-synthesis completes.
+    #[tokio::test]
+    async fn clear_stale_resets_the_flag() {
+        let (store, _tmp) = make_store();
+        let b = sample_belief("b-clear", "user.x", Some(Utc::now()));
+        store.upsert_belief(&b).await.unwrap();
+        store.mark_stale("b-clear").await.unwrap();
+        assert!(store.list_beliefs("default", 10).await.unwrap()[0].stale);
+
+        store.clear_stale("b-clear").await.unwrap();
+        assert!(!store.list_beliefs("default", 10).await.unwrap()[0].stale);
     }
 }

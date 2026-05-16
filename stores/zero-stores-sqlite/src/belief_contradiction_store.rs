@@ -298,6 +298,7 @@ mod tests {
             created_at: now,
             updated_at: now,
             superseded_by: None,
+            stale: false,
         };
         belief_store.upsert_belief(&b).await.unwrap();
     }
