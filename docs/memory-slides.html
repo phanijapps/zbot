@@ -1433,6 +1433,7 @@ intent routing as usual</span></pre>
       "<span class="k">conflictResolverIntervalHours</span>": 24,
 
       "<span class="k">queryGate</span>": { "enabled": false },
+      "<span class="k">beliefNetwork</span>": { "enabled": false, "intervalHours": 24 },
       "<span class="k">mmr</span>": { "enabled": true, "lambda": 0.6 },
       "<span class="k">rerank</span>": { "enabled": false },
       "<span class="k">intentRouter</span>": { "enabled": false }
@@ -1454,6 +1455,10 @@ intent routing as usual</span></pre>
             <tr style="border-bottom:1px solid #1c2535">
               <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">queryGate</td>
               <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Self-RAG. LLM call before hybrid search returns <span class="mono">Skip</span> / <span class="mono">Direct</span> / <span class="mono">Split</span>. Fixes multi-topic dilution.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">beliefNetwork</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Belief synthesis (B-1). Aggregates facts about the same subject into a belief with derived confidence. Single-fact subjects short-circuit (no LLM).</td>
             </tr>
             <tr style="border-bottom:1px solid #1c2535">
               <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">mmr</td>
