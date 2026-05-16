@@ -21,7 +21,7 @@ use crate::sleep::{
     Compactor, ConflictResolver, CorrectionsAbstractor, DecayConfig, DecayEngine,
     LlmBeliefSynthesizer, LlmConflictJudge, LlmContradictionJudge, LlmCorrectionsAbstractor,
     LlmPairwiseVerifier, LlmPatternExtractor, LlmSynthesizer, OrphanArchiver, PairwiseVerifier,
-    PatternExtractor, Pruner, SleepOps, SleepTimeWorker, Synthesizer,
+    PatternExtractor, Pruner, RecentBeliefNetworkActivity, SleepOps, SleepTimeWorker, Synthesizer,
 };
 use crate::{KgDecayConfig, MemoryLlmFactory};
 
@@ -77,6 +77,11 @@ pub struct MemoryServicesConfig {
 /// be added here as the memory crate grows.
 pub struct MemoryServices {
     pub sleep_time_worker: Arc<SleepTimeWorker>,
+    /// Shared recorder of recent Belief Network worker cycles (Phase B-6).
+    /// The gateway clones this Arc onto `AppState` so the Observatory HTTP
+    /// handlers can read the most recent stats. Always constructed —
+    /// records will simply remain empty when the network is disabled.
+    pub belief_network_activity: Arc<RecentBeliefNetworkActivity>,
 }
 
 impl MemoryServices {
@@ -220,6 +225,8 @@ impl MemoryServices {
                 _ => (None, None),
             };
 
+        let belief_network_activity = Arc::new(RecentBeliefNetworkActivity::new());
+
         let ops = SleepOps {
             synthesizer: Some(synthesizer),
             pattern_extractor: Some(pattern_extractor),
@@ -228,6 +235,7 @@ impl MemoryServices {
             conflict_resolver: Some(conflict_resolver),
             belief_synthesizer,
             belief_contradiction_detector,
+            belief_network_activity: Some(belief_network_activity.clone()),
         };
 
         let sleep_time_worker = Arc::new(SleepTimeWorker::start_with_ops(
@@ -240,6 +248,9 @@ impl MemoryServices {
             agent_id,
         ));
 
-        Self { sleep_time_worker }
+        Self {
+            sleep_time_worker,
+            belief_network_activity,
+        }
     }
 }

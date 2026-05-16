@@ -22,6 +22,10 @@ pub use sleep::belief_contradiction_detector::{
     BeliefContradictionConfig, BeliefContradictionDetector, ContradictionDetectionStats,
     ContradictionJudgeLlm, ContradictionJudgeResponse, JudgeDecision, LlmContradictionJudge,
 };
+pub use sleep::belief_network_activity::{
+    RecentBeliefNetworkActivity, TimestampedContradictionStats, TimestampedPropagationStats,
+    TimestampedSynthesisStats, RECENT_CAPACITY as BELIEF_NETWORK_RECENT_CAPACITY,
+};
 pub use sleep::belief_propagator::{BeliefPropagationStats, BeliefPropagator};
 pub use sleep::belief_synthesizer::{
     BeliefSynthesisLlm, BeliefSynthesisStats, BeliefSynthesizer, LlmBeliefSynthesizer,

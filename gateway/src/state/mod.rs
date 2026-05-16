@@ -181,6 +181,22 @@ pub struct AppState {
     /// Active mDNS advertise handle. None until `start()` runs and only
     /// populated when `network.exposeToLan = true`.
     pub advertise_handle: std::sync::Arc<std::sync::Mutex<Option<discovery::AdvertiseHandle>>>,
+
+    /// Trait-routed belief store. Wired when the Belief Network is built
+    /// alongside the knowledge DB; consumed by the Observatory belief
+    /// network endpoints (Phase B-6). `None` for minimal AppStates.
+    pub belief_store: Option<Arc<dyn zero_stores::BeliefStore>>,
+
+    /// Trait-routed belief-contradiction store (Phase B-2). Wired by the
+    /// same path as `belief_store`. Consumed by the Observatory
+    /// belief-network endpoints to surface contradiction totals.
+    pub belief_contradiction_store: Option<Arc<dyn zero_stores::BeliefContradictionStore>>,
+
+    /// In-memory recorder of recent Belief Network worker stats (Phase
+    /// B-6). Always wired when the sleep-time worker is wired so the
+    /// HTTP layer can render the Observatory belief panel even when the
+    /// network itself is disabled (empty history + `enabled: false`).
+    pub belief_network_activity: Option<Arc<gateway_memory::RecentBeliefNetworkActivity>>,
 }
 
 /// Boot-time helper: synchronously reconcile vec0 tables to match the
@@ -818,6 +834,22 @@ impl AppState {
             }
         }
 
+        // Belief stores (used by both the SleepTimeWorker construction
+        // below AND the Observatory belief-network HTTP handlers). Wired
+        // only when the knowledge DB is present.
+        let belief_store_for_state: Option<Arc<dyn zero_stores::BeliefStore>> =
+            knowledge_db.as_ref().map(|kdb| {
+                Arc::new(zero_stores_sqlite::SqliteBeliefStore::new(kdb.clone()))
+                    as Arc<dyn zero_stores::BeliefStore>
+            });
+        let belief_contradiction_store_for_state: Option<
+            Arc<dyn zero_stores::BeliefContradictionStore>,
+        > = knowledge_db.as_ref().map(|kdb| {
+            Arc::new(zero_stores_sqlite::SqliteBeliefContradictionStore::new(
+                kdb.clone(),
+            )) as Arc<dyn zero_stores::BeliefContradictionStore>
+        });
+
         // Sleep-time worker requires the entire SQLite knowledge cluster.
         // Build only when ALL of (compaction_repo, memory_repo, knowledge_db,
         // procedure_repo, kg_store, compaction_store) are present. The
@@ -827,7 +859,7 @@ impl AppState {
         // compaction_store) all wired above from the SQLite repos.
         // Conversation store is always SQLite-backed (per design) and
         // built unconditionally above.
-        let sleep_time_worker = match (
+        let (sleep_time_worker, belief_network_activity) = match (
             kg_store.as_ref(),
             episode_store_for_state.as_ref(),
             memory_store.as_ref(),
@@ -847,26 +879,6 @@ impl AppState {
                     .get_execution_settings()
                     .map(|s| s.memory.belief_network.clone())
                     .unwrap_or_default();
-                // BeliefStore is built only when the knowledge DB is wired.
-                // Opt-in: even when the DB is available, the synthesizer
-                // is omitted unless `belief_network.enabled = true`.
-                let belief_store: Option<Arc<dyn zero_stores::BeliefStore>> =
-                    knowledge_db.as_ref().map(|kdb| {
-                        Arc::new(zero_stores_sqlite::SqliteBeliefStore::new(kdb.clone()))
-                            as Arc<dyn zero_stores::BeliefStore>
-                    });
-                // Phase B-2: contradiction store mirrors the belief store
-                // — built only when the KG DB is wired. The detector
-                // wiring further gates on the shared `enabled` flag inside
-                // MemoryServices, so flipping `enabled: false` keeps the
-                // store-construction path harmless.
-                let belief_contradiction_store: Option<
-                    Arc<dyn zero_stores::BeliefContradictionStore>,
-                > = knowledge_db.as_ref().map(|kdb| {
-                    Arc::new(zero_stores_sqlite::SqliteBeliefContradictionStore::new(
-                        kdb.clone(),
-                    )) as Arc<dyn zero_stores::BeliefContradictionStore>
-                });
                 let memory_services =
                     gateway_memory::MemoryServices::new(gateway_memory::MemoryServicesConfig {
                         agent_id: "root".to_string(),
@@ -887,12 +899,12 @@ impl AppState {
                             conflict_interval_hours as u64 * 3600,
                         ),
                         decay_config: gateway_memory::sleep::DecayConfig::default(),
-                        belief_store,
+                        belief_store: belief_store_for_state.clone(),
                         belief_network_enabled: belief_network_cfg.enabled,
                         belief_network_interval: std::time::Duration::from_secs(
                             belief_network_cfg.interval_hours as u64 * 3600,
                         ),
-                        belief_contradiction_store,
+                        belief_contradiction_store: belief_contradiction_store_for_state.clone(),
                         belief_contradiction_neighborhood_prefix_depth: belief_network_cfg
                             .neighborhood_prefix_depth,
                         belief_contradiction_budget_per_cycle: belief_network_cfg
@@ -900,9 +912,12 @@ impl AppState {
                         belief_fact_confidence_drop_threshold: belief_network_cfg
                             .fact_confidence_drop_threshold,
                     });
-                Some(memory_services.sleep_time_worker.clone())
+                (
+                    Some(memory_services.sleep_time_worker.clone()),
+                    Some(memory_services.belief_network_activity.clone()),
+                )
             }
-            _ => None,
+            _ => (None, None),
         };
 
         // Create hook registry
@@ -963,6 +978,9 @@ impl AppState {
             ingestion_backpressure,
             advertiser: discovery::noop(),
             advertise_handle: Arc::new(std::sync::Mutex::new(None)),
+            belief_store: belief_store_for_state,
+            belief_contradiction_store: belief_contradiction_store_for_state,
+            belief_network_activity,
         }
     }
 
@@ -1100,6 +1118,9 @@ impl AppState {
             ingestion_backpressure: None,
             advertiser: discovery::noop(),
             advertise_handle: Arc::new(std::sync::Mutex::new(None)),
+            belief_store: None,
+            belief_contradiction_store: None,
+            belief_network_activity: None,
         }
     }
 
@@ -1237,6 +1258,9 @@ impl AppState {
             ingestion_backpressure: None,
             advertiser: discovery::noop(),
             advertise_handle: Arc::new(std::sync::Mutex::new(None)),
+            belief_store: None,
+            belief_contradiction_store: None,
+            belief_network_activity: None,
         }
     }
 

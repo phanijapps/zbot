@@ -813,3 +813,51 @@ async fn session_messages_empty_session() {
         "Should return empty array for session with no messages"
     );
 }
+
+// ============================================================================
+// Belief Network Observability Endpoint Tests (Phase B-6)
+// ============================================================================
+
+#[tokio::test]
+async fn belief_network_stats_disabled_returns_empty_payload() {
+    let (server, _dir) = setup_test_server().await;
+
+    let response = server.get("/api/belief-network/stats").await;
+    response.assert_status_ok();
+
+    let body: Value = response.json();
+    assert_eq!(body["enabled"], false);
+    assert_eq!(body["synthesizer"]["history"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        body["contradiction_detector"]["history"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(body["propagator"]["history"].as_array().unwrap().len(), 0);
+    assert_eq!(body["totals"]["total_beliefs"], 0);
+    assert_eq!(body["totals"]["total_contradictions"], 0);
+}
+
+#[tokio::test]
+async fn belief_network_activity_disabled_returns_empty_array() {
+    let (server, _dir) = setup_test_server().await;
+
+    let response = server.get("/api/belief-network/activity").await;
+    response.assert_status_ok();
+
+    let events: Vec<Value> = response.json();
+    assert!(events.is_empty());
+}
+
+#[tokio::test]
+async fn belief_network_activity_honours_limit_query_param() {
+    let (server, _dir) = setup_test_server().await;
+
+    // Even with limit, disabled state still returns []
+    let response = server.get("/api/belief-network/activity?limit=10").await;
+    response.assert_status_ok();
+    let events: Vec<Value> = response.json();
+    assert!(events.is_empty());
+}
