@@ -5,12 +5,14 @@
 //! `zero-stores-sqlite`; alternate backends drop in by implementing the
 //! same traits.
 
+pub mod belief;
 pub mod error;
 pub mod extracted;
 pub mod knowledge_graph;
 pub mod memory_facts;
 pub mod types;
 
+pub use belief::{Belief, BeliefStore};
 pub use error::{StoreError, StoreResult};
 pub use extracted::ExtractedKnowledge;
 pub use knowledge_graph::{

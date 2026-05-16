@@ -6111,6 +6111,7 @@ dependencies = [
 name = "zero-stores-domain"
 version = "2026.5.3"
 dependencies = [
+ "chrono",
  "serde",
 ]
 

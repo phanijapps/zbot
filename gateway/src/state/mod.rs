@@ -815,6 +815,18 @@ impl AppState {
                     .get_execution_settings()
                     .map(|s| s.memory.conflict_resolver_interval_hours)
                     .unwrap_or(24);
+                let belief_network_cfg = settings
+                    .get_execution_settings()
+                    .map(|s| s.memory.belief_network.clone())
+                    .unwrap_or_default();
+                // BeliefStore is built only when the knowledge DB is wired.
+                // Opt-in: even when the DB is available, the synthesizer
+                // is omitted unless `belief_network.enabled = true`.
+                let belief_store: Option<Arc<dyn zero_stores::BeliefStore>> =
+                    knowledge_db.as_ref().map(|kdb| {
+                        Arc::new(zero_stores_sqlite::SqliteBeliefStore::new(kdb.clone()))
+                            as Arc<dyn zero_stores::BeliefStore>
+                    });
                 let memory_services =
                     gateway_memory::MemoryServices::new(gateway_memory::MemoryServicesConfig {
                         agent_id: "root".to_string(),
@@ -835,6 +847,11 @@ impl AppState {
                             conflict_interval_hours as u64 * 3600,
                         ),
                         decay_config: gateway_memory::sleep::DecayConfig::default(),
+                        belief_store,
+                        belief_network_enabled: belief_network_cfg.enabled,
+                        belief_network_interval: std::time::Duration::from_secs(
+                            belief_network_cfg.interval_hours as u64 * 3600,
+                        ),
                     });
                 Some(memory_services.sleep_time_worker.clone())
             }

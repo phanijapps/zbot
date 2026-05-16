@@ -17,6 +17,7 @@
 //! - HTTP request/response shapes — those live in the gateway HTTP layer
 //!   (they can derive From/Into the domain types here).
 
+pub mod belief;
 pub mod distillation_ops;
 pub mod goal;
 pub mod kg_episode;
@@ -27,6 +28,7 @@ pub mod procedure;
 pub mod session_episode;
 pub mod wiki;
 
+pub use belief::Belief;
 pub use distillation_ops::{DistillationStats, UndistilledSession};
 pub use goal::Goal;
 pub use kg_episode::{EpisodeSource, KgEpisode};

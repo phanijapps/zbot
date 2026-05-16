@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use zero_core::{FileSystemContext, Result, Tool, ToolContext, ToolPermissions, ZeroError};
-use zero_stores_traits::MemoryFactStore;
+use zero_stores_traits::{BeliefStore, MemoryFactStore};
 
 // ============================================================================
 // CONFIGURATION
@@ -67,6 +67,11 @@ pub struct MemoryStore {
 pub struct MemoryTool {
     fs: Arc<dyn FileSystemContext>,
     fact_store: Option<Arc<dyn MemoryFactStore>>,
+    /// Optional belief store — when present, the `belief` action returns
+    /// synthesized aggregate stances about a subject. Mirrors the
+    /// `fact_store` plumbing so callers that don't wire the Belief
+    /// Network see a clean "not configured" error instead of a panic.
+    belief_store: Option<Arc<dyn BeliefStore>>,
 }
 
 impl MemoryTool {
@@ -76,7 +81,26 @@ impl MemoryTool {
         fs: Arc<dyn FileSystemContext>,
         fact_store: Option<Arc<dyn MemoryFactStore>>,
     ) -> Self {
-        Self { fs, fact_store }
+        Self {
+            fs,
+            fact_store,
+            belief_store: None,
+        }
+    }
+
+    /// Variant of [`MemoryTool::new`] that also wires the Belief Network
+    /// store. The `belief` action becomes available when this is set.
+    #[must_use]
+    pub fn with_belief_store(
+        fs: Arc<dyn FileSystemContext>,
+        fact_store: Option<Arc<dyn MemoryFactStore>>,
+        belief_store: Option<Arc<dyn BeliefStore>>,
+    ) -> Self {
+        Self {
+            fs,
+            fact_store,
+            belief_store,
+        }
     }
 
     /// Get memory file path based on scope.
@@ -194,7 +218,8 @@ impl Tool for MemoryTool {
         Actions: get/set/delete/list/search (key-value store), \
         save_fact (structured fact with category/key/content/confidence — automatically embedded for semantic search), \
         recall (hybrid semantic + keyword search over saved facts), \
-        get_fact (exact-key lookup for ctx-namespaced session state — use this to fetch intent/prompt/plan/state.<exec_id> by precise key). \
+        get_fact (exact-key lookup for ctx-namespaced session state — use this to fetch intent/prompt/plan/state.<exec_id> by precise key), \
+        belief (synthesized aggregate stance about a subject — returns the active belief for a (partition, subject) at as_of). \
         Scopes: 'agent' (default), 'shared' (cross-session). \
         Shared memory requires a 'file' parameter: user_info, workspace, patterns, or session_summaries."
     }
@@ -205,8 +230,12 @@ impl Tool for MemoryTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["get", "set", "delete", "list", "search", "save_fact", "recall", "get_fact"],
+                    "enum": ["get", "set", "delete", "list", "search", "save_fact", "recall", "get_fact", "belief"],
                     "description": "The memory operation to perform"
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Subject key for the 'belief' action — e.g. 'user.location' or 'domain.finance.acn.valuation_verdict'"
                 },
                 "category": {
                     "type": "string",
@@ -319,6 +348,7 @@ impl Tool for MemoryTool {
             "save_fact" => self.action_save_fact(ctx.as_ref(), &agent_id, &args).await,
             "recall" => self.action_recall(ctx.as_ref(), &agent_id, &args).await,
             "get_fact" => self.action_get_fact(ctx.as_ref(), &args).await,
+            "belief" => self.action_belief(ctx.as_ref(), &agent_id, &args).await,
             _ => Err(ZeroError::Tool(format!("Unknown action: {}", action))),
         }
     }
@@ -824,6 +854,79 @@ impl MemoryTool {
                     .to_string(),
             )),
         }
+    }
+
+    /// Read the active belief for a subject from the Belief Network.
+    ///
+    /// Returns `{ "belief": null }` when no belief exists. When the
+    /// belief store isn't wired (Belief Network disabled), returns a
+    /// clean "not configured" tool error rather than panicking.
+    ///
+    /// `subject` is required. `as_of` is an optional ISO-8601 / RFC3339
+    /// timestamp for point-in-time queries — omitting it defaults to
+    /// "now" inside the store layer.
+    async fn action_belief(
+        &self,
+        ctx: &dyn ToolContext,
+        agent_id: &str,
+        args: &Value,
+    ) -> Result<Value> {
+        let subject = args
+            .get("subject")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ZeroError::Tool("Missing 'subject' for belief".to_string()))?;
+
+        let as_of: Option<chrono::DateTime<chrono::Utc>> = match args
+            .get("as_of")
+            .and_then(|v| v.as_str())
+        {
+            Some(s) => Some(
+                chrono::DateTime::parse_from_rfc3339(s)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .map_err(|_| {
+                        ZeroError::Tool("invalid as_of timestamp, expected ISO-8601".to_string())
+                    })?,
+            ),
+            None => None,
+        };
+
+        // Partition mirrors the recall convention — agent_id buckets the
+        // belief space. Ward overrides via `ward_id` context when set.
+        let partition_id = ctx
+            .get_state("ward_id")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| agent_id.to_string());
+
+        let Some(store) = self.belief_store.as_ref() else {
+            return Err(ZeroError::Tool(
+                "Belief Network is not configured (enable execution.memory.beliefNetwork in settings)"
+                    .to_string(),
+            ));
+        };
+
+        let belief = store
+            .get_belief(&partition_id, subject, as_of)
+            .await
+            .map_err(ZeroError::Tool)?;
+
+        let payload = match belief {
+            Some(b) => json!({
+                "belief": {
+                    "id": b.id,
+                    "partition_id": b.partition_id,
+                    "subject": b.subject,
+                    "content": b.content,
+                    "confidence": b.confidence,
+                    "valid_from": b.valid_from.map(|t| t.to_rfc3339()),
+                    "valid_until": b.valid_until.map(|t| t.to_rfc3339()),
+                    "source_fact_ids": b.source_fact_ids,
+                    "synthesizer_version": b.synthesizer_version,
+                    "reasoning": b.reasoning,
+                }
+            }),
+            None => json!({ "belief": null }),
+        };
+        Ok(payload)
     }
 
     /// Search memory entries
@@ -1504,6 +1607,286 @@ mod tests {
             err.is_err(),
             "malformed as_of must produce a tool error, got: {err:?}"
         );
+    }
+
+    // ========================================================================
+    // Belief action tests — Phase B-1
+    //
+    // The fact-store harness here is independent of the synthesizer; the
+    // belief is written directly into a mock store so we cover the tool's
+    // schema + parsing + serialization paths without standing up the full
+    // memory subsystem.
+    // ========================================================================
+
+    #[tokio::test]
+    async fn action_belief_returns_belief_when_present() {
+        use async_trait::async_trait;
+        use std::sync::Mutex as StdMutex;
+        use zero_stores_traits::{Belief, BeliefStore};
+
+        struct StubBeliefStore {
+            stored: StdMutex<Option<Belief>>,
+        }
+
+        #[async_trait]
+        impl BeliefStore for StubBeliefStore {
+            async fn get_belief(
+                &self,
+                _partition_id: &str,
+                _subject: &str,
+                _as_of: Option<chrono::DateTime<chrono::Utc>>,
+            ) -> std::result::Result<Option<Belief>, String> {
+                Ok(self.stored.lock().unwrap().clone())
+            }
+            async fn list_beliefs(
+                &self,
+                _partition_id: &str,
+                _limit: usize,
+            ) -> std::result::Result<Vec<Belief>, String> {
+                Ok(vec![])
+            }
+            async fn upsert_belief(&self, b: &Belief) -> std::result::Result<(), String> {
+                *self.stored.lock().unwrap() = Some(b.clone());
+                Ok(())
+            }
+            async fn supersede_belief(
+                &self,
+                _old_id: &str,
+                _new_id: &str,
+                _t: chrono::DateTime<chrono::Utc>,
+            ) -> std::result::Result<(), String> {
+                Ok(())
+            }
+        }
+
+        use zero_core::{CallbackContext, Content, EventActions, ReadonlyContext, ToolContext};
+        struct Ctx;
+        impl ReadonlyContext for Ctx {
+            fn invocation_id(&self) -> &str {
+                "t"
+            }
+            fn agent_name(&self) -> &str {
+                "t"
+            }
+            fn user_id(&self) -> &str {
+                "t"
+            }
+            fn app_name(&self) -> &str {
+                "t"
+            }
+            fn session_id(&self) -> &str {
+                "sess-belief"
+            }
+            fn branch(&self) -> &str {
+                "t"
+            }
+            fn user_content(&self) -> &Content {
+                use std::sync::LazyLock;
+                static C: LazyLock<Content> = LazyLock::new(|| Content {
+                    role: "user".to_string(),
+                    parts: vec![],
+                });
+                &C
+            }
+        }
+        impl CallbackContext for Ctx {
+            fn get_state(&self, _key: &str) -> Option<Value> {
+                None
+            }
+            fn set_state(&self, _key: String, _value: Value) {}
+        }
+        impl ToolContext for Ctx {
+            fn function_call_id(&self) -> String {
+                "t".to_string()
+            }
+            fn actions(&self) -> EventActions {
+                EventActions::default()
+            }
+            fn set_actions(&self, _: EventActions) {}
+        }
+
+        let now = chrono::Utc::now();
+        let belief = Belief {
+            id: "b-1".to_string(),
+            partition_id: "root".to_string(),
+            subject: "user.location".to_string(),
+            content: "Mason, OH".to_string(),
+            confidence: 0.9,
+            valid_from: Some(now),
+            valid_until: None,
+            source_fact_ids: vec!["fact-1".to_string()],
+            synthesizer_version: 1,
+            reasoning: None,
+            created_at: now,
+            updated_at: now,
+            superseded_by: None,
+        };
+        let store: Arc<dyn BeliefStore> = Arc::new(StubBeliefStore {
+            stored: StdMutex::new(Some(belief)),
+        });
+
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
+        let tool = MemoryTool::with_belief_store(fs, None, Some(store));
+        let ctx = Ctx;
+
+        let args = json!({ "subject": "user.location" });
+        let result = tool.action_belief(&ctx, "root", &args).await.unwrap();
+        let b = &result["belief"];
+        assert_eq!(b["content"], "Mason, OH");
+        assert_eq!(b["confidence"], 0.9);
+        assert_eq!(b["source_fact_ids"], json!(["fact-1"]));
+    }
+
+    #[tokio::test]
+    async fn action_belief_returns_null_when_absent() {
+        use async_trait::async_trait;
+        use zero_stores_traits::{Belief, BeliefStore};
+
+        struct EmptyStore;
+        #[async_trait]
+        impl BeliefStore for EmptyStore {
+            async fn get_belief(
+                &self,
+                _: &str,
+                _: &str,
+                _: Option<chrono::DateTime<chrono::Utc>>,
+            ) -> std::result::Result<Option<Belief>, String> {
+                Ok(None)
+            }
+            async fn list_beliefs(
+                &self,
+                _: &str,
+                _: usize,
+            ) -> std::result::Result<Vec<Belief>, String> {
+                Ok(vec![])
+            }
+            async fn upsert_belief(&self, _: &Belief) -> std::result::Result<(), String> {
+                Ok(())
+            }
+            async fn supersede_belief(
+                &self,
+                _: &str,
+                _: &str,
+                _: chrono::DateTime<chrono::Utc>,
+            ) -> std::result::Result<(), String> {
+                Ok(())
+            }
+        }
+
+        use zero_core::{CallbackContext, Content, EventActions, ReadonlyContext, ToolContext};
+        struct Ctx;
+        impl ReadonlyContext for Ctx {
+            fn invocation_id(&self) -> &str {
+                "t"
+            }
+            fn agent_name(&self) -> &str {
+                "t"
+            }
+            fn user_id(&self) -> &str {
+                "t"
+            }
+            fn app_name(&self) -> &str {
+                "t"
+            }
+            fn session_id(&self) -> &str {
+                "sess-belief-null"
+            }
+            fn branch(&self) -> &str {
+                "t"
+            }
+            fn user_content(&self) -> &Content {
+                use std::sync::LazyLock;
+                static C: LazyLock<Content> = LazyLock::new(|| Content {
+                    role: "user".to_string(),
+                    parts: vec![],
+                });
+                &C
+            }
+        }
+        impl CallbackContext for Ctx {
+            fn get_state(&self, _key: &str) -> Option<Value> {
+                None
+            }
+            fn set_state(&self, _key: String, _value: Value) {}
+        }
+        impl ToolContext for Ctx {
+            fn function_call_id(&self) -> String {
+                "t".to_string()
+            }
+            fn actions(&self) -> EventActions {
+                EventActions::default()
+            }
+            fn set_actions(&self, _: EventActions) {}
+        }
+
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
+        let store: Arc<dyn BeliefStore> = Arc::new(EmptyStore);
+        let tool = MemoryTool::with_belief_store(fs, None, Some(store));
+        let ctx = Ctx;
+
+        let args = json!({ "subject": "no.such.subject" });
+        let result = tool.action_belief(&ctx, "root", &args).await.unwrap();
+        assert_eq!(result["belief"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn action_belief_errors_when_store_missing() {
+        use zero_core::{CallbackContext, Content, EventActions, ReadonlyContext, ToolContext};
+        struct Ctx;
+        impl ReadonlyContext for Ctx {
+            fn invocation_id(&self) -> &str {
+                "t"
+            }
+            fn agent_name(&self) -> &str {
+                "t"
+            }
+            fn user_id(&self) -> &str {
+                "t"
+            }
+            fn app_name(&self) -> &str {
+                "t"
+            }
+            fn session_id(&self) -> &str {
+                "sess-belief-missing"
+            }
+            fn branch(&self) -> &str {
+                "t"
+            }
+            fn user_content(&self) -> &Content {
+                use std::sync::LazyLock;
+                static C: LazyLock<Content> = LazyLock::new(|| Content {
+                    role: "user".to_string(),
+                    parts: vec![],
+                });
+                &C
+            }
+        }
+        impl CallbackContext for Ctx {
+            fn get_state(&self, _key: &str) -> Option<Value> {
+                None
+            }
+            fn set_state(&self, _key: String, _value: Value) {}
+        }
+        impl ToolContext for Ctx {
+            fn function_call_id(&self) -> String {
+                "t".to_string()
+            }
+            fn actions(&self) -> EventActions {
+                EventActions::default()
+            }
+            fn set_actions(&self, _: EventActions) {}
+        }
+
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
+        let tool = MemoryTool::new(fs, None);
+        let ctx = Ctx;
+
+        let args = json!({ "subject": "user.x" });
+        let err = tool.action_belief(&ctx, "root", &args).await;
+        assert!(err.is_err(), "missing store must surface as a tool error");
     }
 
     #[test]

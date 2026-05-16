@@ -1,11 +1,11 @@
-//! Schema v26 for `knowledge.db`.
+//! Schema v27 for `knowledge.db`.
 //!
 //! All long-term memory + graph + vector indexes live here.
 //! Applied idempotently on daemon boot. No migrations — clean slate.
 
 use rusqlite::Connection;
 
-const SCHEMA_VERSION: i32 = 26;
+const SCHEMA_VERSION: i32 = 27;
 
 /// v23 delta: full-text search over `ward_wiki_articles` with sync triggers.
 const V23_WIKI_FTS_SQL: &str = include_str!("../migrations/v23_wiki_fts.sql");
@@ -32,6 +32,12 @@ const V25_MEMORY_FACTS_VALID_FROM_BACKFILL_SQL: &str =
 const V26_KG_RELATIONSHIPS_BITEMPORAL_SQL: &str =
     include_str!("../migrations/v26_kg_relationships_bitemporal.sql");
 
+/// v27 delta: add `kg_beliefs` table for the Belief Network (Phase B-1).
+/// A belief is an aggregate over one or more memory_facts about a single
+/// subject. Partition-scoped from day one using `partition_id` so the
+/// future R-series rename of `ward_id` doesn't need to touch this table.
+const V27_KG_BELIEFS_SQL: &str = include_str!("../migrations/v27_kg_beliefs.sql");
+
 /// Initialize the knowledge database schema (v26).
 ///
 /// Creates all tables and indexes if they don't exist. Records the
@@ -47,6 +53,7 @@ pub fn initialize_knowledge_database(conn: &Connection) -> Result<(), rusqlite::
     ensure_evidence_column(conn, "kg_relationships")?;
     ensure_kg_relationships_bitemporal_columns(conn)?;
     conn.execute_batch(V26_KG_RELATIONSHIPS_BITEMPORAL_SQL)?;
+    conn.execute_batch(V27_KG_BELIEFS_SQL)?;
     conn.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?1, datetime('now'))",
         rusqlite::params![SCHEMA_VERSION],
@@ -402,6 +409,28 @@ CREATE TABLE IF NOT EXISTS kg_episode_payloads (
     created_at TEXT NOT NULL,
     FOREIGN KEY (episode_id) REFERENCES kg_episodes(id) ON DELETE CASCADE
 );
+
+-- v27: Belief Network — aggregate of one or more facts about a subject.
+-- See migrations/v27_kg_beliefs.sql for the canonical definition; this
+-- inline copy keeps fresh-DB init self-contained.
+CREATE TABLE IF NOT EXISTS kg_beliefs (
+    id TEXT PRIMARY KEY,
+    partition_id TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    content TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    valid_from TEXT,
+    valid_until TEXT,
+    source_fact_ids TEXT NOT NULL,
+    synthesizer_version INTEGER NOT NULL DEFAULT 1,
+    reasoning TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    superseded_by TEXT,
+    UNIQUE(partition_id, subject, valid_from)
+);
+CREATE INDEX IF NOT EXISTS idx_beliefs_partition_subject ON kg_beliefs(partition_id, subject);
+CREATE INDEX IF NOT EXISTS idx_beliefs_valid ON kg_beliefs(valid_from, valid_until);
 "#;
 
 #[allow(dead_code)] // retained for reference/tests; runtime uses initialize_vec_tables_with_dim
@@ -681,7 +710,7 @@ mod tests {
         let version: i32 = conn
             .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 26);
+        assert_eq!(version, 27);
 
         // Regular tables.
         for table in [
@@ -698,6 +727,7 @@ mod tests {
             "session_episodes",
             "embedding_cache",
             "kg_episode_payloads",
+            "kg_beliefs",
         ] {
             let count: i64 = conn
                 .query_row(
@@ -1030,6 +1060,45 @@ mod tests {
             vu.is_none(),
             "valid_until must stay NULL when invalidated_at was NULL"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // v27 — kg_beliefs migration idempotency
+    // -----------------------------------------------------------------
+
+    /// v27 belief table creation is idempotent: re-running the migration
+    /// SQL on an already-initialized database is a no-op and does not
+    /// corrupt the table.
+    #[test]
+    fn v27_kg_beliefs_migration_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        // Confirm the table exists after the first run.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='kg_beliefs'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query kg_beliefs");
+        assert_eq!(count, 1, "kg_beliefs must be created by initialize");
+
+        // Re-running the migration directly must not error.
+        conn.execute_batch(V27_KG_BELIEFS_SQL)
+            .expect("rerun v27 migration");
+
+        // Re-running the full init path must also stay healthy.
+        initialize_knowledge_database(&conn).expect("re-init is idempotent");
+
+        let count_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='kg_beliefs'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("recount kg_beliefs");
+        assert_eq!(count_after, 1, "no duplicate table after rerun");
     }
 
     /// Writers exercising the kg_relationships INSERT path populate
