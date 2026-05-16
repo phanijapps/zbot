@@ -17,7 +17,7 @@ pub use recall::query_gate::{
 pub use recall::scored_item::{
     intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, ScoredItem,
 };
-pub use recall::{format_recall_failure_message, format_scored_items, MemoryRecall};
+pub use recall::MemoryRecall;
 pub use sleep::compactor::{CompactionStats, Compactor, PairwiseVerifier};
 pub use sleep::conflict_resolver::{
     ConflictJudgeLlm, ConflictResolver, ConflictResponse, ConflictStats,
