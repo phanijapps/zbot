@@ -76,6 +76,7 @@ async function safeReadError(response: Response): Promise<string> {
 
 export async function listBeliefs(
   agentId: string,
+  partitionId: string | null,
   limit = 50,
   offset = 0,
 ): Promise<ApiResult<Belief[]>> {
@@ -83,6 +84,9 @@ export async function listBeliefs(
     limit: String(limit),
     offset: String(offset),
   });
+  if (partitionId) {
+    params.set("partition_id", partitionId);
+  }
   const res = await fetchJson<BeliefListResponse>(
     `/api/beliefs/${encodeURIComponent(agentId)}?${params.toString()}`,
   );
@@ -103,9 +107,13 @@ export async function getBeliefDetail(
 
 export async function listContradictions(
   agentId: string,
+  partitionId: string | null,
   limit = 20,
 ): Promise<ApiResult<BeliefContradiction[]>> {
   const params = new URLSearchParams({ limit: String(limit) });
+  if (partitionId) {
+    params.set("partition_id", partitionId);
+  }
   const res = await fetchJson<ContradictionListResponse>(
     `/api/contradictions/${encodeURIComponent(agentId)}?${params.toString()}`,
   );

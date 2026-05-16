@@ -3364,6 +3364,13 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  /* B-6 added BeliefNetworkPanel as a flex-column sibling of __main.
+     The panel has tall intrinsic content (~2000px) that consumed all
+     the column space, squeezing __main (which has flex: 1, basis 0%)
+     down to 0 and collapsing the graph canvas. Make the observatory
+     scrollable so the panel can extend below the graph instead of
+     fighting it for height. */
+  overflow-y: auto;
 }
 
 .observatory__toolbar {
@@ -3391,7 +3398,12 @@
 
 .observatory__main {
   display: flex;
-  flex: 1;
+  /* Don't grow/shrink — use min-height instead so the graph canvas
+     keeps a visible footprint even when the BeliefNetworkPanel below
+     pushes total content above the viewport. The container scroll
+     (on .observatory) handles overflow. */
+  flex: 0 0 auto;
+  min-height: 600px;
   overflow: hidden;
 }
 
@@ -6541,4 +6553,643 @@
   font-size: 11px;
   color: var(--subtle-foreground);
   font-style: italic;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Belief Network UI — Memory tab (Phase B-5)
+   ═══════════════════════════════════════════════════════════ */
+
+.beliefs-list,
+.contradiction-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-4);
+  /* Bound to parent so the list scrolls internally instead of pushing
+     content below the viewport. The .memory-deck parent is overflow:hidden
+     so without this the items just disappeared. */
+  height: 100%;
+  overflow-y: auto;
+}
+
+.beliefs-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  flex-wrap: wrap;
+  padding: var(--spacing-2) var(--spacing-3);
+  background: var(--background-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--muted-foreground);
+  /* Stick to the top of the scrollable list so filtering stays
+     reachable while the user scrolls through 100s of cards. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.beliefs-filter-bar__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  padding: var(--spacing-1) var(--spacing-2);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--subtle-foreground);
+  font-size: var(--text-xs);
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.beliefs-filter-bar__chip:hover {
+  color: var(--foreground);
+  border-color: var(--border-hover);
+}
+
+.beliefs-filter-bar__chip[aria-pressed="true"],
+.beliefs-filter-bar__chip.is-active {
+  background: var(--primary-muted);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.beliefs-filter-bar__range {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  white-space: nowrap;
+}
+
+.beliefs-filter-bar__range input[type="range"] {
+  width: 120px;
+  accent-color: var(--primary);
+}
+
+.beliefs-filter-bar label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  cursor: pointer;
+}
+
+.beliefs-list__items,
+.contradiction-list__items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Belief card ───────────────────────────────────────────────── */
+
+.belief-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4);
+  background: var(--background-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.belief-card:hover {
+  border-color: var(--border-hover);
+  transform: translateY(-1px);
+}
+
+.belief-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+}
+
+.belief-card__subject {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--primary);
+  letter-spacing: 0.02em;
+  word-break: break-all;
+}
+
+.belief-card__content {
+  font-size: var(--text-sm);
+  color: var(--foreground);
+  line-height: 1.5;
+}
+
+.belief-card__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  font-size: var(--text-xs);
+  color: var(--subtle-foreground);
+  font-family: var(--font-mono);
+}
+
+.belief-card__sources::before {
+  content: "↳ ";
+  opacity: 0.6;
+}
+
+.belief-card__age {
+  margin-left: auto;
+}
+
+/* Confidence bar ─────────────────────────────────────────────── */
+
+.belief-confidence {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 110px;
+}
+
+.belief-confidence__track {
+  flex: 1;
+  height: 4px;
+  background: var(--border);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  min-width: 60px;
+}
+
+.belief-confidence__fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: var(--radius-full);
+  transition: width 0.2s;
+}
+
+.belief-confidence__num {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted-foreground);
+  min-width: 32px;
+  text-align: right;
+}
+
+/* Belief / contradiction badges ──────────────────────────────── */
+
+.belief-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+  background: var(--background-surface);
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+}
+
+.belief-badge--clickable {
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.belief-badge--clickable:hover {
+  border-color: var(--border-hover);
+  color: var(--foreground);
+}
+
+.belief-badge--contradiction,
+.belief-badge--unresolved {
+  background: color-mix(in srgb, #f6c453 14%, transparent);
+  color: #f6c453;
+  border-color: color-mix(in srgb, #f6c453 30%, transparent);
+}
+
+.belief-badge--stale {
+  background: color-mix(in srgb, var(--subtle-foreground) 14%, transparent);
+  color: var(--subtle-foreground);
+  border-color: var(--border);
+  font-style: italic;
+}
+
+.belief-badge--resolved {
+  background: color-mix(in srgb, #6ee7a4 14%, transparent);
+  color: #6ee7a4;
+  border-color: color-mix(in srgb, #6ee7a4 30%, transparent);
+}
+
+.belief-badge--logical {
+  background: color-mix(in srgb, #ff7a7a 14%, transparent);
+  color: #ff7a7a;
+  border-color: color-mix(in srgb, #ff7a7a 30%, transparent);
+}
+
+.belief-badge--tension {
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+/* Belief detail drawer body ─────────────────────────────────── */
+
+.belief-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  padding: var(--spacing-4);
+}
+
+.belief-detail__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  font-size: var(--text-sm);
+  color: var(--foreground);
+  line-height: 1.55;
+}
+
+.belief-detail__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-4);
+  padding: var(--spacing-3);
+  background: var(--background-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--muted-foreground);
+}
+
+.belief-detail__facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.belief-detail__fact {
+  padding: var(--spacing-2) var(--spacing-3);
+  background: var(--background-surface);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--primary);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--muted-foreground);
+}
+
+.belief-detail__contradictions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--border);
+}
+
+/* Contradiction list row ────────────────────────────────────── */
+
+.contradiction-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4);
+  background: var(--background-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.contradiction-row:hover {
+  border-color: var(--border-hover);
+}
+
+.contradiction-row__head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex-wrap: wrap;
+}
+
+.contradiction-row__severity {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted-foreground);
+  margin-left: auto;
+}
+
+.contradiction-row__pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-3);
+  font-size: var(--text-sm);
+  color: var(--foreground);
+}
+
+.contradiction-row__pair > * {
+  padding: var(--spacing-2);
+  background: var(--background-surface);
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--border);
+}
+
+.contradiction-row__reasoning {
+  font-size: var(--text-xs);
+  color: var(--subtle-foreground);
+  font-style: italic;
+  margin: 0;
+  padding-top: var(--spacing-1);
+  border-top: 1px dashed var(--border);
+}
+
+/* Contradiction resolver modal body ─────────────────────────── */
+
+.contradiction-resolver {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.contradiction-resolver__pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-3);
+  padding: var(--spacing-4);
+}
+
+.contradiction-resolver__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3);
+  background: var(--background-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.contradiction-resolver__panel h4 {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--primary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.contradiction-resolver__reasoning {
+  padding: var(--spacing-3) var(--spacing-4);
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted-foreground);
+  font-style: italic;
+  background: var(--background-surface);
+  border-left: 2px solid var(--primary);
+}
+
+.contradiction-resolver__actions {
+  display: flex;
+  gap: var(--spacing-2);
+  justify-content: flex-end;
+  padding: var(--spacing-3) var(--spacing-4);
+  border-top: 1px solid var(--border);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Belief Network Panel — Observatory page (Phase B-6)
+   ═══════════════════════════════════════════════════════════ */
+
+.belief-network-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  padding: var(--spacing-5) var(--spacing-6);
+  border-top: 1px solid var(--border);
+  background: var(--background);
+}
+
+.belief-network-panel--disabled,
+.belief-network-panel--loading,
+.belief-network-panel--error {
+  color: var(--subtle-foreground);
+  font-size: var(--text-sm);
+  padding: var(--spacing-4) var(--spacing-6);
+  font-style: italic;
+}
+
+.belief-network-panel__header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-3);
+  flex-wrap: wrap;
+}
+
+.belief-network-panel__title {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  color: var(--primary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+.belief-network-panel__totals {
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--muted-foreground);
+  letter-spacing: 0.02em;
+}
+
+.belief-network-panel__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--spacing-3);
+}
+
+.belief-network-panel__activity-title {
+  margin: 0 0 var(--spacing-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--subtle-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.belief-network-panel__activity,
+.belief-network-panel__cascade {
+  padding-top: var(--spacing-3);
+  border-top: 1px dashed var(--border);
+}
+
+/* Stat card ─────────────────────────────────────────────────── */
+
+.belief-network-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4);
+  background: var(--background-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.belief-network-card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+
+.belief-network-card__title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.belief-network-card__subtitle {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--subtle-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.belief-network-card__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+.belief-network-card__metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.belief-network-card__metric-label {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--subtle-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.belief-network-card__metric-value {
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.belief-network-card__metric--highlight .belief-network-card__metric-value {
+  color: var(--primary);
+}
+
+.belief-network-card__sparkline {
+  display: block;
+  width: 100%;
+  max-width: 200px;
+  height: 24px;
+  margin-top: var(--spacing-1);
+}
+
+.belief-network-card__sparkline-caption {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--subtle-foreground);
+  letter-spacing: 0.04em;
+}
+
+.belief-network-card__warning {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, #f6c453 14%, transparent);
+  color: #f6c453;
+  border: 1px solid color-mix(in srgb, #f6c453 30%, transparent);
+}
+
+/* Activity feed ─────────────────────────────────────────────── */
+
+.belief-activity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.belief-activity__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.belief-activity__item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--spacing-2);
+  padding: var(--spacing-1) var(--spacing-2);
+  font-size: var(--text-xs);
+  border-left: 2px solid var(--border);
+  background: var(--background-surface);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.belief-activity__time {
+  font-family: var(--font-mono);
+  color: var(--subtle-foreground);
+  white-space: nowrap;
+}
+
+.belief-activity__summary {
+  color: var(--muted-foreground);
+  word-break: break-word;
+}
+
+.belief-activity__empty {
+  font-size: var(--text-xs);
+  color: var(--subtle-foreground);
+  font-style: italic;
+  padding: var(--spacing-2);
+}
+
+/* Propagation chain ─────────────────────────────────────────── */
+
+.propagation-chain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3);
+  background: var(--background-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.propagation-chain--idle {
+  font-size: var(--text-xs);
+  color: var(--subtle-foreground);
+  font-style: italic;
+}
+
+.propagation-chain__caption {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--subtle-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
