@@ -18,15 +18,17 @@
 //! 6. Format as a "Recalled Memory" system message
 
 pub mod adapters;
+pub mod mmr;
 pub mod previous_episodes;
 pub mod query_gate;
 pub mod scored_item;
+pub use mmr::{mmr_select, MmrInput};
 pub use query_gate::{GateResponse, LlmQueryGate, QueryGate, QueryGateLlm, RetrievalDecision};
 pub use scored_item::{intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, ScoredItem};
 
 use std::sync::Arc;
 
-use crate::RecallConfig;
+use crate::{MmrConfig, RecallConfig};
 use agent_runtime::llm::embedding::EmbeddingClient;
 use zero_stores_domain::{MemoryFact, Procedure, ScoredFact};
 
@@ -52,6 +54,9 @@ pub struct MemoryRecall {
     /// Self-RAG retrieval gate. When `None`, recall behaves identically to
     /// pre-gate behavior (raw user message → hybrid search).
     query_gate: Option<Arc<QueryGate>>,
+    /// MMR diversity reranking. When `None` or `enabled = false`,
+    /// `recall_unified` is byte-for-byte identical to pre-MMR behavior.
+    mmr_config: Option<MmrConfig>,
     config: Arc<RecallConfig>,
 }
 
@@ -72,6 +77,7 @@ impl MemoryRecall {
             procedure_store: None,
             belief_store: None,
             query_gate: None,
+            mmr_config: None,
             config,
         }
     }
@@ -89,6 +95,15 @@ impl MemoryRecall {
     /// (bootstrap) is unaffected.
     pub fn set_query_gate(&mut self, gate: Arc<QueryGate>) {
         self.query_gate = Some(gate);
+    }
+
+    /// Wire MMR diversity reranking. When set with `enabled = true`,
+    /// `recall_unified` over-fetches `candidate_pool` items from RRF, then
+    /// reranks via MMR before truncating to the caller's budget. When
+    /// unset (or `enabled = false`), recall is byte-for-byte identical to
+    /// pre-MMR behavior.
+    pub fn set_mmr_config(&mut self, cfg: MmrConfig) {
+        self.mmr_config = Some(cfg);
     }
 
     /// Access the recall configuration.
@@ -457,7 +472,90 @@ impl MemoryRecall {
         }
         all_lists.push(goal_items);
 
-        Ok(rrf_merge(all_lists, 60.0, budget))
+        // Decide fusion budget: when MMR is enabled, over-fetch from RRF so
+        // MMR has a wider candidate pool to diversify over. When disabled,
+        // pass `budget` straight through so behavior is byte-for-byte
+        // identical to pre-MMR.
+        let (fusion_budget, run_mmr) = match self.mmr_config.as_ref() {
+            Some(cfg) if cfg.enabled => (cfg.candidate_pool.max(budget), true),
+            _ => (budget, false),
+        };
+
+        let fused = rrf_merge(all_lists, 60.0, fusion_budget);
+
+        if !run_mmr {
+            return Ok(fused);
+        }
+
+        let lambda = self.mmr_config.as_ref().map(|c| c.lambda).unwrap_or(0.6);
+        let reranked = self.mmr_rerank(fused, lambda, budget).await;
+        Ok(reranked)
+    }
+
+    /// Resolve a per-item embedding for MMR. Returns `None` when the
+    /// candidate's kind has no embedding source or the lookup fails.
+    ///
+    /// - `Fact` → `memory_store.get_fact_embedding(id)` (single SQLite hop).
+    /// - `Belief` / `Wiki` / `Procedure` / `GraphNode` → embed the rendered
+    ///   `content` via the embedding client. The belief's stored embedding
+    ///   bytes are not carried through `ScoredItem`, and re-embedding the
+    ///   rendered content tracks the same semantic neighborhood closely
+    ///   enough for diversity scoring at this scale.
+    /// - `Goal` / `Episode` → `None` (diversity penalty contributes 0).
+    async fn fetch_item_embedding(&self, item: &ScoredItem) -> Option<Vec<f32>> {
+        match item.kind {
+            ItemKind::Fact => {
+                let store = self.memory_store.as_ref()?;
+                store.get_fact_embedding(&item.id).await.ok().flatten()
+            }
+            ItemKind::Belief | ItemKind::Wiki | ItemKind::Procedure | ItemKind::GraphNode => {
+                let client = self.embedding_client.as_ref()?;
+                match client.embed(&[item.content.as_str()]).await {
+                    Ok(mut v) if !v.is_empty() => Some(v.remove(0)),
+                    _ => None,
+                }
+            }
+            ItemKind::Goal | ItemKind::Episode => None,
+        }
+    }
+
+    /// Apply MMR reranking to `candidates`, returning at most `budget`
+    /// items in selection order. Embeddings are fetched per item via
+    /// [`Self::fetch_item_embedding`]; candidates without embeddings keep
+    /// their relevance score but contribute zero diversity penalty.
+    async fn mmr_rerank(
+        &self,
+        candidates: Vec<ScoredItem>,
+        lambda: f64,
+        budget: usize,
+    ) -> Vec<ScoredItem> {
+        if candidates.is_empty() || budget == 0 {
+            return Vec::new();
+        }
+
+        // Serial embedding fetch. `candidate_pool` defaults to 30, each
+        // fact lookup is a single SQLite hop, and content-embed calls hit
+        // the cached embedding client. At this scale, naive serial is
+        // sub-ms per item — batching is not yet warranted.
+        let mut embeddings: Vec<Option<Vec<f32>>> = Vec::with_capacity(candidates.len());
+        for item in &candidates {
+            embeddings.push(self.fetch_item_embedding(item).await);
+        }
+
+        let inputs: Vec<MmrInput<'_>> = candidates
+            .iter()
+            .zip(embeddings.iter())
+            .map(|(item, emb)| MmrInput {
+                item,
+                embedding: emb.as_deref(),
+            })
+            .collect();
+
+        let selected_idx = mmr_select(inputs, lambda, budget);
+        selected_idx
+            .into_iter()
+            .map(|i| candidates[i].clone())
+            .collect()
     }
 
     /// Embed a query string for vector search.
@@ -1127,5 +1225,415 @@ mod tests {
             schema_weighted > belief_weighted,
             "schema ({schema_weighted}) must beat belief ({belief_weighted}) at equal raw score"
         );
+    }
+
+    // ========================================================================
+    // MMR — Maximal Marginal Relevance integration tests
+    //
+    // These tests exercise the full recall_unified pipeline with MMR enabled
+    // vs disabled, end-to-end through a real SQLite-backed memory store.
+    // ========================================================================
+
+    use crate::MmrConfig;
+
+    /// 384-dim is what the SQLite vec0 table expects. We synthesize
+    /// orthogonal directions by setting exactly one of the first three
+    /// components to 1.0. Cosine similarity is then `1.0` between
+    /// same-direction items and `0.0` between different directions.
+    const EMBED_DIM: usize = 384;
+
+    /// Directional embedder used by MMR integration tests. Routes input
+    /// text to one of three orthogonal directions based on keywords —
+    /// lets tests set up controlled near-duplicate vs. diverse scenarios.
+    struct DirectionalEmbed;
+
+    #[async_trait]
+    impl EmbeddingClient for DirectionalEmbed {
+        async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            Ok(texts.iter().map(|t| direction_for_text(t)).collect())
+        }
+        fn dimensions(&self) -> usize {
+            EMBED_DIM
+        }
+        fn model_name(&self) -> String {
+            "directional".to_string()
+        }
+    }
+
+    fn direction_for_text(text: &str) -> Vec<f32> {
+        let t = text.to_lowercase();
+        let mut v = vec![0.0_f32; EMBED_DIM];
+        // Order matters: "apple/banana/fruit" wins over "color/red" if
+        // both appear, but our test contents don't overlap.
+        let idx = if t.contains("apple") || t.contains("banana") || t.contains("fruit") {
+            0
+        } else if t.contains("color") || t.contains("red") || t.contains("blue") {
+            1
+        } else {
+            2
+        };
+        v[idx] = 1.0;
+        v
+    }
+
+    /// Build a real SQLite-backed memory store wired with an embedder so
+    /// `save_fact` generates embeddings that we can later look up via
+    /// `get_fact_embedding`.
+    async fn make_memory_store_with_embedder(
+        tmp: &tempfile::TempDir,
+        embed: Arc<dyn EmbeddingClient>,
+    ) -> Arc<dyn zero_stores::MemoryFactStore> {
+        let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
+        let db = Arc::new(KnowledgeDatabase::new(paths).expect("db"));
+        let vec_index: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(db.clone(), "memory_facts_index", "fact_id")
+                .expect("vec index init"),
+        );
+        let memory_repo = Arc::new(MemoryRepository::new(db, vec_index));
+        Arc::new(GatewayMemoryFactStore::new(memory_repo, Some(embed)))
+    }
+
+    /// RecallConfig with min_score relaxed to 0 — the hybrid scorer
+    /// produces values around 0.01–0.05 for synthetic test corpora,
+    /// well below the default 0.3 threshold. Tests that exercise the
+    /// real store need this so any facts survive the filter.
+    fn relaxed_recall_config() -> Arc<RecallConfig> {
+        Arc::new(RecallConfig {
+            min_score: 0.0,
+            ..RecallConfig::default()
+        })
+    }
+
+    /// MMR disabled → recall_unified output identical to no-MMR.
+    /// Sanity check that the gating is the whole seam.
+    #[tokio::test]
+    async fn mmr_disabled_pipeline_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let embed: Arc<dyn EmbeddingClient> = Arc::new(DirectionalEmbed);
+        let store = make_memory_store_with_embedder(&tmp, embed.clone()).await;
+
+        store
+            .save_fact(
+                "agent",
+                "domain",
+                "f.apple",
+                "apple is a fruit",
+                0.8,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .save_fact(
+                "agent",
+                "domain",
+                "f.banana",
+                "banana is a fruit",
+                0.8,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .save_fact(
+                "agent",
+                "domain",
+                "f.color",
+                "red is a color",
+                0.8,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let config = relaxed_recall_config();
+        let mut recall = MemoryRecall::new(Some(embed), config);
+        recall.set_memory_store(store.clone());
+
+        // Baseline (no MMR wired).
+        let baseline = recall
+            .recall_unified("agent", "fruit", None, &[], 10)
+            .await
+            .unwrap();
+
+        // Explicit disabled.
+        recall.set_mmr_config(MmrConfig {
+            enabled: false,
+            lambda: 0.5,
+            candidate_pool: 30,
+        });
+        let disabled = recall
+            .recall_unified("agent", "fruit", None, &[], 10)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            baseline.len(),
+            disabled.len(),
+            "disabled MMR must not change result count"
+        );
+        let baseline_ids: Vec<&str> = baseline.iter().map(|i| i.id.as_str()).collect();
+        let disabled_ids: Vec<&str> = disabled.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(
+            baseline_ids, disabled_ids,
+            "disabled MMR must not change result order"
+        );
+    }
+
+    /// MMR enabled with two duplicate-direction facts → only one survives
+    /// in the top-2 output; the diverse third fact takes the other slot.
+    #[tokio::test]
+    async fn mmr_drops_near_duplicate_in_top_k() {
+        let tmp = tempfile::tempdir().unwrap();
+        let embed: Arc<dyn EmbeddingClient> = Arc::new(DirectionalEmbed);
+        let store = make_memory_store_with_embedder(&tmp, embed.clone()).await;
+
+        // Two facts in the "fruit" direction (near-duplicate embeddings).
+        store
+            .save_fact(
+                "agent",
+                "domain",
+                "f.apple",
+                "apple is a fruit",
+                0.9,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .save_fact(
+                "agent",
+                "domain",
+                "f.banana",
+                "banana is a fruit",
+                0.85,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        // One fact in a different direction (orthogonal).
+        store
+            .save_fact(
+                "agent",
+                "domain",
+                "f.color",
+                "red is a color",
+                0.6,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let config = relaxed_recall_config();
+        let mut recall = MemoryRecall::new(Some(embed), config);
+        recall.set_memory_store(store.clone());
+        recall.set_mmr_config(MmrConfig {
+            enabled: true,
+            lambda: 0.5,
+            candidate_pool: 30,
+        });
+
+        let out = recall
+            .recall_unified("agent", "fruit", None, &[], 2)
+            .await
+            .unwrap();
+
+        assert_eq!(out.len(), 2, "budget=2 → 2 items");
+        // The color fact must be present — diversity bonus pushes it over
+        // the second fruit fact.
+        let color_present = out.iter().any(|i| i.content.contains("f.color"));
+        let fruit_count = out
+            .iter()
+            .filter(|i| i.content.contains("f.apple") || i.content.contains("f.banana"))
+            .count();
+        assert!(
+            color_present,
+            "MMR should surface the orthogonal color fact over a second near-duplicate fruit"
+        );
+        assert_eq!(
+            fruit_count, 1,
+            "exactly one fruit fact should survive the diversity penalty"
+        );
+    }
+
+    /// Belief + source fact in the same direction — MMR keeps just one.
+    /// This is the canonical B-4 case the design doc Q3 deferred to MMR.
+    #[tokio::test]
+    async fn mmr_dedups_belief_and_source_fact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let embed: Arc<dyn EmbeddingClient> = Arc::new(DirectionalEmbed);
+        let store = make_memory_store_with_embedder(&tmp, embed.clone()).await;
+
+        // Source fact in the "fruit" direction.
+        store
+            .save_fact(
+                "agent",
+                "user",
+                "f.fruit_preference",
+                "user likes apple",
+                0.9,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        // An orthogonal fact (color direction) to provide the diverse pick.
+        store
+            .save_fact(
+                "agent",
+                "domain",
+                "f.color",
+                "red is a color the user mentioned",
+                0.4,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Belief overlaps semantically with the fruit fact (the embedder
+        // routes "apple" content into the same direction).
+        let belief = sample_belief(
+            "b-fruit",
+            "user.preferences",
+            "user prefers apple-flavored things",
+        );
+        let belief_emb_bytes: Vec<u8> = direction_for_text(&belief.content)
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        let mut belief_with_emb = belief.clone();
+        belief_with_emb.embedding = Some(belief_emb_bytes);
+        let stub: Arc<dyn BeliefStore> = Arc::new(StubBeliefStore::new(vec![ScoredBelief {
+            belief: belief_with_emb,
+            score: 0.95,
+        }]));
+
+        let config = relaxed_recall_config();
+        let mut recall = MemoryRecall::new(Some(embed), config);
+        recall.set_memory_store(store.clone());
+        recall.set_belief_store(stub);
+        recall.set_mmr_config(MmrConfig {
+            enabled: true,
+            lambda: 0.5,
+            candidate_pool: 30,
+        });
+
+        let out = recall
+            .recall_unified("agent", "apple preferences", None, &[], 2)
+            .await
+            .unwrap();
+
+        assert_eq!(out.len(), 2);
+        // We must NOT see both the belief and the source fact at top-2 —
+        // they're in the same direction. MMR keeps one, swaps the other
+        // for the orthogonal color fact.
+        let belief_count = out
+            .iter()
+            .filter(|i| matches!(i.kind, ItemKind::Belief))
+            .count();
+        let apple_fact_count = out
+            .iter()
+            .filter(|i| matches!(i.kind, ItemKind::Fact) && i.content.contains("apple"))
+            .count();
+        assert!(
+            belief_count + apple_fact_count <= 1,
+            "MMR should keep only one of (belief, apple fact) at top-2, got {} belief + {} apple fact",
+            belief_count,
+            apple_fact_count
+        );
+        let color_present = out.iter().any(|i| i.content.contains("f.color"));
+        assert!(
+            color_present,
+            "the diverse orthogonal item should be selected"
+        );
+    }
+
+    /// `candidate_pool` controls the over-fetch from RRF. With a wide
+    /// pool, MMR sees the orthogonal item even when many high-relevance
+    /// near-duplicates exist. Proves the knob is honored on the recall
+    /// path.
+    #[tokio::test]
+    async fn mmr_candidate_pool_is_respected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let embed: Arc<dyn EmbeddingClient> = Arc::new(DirectionalEmbed);
+        let store = make_memory_store_with_embedder(&tmp, embed.clone()).await;
+
+        // 6 fruit facts (all in the same direction).
+        for i in 0..6 {
+            store
+                .save_fact(
+                    "agent",
+                    "domain",
+                    &format!("f.fruit_{i}"),
+                    &format!("fruit fact {i} apple"),
+                    0.9 - (i as f64) * 0.01,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        // One orthogonal color fact at mid-relevance.
+        store
+            .save_fact(
+                "agent",
+                "domain",
+                "f.color",
+                "red is a color",
+                0.5,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let config = relaxed_recall_config();
+        let mut recall = MemoryRecall::new(Some(embed.clone()), config.clone());
+        recall.set_memory_store(store.clone());
+        recall.set_mmr_config(MmrConfig {
+            enabled: true,
+            lambda: 0.5,
+            candidate_pool: 30,
+        });
+        let wide = recall
+            .recall_unified("agent", "fruit", None, &[], 3)
+            .await
+            .unwrap();
+        assert!(
+            wide.iter().any(|i| i.content.contains("f.color")),
+            "with candidate_pool=30, the diverse color fact must appear at top-3 — got {:?}",
+            wide.iter().map(|i| &i.content).collect::<Vec<_>>()
+        );
+    }
+
+    /// Empty candidate list → empty result, no panic.
+    #[tokio::test]
+    async fn mmr_empty_candidates_yields_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let embed: Arc<dyn EmbeddingClient> = Arc::new(DirectionalEmbed);
+        let store = make_memory_store_with_embedder(&tmp, embed.clone()).await;
+
+        let config = relaxed_recall_config();
+        let mut recall = MemoryRecall::new(Some(embed), config);
+        recall.set_memory_store(store);
+        recall.set_mmr_config(MmrConfig {
+            enabled: true,
+            lambda: 0.5,
+            candidate_pool: 30,
+        });
+
+        let out = recall
+            .recall_unified("agent", "anything", None, &[], 10)
+            .await
+            .unwrap();
+        assert!(out.is_empty());
     }
 }
