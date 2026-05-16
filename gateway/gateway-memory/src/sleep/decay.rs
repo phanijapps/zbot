@@ -403,6 +403,7 @@ mod tests {
             updated_at: now,
             superseded_by: None,
             stale: false,
+            embedding: None,
         };
         let b_stable = Belief {
             id: "b-stable".into(),
@@ -419,6 +420,7 @@ mod tests {
             updated_at: now,
             superseded_by: None,
             stale: false,
+            embedding: None,
         };
         belief_store.upsert_belief(&b_crossing).await.unwrap();
         belief_store.upsert_belief(&b_stable).await.unwrap();
@@ -472,6 +474,7 @@ mod tests {
             updated_at: now,
             superseded_by: None,
             stale: false,
+            embedding: None,
         };
         belief_store.upsert_belief(&b).await.unwrap();
 

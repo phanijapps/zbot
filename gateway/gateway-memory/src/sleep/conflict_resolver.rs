@@ -655,6 +655,7 @@ mod tests {
             updated_at: now,
             superseded_by: None,
             stale: false,
+            embedding: None,
         };
         let multi_belief = Belief {
             id: "belief-multi".into(),
@@ -671,6 +672,7 @@ mod tests {
             updated_at: now,
             superseded_by: None,
             stale: false,
+            embedding: None,
         };
         belief_store.upsert_belief(&sole_belief).await.unwrap();
         belief_store.upsert_belief(&multi_belief).await.unwrap();

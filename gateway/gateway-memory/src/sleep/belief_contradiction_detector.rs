@@ -611,6 +611,7 @@ mod tests {
             updated_at: now,
             superseded_by: None,
             stale: false,
+            embedding: None,
         };
         store.upsert_belief(&b).await.unwrap();
     }

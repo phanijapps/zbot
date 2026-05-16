@@ -25,6 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::ChatMessage;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -92,6 +93,13 @@ pub struct BeliefSynthesizer {
     fact_store: Arc<dyn MemoryFactStore>,
     belief_store: Arc<dyn BeliefStore>,
     llm: Arc<dyn BeliefSynthesisLlm>,
+    /// Embedding client used to generate `belief.embedding` at
+    /// synthesis time (Phase B-4). When `None`, beliefs are written
+    /// with `embedding = None` and won't surface in semantic recall.
+    /// Embedding failures are logged and degrade to `None` rather
+    /// than aborting synthesis — beliefs are still useful via direct
+    /// lookup.
+    embedding_client: Option<Arc<dyn EmbeddingClient>>,
     /// Minimum time between cycles. `Duration::ZERO` runs every tick.
     interval: Duration,
     last_run: Mutex<Option<Instant>>,
@@ -112,10 +120,22 @@ impl BeliefSynthesizer {
             fact_store,
             belief_store,
             llm,
+            embedding_client: None,
             interval,
             last_run: Mutex::new(None),
             enabled,
         }
+    }
+
+    /// Attach an embedding client so synthesized beliefs carry a vector
+    /// for semantic recall (Phase B-4). Builder-style so the existing
+    /// callers that don't yet wire embeddings keep working. The
+    /// generated embedding is best-effort: if the client returns an
+    /// error or empty vector, the belief is still written with
+    /// `embedding = None`.
+    pub fn with_embedding_client(mut self, client: Option<Arc<dyn EmbeddingClient>>) -> Self {
+        self.embedding_client = client;
+        self
     }
 
     /// Run one synthesis cycle for a partition. Conservative: per-subject
@@ -363,6 +383,12 @@ impl BeliefSynthesizer {
 
         let source_fact_ids: Vec<String> = facts.iter().map(|f| f.id.clone()).collect();
 
+        // B-4: best-effort embedding for semantic recall. A failure or
+        // missing client falls back to `None` — the belief is still
+        // useful via exact-subject lookup, just hidden from
+        // similarity-driven recall.
+        let embedding = self.embed_belief_content(&content).await;
+
         let belief = Belief {
             id,
             partition_id: partition_id.to_string(),
@@ -378,6 +404,7 @@ impl BeliefSynthesizer {
             updated_at: now,
             superseded_by: None,
             stale: false,
+            embedding,
         };
 
         self.belief_store.upsert_belief(&belief).await?;
@@ -392,6 +419,38 @@ impl BeliefSynthesizer {
         );
         Ok(())
     }
+
+    /// Generate the belief's embedding bytes from its content. Returns
+    /// `None` when no client is wired or the call fails — synthesis
+    /// must NEVER fail because embedding failed (B-4 hard rule). The
+    /// bytes are little-endian f32, matching the format expected by
+    /// `SqliteBeliefStore::search_beliefs`.
+    async fn embed_belief_content(&self, content: &str) -> Option<Vec<u8>> {
+        let client = self.embedding_client.as_ref()?;
+        match client.embed(&[content]).await {
+            Ok(mut v) if !v.is_empty() => Some(embedding_to_bytes(&v.remove(0))),
+            Ok(_) => {
+                tracing::debug!("belief-synthesizer: embed returned empty vector");
+                None
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "belief-synthesizer: embed failed; belief saved without embedding");
+                None
+            }
+        }
+    }
+}
+
+/// Serialize an f32 vector to little-endian bytes for storage on the
+/// `kg_beliefs.embedding` column. Mirrors the `embedding_from_bytes`
+/// helper in `SqliteBeliefStore` so a round-trip preserves the vector
+/// exactly.
+pub(crate) fn embedding_to_bytes(vec: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(vec.len() * 4);
+    for f in vec {
+        out.extend_from_slice(&f.to_le_bytes());
+    }
+    out
 }
 
 // ============================================================================
@@ -1013,6 +1072,196 @@ mod tests {
         assert!(
             stats.beliefs_synthesized >= 1,
             "normal pass also runs: {stats:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // B-4: embedding generation at synthesis time
+    // ------------------------------------------------------------------
+
+    use agent_runtime::llm::embedding::{EmbeddingClient, EmbeddingError};
+
+    /// Embedding client that returns a fixed 3-dim vector for every
+    /// call. Counts invocations so tests can confirm the synthesizer
+    /// actually hits it.
+    struct ConstEmbed {
+        calls: StdMutex<u64>,
+    }
+
+    impl ConstEmbed {
+        fn new() -> Self {
+            Self {
+                calls: StdMutex::new(0),
+            }
+        }
+        fn calls(&self) -> u64 {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    #[async_trait]
+    impl EmbeddingClient for ConstEmbed {
+        async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            *self.calls.lock().unwrap() += 1;
+            Ok(texts.iter().map(|_| vec![1.0_f32, 0.5, -0.25]).collect())
+        }
+        fn dimensions(&self) -> usize {
+            3
+        }
+        fn model_name(&self) -> String {
+            "const-embed-3".to_string()
+        }
+    }
+
+    /// Embedding client that always errors — used to verify the
+    /// best-effort fallback (B-4 hard rule: embedding failure must not
+    /// abort synthesis).
+    struct FailEmbed;
+    #[async_trait]
+    impl EmbeddingClient for FailEmbed {
+        async fn embed(&self, _: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            Err(EmbeddingError::ModelError("induced failure".to_string()))
+        }
+        fn dimensions(&self) -> usize {
+            3
+        }
+        fn model_name(&self) -> String {
+            "fail-embed".to_string()
+        }
+    }
+
+    /// Single-fact short-circuit must still generate an embedding.
+    /// Confirms the embed path runs even on the optimized path that
+    /// skips the LLM.
+    #[tokio::test]
+    async fn short_circuit_path_generates_embedding() {
+        let llm = Arc::new(MockLlm::ok("SHOULD NOT BE USED", "no"));
+        let embedder = Arc::new(ConstEmbed::new());
+        let (synth, fact_store, belief_store, _tmp) = setup_with_llm(llm.clone(), true);
+        let synth = synth.with_embedding_client(Some(embedder.clone()));
+
+        seed_fact(
+            &fact_store,
+            "ag",
+            "user.location",
+            "Mason, OH",
+            0.9,
+            Some(Utc::now()),
+        )
+        .await;
+
+        let stats = synth.run_cycle("run-short-emb", "ag").await.unwrap();
+        assert_eq!(stats.beliefs_short_circuited, 1);
+        assert_eq!(
+            embedder.calls(),
+            1,
+            "embedder called once even on short-circuit path"
+        );
+        let got = belief_store
+            .get_belief("ag", "user.location", None)
+            .await
+            .unwrap()
+            .expect("belief present");
+        let bytes = got.embedding.expect("embedding bytes populated");
+        assert_eq!(bytes.len(), 12, "3 × f32 = 12 bytes");
+    }
+
+    /// Multi-fact LLM path also generates an embedding for the
+    /// synthesized belief content.
+    #[tokio::test]
+    async fn multi_fact_path_generates_embedding() {
+        let llm = Arc::new(MockLlm::ok("User goes by Phani", "newer beats older"));
+        let embedder = Arc::new(ConstEmbed::new());
+        let (synth, fact_store, belief_store, _tmp) = setup_with_llm(llm.clone(), true);
+        let synth = synth.with_embedding_client(Some(embedder.clone()));
+
+        // Seed two facts for the same subject — forces multi-fact path.
+        let older = Utc::now() - ChronoDuration::days(120);
+        seed_fact(
+            &fact_store,
+            "ag",
+            "user.name",
+            "Phanindra",
+            0.85,
+            Some(older),
+        )
+        .await;
+        let newer = Utc::now();
+        let typed_fact = serde_json::json!({
+            "id": format!("fact-{}", uuid::Uuid::new_v4()),
+            "session_id": null,
+            "agent_id": "ag",
+            "scope": "agent",
+            "category": "user",
+            "key": "user.name",
+            "content": "Phani",
+            "confidence": 0.9,
+            "mention_count": 1,
+            "source_summary": null,
+            "ward_id": "__global__",
+            "contradicted_by": null,
+            "created_at": newer.to_rfc3339(),
+            "updated_at": newer.to_rfc3339(),
+            "expires_at": null,
+            "valid_from": newer.to_rfc3339(),
+            "valid_until": null,
+            "superseded_by": null,
+            "pinned": false,
+            "epistemic_class": "current",
+            "source_episode_id": null,
+            "source_ref": null,
+        });
+        fact_store
+            .upsert_typed_fact(typed_fact, None)
+            .await
+            .unwrap();
+
+        let stats = synth.run_cycle("run-multi-emb", "ag").await.unwrap();
+        assert_eq!(stats.beliefs_llm_synthesized, 1);
+        assert_eq!(embedder.calls(), 1, "embedder called once on multi-fact");
+        let got = belief_store
+            .get_belief("ag", "user.name", None)
+            .await
+            .unwrap()
+            .expect("belief present");
+        assert!(
+            got.embedding.is_some(),
+            "embedding populated on multi-fact path"
+        );
+    }
+
+    /// Embedder failure must NOT abort synthesis — the belief is
+    /// written with `embedding = None` and the cycle continues. B-4
+    /// hard rule.
+    #[tokio::test]
+    async fn embed_failure_falls_back_to_null_embedding() {
+        let llm = Arc::new(MockLlm::ok("ignored", "ignored"));
+        let embedder = Arc::new(FailEmbed);
+        let (synth, fact_store, belief_store, _tmp) = setup_with_llm(llm.clone(), true);
+        let synth = synth.with_embedding_client(Some(embedder.clone()));
+
+        seed_fact(
+            &fact_store,
+            "ag",
+            "user.x",
+            "anything",
+            0.9,
+            Some(Utc::now()),
+        )
+        .await;
+
+        let stats = synth.run_cycle("run-embfail", "ag").await.unwrap();
+        // Synthesis still succeeds.
+        assert_eq!(stats.beliefs_short_circuited, 1);
+        // Belief exists; embedding is None.
+        let got = belief_store
+            .get_belief("ag", "user.x", None)
+            .await
+            .unwrap()
+            .expect("belief present despite embed failure");
+        assert!(
+            got.embedding.is_none(),
+            "embed failure leaves embedding NULL"
         );
     }
 }
