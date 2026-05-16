@@ -174,4 +174,24 @@ export const handlers = [
     ]);
   }),
 
+  // Belief Network stats (Phase B-6) — default to disabled so existing
+  // ObservatoryPage tests render the placeholder, not the full panel.
+  http.get(`${API_BASE}/api/belief-network/stats`, () => {
+    return HttpResponse.json({
+      enabled: false,
+      synthesizer: { latest: {}, history: [] },
+      contradiction_detector: { latest: {}, history: [] },
+      propagator: { latest: {}, history: [] },
+      totals: {
+        total_beliefs: 0,
+        total_contradictions: 0,
+        total_unresolved_contradictions: 0,
+      },
+    });
+  }),
+
+  http.get(`${API_BASE}/api/belief-network/activity`, () => {
+    return HttpResponse.json([]);
+  }),
+
 ];

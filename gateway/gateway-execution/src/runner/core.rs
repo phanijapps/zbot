@@ -27,6 +27,7 @@ pub type OnSessionReady =
     Box<dyn FnOnce(String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
 
 // Import types from sibling modules
+use crate::agent_pool::AgentResultBus;
 pub use crate::config::ExecutionConfig;
 use crate::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
 pub use crate::handle::ExecutionHandle;
@@ -86,6 +87,8 @@ pub struct ExecutionRunner {
     memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     /// Session distiller for automatic fact extraction after sessions
     distiller: Option<Arc<crate::distillation::SessionDistiller>>,
+    /// Handoff writer for session completion → KV summary.
+    handoff_writer: Option<Arc<crate::sleep::HandoffWriter>>,
     /// Memory recall for automatic fact retrieval at session start
     memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     /// Semaphore to limit concurrent delegation spawns (prevents resource exhaustion)
@@ -118,6 +121,7 @@ pub struct ExecutionRunner {
     /// Adapter for the `goal` agent tool. Wired via [`Self::set_goal_adapter`].
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     steering_registry: Arc<agent_runtime::SteeringRegistry>,
+    agent_result_bus: Arc<AgentResultBus>,
     /// Pre-session setup delegate. Holds the dependency set needed by
     /// `invoke_with_callback`'s bootstrap phase, extracted here so
     /// `setup()` can be tested and read independently of the full runner.
@@ -153,6 +157,7 @@ pub struct ExecutionRunnerConfig {
     /// Trait-routed memory store — wired.
     pub memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub distiller: Option<Arc<crate::distillation::SessionDistiller>>,
+    pub handoff_writer: Option<Arc<crate::sleep::HandoffWriter>>,
     pub memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
     pub bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
@@ -187,6 +192,7 @@ pub(super) struct ContinuationArgs<'a> {
     pub(super) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub(super) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     pub(super) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
+    pub(super) handoff_writer: Option<Arc<crate::sleep::HandoffWriter>>,
     pub(super) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub(super) model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
     pub(super) kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
@@ -371,6 +377,7 @@ impl ExecutionRunner {
             connector_registry,
             memory_store,
             distiller,
+            handoff_writer,
             memory_recall,
             bridge_registry,
             bridge_outbox,
@@ -398,6 +405,7 @@ impl ExecutionRunner {
             >,
         > = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
         let steering_registry = Arc::new(agent_runtime::SteeringRegistry::new());
+        let agent_result_bus = Arc::new(AgentResultBus::new());
 
         let bootstrap = super::invoke_bootstrap::InvokeBootstrap {
             agent_service: agent_service.clone(),
@@ -419,6 +427,7 @@ impl ExecutionRunner {
             ingestion_adapter: None,
             goal_adapter: None,
             steering_registry: Some(steering_registry.clone()),
+            agent_result_bus: Some(agent_result_bus.clone()),
             event_bus: event_bus.clone(),
             handles: handles.clone(),
         };
@@ -441,6 +450,7 @@ impl ExecutionRunner {
             bridge_outbox,
             memory_store,
             distiller,
+            handoff_writer,
             memory_recall,
             delegation_semaphore,
             embedding_client,
@@ -451,6 +461,7 @@ impl ExecutionRunner {
             ingestion_adapter: None,
             goal_adapter: None,
             steering_registry,
+            agent_result_bus,
             bootstrap,
         };
 
@@ -538,6 +549,7 @@ impl ExecutionRunner {
             memory_store: self.memory_store.clone(),
             embedding_client: self.embedding_client.clone(),
             distiller: self.distiller.clone(),
+            handoff_writer: self.handoff_writer.clone(),
             memory_recall: self.memory_recall.clone(),
             model_registry: self.model_registry.clone(),
             kg_store: self.kg_store.clone(),
@@ -576,6 +588,7 @@ impl ExecutionRunner {
             ingestion_adapter: self.ingestion_adapter.clone(),
             goal_adapter: self.goal_adapter.clone(),
             steering_registry: self.steering_registry.clone(),
+            agent_result_bus: self.agent_result_bus.clone(),
         }
     }
 
@@ -645,6 +658,7 @@ impl ExecutionRunner {
             delegation_registry: self.delegation_registry.clone(),
             handles: self.handles.clone(),
             distiller: self.distiller.clone(),
+            handoff_writer: self.handoff_writer.clone(),
             kg_episode_repo: self.kg_episode_repo.clone(),
             paths: self.paths.clone(),
             kg_store: self.kg_store.clone(),
@@ -877,6 +891,7 @@ impl ExecutionRunner {
             self.ingestion_adapter.clone(),
             self.goal_adapter.clone(),
             self.steering_registry.clone(),
+            self.agent_result_bus.clone(),
         )
         .await?;
 
@@ -1050,6 +1065,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         memory_store,
         embedding_client: _embedding_client,
         distiller,
+        handoff_writer,
         memory_recall,
         model_registry,
         kg_store,
@@ -1463,6 +1479,21 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                             &paths_for_indexer,
                         )
                         .await;
+                    });
+                }
+
+                // Session handoff — fire-and-forget, silent on failure.
+                if let Some(writer) = handoff_writer {
+                    let sid = session_id_clone.clone();
+                    let aid = agent_id_clone.clone();
+                    let wid = state_service
+                        .get_session(&sid)
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.ward_id)
+                        .unwrap_or_default();
+                    tokio::spawn(async move {
+                        writer.write(&sid, &aid, &wid).await;
                     });
                 }
             }

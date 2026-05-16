@@ -27,7 +27,13 @@ async fn recall_unified_returns_scored_items_from_facts() {
         SqliteVecIndex::new(db.clone(), "memory_facts_index", "fact_id").expect("vec index init"),
     );
     let memory_repo = Arc::new(MemoryRepository::new(db.clone(), fact_vec));
-    let config = Arc::new(RecallConfig::default());
+    // Use min_score=0 so the wiring test is not blocked by the noise filter.
+    // Real scores from FTS-only (no embedding client) are below 0.3 by design;
+    // the min_score filter is tested separately in the unit tests.
+    let config = Arc::new(RecallConfig {
+        min_score: 0.0,
+        ..RecallConfig::default()
+    });
 
     // Seed one fact so the FTS arm of `search_memory_facts_hybrid` fires.
     let fact = MemoryFact {

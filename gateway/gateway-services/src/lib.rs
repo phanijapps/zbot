@@ -41,10 +41,10 @@ pub use ollama_client::OllamaClient;
 pub use paths::{SharedVaultPaths, VaultPaths};
 pub use plugin_service::PluginService;
 pub use providers::ProviderService;
-pub use recall_config::RecallConfig;
+pub use recall_config::{KgDecayConfig, RecallConfig};
 pub use settings::{
-    AppSettings, ChatConfig, DistillationConfig, ExecutionSettings, MultimodalConfig,
-    OrchestratorConfig, SettingsService,
+    AppSettings, ChatConfig, DistillationConfig, ExecutionSettings, MemorySettings,
+    MultimodalConfig, OrchestratorConfig, SettingsService,
 };
 pub use skills::{
     Skill, SkillFileInfo, SkillFrontmatter, SkillService, SkillSource, WardAgentsMdConfig,

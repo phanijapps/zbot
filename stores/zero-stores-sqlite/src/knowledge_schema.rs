@@ -1,11 +1,11 @@
-//! Schema v24 for `knowledge.db`.
+//! Schema v30 for `knowledge.db`.
 //!
 //! All long-term memory + graph + vector indexes live here.
 //! Applied idempotently on daemon boot. No migrations — clean slate.
 
 use rusqlite::Connection;
 
-const SCHEMA_VERSION: i32 = 24;
+const SCHEMA_VERSION: i32 = 30;
 
 /// v23 delta: full-text search over `ward_wiki_articles` with sync triggers.
 const V23_WIKI_FTS_SQL: &str = include_str!("../migrations/v23_wiki_fts.sql");
@@ -17,7 +17,56 @@ const V23_WIKI_FTS_SQL: &str = include_str!("../migrations/v23_wiki_fts.sql");
 const V24_GLOBAL_SCOPE_BACKFILL_SQL: &str =
     include_str!("../migrations/v24_global_scope_backfill.sql");
 
-/// Initialize the knowledge database schema (v24).
+/// v25 delta: bi-temporal phase 1 — backfill `valid_from` on legacy
+/// `memory_facts` rows so point-in-time queries can include pre-migration
+/// facts in "now" results without special-casing NULL.
+const V25_MEMORY_FACTS_VALID_FROM_BACKFILL_SQL: &str =
+    include_str!("../migrations/v25_memory_facts_valid_from_backfill.sql");
+
+/// v26 delta: bi-temporal phase 3 — align `kg_relationships` with the
+/// symmetric `valid_from` / `valid_until` schema used by `memory_facts`
+/// and `kg_entities`, backfilling from the legacy `valid_at` /
+/// `invalidated_at` pair. The `ALTER TABLE ADD COLUMN` is handled by
+/// `ensure_kg_relationships_bitemporal_columns` (PRAGMA-guarded for
+/// idempotency); this SQL file performs the UPDATE backfill only.
+const V26_KG_RELATIONSHIPS_BITEMPORAL_SQL: &str =
+    include_str!("../migrations/v26_kg_relationships_bitemporal.sql");
+
+/// v27 delta: add `kg_beliefs` table for the Belief Network (Phase B-1).
+/// A belief is an aggregate over one or more memory_facts about a single
+/// subject. Partition-scoped from day one using `partition_id` so the
+/// future R-series rename of `ward_id` doesn't need to touch this table.
+const V27_KG_BELIEFS_SQL: &str = include_str!("../migrations/v27_kg_beliefs.sql");
+
+/// v28 delta: add `kg_belief_contradictions` table for the Belief Network
+/// (Phase B-2). Stores pair-wise contradiction rows produced by the
+/// `BeliefContradictionDetector`. `belief_a_id` is always the
+/// lexicographically smaller of the two — canonical pair ordering keeps
+/// `UNIQUE(belief_a_id, belief_b_id)` doing real work.
+const V28_KG_BELIEF_CONTRADICTIONS_SQL: &str =
+    include_str!("../migrations/v28_kg_belief_contradictions.sql");
+
+/// v29 delta: add `stale INTEGER NOT NULL DEFAULT 0` column to
+/// `kg_beliefs` to support B-3 confidence propagation. When a source
+/// fact is invalidated and the belief has multiple sources, the belief
+/// is marked stale (stale = 1); the next BeliefSynthesizer cycle picks
+/// it up and re-synthesizes from the remaining sources. The migration
+/// SQL only carries the partial index — the `ALTER TABLE ADD COLUMN`
+/// is handled by `ensure_kg_beliefs_stale_column` (PRAGMA-guarded for
+/// idempotency, same pattern as v26).
+const V29_KG_BELIEFS_STALE_SQL: &str = include_str!("../migrations/v29_kg_beliefs_stale.sql");
+
+/// v30 delta: add `embedding BLOB` column to `kg_beliefs` for B-4
+/// recall integration. Belief recall uses in-memory cosine over a
+/// bounded candidate set rather than a separate vec0 table — see the
+/// migration SQL for the rationale. The `ALTER TABLE ADD COLUMN` is
+/// handled by `ensure_kg_beliefs_embedding_column` (PRAGMA-guarded,
+/// mirroring v29). The migration file itself is documentation-only
+/// (no DDL beyond the inline schema and the guard helper).
+const V30_KG_BELIEFS_EMBEDDING_SQL: &str =
+    include_str!("../migrations/v30_kg_beliefs_embedding.sql");
+
+/// Initialize the knowledge database schema (v30).
 ///
 /// Creates all tables and indexes if they don't exist. Records the
 /// schema version in `schema_version` table. Safe to call on an
@@ -26,7 +75,18 @@ pub fn initialize_knowledge_database(conn: &Connection) -> Result<(), rusqlite::
     conn.execute_batch(SCHEMA_SQL)?;
     conn.execute_batch(V23_WIKI_FTS_SQL)?;
     conn.execute_batch(V24_GLOBAL_SCOPE_BACKFILL_SQL)?;
+    conn.execute_batch(V25_MEMORY_FACTS_VALID_FROM_BACKFILL_SQL)?;
     add_skill_index_format_version_if_missing(conn)?;
+    ensure_evidence_column(conn, "kg_entities")?;
+    ensure_evidence_column(conn, "kg_relationships")?;
+    ensure_kg_relationships_bitemporal_columns(conn)?;
+    conn.execute_batch(V26_KG_RELATIONSHIPS_BITEMPORAL_SQL)?;
+    conn.execute_batch(V27_KG_BELIEFS_SQL)?;
+    conn.execute_batch(V28_KG_BELIEF_CONTRADICTIONS_SQL)?;
+    ensure_kg_beliefs_stale_column(conn)?;
+    conn.execute_batch(V29_KG_BELIEFS_STALE_SQL)?;
+    ensure_kg_beliefs_embedding_column(conn)?;
+    conn.execute_batch(V30_KG_BELIEFS_EMBEDDING_SQL)?;
     conn.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?1, datetime('now'))",
         rusqlite::params![SCHEMA_VERSION],
@@ -48,6 +108,87 @@ fn add_skill_index_format_version_if_missing(conn: &Connection) -> Result<(), ru
     if !column_exists {
         conn.execute_batch(
             "ALTER TABLE skill_index_state ADD COLUMN format_version INTEGER NOT NULL DEFAULT 1",
+        )?;
+    }
+    Ok(())
+}
+
+/// Ensure the `evidence TEXT` column exists on the given KG table.
+/// Idempotent — does nothing if the column already exists.
+fn ensure_evidence_column(conn: &Connection, table: &str) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let has_evidence = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == "evidence");
+    if !has_evidence {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN evidence TEXT"), [])?;
+    }
+    Ok(())
+}
+
+/// Ensure `kg_beliefs` carries the `stale` column introduced in schema
+/// v29. SQLite errors on duplicate `ADD COLUMN`, so we PRAGMA-probe the
+/// table before each ALTER. Fresh databases get the column via the
+/// `CREATE TABLE` body and this function is a no-op. The companion
+/// migration SQL file creates the partial index on `stale = 1`.
+fn ensure_kg_beliefs_stale_column(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare("PRAGMA table_info(kg_beliefs)")?;
+    let has_stale = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "stale");
+    if !has_stale {
+        conn.execute(
+            "ALTER TABLE kg_beliefs ADD COLUMN stale INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// Ensure `kg_beliefs` carries the `embedding` BLOB column introduced
+/// in schema v30. The column is nullable — beliefs synthesized without
+/// an available embedding client store NULL and won't surface in
+/// semantic recall (only via direct lookup). Fresh databases get the
+/// column via the inline `CREATE TABLE` body; this function is the
+/// idempotent ALTER guard for existing DBs.
+fn ensure_kg_beliefs_embedding_column(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare("PRAGMA table_info(kg_beliefs)")?;
+    let has_embedding = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "embedding");
+    if !has_embedding {
+        conn.execute("ALTER TABLE kg_beliefs ADD COLUMN embedding BLOB", [])?;
+    }
+    Ok(())
+}
+
+/// Ensure `kg_relationships` carries the bi-temporal `valid_from` and
+/// `valid_until` columns introduced in schema v26.
+///
+/// SQLite errors on duplicate `ADD COLUMN`, so we PRAGMA-probe the table
+/// before each ALTER. Fresh databases get the columns via the
+/// `CREATE TABLE` body and this function is a no-op. The companion
+/// migration SQL file backfills the new columns from the legacy
+/// `valid_at` / `invalidated_at` pair after this function runs.
+fn ensure_kg_relationships_bitemporal_columns(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare("PRAGMA table_info(kg_relationships)")?;
+    let existing: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .collect();
+    if !existing.iter().any(|name| name == "valid_from") {
+        conn.execute(
+            "ALTER TABLE kg_relationships ADD COLUMN valid_from TEXT",
+            [],
+        )?;
+    }
+    if !existing.iter().any(|name| name == "valid_until") {
+        conn.execute(
+            "ALTER TABLE kg_relationships ADD COLUMN valid_until TEXT",
+            [],
         )?;
     }
     Ok(())
@@ -82,7 +223,8 @@ CREATE TABLE IF NOT EXISTS kg_entities (
     valid_until TEXT,
     invalidated_by TEXT,
     compressed_into TEXT,
-    source_episode_ids TEXT
+    source_episode_ids TEXT,
+    evidence TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_entities_normalized_hash
     ON kg_entities(agent_id, entity_type, normalized_hash);
@@ -109,8 +251,11 @@ CREATE TABLE IF NOT EXISTS kg_relationships (
     last_accessed_at TEXT,
     valid_at TEXT,
     invalidated_at TEXT,
+    valid_from TEXT,
+    valid_until TEXT,
     invalidated_by TEXT,
     source_episode_ids TEXT,
+    evidence TEXT,
     UNIQUE(source_entity_id, target_entity_id, relationship_type),
     FOREIGN KEY (source_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE,
     FOREIGN KEY (target_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE
@@ -335,6 +480,70 @@ CREATE TABLE IF NOT EXISTS kg_episode_payloads (
     created_at TEXT NOT NULL,
     FOREIGN KEY (episode_id) REFERENCES kg_episodes(id) ON DELETE CASCADE
 );
+
+-- v27: Belief Network — aggregate of one or more facts about a subject.
+-- See migrations/v27_kg_beliefs.sql for the canonical definition; this
+-- inline copy keeps fresh-DB init self-contained.
+--
+-- v29: `stale` column added so a multi-source belief whose source fact
+-- was invalidated can be queued for re-synthesis on the next sleep cycle.
+--
+-- v30: `embedding` BLOB column added for B-4 recall integration. Stores
+-- a serialized f32 vector (little-endian bytes, same format as other
+-- caches in this crate) so the in-memory cosine search in
+-- `SqliteBeliefStore::search_beliefs` can match beliefs against query
+-- embeddings. NULL means "no embedding generated" — belief is still
+-- usable via direct lookup but won't surface in semantic recall.
+CREATE TABLE IF NOT EXISTS kg_beliefs (
+    id TEXT PRIMARY KEY,
+    partition_id TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    content TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    valid_from TEXT,
+    valid_until TEXT,
+    source_fact_ids TEXT NOT NULL,
+    synthesizer_version INTEGER NOT NULL DEFAULT 1,
+    reasoning TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    superseded_by TEXT,
+    stale INTEGER NOT NULL DEFAULT 0,
+    embedding BLOB,
+    UNIQUE(partition_id, subject, valid_from)
+);
+CREATE INDEX IF NOT EXISTS idx_beliefs_partition_subject ON kg_beliefs(partition_id, subject);
+CREATE INDEX IF NOT EXISTS idx_beliefs_valid ON kg_beliefs(valid_from, valid_until);
+-- NOTE: idx_beliefs_stale is intentionally NOT defined here.
+-- The `stale` column was added by v29 via `ensure_kg_beliefs_stale_column`,
+-- which runs AFTER this inline schema. On databases created before v29,
+-- the column doesn't exist when this batch executes — creating the
+-- partial index here would fail with "no such column: stale".
+-- The index is created in `V29_KG_BELIEFS_STALE_SQL` (migration file),
+-- which runs after the ensure-column helper. For fresh DBs the column
+-- exists (declared above) but the index still waits for the v29 step,
+-- which is idempotent via IF NOT EXISTS.
+
+-- v28: Belief Network — pair-wise contradictions between two beliefs.
+-- See migrations/v28_kg_belief_contradictions.sql for the canonical
+-- definition; this inline copy keeps fresh-DB init self-contained.
+CREATE TABLE IF NOT EXISTS kg_belief_contradictions (
+    id TEXT PRIMARY KEY,
+    belief_a_id TEXT NOT NULL,
+    belief_b_id TEXT NOT NULL,
+    contradiction_type TEXT NOT NULL,
+    severity REAL NOT NULL,
+    judge_reasoning TEXT,
+    detected_at TEXT NOT NULL,
+    resolved_at TEXT,
+    resolution TEXT,
+    FOREIGN KEY (belief_a_id) REFERENCES kg_beliefs(id) ON DELETE CASCADE,
+    FOREIGN KEY (belief_b_id) REFERENCES kg_beliefs(id) ON DELETE CASCADE,
+    UNIQUE(belief_a_id, belief_b_id)
+);
+CREATE INDEX IF NOT EXISTS idx_belief_contradictions_a ON kg_belief_contradictions(belief_a_id);
+CREATE INDEX IF NOT EXISTS idx_belief_contradictions_b ON kg_belief_contradictions(belief_b_id);
+CREATE INDEX IF NOT EXISTS idx_belief_contradictions_unresolved ON kg_belief_contradictions(detected_at) WHERE resolved_at IS NULL;
 "#;
 
 #[allow(dead_code)] // retained for reference/tests; runtime uses initialize_vec_tables_with_dim
@@ -614,7 +823,7 @@ mod tests {
         let version: i32 = conn
             .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 24);
+        assert_eq!(version, 30);
 
         // Regular tables.
         for table in [
@@ -631,6 +840,8 @@ mod tests {
             "session_episodes",
             "embedding_cache",
             "kg_episode_payloads",
+            "kg_beliefs",
+            "kg_belief_contradictions",
         ] {
             let count: i64 = conn
                 .query_row(
@@ -809,5 +1020,444 @@ mod tests {
         let (present, missing) = list_vec_table_presence(&conn);
         assert_eq!(present.len(), 4);
         assert_eq!(missing, vec!["memory_facts_index".to_string()]);
+    }
+
+    #[test]
+    fn kg_entities_and_relationships_have_evidence_column() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        for table in ["kg_entities", "kg_relationships"] {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .unwrap();
+            let cols: Vec<String> = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect();
+            assert!(
+                cols.contains(&"evidence".to_string()),
+                "{table} must have evidence column; got: {cols:?}"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Bi-temporal phase 3: v26 — kg_relationships symmetric columns
+    // -----------------------------------------------------------------
+
+    /// Read the symmetric `valid_from` / `valid_until` pair for a
+    /// relationship row by id. Returns `(valid_from, valid_until)`.
+    fn read_rel_bitemporal(conn: &Connection, id: &str) -> (Option<String>, Option<String>) {
+        conn.query_row(
+            "SELECT valid_from, valid_until FROM kg_relationships WHERE id = ?1",
+            rusqlite::params![id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
+        )
+        .expect("query rel bitemporal")
+    }
+
+    /// Seed a minimal pair of entities + a relationship row with the
+    /// legacy `valid_at` / `invalidated_at` columns populated and the
+    /// symmetric `valid_from` / `valid_until` left NULL — i.e. the
+    /// pre-v26 shape.
+    fn seed_legacy_rel(
+        conn: &Connection,
+        rel_id: &str,
+        valid_at: Option<&str>,
+        invalidated_at: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO kg_entities
+                (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                 first_seen_at, last_seen_at)
+             VALUES ('src-e', 'agent', 'Concept', 'src', 'src', 'h-src',
+                     datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("seed src entity");
+        conn.execute(
+            "INSERT INTO kg_entities
+                (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                 first_seen_at, last_seen_at)
+             VALUES ('tgt-e', 'agent', 'Concept', 'tgt', 'tgt', 'h-tgt',
+                     datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("seed tgt entity");
+        conn.execute(
+            "INSERT INTO kg_relationships
+                (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                 first_seen_at, last_seen_at, valid_at, invalidated_at,
+                 valid_from, valid_until)
+             VALUES (?1, 'agent', 'src-e', 'tgt-e', 'relates_to',
+                     datetime('now'), datetime('now'), ?2, ?3,
+                     NULL, NULL)",
+            rusqlite::params![rel_id, valid_at, invalidated_at],
+        )
+        .expect("seed rel");
+    }
+
+    /// v26 backfill copies the legacy `valid_at` / `invalidated_at`
+    /// pair into the symmetric `valid_from` / `valid_until` columns
+    /// when the symmetric columns are NULL.
+    #[test]
+    fn v26_backfill_copies_valid_at_and_invalidated_at_into_symmetric_pair() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        // Re-seed the legacy state after init clobbered any data:
+        // initialize_knowledge_database also runs the v26 backfill, but
+        // there are no rows yet so it's a no-op. We then seed legacy
+        // rows and re-run the backfill SQL directly to simulate the
+        // upgrade path on an existing database.
+        seed_legacy_rel(
+            &conn,
+            "rel-legacy",
+            Some("2026-01-01T00:00:00Z"),
+            Some("2026-03-01T00:00:00Z"),
+        );
+
+        // Precondition: symmetric columns NULL.
+        let (vf, vu) = read_rel_bitemporal(&conn, "rel-legacy");
+        assert!(vf.is_none(), "precondition: valid_from should be NULL");
+        assert!(vu.is_none(), "precondition: valid_until should be NULL");
+
+        // Apply the v26 backfill SQL directly.
+        conn.execute_batch(V26_KG_RELATIONSHIPS_BITEMPORAL_SQL)
+            .expect("run v26 backfill");
+
+        let (vf, vu) = read_rel_bitemporal(&conn, "rel-legacy");
+        assert_eq!(
+            vf.as_deref(),
+            Some("2026-01-01T00:00:00Z"),
+            "valid_from must be backfilled from valid_at"
+        );
+        assert_eq!(
+            vu.as_deref(),
+            Some("2026-03-01T00:00:00Z"),
+            "valid_until must be backfilled from invalidated_at"
+        );
+    }
+
+    /// The v26 ALTER + UPDATE pipeline is idempotent: re-running the
+    /// migration on an already-migrated database is a no-op and does
+    /// not corrupt previously backfilled values.
+    #[test]
+    fn v26_migration_is_idempotent_on_rerun() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        seed_legacy_rel(&conn, "rel-idem", Some("2026-02-02T00:00:00Z"), None);
+        conn.execute_batch(V26_KG_RELATIONSHIPS_BITEMPORAL_SQL)
+            .expect("first backfill");
+
+        // Re-run the full migration pipeline (ALTER + UPDATE) — both
+        // halves must remain no-ops on an already-migrated database.
+        ensure_kg_relationships_bitemporal_columns(&conn).expect("rerun ALTER guard");
+        conn.execute_batch(V26_KG_RELATIONSHIPS_BITEMPORAL_SQL)
+            .expect("rerun backfill");
+
+        let (vf, vu) = read_rel_bitemporal(&conn, "rel-idem");
+        assert_eq!(
+            vf.as_deref(),
+            Some("2026-02-02T00:00:00Z"),
+            "valid_from must survive a re-run"
+        );
+        assert!(
+            vu.is_none(),
+            "valid_until must stay NULL when invalidated_at was NULL"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // v27 — kg_beliefs migration idempotency
+    // -----------------------------------------------------------------
+
+    /// v28 belief-contradictions table creation is idempotent: re-running
+    /// the migration SQL on an already-initialized database is a no-op and
+    /// does not corrupt the table.
+    #[test]
+    fn v28_kg_belief_contradictions_migration_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='kg_belief_contradictions'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query kg_belief_contradictions");
+        assert_eq!(
+            count, 1,
+            "kg_belief_contradictions must be created by initialize"
+        );
+
+        // Re-running the migration directly must not error.
+        conn.execute_batch(V28_KG_BELIEF_CONTRADICTIONS_SQL)
+            .expect("rerun v28 migration");
+
+        // Re-running the full init path must also stay healthy.
+        initialize_knowledge_database(&conn).expect("re-init is idempotent");
+
+        let count_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='kg_belief_contradictions'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("recount kg_belief_contradictions");
+        assert_eq!(count_after, 1, "no duplicate table after rerun");
+    }
+
+    /// v29 belief-staleness migration is idempotent: the `stale` column
+    /// is added once, and re-running the full init path is a no-op that
+    /// preserves the column. Mirrors the v26 PRAGMA-guarded ALTER pattern.
+    /// Regression test for the daemon-startup crash on databases created
+    /// before v29: pre-v29 databases have a `kg_beliefs` table without a
+    /// `stale` column. If the inline `SCHEMA_SQL` tries to `CREATE INDEX
+    /// ON kg_beliefs(stale)` BEFORE `ensure_kg_beliefs_stale_column` runs
+    /// the ADD COLUMN guard, init crashes with `no such column: stale`.
+    ///
+    /// This test simulates a pre-v29 database (kg_beliefs without stale)
+    /// and then runs `initialize_knowledge_database`. It must succeed —
+    /// the ensure-column helper adds the column, then v29 SQL creates the
+    /// index. The fix is the absence of the stale-index line from inline
+    /// SCHEMA_SQL.
+    #[test]
+    fn initialize_succeeds_on_pre_v29_database_without_stale_column() {
+        let conn = Connection::open_in_memory().expect("open");
+
+        // Bootstrap minimum schema_version table + a pre-v29 kg_beliefs
+        // shape (no `stale`, no `embedding`).
+        conn.execute_batch(
+            "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+             CREATE TABLE kg_beliefs (
+                id TEXT PRIMARY KEY,
+                partition_id TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                content TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                valid_from TEXT,
+                valid_until TEXT,
+                source_fact_ids TEXT NOT NULL,
+                synthesizer_version INTEGER NOT NULL DEFAULT 1,
+                reasoning TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                superseded_by TEXT,
+                UNIQUE(partition_id, subject, valid_from)
+             );",
+        )
+        .expect("seed pre-v29 schema");
+
+        // Now run init — must NOT panic with `no such column: stale`.
+        initialize_knowledge_database(&conn).expect(
+            "init must succeed on a pre-v29 database; the inline schema must \
+             not reference the `stale` column in any CREATE INDEX statement, \
+             because the column is added later by ensure_kg_beliefs_stale_column",
+        );
+
+        // After init, stale + embedding must both exist on the existing table.
+        let mut stmt = conn.prepare("PRAGMA table_info(kg_beliefs)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(cols.contains(&"stale".to_string()), "stale column added");
+        assert!(
+            cols.contains(&"embedding".to_string()),
+            "embedding column added"
+        );
+
+        // And the partial stale index must exist.
+        let stale_index_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='index' AND name='idx_beliefs_stale'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query stale index");
+        assert_eq!(stale_index_count, 1, "idx_beliefs_stale must be created by v29 migration");
+    }
+
+    #[test]
+    fn v29_kg_beliefs_stale_migration_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        let mut stmt = conn.prepare("PRAGMA table_info(kg_beliefs)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            cols.contains(&"stale".to_string()),
+            "kg_beliefs must have stale column after init; got: {cols:?}"
+        );
+
+        // Re-running the full init path must not error and the column
+        // must still be there exactly once.
+        initialize_knowledge_database(&conn).expect("re-init is idempotent");
+        ensure_kg_beliefs_stale_column(&conn).expect("rerun ALTER guard");
+        conn.execute_batch(V29_KG_BELIEFS_STALE_SQL)
+            .expect("rerun v29 migration SQL");
+
+        let mut stmt = conn.prepare("PRAGMA table_info(kg_beliefs)").unwrap();
+        let stale_count = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .filter(|name| name == "stale")
+            .count();
+        assert_eq!(stale_count, 1, "stale column must be present exactly once");
+
+        // The partial index must also be present (idempotent CREATE).
+        let index_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='index' AND name='idx_beliefs_stale'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query index");
+        assert_eq!(index_count, 1, "idx_beliefs_stale index must exist");
+    }
+
+    /// v30 belief-embedding migration is idempotent: the `embedding`
+    /// BLOB column is added once on first init and re-running the full
+    /// init path is a no-op that preserves the column. Same PRAGMA-guarded
+    /// ALTER pattern as v26 / v29.
+    #[test]
+    fn v30_kg_beliefs_embedding_migration_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        // Column must exist after fresh init.
+        let mut stmt = conn.prepare("PRAGMA table_info(kg_beliefs)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            cols.contains(&"embedding".to_string()),
+            "kg_beliefs must have embedding column after init; got: {cols:?}"
+        );
+
+        // Re-running the full init path must not error and the column
+        // must still be there exactly once.
+        initialize_knowledge_database(&conn).expect("re-init is idempotent");
+        ensure_kg_beliefs_embedding_column(&conn).expect("rerun ALTER guard");
+        conn.execute_batch(V30_KG_BELIEFS_EMBEDDING_SQL)
+            .expect("rerun v30 migration SQL");
+
+        let mut stmt = conn.prepare("PRAGMA table_info(kg_beliefs)").unwrap();
+        let embedding_count = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .filter(|name| name == "embedding")
+            .count();
+        assert_eq!(
+            embedding_count, 1,
+            "embedding column must be present exactly once"
+        );
+    }
+
+    /// v27 belief table creation is idempotent: re-running the migration
+    /// SQL on an already-initialized database is a no-op and does not
+    /// corrupt the table.
+    #[test]
+    fn v27_kg_beliefs_migration_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        // Confirm the table exists after the first run.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='kg_beliefs'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query kg_beliefs");
+        assert_eq!(count, 1, "kg_beliefs must be created by initialize");
+
+        // Re-running the migration directly must not error.
+        conn.execute_batch(V27_KG_BELIEFS_SQL)
+            .expect("rerun v27 migration");
+
+        // Re-running the full init path must also stay healthy.
+        initialize_knowledge_database(&conn).expect("re-init is idempotent");
+
+        let count_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='kg_beliefs'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("recount kg_beliefs");
+        assert_eq!(count_after, 1, "no duplicate table after rerun");
+    }
+
+    /// Writers exercising the kg_relationships INSERT path populate
+    /// `valid_from` on creation. We exercise the schema directly with
+    /// the same column shape used by `store_relationship` in
+    /// `kg::storage`, which is the canonical production writer.
+    #[test]
+    fn kg_relationships_insert_populates_valid_from() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        // Insert two entities so the FK constraint is satisfied.
+        conn.execute(
+            "INSERT INTO kg_entities
+                (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                 first_seen_at, last_seen_at)
+             VALUES ('e-src', 'agent', 'Concept', 'a', 'a', 'h-a',
+                     datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("seed src entity");
+        conn.execute(
+            "INSERT INTO kg_entities
+                (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                 first_seen_at, last_seen_at)
+             VALUES ('e-tgt', 'agent', 'Concept', 'b', 'b', 'h-b',
+                     datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("seed tgt entity");
+
+        let first_seen = "2026-05-15T12:00:00+00:00";
+        conn.execute(
+            "INSERT INTO kg_relationships
+                (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                 first_seen_at, last_seen_at, mention_count, valid_from)
+             VALUES ('rel-new', 'agent', 'e-src', 'e-tgt', 'relates_to',
+                     ?1, ?1, 1, ?1)",
+            rusqlite::params![first_seen],
+        )
+        .expect("insert rel");
+
+        let (vf, vu) = read_rel_bitemporal(&conn, "rel-new");
+        assert_eq!(
+            vf.as_deref(),
+            Some(first_seen),
+            "writers must populate valid_from on creation"
+        );
+        assert!(vu.is_none(), "valid_until must stay NULL on creation");
     }
 }

@@ -368,6 +368,50 @@ impl KnowledgeGraphStore for SqliteKgStore {
         .await
     }
 
+    async fn decay_entity_confidence(
+        &self,
+        agent_id: &str,
+        half_life_days: f64,
+        min_confidence: f64,
+        skip_recent_hours: i64,
+    ) -> StoreResult<u64> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        block(move || {
+            decay_kg_table(
+                &storage,
+                "kg_entities",
+                &agent_id,
+                half_life_days,
+                min_confidence,
+                skip_recent_hours,
+            )
+        })
+        .await
+    }
+
+    async fn decay_relationship_confidence(
+        &self,
+        agent_id: &str,
+        half_life_days: f64,
+        min_confidence: f64,
+        skip_recent_hours: i64,
+    ) -> StoreResult<u64> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        block(move || {
+            decay_kg_table(
+                &storage,
+                "kg_relationships",
+                &agent_id,
+                half_life_days,
+                min_confidence,
+                skip_recent_hours,
+            )
+        })
+        .await
+    }
+
     // -------- HTTP read paths -----------------------------------------------
 
     async fn graph_stats(&self, agent_id: &str) -> StoreResult<GraphStats> {
@@ -873,6 +917,90 @@ fn compute_subgraph(
     })
 }
 
+/// Batch-apply temporal confidence decay to a KG table.
+///
+/// Both `kg_entities` and `kg_relationships` share the same schema for
+/// `id`, `agent_id`, `confidence`, `last_seen_at`, and `epistemic_class`,
+/// so one helper covers both. We compute the per-row multiplier in Rust
+/// (`new = max(min_confidence, old * 0.5^(days / half_life))`) and apply
+/// via individual UPDATEs inside a single connection — this avoids
+/// depending on SQLite's optional `exp()` math extension and keeps the
+/// math portable.
+fn decay_kg_table(
+    storage: &Arc<crate::kg::storage::GraphStorage>,
+    table: &str,
+    agent_id: &str,
+    half_life_days: f64,
+    min_confidence: f64,
+    skip_recent_hours: i64,
+) -> StoreResult<u64> {
+    if half_life_days <= 0.0 {
+        return Err(StoreError::Invalid(
+            "half_life_days must be > 0".to_string(),
+        ));
+    }
+    let cutoff = chrono::Utc::now() - chrono::Duration::hours(skip_recent_hours);
+    let cutoff_rfc = cutoff.to_rfc3339();
+    let decay_constant = std::f64::consts::LN_2 / half_life_days;
+    let now = chrono::Utc::now();
+
+    let table = table.to_string();
+    let agent_id = agent_id.to_string();
+
+    storage
+        .knowledge_db()
+        .with_connection(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+
+            let select_sql = format!(
+                "SELECT id, confidence, last_seen_at FROM {table}
+                 WHERE agent_id = ?1
+                   AND epistemic_class != 'archival'
+                   AND last_seen_at < ?2"
+            );
+            let mut stmt = tx.prepare(&select_sql)?;
+            let rows: Vec<(String, f64, String)> = stmt
+                .query_map(rusqlite::params![agent_id, cutoff_rfc], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, f64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            drop(stmt);
+
+            let update_sql = format!("UPDATE {table} SET confidence = ?1 WHERE id = ?2");
+            let mut update = tx.prepare(&update_sql)?;
+            let mut total_updated: u64 = 0;
+            // TODO: Replace this O(N) per-row UPDATE loop with a single bulk
+            // UPDATE using `exp()` once we confirm SQLite's math extension is
+            // always built into our rusqlite. For now we compute in Rust for
+            // portability.
+            for (id, old_conf, last_seen) in rows {
+                let last_seen_dt = match chrono::DateTime::parse_from_rfc3339(&last_seen) {
+                    Ok(dt) => dt.with_timezone(&chrono::Utc),
+                    Err(_) => continue,
+                };
+                let days = (now - last_seen_dt).num_seconds() as f64 / 86_400.0;
+                if days <= 0.0 {
+                    continue;
+                }
+                let new_conf = (old_conf * (-decay_constant * days).exp()).max(min_confidence);
+                if (new_conf - old_conf).abs() < 1e-6 {
+                    continue;
+                }
+                update.execute(rusqlite::params![new_conf, id])?;
+                total_updated += 1;
+            }
+            drop(update);
+            tx.commit()?;
+            Ok(total_updated)
+        })
+        .map_err(StoreError::Backend)
+}
+
 /// Process one hop's worth of neighbors into the BFS accumulators.
 fn collect_subgraph_neighbors(
     neighbors: Vec<NeighborInfo>,
@@ -893,5 +1021,91 @@ fn collect_subgraph_neighbors(
             entities.push(neighbor.entity);
             next_hop.push(neighbor_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::knowledge_db::KnowledgeDatabase;
+    use gateway_services::VaultPaths;
+
+    #[tokio::test]
+    async fn decay_entity_confidence_reduces_old_entities() {
+        use chrono::Duration as ChronoDuration;
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = std::sync::Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        let db = std::sync::Arc::new(KnowledgeDatabase::new(paths).expect("db"));
+        let graph = std::sync::Arc::new(crate::kg::storage::GraphStorage::new(db).expect("graph"));
+        let store = SqliteKgStore::new(graph.clone());
+
+        let agent_id = "agent-decay-test";
+        let stale_time = chrono::Utc::now() - ChronoDuration::days(180); // 2 half-lives at 90d
+        let fresh_time = chrono::Utc::now();
+
+        // Insert one stale + one fresh entity directly via SQL for full control.
+        graph
+            .knowledge_db()
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         epistemic_class, confidence, mention_count, access_count,
+                         first_seen_at, last_seen_at)
+                     VALUES ('stale', ?1, 'Concept', 'Stale', 'stale', 'h1',
+                             'current', 0.8, 1, 0, ?2, ?2)",
+                    rusqlite::params![agent_id, stale_time.to_rfc3339()],
+                )?;
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         epistemic_class, confidence, mention_count, access_count,
+                         first_seen_at, last_seen_at)
+                     VALUES ('fresh', ?1, 'Concept', 'Fresh', 'fresh', 'h2',
+                             'current', 0.8, 1, 0, ?2, ?2)",
+                    rusqlite::params![agent_id, fresh_time.to_rfc3339()],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let updated = store
+            .decay_entity_confidence(agent_id, 90.0, 0.01, 24)
+            .await
+            .expect("decay");
+        assert_eq!(updated, 1, "exactly the stale entity should be decayed");
+
+        // Verify stale confidence approximately halved twice
+        // (2 half-lives → 0.25× of 0.8 = 0.2).
+        let new_stale_conf: f64 = graph
+            .knowledge_db()
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT confidence FROM kg_entities WHERE id = 'stale'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert!(
+            (new_stale_conf - 0.2).abs() < 0.02,
+            "stale conf {new_stale_conf} should be ~0.2"
+        );
+
+        // Fresh entity unchanged.
+        let fresh_conf: f64 = graph
+            .knowledge_db()
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT confidence FROM kg_entities WHERE id = 'fresh'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert!(
+            (fresh_conf - 0.8).abs() < 1e-6,
+            "fresh conf should be unchanged"
+        );
     }
 }

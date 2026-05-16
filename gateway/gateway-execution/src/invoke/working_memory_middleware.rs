@@ -80,6 +80,16 @@ pub fn process_delegation_completed(wm: &mut WorkingMemory, agent_id: &str, resu
     wm.update_delegation(agent_id, "completed", findings);
 }
 
+/// Process an incoming callback system message from a completed subagent.
+///
+/// Call this during history seeding when a system message is identified as
+/// a delegation callback (`## From Agent-Name` or structured envelope).
+/// Updates delegation status to "completed" and decrements pending parallel count.
+pub fn process_callback_message(wm: &mut WorkingMemory, agent_id: &str, result: &str) {
+    process_delegation_completed(wm, agent_id, result);
+    wm.complete_pending_parallel();
+}
+
 /// Extract key lines from a delegation result (first N non-empty lines).
 fn extract_key_lines(text: &str, max_lines: usize) -> Vec<String> {
     text.lines()
@@ -126,17 +136,28 @@ fn extract_and_add_entities(wm: &mut WorkingMemory, text: &str, iteration: u32, 
     }
 }
 
-/// Handle delegation tool result — parse agent_id from result JSON.
+/// Handle delegation tool result — parse agent_id, task, and parallel flag.
 fn handle_delegation_result(wm: &mut WorkingMemory, result: &str) {
-    // delegate_to_agent returns JSON with delegation info
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(result) {
+        // Only process "delegated" outcomes — ignore "queued"/"redirect" guard responses
+        let status = value.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        if status != "delegated" {
+            return;
+        }
         let agent_id = value
             .get("agent_id")
             .or(value.get("child_agent_id"))
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
         let task = value.get("task").and_then(|v| v.as_str()).unwrap_or("");
+        let parallel = value
+            .get("parallel")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         wm.set_delegation_task(agent_id, task);
+        if parallel {
+            wm.add_pending_parallel();
+        }
     }
 }
 
@@ -390,5 +411,44 @@ mod tests {
         let mut wm = WorkingMemory::new(5000);
         process_tool_result(&mut wm, "respond", "Here is the final answer", None, 10);
         assert!(wm.is_empty());
+    }
+
+    #[test]
+    fn delegate_result_sets_task_and_increments_parallel() {
+        let mut wm = WorkingMemory::new(5000);
+        let result = r#"{"status":"delegated","agent_id":"analyst-agent","task":"crunch numbers","parallel":true}"#;
+        process_tool_result(&mut wm, "delegate_to_agent", result, None, 1);
+        let output = wm.format_for_prompt();
+        assert!(output.contains("analyst-agent"));
+        assert!(output.contains("running"));
+        assert_eq!(wm.pending_parallel_count(), 1);
+    }
+
+    #[test]
+    fn delegate_queued_result_is_ignored() {
+        let mut wm = WorkingMemory::new(5000);
+        let result = r#"{"status":"queued","message":"wait for active delegation"}"#;
+        process_tool_result(&mut wm, "delegate_to_agent", result, None, 1);
+        assert!(wm.is_empty());
+    }
+
+    #[test]
+    fn sequential_delegate_does_not_increment_parallel() {
+        let mut wm = WorkingMemory::new(5000);
+        let result = r#"{"status":"delegated","agent_id":"writer-agent","task":"write report","parallel":false}"#;
+        process_tool_result(&mut wm, "delegate_to_agent", result, None, 1);
+        assert_eq!(wm.pending_parallel_count(), 0);
+    }
+
+    #[test]
+    fn process_callback_message_marks_completed_and_decrements() {
+        let mut wm = WorkingMemory::new(5000);
+        wm.add_pending_parallel();
+        wm.add_pending_parallel();
+        process_callback_message(&mut wm, "analyst-agent", "Found 5 items");
+        assert_eq!(wm.pending_parallel_count(), 1);
+        let output = wm.format_for_prompt();
+        assert!(output.contains("analyst-agent: completed"));
+        assert!(output.contains("1 parallel agent(s) still running"));
     }
 }

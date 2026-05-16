@@ -2395,9 +2395,15 @@ fn store_relationship(
         Err(_) => properties_json.clone(),
     };
 
+    // Bi-temporal phase 3: populate `valid_from` on creation. We mirror
+    // `first_seen_at` so a fresh relationship's "in-world validity start"
+    // matches when it first entered the graph. The upsert branch leaves
+    // `valid_from` untouched — only the original creation timestamp
+    // matters for point-in-time recall.
+    let first_seen = relationship.first_seen_at.to_rfc3339();
     conn.execute(
-        "INSERT INTO kg_relationships (id, agent_id, source_entity_id, target_entity_id, relationship_type, properties, first_seen_at, last_seen_at, mention_count)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        "INSERT INTO kg_relationships (id, agent_id, source_entity_id, target_entity_id, relationship_type, properties, first_seen_at, last_seen_at, mention_count, valid_from)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?7)
          ON CONFLICT(source_entity_id, target_entity_id, relationship_type) DO UPDATE SET
             last_seen_at = excluded.last_seen_at,
             mention_count = mention_count + 1,
@@ -2409,7 +2415,7 @@ fn store_relationship(
             relationship.target_entity_id,
             rel_type_str,
             props_to_store,
-            relationship.first_seen_at.to_rfc3339(),
+            first_seen,
             relationship.last_seen_at.to_rfc3339(),
             relationship.mention_count,
         ],

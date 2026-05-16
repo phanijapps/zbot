@@ -37,6 +37,7 @@ pub mod events;
 pub mod execution;
 pub mod hooks;
 pub mod http;
+pub mod memory_llm_factory;
 pub mod server;
 pub mod services;
 pub mod state;

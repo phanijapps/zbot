@@ -9,7 +9,7 @@
 // to the injected `VectorIndex`.
 // ============================================================================
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rusqlite::params;
 use std::sync::Arc;
 
@@ -71,6 +71,25 @@ const FACT_COLUMNS_MF: &str = "mf.id, mf.session_id, mf.agent_id, mf.scope, mf.c
     mf.content, mf.confidence, mf.mention_count, mf.source_summary, mf.ward_id, mf.contradicted_by, \
     mf.created_at, mf.updated_at, mf.expires_at, mf.valid_from, mf.valid_until, mf.superseded_by, \
     mf.pinned, mf.epistemic_class, mf.source_episode_id, mf.source_ref";
+
+/// Bi-temporal point-in-time recall filter. Returns the SQL WHERE fragment
+/// (column-prefixed for joined queries; pass `""` for un-aliased queries) and
+/// the resolved RFC3339 timestamp the caller must bind once. `as_of = None`
+/// defaults to `Utc::now()` — Option A from the bi-temporal design doc:
+/// default recall always excludes facts whose `valid_until` is in the past,
+/// fixing the latent bug where time-bounded-past facts were still returned.
+fn as_of_filter(
+    as_of: Option<chrono::DateTime<chrono::Utc>>,
+    column_prefix: &str,
+) -> (String, String) {
+    let ts = as_of.unwrap_or_else(chrono::Utc::now).to_rfc3339();
+    let filter = format!(
+        "({prefix}valid_from IS NULL OR {prefix}valid_from <= ?) \
+         AND ({prefix}valid_until IS NULL OR {prefix}valid_until > ?)",
+        prefix = column_prefix,
+    );
+    (filter, ts)
+}
 
 /// Repository for memory fact operations.
 pub struct MemoryRepository {
@@ -461,12 +480,22 @@ impl MemoryRepository {
 
     /// Mark an existing fact as superseded by a newer fact.
     ///
-    /// Sets `valid_until` to now and records the new fact's ID in `superseded_by`.
-    pub fn supersede_fact(&self, old_id: &str, new_id: &str) -> Result<(), String> {
+    /// Sets `valid_until = transition_time` and records the new fact's ID in
+    /// `superseded_by`. `transition_time` is the moment the old fact stops
+    /// being valid — usually `Utc::now()` (distillation), but the
+    /// ConflictResolver passes the winner's `created_at` so the old fact's
+    /// truth-interval closes at the precise moment the contradicting belief
+    /// arrived. That preserves bi-temporal continuity: no gap, no overlap.
+    pub fn supersede_fact(
+        &self,
+        old_id: &str,
+        new_id: &str,
+        transition_time: DateTime<Utc>,
+    ) -> Result<(), String> {
         self.db.with_connection(|conn| {
             conn.execute(
                 "UPDATE memory_facts SET valid_until = ?3, superseded_by = ?1 WHERE id = ?2",
-                params![new_id, old_id, Utc::now().to_rfc3339()],
+                params![new_id, old_id, transition_time.to_rfc3339()],
             )?;
             Ok(())
         })
@@ -691,8 +720,10 @@ impl MemoryRepository {
         limit: usize,
         ward_id: Option<&str>,
     ) -> Result<Vec<ScoredFact>, String> {
+        // Contradiction detection compares against currently-valid facts; the
+        // bi-temporal filter defaults to Utc::now() (Option A).
         let mut results =
-            self.search_memory_facts_vector(query_embedding, agent_id, limit, ward_id)?;
+            self.search_memory_facts_vector(query_embedding, agent_id, limit, ward_id, None)?;
         results.retain(|sf| sf.score >= min_similarity);
         Ok(results)
     }
@@ -777,6 +808,7 @@ impl MemoryRepository {
         agent_id: Option<&str>,
         limit: usize,
         ward_id: Option<&str>,
+        as_of: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<ScoredFact>, String> {
         // Sanitize query for FTS5: extract alphanumeric words, join with OR.
         // Raw user messages contain commas, parens, dashes that break FTS5 syntax.
@@ -787,6 +819,12 @@ impl MemoryRepository {
         }
         let query = &sanitized_query;
 
+        // Bi-temporal point-in-time gate. Option A: always apply (defaults to
+        // Utc::now()) so facts with valid_until in the past are correctly
+        // excluded from default recall. The fragment binds the `as_of`
+        // timestamp twice (once per inequality).
+        let (as_of_clause, as_of_ts) = as_of_filter(as_of, "mf.");
+
         self.db.with_connection(|conn| {
             let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
                 match (agent_id, ward_id) {
@@ -795,16 +833,19 @@ impl MemoryRepository {
                             "SELECT {FACT_COLUMNS_MF}, rank
                              FROM memory_facts_fts fts
                              JOIN memory_facts mf ON mf.rowid = fts.rowid
-                             WHERE memory_facts_fts MATCH ?1
-                               AND ((mf.agent_id = ?2 AND mf.scope = 'agent') OR mf.scope = 'global')
-                               AND (mf.ward_id = '__global__' OR mf.ward_id = ?3)
+                             WHERE memory_facts_fts MATCH ?
+                               AND ((mf.agent_id = ? AND mf.scope = 'agent') OR mf.scope = 'global')
+                               AND (mf.ward_id = '__global__' OR mf.ward_id = ?)
+                               AND {as_of_clause}
                              ORDER BY rank
-                             LIMIT ?4"
+                             LIMIT ?"
                         ),
                         vec![
                             Box::new(query.to_string()),
                             Box::new(a.to_string()),
                             Box::new(w.to_string()),
+                            Box::new(as_of_ts.clone()),
+                            Box::new(as_of_ts.clone()),
                             Box::new(limit as i64),
                         ],
                     ),
@@ -813,14 +854,17 @@ impl MemoryRepository {
                             "SELECT {FACT_COLUMNS_MF}, rank
                              FROM memory_facts_fts fts
                              JOIN memory_facts mf ON mf.rowid = fts.rowid
-                             WHERE memory_facts_fts MATCH ?1
-                               AND ((mf.agent_id = ?2 AND mf.scope = 'agent') OR mf.scope = 'global')
+                             WHERE memory_facts_fts MATCH ?
+                               AND ((mf.agent_id = ? AND mf.scope = 'agent') OR mf.scope = 'global')
+                               AND {as_of_clause}
                              ORDER BY rank
-                             LIMIT ?3"
+                             LIMIT ?"
                         ),
                         vec![
                             Box::new(query.to_string()),
                             Box::new(a.to_string()),
+                            Box::new(as_of_ts.clone()),
+                            Box::new(as_of_ts.clone()),
                             Box::new(limit as i64),
                         ],
                     ),
@@ -829,14 +873,17 @@ impl MemoryRepository {
                             "SELECT {FACT_COLUMNS_MF}, rank
                              FROM memory_facts_fts fts
                              JOIN memory_facts mf ON mf.rowid = fts.rowid
-                             WHERE memory_facts_fts MATCH ?1
-                               AND (mf.ward_id = '__global__' OR mf.ward_id = ?2)
+                             WHERE memory_facts_fts MATCH ?
+                               AND (mf.ward_id = '__global__' OR mf.ward_id = ?)
+                               AND {as_of_clause}
                              ORDER BY rank
-                             LIMIT ?3"
+                             LIMIT ?"
                         ),
                         vec![
                             Box::new(query.to_string()),
                             Box::new(w.to_string()),
+                            Box::new(as_of_ts.clone()),
+                            Box::new(as_of_ts.clone()),
                             Box::new(limit as i64),
                         ],
                     ),
@@ -845,11 +892,17 @@ impl MemoryRepository {
                             "SELECT {FACT_COLUMNS_MF}, rank
                              FROM memory_facts_fts fts
                              JOIN memory_facts mf ON mf.rowid = fts.rowid
-                             WHERE memory_facts_fts MATCH ?1
+                             WHERE memory_facts_fts MATCH ?
+                               AND {as_of_clause}
                              ORDER BY rank
-                             LIMIT ?2"
+                             LIMIT ?"
                         ),
-                        vec![Box::new(query.to_string()), Box::new(limit as i64)],
+                        vec![
+                            Box::new(query.to_string()),
+                            Box::new(as_of_ts.clone()),
+                            Box::new(as_of_ts.clone()),
+                            Box::new(limit as i64),
+                        ],
                     ),
                 };
 
@@ -899,6 +952,7 @@ impl MemoryRepository {
         _vector_weight: f64,
         _bm25_weight: f64,
         ward_id: Option<&str>,
+        as_of: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<(Vec<ScoredFact>, Vec<(String, &'static str)>), String> {
         // Standard RRF constant. Dampens the rank-1 vs rank-20 gap so that
         // showing up in both arms (even mid-rank) outranks a single-arm top-1.
@@ -909,12 +963,12 @@ impl MemoryRepository {
 
         // Step 1: FTS5 keyword results.
         let fts_results = self
-            .search_memory_facts_fts(query_text, agent_id, retrieval_k, ward_id)
+            .search_memory_facts_fts(query_text, agent_id, retrieval_k, ward_id, as_of)
             .unwrap_or_default();
 
         // Step 2: Vector results (if embedding provided).
         let vec_results = if let Some(qe) = query_embedding {
-            self.search_memory_facts_vector(qe, agent_id, retrieval_k, ward_id)?
+            self.search_memory_facts_vector(qe, agent_id, retrieval_k, ward_id, as_of)?
         } else {
             Vec::new()
         };
@@ -1006,8 +1060,10 @@ impl MemoryRepository {
         agent_id: Option<&str>,
         limit: usize,
         ward_id: Option<&str>,
+        as_of: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<ScoredFact>, String> {
-        // Over-fetch so post-filtering by agent/ward still returns `limit` hits.
+        // Over-fetch so post-filtering by agent/ward (and bi-temporal as_of)
+        // still returns `limit` hits.
         let fetch = limit.saturating_mul(4).max(limit);
         let nearest = self.vec_index.query_nearest(query_embedding, fetch)?;
         if nearest.is_empty() {
@@ -1022,12 +1078,24 @@ impl MemoryRepository {
             .map(|i| format!("?{}", i + 1))
             .collect::<Vec<_>>()
             .join(",");
-        let sql = format!("SELECT {FACT_COLUMNS} FROM memory_facts WHERE id IN ({placeholders})");
+        // Bi-temporal point-in-time gate. The two `?` placeholders bind the
+        // same `as_of` timestamp; they sit AFTER the id placeholders so the
+        // existing positional binding for `ids` is preserved.
+        let (as_of_clause, as_of_ts) = as_of_filter(as_of, "");
+        let sql = format!(
+            "SELECT {FACT_COLUMNS} FROM memory_facts WHERE id IN ({placeholders}) AND {as_of_clause}"
+        );
 
         let facts: Vec<MemoryFact> = self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(&sql)?;
-            let params_iter = rusqlite::params_from_iter(ids.iter());
-            let rows = stmt.query_map(params_iter, row_to_memory_fact)?;
+            // Bind: id_1, ..., id_n, as_of, as_of
+            let mut param_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
+                ids.iter().map(|i| Box::new(i.clone()) as _).collect();
+            param_vec.push(Box::new(as_of_ts.clone()));
+            param_vec.push(Box::new(as_of_ts.clone()));
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                param_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt.query_map(param_refs.as_slice(), row_to_memory_fact)?;
             rows.collect::<Result<Vec<_>, _>>()
         })?;
 
@@ -1603,7 +1671,7 @@ mod tests {
         .expect("upsert 3");
 
         let results = repo
-            .search_memory_facts_fts("Rust", Some("agent-1"), 10, None)
+            .search_memory_facts_fts("Rust", Some("agent-1"), 10, None, None)
             .expect("fts");
         assert!(
             results.len() >= 2,
@@ -1628,7 +1696,16 @@ mod tests {
         // Query close to fact1.
         let query = normalized_384(0.9, 0.1, 0.0);
         let (results, sources) = repo
-            .search_memory_facts_hybrid("hello", Some(&query), Some("agent-1"), 10, 0.7, 0.3, None)
+            .search_memory_facts_hybrid(
+                "hello",
+                Some(&query),
+                Some("agent-1"),
+                10,
+                0.7,
+                0.3,
+                None,
+                None,
+            )
             .expect("hybrid");
 
         assert!(!results.is_empty(), "Should find at least one result");
@@ -1723,5 +1800,208 @@ mod tests {
             .expect("high conf");
         assert_eq!(facts.len(), 1);
         assert_eq!(facts[0].key, "important");
+    }
+
+    // ========================================================================
+    // BI-TEMPORAL CONFLICT TRANSITION (Phase 4)
+    // ========================================================================
+
+    /// Helper: insert a fact at a specific RFC3339 created_at/updated_at and
+    /// optionally a valid_from. The fact otherwise mirrors `make_fact`.
+    fn make_fact_at(
+        agent_id: &str,
+        key: &str,
+        content: &str,
+        created_at: &str,
+        valid_from: Option<&str>,
+    ) -> MemoryFact {
+        MemoryFact {
+            id: format!("fact-{}", uuid::Uuid::new_v4()),
+            session_id: None,
+            agent_id: agent_id.to_string(),
+            scope: "agent".to_string(),
+            category: "schema".to_string(),
+            key: key.to_string(),
+            content: content.to_string(),
+            confidence: 0.8,
+            mention_count: 1,
+            source_summary: None,
+            embedding: None,
+            ward_id: "__global__".to_string(),
+            contradicted_by: None,
+            created_at: created_at.to_string(),
+            updated_at: created_at.to_string(),
+            expires_at: None,
+            valid_from: valid_from.map(|s| s.to_string()),
+            valid_until: None,
+            superseded_by: None,
+            pinned: false,
+            epistemic_class: Some("current".to_string()),
+            source_episode_id: None,
+            source_ref: None,
+        }
+    }
+
+    /// Test A — `supersede_fact` respects the passed `transition_time` rather
+    /// than always using `Utc::now()`. With path (b), ConflictResolver passes
+    /// the winner's `created_at`; the loser's `valid_until` must match exactly.
+    #[test]
+    fn supersede_fact_respects_transition_time() {
+        let (_tmp, repo) = setup();
+
+        let a = make_fact_at(
+            "agent-bt",
+            "policy.rebase",
+            "Always rebase",
+            "2026-01-01T00:00:00+00:00",
+            Some("2026-01-01T00:00:00+00:00"),
+        );
+        let b = make_fact_at(
+            "agent-bt",
+            "policy.rebase.b",
+            "Never rebase",
+            "2026-02-01T00:00:00+00:00",
+            Some("2026-02-01T00:00:00+00:00"),
+        );
+        repo.upsert_memory_fact(&a).expect("upsert a");
+        repo.upsert_memory_fact(&b).expect("upsert b");
+
+        let b_created_at = DateTime::parse_from_rfc3339(&b.created_at)
+            .expect("parse b.created_at")
+            .with_timezone(&Utc);
+
+        repo.supersede_fact(&a.id, &b.id, b_created_at)
+            .expect("supersede");
+
+        let loaded_a = repo
+            .get_memory_fact_by_id(&a.id)
+            .expect("load a")
+            .expect("a present");
+        assert_eq!(
+            loaded_a.superseded_by.as_deref(),
+            Some(b.id.as_str()),
+            "loser.superseded_by must point at winner"
+        );
+        let valid_until = loaded_a.valid_until.expect("valid_until set");
+        let parsed = DateTime::parse_from_rfc3339(&valid_until)
+            .expect("valid_until parses")
+            .with_timezone(&Utc);
+        assert_eq!(
+            parsed, b_created_at,
+            "loser.valid_until must equal winner.created_at (bi-temporal transition)"
+        );
+    }
+
+    /// Test B — point-in-time recall returns the correct fact across the
+    /// transition. Before the transition: only A is valid. After: only B.
+    /// No overlap interval exists.
+    #[test]
+    fn point_in_time_recall_across_conflict_transition() {
+        let (_tmp, repo) = setup();
+
+        // Different keys so the upsert ON CONFLICT clause doesn't merge them.
+        let a = make_fact_at(
+            "agent-pit",
+            "policy.a",
+            "Belief A",
+            "2026-01-01T00:00:00+00:00",
+            Some("2026-01-01T00:00:00+00:00"),
+        );
+        let b = make_fact_at(
+            "agent-pit",
+            "policy.b",
+            "Belief B",
+            "2026-02-01T00:00:00+00:00",
+            Some("2026-02-01T00:00:00+00:00"),
+        );
+        repo.upsert_memory_fact(&a).expect("upsert a");
+        repo.upsert_memory_fact(&b).expect("upsert b");
+
+        let b_created_at = DateTime::parse_from_rfc3339(&b.created_at)
+            .unwrap()
+            .with_timezone(&Utc);
+        repo.supersede_fact(&a.id, &b.id, b_created_at)
+            .expect("supersede");
+
+        // Query helper: returns the set of fact ids visible at `as_of` by
+        // applying the same bi-temporal predicate the recall paths use.
+        let db = repo.db_for_tests();
+        let visible_at = |as_of: DateTime<Utc>| -> Vec<String> {
+            let ts = as_of.to_rfc3339();
+            db.with_connection(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id FROM memory_facts \
+                     WHERE agent_id = ?1 \
+                     AND (valid_from IS NULL OR valid_from <= ?2) \
+                     AND (valid_until IS NULL OR valid_until > ?2)",
+                )?;
+                let rows =
+                    stmt.query_map(params!["agent-pit", ts], |row| row.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()
+            })
+            .expect("query")
+        };
+
+        // Mid-January: only A is valid.
+        let mid_jan = DateTime::parse_from_rfc3339("2026-01-15T00:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        let jan = visible_at(mid_jan);
+        assert!(jan.contains(&a.id), "A must be visible mid-January");
+        assert!(!jan.contains(&b.id), "B must NOT be visible mid-January");
+
+        // Mid-February: only B is valid.
+        let mid_feb = DateTime::parse_from_rfc3339("2026-02-15T00:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        let feb = visible_at(mid_feb);
+        assert!(feb.contains(&b.id), "B must be visible mid-February");
+        assert!(!feb.contains(&a.id), "A must NOT be visible mid-February");
+
+        // Exactly at the transition (B.created_at): A.valid_until = B.created_at
+        // so the half-open interval `valid_until > as_of` excludes A; B is
+        // already valid (valid_from = B.created_at). No overlap.
+        let at_transition = b_created_at;
+        let transition = visible_at(at_transition);
+        assert!(
+            !transition.contains(&a.id),
+            "A must NOT be visible at the transition instant (valid_until is exclusive)"
+        );
+        assert!(
+            transition.contains(&b.id),
+            "B must be visible at the transition instant (valid_from is inclusive)"
+        );
+    }
+
+    /// Test C — backward compatibility: the distillation-style call with
+    /// `transition_time = Utc::now()` still produces the pre-Phase-4 semantics
+    /// (loser's `valid_until` is approximately "now").
+    #[test]
+    fn supersede_fact_with_now_preserves_default_semantics() {
+        let (_tmp, repo) = setup();
+
+        let a = make_fact("agent-now", "k.a", "A", "schema");
+        let b = make_fact("agent-now", "k.b", "B", "schema");
+        repo.upsert_memory_fact(&a).expect("upsert a");
+        repo.upsert_memory_fact(&b).expect("upsert b");
+
+        let before = Utc::now();
+        repo.supersede_fact(&a.id, &b.id, Utc::now())
+            .expect("supersede");
+        let after = Utc::now();
+
+        let loaded_a = repo
+            .get_memory_fact_by_id(&a.id)
+            .expect("load a")
+            .expect("a present");
+        assert_eq!(loaded_a.superseded_by.as_deref(), Some(b.id.as_str()));
+        let valid_until = loaded_a.valid_until.expect("valid_until set");
+        let parsed = DateTime::parse_from_rfc3339(&valid_until)
+            .expect("valid_until parses")
+            .with_timezone(&Utc);
+        assert!(
+            parsed >= before && parsed <= after,
+            "valid_until must fall within the call window when transition_time = Utc::now()"
+        );
     }
 }

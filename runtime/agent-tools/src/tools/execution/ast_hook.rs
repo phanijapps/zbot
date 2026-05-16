@@ -73,6 +73,7 @@ fn extract(path: &Path, extractor_script: &Path) -> Option<Vec<Primitive>> {
     let output = Command::new("python3")
         .arg(extractor_script)
         .arg(path)
+        .stdin(std::process::Stdio::null())
         .output()
         .ok()?;
     if !output.status.success() {

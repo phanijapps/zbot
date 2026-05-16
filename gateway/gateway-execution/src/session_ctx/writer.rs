@@ -224,6 +224,7 @@ mod tests {
             _content: &str,
             _confidence: f64,
             _session_id: Option<&str>,
+            _valid_from: Option<chrono::DateTime<chrono::Utc>>,
         ) -> Result<Value, String> {
             Ok(json!({"success": true}))
         }

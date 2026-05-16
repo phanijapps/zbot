@@ -8,6 +8,7 @@ description = "Pure-data domain types for the AgentZero persistence layer"
 
 [dependencies]
 serde = { workspace = true }
+chrono = { workspace = true }
 
 [lints]
 workspace = true
