@@ -1492,7 +1492,7 @@ belief B: "User works at OpenAI"
       "<span class="k">conflictResolverIntervalHours</span>": 24,
 
       "<span class="k">queryGate</span>": { "enabled": false },
-      "<span class="k">beliefNetwork</span>": { "enabled": false, "intervalHours": 24 },
+      "<span class="k">beliefNetwork</span>": { "enabled": false, "intervalHours": 24, "neighborhoodPrefixDepth": 1, "contradictionBudgetPerCycle": 20 },
       "<span class="k">mmr</span>": { "enabled": true, "lambda": 0.6 },
       "<span class="k">rerank</span>": { "enabled": false },
       "<span class="k">intentRouter</span>": { "enabled": false }
@@ -1517,7 +1517,7 @@ belief B: "User works at OpenAI"
             </tr>
             <tr style="border-bottom:1px solid #1c2535">
               <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">beliefNetwork</td>
-              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Belief synthesis (B-1). Aggregates facts about the same subject into a belief with derived confidence. Single-fact subjects short-circuit (no LLM).</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Belief synthesis (B-1) + contradiction detection (B-2). Single-fact short-circuit. <span class="mono">neighborhoodPrefixDepth</span> controls topical scoping; <span class="mono">contradictionBudgetPerCycle</span> caps LLM calls.</td>
             </tr>
             <tr style="border-bottom:1px solid #1c2535">
               <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">mmr</td>
