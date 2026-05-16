@@ -42,8 +42,8 @@ export function BeliefsList({ agentId, partitionId }: Props) {
     if (!partitionId) return;
     setState((s) => ({ ...s, loading: true }));
     const [bRes, cRes] = await Promise.all([
-      listBeliefs(partitionId, 50, 0),
-      listContradictions(partitionId, 50),
+      listBeliefs(agentId, partitionId, 50, 0),
+      listContradictions(agentId, partitionId, 50),
     ]);
 
     if (bRes.disabled) {

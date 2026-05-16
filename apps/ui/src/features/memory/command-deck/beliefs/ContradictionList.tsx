@@ -36,7 +36,7 @@ export function ContradictionList({ agentId, partitionId }: Props) {
   const load = useCallback(async () => {
     if (!partitionId) return;
     setState((s) => ({ ...s, loading: true }));
-    const res = await listContradictions(partitionId, 50);
+    const res = await listContradictions(agentId, partitionId, 50);
     if (res.disabled) {
       setState({ ...INITIAL_STATE, disabled: true });
       return;
@@ -54,7 +54,7 @@ export function ContradictionList({ agentId, partitionId }: Props) {
       disabled: false,
       error: null,
     });
-  }, [partitionId]);
+  }, [agentId, partitionId]);
 
   useEffect(() => {
     if (!partitionId) {
