@@ -13,7 +13,8 @@ use tokio::sync::mpsc;
 
 use crate::sleep::{
     BeliefContradictionDetector, BeliefSynthesizer, Compactor, ConflictResolver,
-    CorrectionsAbstractor, DecayEngine, OrphanArchiver, PatternExtractor, Pruner, Synthesizer,
+    CorrectionsAbstractor, DecayEngine, OrphanArchiver, PatternExtractor, Pruner,
+    RecentBeliefNetworkActivity, Synthesizer,
 };
 
 /// Bundle of optional sleep-time ops passed to [`SleepTimeWorker::start`].
@@ -35,6 +36,11 @@ pub struct SleepOps {
     /// to the pairwise judge. When `None`, the cycle skips the detection
     /// step entirely — same opt-in flag as B-1.
     pub belief_contradiction_detector: Option<Arc<BeliefContradictionDetector>>,
+    /// Recorder for recent Belief Network worker stats (Phase B-6). When
+    /// `Some`, every successful synthesizer / detector cycle writes a
+    /// timestamped snapshot here for the Observatory UI to read. `None`
+    /// is the legacy code path — recording is skipped entirely.
+    pub belief_network_activity: Option<Arc<RecentBeliefNetworkActivity>>,
 }
 
 /// Background worker that orchestrates the full sleep-time pipeline.
@@ -251,6 +257,9 @@ async fn run_cycle(
         match bs.run_cycle(&run_id, agent_id).await {
             Ok(s) => {
                 stats.beliefs_synthesized = s.beliefs_synthesized;
+                if let Some(act) = ops.belief_network_activity.as_ref() {
+                    act.record_synthesis(s);
+                }
             }
             Err(e) => {
                 tracing::warn!(%run_id, error = %e, "belief synthesizer cycle failed");
@@ -267,6 +276,9 @@ async fn run_cycle(
             Ok(s) => {
                 stats.belief_contradictions_detected =
                     s.contradictions_logical + s.contradictions_tension;
+                if let Some(act) = ops.belief_network_activity.as_ref() {
+                    act.record_contradiction(s);
+                }
             }
             Err(e) => {
                 tracing::warn!(%run_id, error = %e, "belief contradiction detector cycle failed");
@@ -501,6 +513,7 @@ mod tests {
             conflict_resolver: None,
             belief_synthesizer: None,
             belief_contradiction_detector: None,
+            belief_network_activity: None,
         };
         let stats = run_cycle(
             "test",
@@ -606,6 +619,7 @@ mod tests {
             conflict_resolver: None,
             belief_synthesizer: None,
             belief_contradiction_detector: None,
+            belief_network_activity: None,
         };
         let stats = run_cycle(
             "test",

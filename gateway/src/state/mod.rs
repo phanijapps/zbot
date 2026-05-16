@@ -166,14 +166,20 @@ pub struct AppState {
     /// Trait-routed belief store (Belief Network Phase B-5 HTTP surface).
     /// `Some(...)` only when `execution.memory.beliefNetwork.enabled = true`
     /// AND the knowledge DB is wired. The HTTP handlers in
-    /// `http::beliefs` use this for 503-vs-200 disambiguation: a
-    /// `None` here means the Belief Network is disabled, not that the
-    /// data is missing.
+    /// `http::beliefs` and `http::belief_network` use this for 503-vs-200
+    /// disambiguation: a `None` here means the Belief Network is disabled,
+    /// not that the data is missing.
     pub belief_store: Option<Arc<dyn zero_stores_traits::BeliefStore>>,
 
     /// Trait-routed belief-contradiction store (Belief Network Phase B-5
     /// HTTP surface). Same opt-in gating as `belief_store`.
     pub belief_contradiction_store: Option<Arc<dyn zero_stores_traits::BeliefContradictionStore>>,
+
+    /// In-memory recorder of recent Belief Network worker stats (Phase
+    /// B-6). Always wired when the sleep-time worker is wired so the
+    /// HTTP layer can render the Observatory belief panel even when the
+    /// network itself is disabled (empty history + `enabled: false`).
+    pub belief_network_activity: Option<Arc<gateway_memory::RecentBeliefNetworkActivity>>,
 
     /// Model capabilities registry (bundled + local overrides).
     pub model_registry: Arc<ModelRegistry>,
@@ -830,15 +836,16 @@ impl AppState {
             }
         }
 
-        // Belief Network stores (Phase B-1/B-2 + B-5 HTTP surface).
+        // Belief Network stores (Phase B-1/B-2 + B-5 HTTP surface + B-6 observatory).
         //
         // Two layers of gating:
         //   1. Trait store handles can only be built when `knowledge_db`
         //      is wired (SQLite-backed).
         //   2. We only park them on `AppState` for the HTTP layer when
         //      `execution.memory.beliefNetwork.enabled = true` — so the
-        //      `/api/beliefs/*` and `/api/contradictions/*` endpoints
-        //      cleanly return 503 when the feature is off.
+        //      `/api/beliefs/*`, `/api/contradictions/*`, and
+        //      `/api/belief-network/*` endpoints cleanly return 503/empty
+        //      when the feature is off.
         //
         // The sleep-time worker block below still gets to consume the
         // handles either way (it has its own internal enable flag).
@@ -881,7 +888,7 @@ impl AppState {
         // compaction_store) all wired above from the SQLite repos.
         // Conversation store is always SQLite-backed (per design) and
         // built unconditionally above.
-        let sleep_time_worker = match (
+        let (sleep_time_worker, belief_network_activity) = match (
             kg_store.as_ref(),
             episode_store_for_state.as_ref(),
             memory_store.as_ref(),
@@ -897,6 +904,8 @@ impl AppState {
                     .get_execution_settings()
                     .map(|s| s.memory.conflict_resolver_interval_hours)
                     .unwrap_or(24);
+                // `belief_network_cfg` is already defined in the outer
+                // scope above (used for HTTP-store gating). Reuse it here.
                 let memory_services =
                     gateway_memory::MemoryServices::new(gateway_memory::MemoryServicesConfig {
                         agent_id: "root".to_string(),
@@ -930,9 +939,12 @@ impl AppState {
                         belief_fact_confidence_drop_threshold: belief_network_cfg
                             .fact_confidence_drop_threshold,
                     });
-                Some(memory_services.sleep_time_worker.clone())
+                (
+                    Some(memory_services.sleep_time_worker.clone()),
+                    Some(memory_services.belief_network_activity.clone()),
+                )
             }
-            _ => None,
+            _ => (None, None),
         };
 
         // Create hook registry
@@ -972,8 +984,6 @@ impl AppState {
             sleep_time_worker,
             compaction_repo,
             compaction_store,
-            belief_store: belief_store_for_http,
-            belief_contradiction_store: belief_contradiction_store_for_http,
             plugin_manager,
             model_registry,
             embedding_service,
@@ -995,6 +1005,9 @@ impl AppState {
             ingestion_backpressure,
             advertiser: discovery::noop(),
             advertise_handle: Arc::new(std::sync::Mutex::new(None)),
+            belief_store: belief_store_for_http,
+            belief_contradiction_store: belief_contradiction_store_for_http,
+            belief_network_activity,
         }
     }
 
@@ -1108,8 +1121,6 @@ impl AppState {
             sleep_time_worker: None,
             compaction_repo: None,
             compaction_store: None,
-            belief_store: None,
-            belief_contradiction_store: None,
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
             embedding_service: Arc::new(
                 EmbeddingService::with_config(paths.clone(), Default::default())
@@ -1134,6 +1145,9 @@ impl AppState {
             ingestion_backpressure: None,
             advertiser: discovery::noop(),
             advertise_handle: Arc::new(std::sync::Mutex::new(None)),
+            belief_store: None,
+            belief_contradiction_store: None,
+            belief_network_activity: None,
         }
     }
 
@@ -1247,8 +1261,6 @@ impl AppState {
             sleep_time_worker: None,
             compaction_repo: None,
             compaction_store: None,
-            belief_store: None,
-            belief_contradiction_store: None,
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
             embedding_service: Arc::new(
                 EmbeddingService::with_config(paths.clone(), Default::default())
@@ -1273,6 +1285,9 @@ impl AppState {
             ingestion_backpressure: None,
             advertiser: discovery::noop(),
             advertise_handle: Arc::new(std::sync::Mutex::new(None)),
+            belief_store: None,
+            belief_contradiction_store: None,
+            belief_network_activity: None,
         }
     }
 

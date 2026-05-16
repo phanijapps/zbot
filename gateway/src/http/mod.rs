@@ -4,6 +4,7 @@
 
 mod agents;
 mod artifacts;
+mod belief_network;
 mod beliefs;
 mod bridge;
 mod chat;
@@ -330,6 +331,12 @@ pub fn create_http_router(
         .route(
             "/api/graph/ingest/:source_id/progress",
             get(ingest::progress),
+        )
+        // Belief Network observability (Phase B-6)
+        .route("/api/belief-network/stats", get(belief_network::get_stats))
+        .route(
+            "/api/belief-network/activity",
+            get(belief_network::get_activity),
         )
         // Distillation endpoints
         .route("/api/distillation/status", get(graph::distillation_status))
