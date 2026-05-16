@@ -290,19 +290,85 @@ Future recall:
 
 Without B-3, B1 would still surface at confidence 0.9 — the agent would confidently assert a fact whose only source is now untrusted. Propagation closes that gap.
 
+### Phase B-4 — Recall integration
+
+B-1, B-2, B-3 stored beliefs and kept them current. **B-4 makes beliefs visible to the agent at recall time** — they surface alongside facts in the recall result set with their own semantic match score, their own category weight, and their own prompt section.
+
+#### How beliefs become searchable
+
+Beliefs get their own embedding. When `BeliefSynthesizer` produces a belief — either via the single-fact short-circuit or via the multi-fact LLM call — it embeds `belief.content` and writes the vector to the new `embedding BLOB` column on `kg_beliefs`. If the embedding client fails, the column stays `NULL` and the belief is queryable by exact lookup but invisible to semantic recall (logged for observability).
+
+Embeddings live **on the row**, not in a separate vec0 table. Reasoning: belief count is bounded (current production has ~15 multi-fact subjects; even at 100× growth that's small). In-memory cosine over a few thousand vectors is sub-millisecond. The vec0 table is reserved for the much larger fact embedding set.
+
+#### How beliefs join the recall pipeline
+
+The recall pipeline gains a new step 5b that fetches beliefs in parallel with the existing fact/wiki/procedure/graph searches:
+
+```
+1. Embed query
+2. Hybrid fact search (FTS5 + vector cosine, RRF blend)
+3. Wiki search
+4. Procedural pattern search
+5a. Graph traversal expansion
+5b. NEW: belief_store.search_beliefs(partition_id, query_embedding, limit)
+        — in-memory cosine over partition beliefs
+        — filters superseded / past-interval / NULL-embedding rows
+        — returns top-K scored beliefs
+6. Merge all candidates into unified result set
+7. Rescore with category weights (beliefs: 1.5)
+8. Min-score filter, top-K truncate
+```
+
+Beliefs surface as a new `ItemKind::Belief` variant alongside `Fact`, `Wiki`, `Procedure`, `GraphNode`, `Goal`, `Episode`. They compete in the same rescore step as everything else.
+
+#### Category weight: 1.5
+
+Beliefs sit at category weight **1.5** — the same level as `correction` (raw user feedback), below `schema` at 1.6 (LLM-distilled rules from multiple corrections).
+
+Why conservative: new code shouldn't outrank existing trusted code paths until empirical validation confirms it deserves the higher weight. Beliefs are themselves LLM synthesis output — they could be wrong. Until the validation corpus measures their recall quality in mixed result sets, they share the floor with corrections rather than outrank them.
+
+Plan: revisit after B-5/B-6 land and we can measure real recall traces. If beliefs prove reliable, the weight bumps to 1.7 or 1.8.
+
+#### The prompt block
+
+When beliefs surface in a recall result, the gateway formatter groups them under a distinct heading:
+
+```
+## Active Beliefs
+- [belief 0.92] User lives in Mason, OH (since 2026-04-01)
+- [belief 0.85] User is vegetarian
+
+## Recalled Context
+- [fact] User said "I prefer dark mode" (2026-03-12)
+- [fact] User imported Tailwind v4 in the home-server project
+- ...
+```
+
+The `## Active Beliefs` heading lives in `gateway-execution`, not `gateway-memory` — per the M1-M5 audit lessons, presentation belongs at the consumer layer. The memory crate just returns scored items; the consumer decides how they render.
+
+#### What doesn't change
+
+- **Recall path is byte-for-byte identical when `beliefNetwork.enabled = false`.** No belief fetch, no extra LLM cost, no new heading. The opt-in gate is the entire seam.
+- **No special belief-vs-fact dedup.** If a belief and one of its source facts both surface, both render. The design originally assumed MMR would handle this (see "what's still missing" below); turns out MMR is configured but not yet implemented, so for now both can appear.
+
+#### What's still missing
+
+- **MMR dedup is aspirational.** The `memory.mmr` config block exists in `settings.json` and `BeliefNetworkConfig`'s prose references "MMR handles redundancy," but **no MMR algorithm actually runs in the recall pipeline today**. Beliefs and their source facts can appear together in recall results. A separate "implement MMR for real" task addresses this.
+
 ### Why this matters
 
-The Belief Network changes what the agent can do in three concrete ways:
+The Belief Network changes what the agent can do in four concrete ways:
 
 - **Queryable provenance.** The agent can answer "why do you believe X?" by walking back to source facts. Beliefs aren't opaque — they cite their evidence.
 - **Conflict awareness.** Today the agent has no way to know it holds contradicting positions. After B-2, contradictions are first-class data the agent can read about itself.
 - **Trust gradients that reflect reality.** After B-3, retracting evidence weakens dependent beliefs automatically — the agent's confidence about a topic tracks the evidence it actually has, not the evidence it had when first synthesized.
+- **Recall surfaces synthesis, not just raw evidence.** After B-4, the agent's context window contains both atoms (facts) and aggregates (beliefs). Distilled understanding gets equal billing with raw history.
 
 ### What's not yet built
 
-- **B-4 — Recall integration.** Beliefs surface alongside facts in recall results, with category weight 1.5 (conservative until empirically validated).
 - **B-5 — /memory UI.** Beliefs list, detail drawer, contradiction badge + resolver, filters, subject browser.
 - **B-6 — /observatory UI.** Worker stats, contradiction activity feed, propagation chain visualizer.
+- **MMR dedup** — promised in the recall pipeline; not yet implemented.
 
 Design lives in `memory-bank/future-state/2026-05-15-belief-network-design.md`.
 

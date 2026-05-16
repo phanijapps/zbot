@@ -163,6 +163,24 @@ pub struct AppState {
     /// backend that doesn't care can inherit them.
     pub compaction_store: Option<Arc<dyn zero_stores_traits::CompactionStore>>,
 
+    /// Trait-routed belief store (Belief Network Phase B-5 HTTP surface).
+    /// `Some(...)` only when `execution.memory.beliefNetwork.enabled = true`
+    /// AND the knowledge DB is wired. The HTTP handlers in
+    /// `http::beliefs` and `http::belief_network` use this for 503-vs-200
+    /// disambiguation: a `None` here means the Belief Network is disabled,
+    /// not that the data is missing.
+    pub belief_store: Option<Arc<dyn zero_stores_traits::BeliefStore>>,
+
+    /// Trait-routed belief-contradiction store (Belief Network Phase B-5
+    /// HTTP surface). Same opt-in gating as `belief_store`.
+    pub belief_contradiction_store: Option<Arc<dyn zero_stores_traits::BeliefContradictionStore>>,
+
+    /// In-memory recorder of recent Belief Network worker stats (Phase
+    /// B-6). Always wired when the sleep-time worker is wired so the
+    /// HTTP layer can render the Observatory belief panel even when the
+    /// network itself is disabled (empty history + `enabled: false`).
+    pub belief_network_activity: Option<Arc<gateway_memory::RecentBeliefNetworkActivity>>,
+
     /// Model capabilities registry (bundled + local overrides).
     pub model_registry: Arc<ModelRegistry>,
 
@@ -181,22 +199,6 @@ pub struct AppState {
     /// Active mDNS advertise handle. None until `start()` runs and only
     /// populated when `network.exposeToLan = true`.
     pub advertise_handle: std::sync::Arc<std::sync::Mutex<Option<discovery::AdvertiseHandle>>>,
-
-    /// Trait-routed belief store. Wired when the Belief Network is built
-    /// alongside the knowledge DB; consumed by the Observatory belief
-    /// network endpoints (Phase B-6). `None` for minimal AppStates.
-    pub belief_store: Option<Arc<dyn zero_stores::BeliefStore>>,
-
-    /// Trait-routed belief-contradiction store (Phase B-2). Wired by the
-    /// same path as `belief_store`. Consumed by the Observatory
-    /// belief-network endpoints to surface contradiction totals.
-    pub belief_contradiction_store: Option<Arc<dyn zero_stores::BeliefContradictionStore>>,
-
-    /// In-memory recorder of recent Belief Network worker stats (Phase
-    /// B-6). Always wired when the sleep-time worker is wired so the
-    /// HTTP layer can render the Observatory belief panel even when the
-    /// network itself is disabled (empty history + `enabled: false`).
-    pub belief_network_activity: Option<Arc<gateway_memory::RecentBeliefNetworkActivity>>,
 }
 
 /// Boot-time helper: synchronously reconcile vec0 tables to match the
@@ -834,21 +836,48 @@ impl AppState {
             }
         }
 
-        // Belief stores (used by both the SleepTimeWorker construction
-        // below AND the Observatory belief-network HTTP handlers). Wired
-        // only when the knowledge DB is present.
-        let belief_store_for_state: Option<Arc<dyn zero_stores::BeliefStore>> =
+        // Belief Network stores (Phase B-1/B-2 + B-5 HTTP surface + B-6 observatory).
+        //
+        // Two layers of gating:
+        //   1. Trait store handles can only be built when `knowledge_db`
+        //      is wired (SQLite-backed).
+        //   2. We only park them on `AppState` for the HTTP layer when
+        //      `execution.memory.beliefNetwork.enabled = true` — so the
+        //      `/api/beliefs/*`, `/api/contradictions/*`, and
+        //      `/api/belief-network/*` endpoints cleanly return 503/empty
+        //      when the feature is off.
+        //
+        // The sleep-time worker block below still gets to consume the
+        // handles either way (it has its own internal enable flag).
+        let belief_network_cfg = settings
+            .get_execution_settings()
+            .map(|s| s.memory.belief_network.clone())
+            .unwrap_or_default();
+        let belief_store_raw: Option<Arc<dyn zero_stores::BeliefStore>> =
             knowledge_db.as_ref().map(|kdb| {
                 Arc::new(zero_stores_sqlite::SqliteBeliefStore::new(kdb.clone()))
                     as Arc<dyn zero_stores::BeliefStore>
             });
-        let belief_contradiction_store_for_state: Option<
-            Arc<dyn zero_stores::BeliefContradictionStore>,
-        > = knowledge_db.as_ref().map(|kdb| {
-            Arc::new(zero_stores_sqlite::SqliteBeliefContradictionStore::new(
-                kdb.clone(),
-            )) as Arc<dyn zero_stores::BeliefContradictionStore>
-        });
+        let belief_contradiction_store_raw: Option<Arc<dyn zero_stores::BeliefContradictionStore>> =
+            knowledge_db.as_ref().map(|kdb| {
+                Arc::new(zero_stores_sqlite::SqliteBeliefContradictionStore::new(
+                    kdb.clone(),
+                )) as Arc<dyn zero_stores::BeliefContradictionStore>
+            });
+        // HTTP surface only exposes the stores when the feature is on.
+        let belief_store_for_http: Option<Arc<dyn zero_stores_traits::BeliefStore>> =
+            if belief_network_cfg.enabled {
+                belief_store_raw.clone()
+            } else {
+                None
+            };
+        let belief_contradiction_store_for_http: Option<
+            Arc<dyn zero_stores_traits::BeliefContradictionStore>,
+        > = if belief_network_cfg.enabled {
+            belief_contradiction_store_raw.clone()
+        } else {
+            None
+        };
 
         // Sleep-time worker requires the entire SQLite knowledge cluster.
         // Build only when ALL of (compaction_repo, memory_repo, knowledge_db,
@@ -875,10 +904,8 @@ impl AppState {
                     .get_execution_settings()
                     .map(|s| s.memory.conflict_resolver_interval_hours)
                     .unwrap_or(24);
-                let belief_network_cfg = settings
-                    .get_execution_settings()
-                    .map(|s| s.memory.belief_network.clone())
-                    .unwrap_or_default();
+                // `belief_network_cfg` is already defined in the outer
+                // scope above (used for HTTP-store gating). Reuse it here.
                 let memory_services =
                     gateway_memory::MemoryServices::new(gateway_memory::MemoryServicesConfig {
                         agent_id: "root".to_string(),
@@ -899,12 +926,12 @@ impl AppState {
                             conflict_interval_hours as u64 * 3600,
                         ),
                         decay_config: gateway_memory::sleep::DecayConfig::default(),
-                        belief_store: belief_store_for_state.clone(),
+                        belief_store: belief_store_raw.clone(),
                         belief_network_enabled: belief_network_cfg.enabled,
                         belief_network_interval: std::time::Duration::from_secs(
                             belief_network_cfg.interval_hours as u64 * 3600,
                         ),
-                        belief_contradiction_store: belief_contradiction_store_for_state.clone(),
+                        belief_contradiction_store: belief_contradiction_store_raw.clone(),
                         belief_contradiction_neighborhood_prefix_depth: belief_network_cfg
                             .neighborhood_prefix_depth,
                         belief_contradiction_budget_per_cycle: belief_network_cfg
@@ -978,8 +1005,8 @@ impl AppState {
             ingestion_backpressure,
             advertiser: discovery::noop(),
             advertise_handle: Arc::new(std::sync::Mutex::new(None)),
-            belief_store: belief_store_for_state,
-            belief_contradiction_store: belief_contradiction_store_for_state,
+            belief_store: belief_store_for_http,
+            belief_contradiction_store: belief_contradiction_store_for_http,
             belief_network_activity,
         }
     }
