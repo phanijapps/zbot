@@ -222,11 +222,31 @@ Wire `belief_invalidate` into the existing fact-lifecycle events. Builds on B-1 
 Recall returns beliefs alongside facts.
 
 - `recall_unified` learns to retrieve beliefs (new `ItemKind::Belief`)
-- Beliefs get a category weight in the rescore step (suggested default: 1.7 — above schema at 1.6 since beliefs are MORE distilled)
+- Beliefs get category weight **1.5** in the rescore step — same as `correction`, below `schema` at 1.6 (decision Q4: conservative initial weight; bump up after empirical measurement once beliefs prove reliable)
 - Agent prompt block: `## Active Beliefs` formatted on the gateway side (not in gateway-memory — per the audit, presentation belongs at the consumer layer)
-- Tests: beliefs surface for relevant queries, beliefs deduplicate against their source facts in results
+- **No special belief-vs-fact dedup logic.** MMR diversity rerank handles redundancy (decision Q3). Matches how schemas and corrections coexist today.
+- Tests: beliefs surface for relevant queries, MMR correctly handles belief-fact redundancy in mixed result sets
 
-**Total estimated effort: ~10-14 days across 4 PRs.**
+### Phase B-5 — `/memory` UI surfacing (~3-5 days, separate PR after B-1+B-2)
+
+Lands after B-1+B-2 so users can see what's in their belief network.
+
+- New "Beliefs" section in `/memory` tab — list by subject with confidence bars + source-fact counts
+- Belief detail drawer — full content, source facts (with links), confidence math, valid_from/until
+- Contradiction badge per belief — yellow dot when unresolved; severity in tooltip
+- Contradiction resolver UI — side-by-side view, manual `a_won` / `b_won` / `compatible` choice
+- Filters: partition, subject prefix, has-contradictions, confidence range
+- Subject browser — hierarchical tree (`user.*` / `project.*` / etc.)
+- Recall test panel update — beliefs visually distinct from facts (icon/badge), source facts collapsed by default
+
+### Phase B-6 — `/observatory` UI panels (~2-3 days, can parallel B-5)
+
+- BeliefSynthesizer worker stats — last run, count synthesized, LLM calls, throttle status
+- BeliefContradictionDetector stats — last run, contradictions detected/resolved, budget consumed
+- Belief activity feed — recent events (synthesis, contradiction detection, propagation cascades)
+- Propagation chain visualizer — small graph when a fact retraction cascades N hops
+
+**Total estimated effort: ~15-22 days across 6 PRs** (10-14 backend + 5-8 UI). UI phases run after backend foundation lands; can be parallelized.
 
 ---
 
@@ -367,23 +387,64 @@ Without propagation, B1 would stay at conf=0.9 even though its only source is no
 
 ---
 
-## Open Questions (revisit before Phase B-1 implementation)
+## Decisions (resolved 2026-05-15)
 
-1. **Subject canonicalization** — Phase 1 uses exact key match (`user.location`). Should we canonicalize via embedding similarity (`user.location` and `user.address` collapse to one subject) in Phase 1 or defer to Phase 2? Tradeoff: Phase-1 simplicity vs. better belief consolidation.
-2. **Confidence formula** — should constituent confidence be a recency-weighted average, or something more sophisticated (e.g., Bayesian update)? Phase 1 should use the simplest version that works; revisit if results are poor.
-3. **Belief retrieval in recall** — should beliefs always be surfaced when their constituent facts surface (i.e., dedup facts in favor of their belief)? Or should they be additive? Phase 4 will decide; preview here for visibility.
-4. **What's the right default for category weight on beliefs?** I propose 1.7 (above schema at 1.6) since beliefs are more distilled. But this is a guess — should be tuned empirically once Phase B-4 lands.
-5. **Should contradiction resolution involve a user prompt?** ("We have conflicting evidence about X — which should we trust?") Probably yes in some cases, but the design here keeps it agent-internal for v1.
+The five questions originally flagged for resolution before B-1 are now decided. Each was considered against the principle "ship the simplest thing that works; upgrade with evidence."
+
+### Q1 — Subject canonicalization
+**Decision: exact-key match in Phase B-1.** Escalate to embedding-similarity canonicalization in B-2 only if there's evidence (e.g., >5× more belief rows than conceptual subjects in production data).
+
+Reasoning: exact match is simple and predictable. Failure mode = "too many beliefs" (recoverable, observable, measurable). Embedding similarity introduces false-merge failures that are harder to debug and roll back from. Phase B-1's job is to prove the abstraction; over-engineering canonicalization without evidence is premature.
+
+### Q2 — Confidence formula
+**Decision: simple recency-weighted average in Phase B-1.** Evaluate upgrade to probabilistic-OR in B-2 once we have data.
+
+The B-1 formula:
+```
+belief.confidence = avg(fact.confidence × recency_weight(fact.valid_from))
+where recency_weight(t) = 1 / (1 + age_days(t) / 90)
+```
+
+The deferred upgrade (probabilistic-OR) treats N agreeing sources as independent confirmations:
+```
+belief.confidence = 1 - prod(1 - fact_i.confidence × recency_weight_i)
+```
+
+Reasoning: the average is debuggable — "this is 0.9 because constituents averaged to 0.9" is explainable. Probabilistic-OR is mathematically nicer but introduces "why is this 0.99 not 0.9?" surprises. Pre-optimizing before we have data is premature.
+
+### Q3 — Recall dedup behavior
+**Decision: no special belief-vs-fact dedup logic.** Lean on MMR diversity rerank to handle redundancy.
+
+Reasoning: this is how schemas and corrections work today — both surface, MMR drops the redundant one based on embedding distance. Adding a "belief suppresses its source facts" code path introduces edge cases (different wards, stale beliefs, etc.) without measurable benefit. MMR catches almost all redundancy in practice.
+
+### Q4 — Default category weight for beliefs
+**Decision: 1.5 (NOT the originally-proposed 1.7).** Reconsider after Phase B-4 validation.
+
+Updated category weight table:
+
+| Category | Weight | Rationale |
+|---|---|---|
+| schema | 1.6 | LLM-distilled rule from N corrections |
+| **belief** | **1.5** | **Multi-fact synthesis. Same trust level as raw corrections initially.** |
+| correction | 1.5 | Direct user feedback |
+| strategy | 1.4 | LLM-extracted pattern |
+| user | 1.3 | User identity facts |
+| ... | unchanged | |
+
+Reasoning: new code shouldn't outrank existing trusted code paths until it proves itself. Conservative defaults age better than aggressive ones. After Phase B-4 ships and we measure recall quality with beliefs in the mix, bump the weight up if beliefs are demonstrably reliable.
+
+### Q5 — User prompt on contradiction resolution
+**Decision: no in-conversation prompts.** Surface high-severity unresolved contradictions passively in `/memory` UI (Phase B-5).
+
+Reasoning: desktop chat ergonomics. Quizzing the user about which of two old beliefs to trust breaks conversational flow. Most contradictions resolve themselves over time as facts decay or get superseded. Severity threshold (default 0.7) triggers a visible badge in `/memory` UI without a conversational prompt. User can manually resolve via UI when they care. Agent never directly asks unless the user opens the conversation about it.
 
 ---
 
 ## What This Doc Is NOT
 
-This is a northstar design, not an implementation plan. Before implementing Phase B-1:
+This is a northstar design with all five originally-open decisions resolved. The path to implementation:
 
-1. Pick the simplest defensible answer to each of the 5 open questions above
-2. Sketch the BeliefSynthesizer LLM prompt and test it manually on a real subject from the existing memory_facts table
-3. Pilot subject identification on real data — confirm exact-key-match is enough for v1, or escalate to embedding similarity
-4. Decide whether to ship Phase B-1 standalone or wait until Phase B-2 design is also signed off
-
-After implementation: validate against a real validation corpus (the runs we haven't completed). Beliefs should make recall demonstrably better for queries that today produce N raw conflicting facts.
+1. **Sketch the BeliefSynthesizer LLM prompt** and test it manually on a real subject (e.g., `user.location`) from the existing `memory_facts` table. Verify the synthesizer produces a sensible belief from real data before automating it.
+2. **Confirm exact-key-match works on production data** by querying the existing schema for key distributions. If `user.location` / `user.address` / `user.city` show up as competing keys, that's evidence for Q1 upgrade later.
+3. **Decide whether to ship Phase B-1 standalone or batch with B-2.** B-1 alone is useful (synthesis runs, beliefs appear via API) but invisible to the user without B-5 UI work. Acceptable to ship and observe.
+4. **Validate against the unfinished validation corpus** after B-1 lands. Beliefs should make recall demonstrably better for queries that today produce N raw conflicting facts (the exact failure class we debugged this session).
