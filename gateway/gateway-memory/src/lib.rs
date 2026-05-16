@@ -377,6 +377,13 @@ pub struct MemorySettings {
     /// reflective memory roadmap — opt-in (disabled by default).
     #[serde(default)]
     pub belief_network: BeliefNetworkConfig,
+    /// Maximal Marginal Relevance diversity reranking. When enabled, the
+    /// unified recall pipeline over-fetches `candidate_pool` items from
+    /// RRF, then reranks via MMR before final truncation to the caller's
+    /// budget. Default: disabled — when disabled, recall is byte-for-byte
+    /// identical to pre-MMR behavior.
+    #[serde(default)]
+    pub mmr: MmrConfig,
 }
 
 pub fn default_corrections_abstractor_interval_hours() -> u32 {
@@ -394,6 +401,7 @@ impl Default for MemorySettings {
             conflict_resolver_interval_hours: default_conflict_resolver_interval_hours(),
             query_gate: QueryGateConfig::default(),
             belief_network: BeliefNetworkConfig::default(),
+            mmr: MmrConfig::default(),
         }
     }
 }
@@ -524,6 +532,62 @@ impl Default for QueryGateConfig {
             max_subqueries: default_max_subqueries(),
             max_subquery_len: default_max_subquery_len(),
             timeout_ms: default_query_gate_timeout_ms(),
+        }
+    }
+}
+
+// ============================================================================
+// MMR CONFIG
+// Maximal Marginal Relevance diversity reranking — post-rescore step that
+// trades a little relevance for diversity in the final recalled set.
+// Default-disabled; opt-in via `memory.mmr.enabled = true`.
+// ============================================================================
+
+/// Configuration for Maximal Marginal Relevance (MMR) diversity reranking.
+///
+/// When `enabled: true`, the unified recall pipeline over-fetches
+/// `candidate_pool` items from the RRF-fused candidate list, then reranks
+/// them via the MMR algorithm:
+///
+/// ```text
+/// next = argmax over remaining of:
+///     lambda * relevance(c) - (1 - lambda) * max(sim(c, s) for s in Selected)
+/// ```
+///
+/// Higher `lambda` favors relevance; lower favors diversity. The default
+/// `0.6` weighs relevance 60% and diversity 40% — a balanced setting that
+/// matches typical recommender-system tuning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MmrConfig {
+    /// Master switch. Default: `false` (opt-in).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Relevance/diversity tradeoff in `[0.0, 1.0]`. `1.0` = pure relevance
+    /// (degenerates to identity sort); `0.0` = pure diversity. Default: `0.6`.
+    #[serde(default = "default_mmr_lambda")]
+    pub lambda: f64,
+    /// Over-fetch size from RRF before MMR reranks. The recall caller still
+    /// receives at most `budget` items; this controls how many candidates
+    /// MMR has to choose from. Default: `30`.
+    #[serde(default = "default_mmr_candidate_pool")]
+    pub candidate_pool: usize,
+}
+
+pub fn default_mmr_lambda() -> f64 {
+    0.6
+}
+
+pub fn default_mmr_candidate_pool() -> usize {
+    30
+}
+
+impl Default for MmrConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            lambda: default_mmr_lambda(),
+            candidate_pool: default_mmr_candidate_pool(),
         }
     }
 }
@@ -881,6 +945,58 @@ mod tests {
         assert_eq!(cfg.neighborhood_prefix_depth, 2);
         assert_eq!(cfg.contradiction_budget_per_cycle, 50);
         assert!((cfg.fact_confidence_drop_threshold - 0.45).abs() < 1e-9);
+    }
+
+    #[test]
+    fn mmr_config_default_is_disabled() {
+        let cfg = MmrConfig::default();
+        assert!(!cfg.enabled, "MMR must default to disabled");
+        assert!((cfg.lambda - 0.6).abs() < f64::EPSILON);
+        assert_eq!(cfg.candidate_pool, 30);
+    }
+
+    #[test]
+    fn memory_settings_default_mmr_disabled() {
+        let m = MemorySettings::default();
+        assert!(!m.mmr.enabled);
+        assert!((m.mmr.lambda - 0.6).abs() < f64::EPSILON);
+        assert_eq!(m.mmr.candidate_pool, 30);
+    }
+
+    #[test]
+    fn mmr_config_deserializes_camel_case() {
+        let json = r#"{
+            "enabled": true,
+            "lambda": 0.4,
+            "candidatePool": 50
+        }"#;
+        let cfg: MmrConfig = serde_json::from_str(json).unwrap();
+        assert!(cfg.enabled);
+        assert!((cfg.lambda - 0.4).abs() < f64::EPSILON);
+        assert_eq!(cfg.candidate_pool, 50);
+    }
+
+    #[test]
+    fn memory_settings_with_mmr_block_round_trips() {
+        let json = r#"{
+            "mmr": { "enabled": true, "lambda": 0.8 }
+        }"#;
+        let m: MemorySettings = serde_json::from_str(json).unwrap();
+        assert!(m.mmr.enabled);
+        assert!((m.mmr.lambda - 0.8).abs() < f64::EPSILON);
+        // unspecified field keeps default
+        assert_eq!(m.mmr.candidate_pool, 30);
+    }
+
+    #[test]
+    fn mmr_legacy_json_back_compat() {
+        // Existing settings.json from pre-MMR users won't have the block —
+        // MemorySettings deserialization must still succeed with defaults.
+        let json = r#"{"conflictResolverIntervalHours": 12}"#;
+        let m: MemorySettings = serde_json::from_str(json).unwrap();
+        assert!(!m.mmr.enabled);
+        assert!((m.mmr.lambda - 0.6).abs() < f64::EPSILON);
+        assert_eq!(m.mmr.candidate_pool, 30);
     }
 
     #[test]

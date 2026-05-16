@@ -616,6 +616,30 @@ impl AppState {
             tracing::info!("Memory query gate: disabled");
         }
 
+        // MMR diversity reranking (opt-in via `memory.mmr.enabled` in
+        // settings.json). Default-disabled: when the block is missing or
+        // `enabled = false`, recall is byte-for-byte identical to pre-MMR.
+        // The config block is attached unconditionally so the runtime can
+        // read the current values; only `enabled = true` triggers the
+        // rerank step inside `recall_unified`.
+        let mmr_cfg: gateway_memory::MmrConfig =
+            gateway_services::SettingsService::new(paths.clone())
+                .load()
+                .map(|s| s.execution.memory.mmr.clone())
+                .unwrap_or_default();
+        if let Some(recall) = memory_recall_inner.as_mut() {
+            recall.set_mmr_config(mmr_cfg.clone());
+        }
+        if mmr_cfg.enabled {
+            tracing::info!(
+                "Memory MMR rerank: enabled (lambda={}, candidate_pool={})",
+                mmr_cfg.lambda,
+                mmr_cfg.candidate_pool,
+            );
+        } else {
+            tracing::debug!("Memory MMR rerank: disabled (default)");
+        }
+
         let memory_recall: Option<Arc<MemoryRecall>> = memory_recall_inner.map(Arc::new);
 
         // Clone embedding client before it's moved into distiller — the runner
