@@ -1,11 +1,11 @@
-//! Schema v27 for `knowledge.db`.
+//! Schema v28 for `knowledge.db`.
 //!
 //! All long-term memory + graph + vector indexes live here.
 //! Applied idempotently on daemon boot. No migrations — clean slate.
 
 use rusqlite::Connection;
 
-const SCHEMA_VERSION: i32 = 27;
+const SCHEMA_VERSION: i32 = 28;
 
 /// v23 delta: full-text search over `ward_wiki_articles` with sync triggers.
 const V23_WIKI_FTS_SQL: &str = include_str!("../migrations/v23_wiki_fts.sql");
@@ -38,6 +38,14 @@ const V26_KG_RELATIONSHIPS_BITEMPORAL_SQL: &str =
 /// future R-series rename of `ward_id` doesn't need to touch this table.
 const V27_KG_BELIEFS_SQL: &str = include_str!("../migrations/v27_kg_beliefs.sql");
 
+/// v28 delta: add `kg_belief_contradictions` table for the Belief Network
+/// (Phase B-2). Stores pair-wise contradiction rows produced by the
+/// `BeliefContradictionDetector`. `belief_a_id` is always the
+/// lexicographically smaller of the two — canonical pair ordering keeps
+/// `UNIQUE(belief_a_id, belief_b_id)` doing real work.
+const V28_KG_BELIEF_CONTRADICTIONS_SQL: &str =
+    include_str!("../migrations/v28_kg_belief_contradictions.sql");
+
 /// Initialize the knowledge database schema (v26).
 ///
 /// Creates all tables and indexes if they don't exist. Records the
@@ -54,6 +62,7 @@ pub fn initialize_knowledge_database(conn: &Connection) -> Result<(), rusqlite::
     ensure_kg_relationships_bitemporal_columns(conn)?;
     conn.execute_batch(V26_KG_RELATIONSHIPS_BITEMPORAL_SQL)?;
     conn.execute_batch(V27_KG_BELIEFS_SQL)?;
+    conn.execute_batch(V28_KG_BELIEF_CONTRADICTIONS_SQL)?;
     conn.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?1, datetime('now'))",
         rusqlite::params![SCHEMA_VERSION],
@@ -431,6 +440,27 @@ CREATE TABLE IF NOT EXISTS kg_beliefs (
 );
 CREATE INDEX IF NOT EXISTS idx_beliefs_partition_subject ON kg_beliefs(partition_id, subject);
 CREATE INDEX IF NOT EXISTS idx_beliefs_valid ON kg_beliefs(valid_from, valid_until);
+
+-- v28: Belief Network — pair-wise contradictions between two beliefs.
+-- See migrations/v28_kg_belief_contradictions.sql for the canonical
+-- definition; this inline copy keeps fresh-DB init self-contained.
+CREATE TABLE IF NOT EXISTS kg_belief_contradictions (
+    id TEXT PRIMARY KEY,
+    belief_a_id TEXT NOT NULL,
+    belief_b_id TEXT NOT NULL,
+    contradiction_type TEXT NOT NULL,
+    severity REAL NOT NULL,
+    judge_reasoning TEXT,
+    detected_at TEXT NOT NULL,
+    resolved_at TEXT,
+    resolution TEXT,
+    FOREIGN KEY (belief_a_id) REFERENCES kg_beliefs(id) ON DELETE CASCADE,
+    FOREIGN KEY (belief_b_id) REFERENCES kg_beliefs(id) ON DELETE CASCADE,
+    UNIQUE(belief_a_id, belief_b_id)
+);
+CREATE INDEX IF NOT EXISTS idx_belief_contradictions_a ON kg_belief_contradictions(belief_a_id);
+CREATE INDEX IF NOT EXISTS idx_belief_contradictions_b ON kg_belief_contradictions(belief_b_id);
+CREATE INDEX IF NOT EXISTS idx_belief_contradictions_unresolved ON kg_belief_contradictions(detected_at) WHERE resolved_at IS NULL;
 "#;
 
 #[allow(dead_code)] // retained for reference/tests; runtime uses initialize_vec_tables_with_dim
@@ -710,7 +740,7 @@ mod tests {
         let version: i32 = conn
             .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 27);
+        assert_eq!(version, 28);
 
         // Regular tables.
         for table in [
@@ -728,6 +758,7 @@ mod tests {
             "embedding_cache",
             "kg_episode_payloads",
             "kg_beliefs",
+            "kg_belief_contradictions",
         ] {
             let count: i64 = conn
                 .query_row(
@@ -1065,6 +1096,45 @@ mod tests {
     // -----------------------------------------------------------------
     // v27 — kg_beliefs migration idempotency
     // -----------------------------------------------------------------
+
+    /// v28 belief-contradictions table creation is idempotent: re-running
+    /// the migration SQL on an already-initialized database is a no-op and
+    /// does not corrupt the table.
+    #[test]
+    fn v28_kg_belief_contradictions_migration_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='kg_belief_contradictions'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query kg_belief_contradictions");
+        assert_eq!(
+            count, 1,
+            "kg_belief_contradictions must be created by initialize"
+        );
+
+        // Re-running the migration directly must not error.
+        conn.execute_batch(V28_KG_BELIEF_CONTRADICTIONS_SQL)
+            .expect("rerun v28 migration");
+
+        // Re-running the full init path must also stay healthy.
+        initialize_knowledge_database(&conn).expect("re-init is idempotent");
+
+        let count_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='kg_belief_contradictions'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("recount kg_belief_contradictions");
+        assert_eq!(count_after, 1, "no duplicate table after rerun");
+    }
 
     /// v27 belief table creation is idempotent: re-running the migration
     /// SQL on an already-initialized database is a no-op and does not
