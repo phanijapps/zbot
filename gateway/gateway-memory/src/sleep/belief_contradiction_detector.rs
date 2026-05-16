@@ -610,6 +610,7 @@ mod tests {
             created_at: now,
             updated_at: now,
             superseded_by: None,
+            stale: false,
         };
         store.upsert_belief(&b).await.unwrap();
     }

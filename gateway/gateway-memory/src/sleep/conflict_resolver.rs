@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use zero_stores_traits::{CompactionStore, MemoryFact, MemoryFactStore};
 
+use crate::sleep::belief_propagator::BeliefPropagator;
 use crate::util::parse_llm_json;
 use crate::{LlmClientConfig, MemoryLlmFactory};
 
@@ -47,6 +48,14 @@ pub trait ConflictJudgeLlm: Send + Sync {
 }
 
 /// Sleep-time component that supersedes contradicting schema facts.
+///
+/// When the Belief Network is enabled, ConflictResolver carries an
+/// `Option<Arc<BeliefPropagator>>` and fires
+/// [`BeliefPropagator::propagate_invalidation`] inline after every
+/// successful `supersede_fact` call. Beliefs derived from the losing
+/// fact get retracted (sole source) or marked stale (multi-source)
+/// before the next sleep cycle. The propagator never bubbles errors —
+/// supersession always succeeds even if belief-side propagation fails.
 pub struct ConflictResolver {
     memory_store: Arc<dyn MemoryFactStore>,
     compaction_store: Arc<dyn CompactionStore>,
@@ -54,6 +63,10 @@ pub struct ConflictResolver {
     /// Minimum time between LLM judge passes. `Duration::ZERO` = every cycle.
     interval: Duration,
     last_run: Mutex<Option<Instant>>,
+    /// B-3: optional propagator. `None` when the Belief Network is
+    /// disabled or its store isn't wired — the resolver skips the
+    /// propagation call entirely.
+    belief_propagator: Option<Arc<BeliefPropagator>>,
 }
 
 impl ConflictResolver {
@@ -69,7 +82,17 @@ impl ConflictResolver {
             llm,
             interval,
             last_run: Mutex::new(None),
+            belief_propagator: None,
         }
+    }
+
+    /// Builder-style: attach a [`BeliefPropagator`] so successful
+    /// supersessions fire B-3 propagation inline. Pass `None` to leave
+    /// the resolver in B-2 behavior.
+    #[must_use]
+    pub fn with_belief_propagator(mut self, propagator: Option<Arc<BeliefPropagator>>) -> Self {
+        self.belief_propagator = propagator;
+        self
     }
 
     /// Run one resolution cycle. Returns aggregate stats. Conservative:
@@ -195,6 +218,27 @@ impl ConflictResolver {
                 }
                 stats.conflicts_resolved += 1;
                 superseded_ids.insert(loser.id.clone());
+
+                // B-3: propagate the invalidation to dependent beliefs.
+                // The propagator never bubbles errors — supersession
+                // already succeeded above; belief-side failures are
+                // logged inside `propagate_invalidation` and the cycle
+                // continues.
+                if let Some(propagator) = self.belief_propagator.as_ref() {
+                    let prop_stats = propagator
+                        .propagate_invalidation(&loser.id, transition_time)
+                        .await;
+                    if prop_stats.beliefs_invalidated > 0 || prop_stats.errors > 0 {
+                        tracing::debug!(
+                            loser_id = %loser.id,
+                            invalidated = prop_stats.beliefs_invalidated,
+                            retracted = prop_stats.beliefs_retracted,
+                            stale = prop_stats.beliefs_marked_stale,
+                            errors = prop_stats.errors,
+                            "conflict-resolver: belief propagation fired"
+                        );
+                    }
+                }
 
                 let reason = format!(
                     "superseded by {} (sim={:.2}, judge_conf={:.2}): {}",
@@ -330,6 +374,7 @@ mod tests {
         _tmp: tempfile::TempDir,
         memory_store: Arc<dyn MemoryFactStore>,
         compaction_store: Arc<dyn CompactionStore>,
+        knowledge_db: Arc<KnowledgeDatabase>,
     }
 
     fn setup() -> Harness {
@@ -347,6 +392,7 @@ mod tests {
             _tmp: tmp,
             memory_store: Arc::new(GatewayMemoryFactStore::new(memory_repo, None)),
             compaction_store: Arc::new(GatewayCompactionStore::new(compaction_repo)),
+            knowledge_db: db,
         }
     }
 
@@ -543,5 +589,168 @@ mod tests {
         let s2 = resolver.run_cycle("r2", "agent-t").await.unwrap();
         assert_eq!(s2.facts_considered, 0);
         assert_eq!(s2.pairs_examined, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // B-3: supersession fires belief propagation.
+    // ------------------------------------------------------------------
+
+    /// When ConflictResolver supersedes a fact, the attached
+    /// BeliefPropagator fires. A belief whose sole source is the loser
+    /// fact is retracted (valid_until set); a multi-source belief is
+    /// marked stale.
+    #[tokio::test]
+    async fn supersession_fires_belief_propagation() {
+        use zero_stores_sqlite::SqliteBeliefStore;
+        use zero_stores_traits::Belief;
+        use zero_stores_traits::BeliefStore;
+
+        let h = setup();
+        seed_two_schemas(
+            &h.memory_store,
+            "agent-prop",
+            "Always rebase",
+            "Never rebase",
+        )
+        .await;
+
+        // Look up the loser fact's id so we can wire a belief that
+        // sources from it. The lower-confidence fact (`schema.b`, 0.8)
+        // will be superseded by `schema.a` (0.9).
+        let facts = h
+            .memory_store
+            .get_facts_by_category("agent-prop", "schema", 10)
+            .await
+            .unwrap();
+        let loser_id = facts
+            .iter()
+            .find(|f| f.key == "schema.b")
+            .expect("schema.b seeded")
+            .id
+            .clone();
+        let winner_id = facts
+            .iter()
+            .find(|f| f.key == "schema.a")
+            .unwrap()
+            .id
+            .clone();
+
+        // Wire a real SqliteBeliefStore against the same KnowledgeDatabase
+        // the memory store uses.
+        let knowledge_db = h.knowledge_db.clone();
+        let belief_store: Arc<dyn BeliefStore> = Arc::new(SqliteBeliefStore::new(knowledge_db));
+        let now = chrono::Utc::now();
+        let sole_belief = Belief {
+            id: "belief-sole".into(),
+            partition_id: "agent-prop".into(),
+            subject: "schema.b".into(),
+            content: "Never rebase".into(),
+            confidence: 0.8,
+            valid_from: Some(now),
+            valid_until: None,
+            source_fact_ids: vec![loser_id.clone()],
+            synthesizer_version: 1,
+            reasoning: None,
+            created_at: now,
+            updated_at: now,
+            superseded_by: None,
+            stale: false,
+        };
+        let multi_belief = Belief {
+            id: "belief-multi".into(),
+            partition_id: "agent-prop".into(),
+            subject: "schema.related".into(),
+            content: "Either way is fine".into(),
+            confidence: 0.7,
+            valid_from: Some(now),
+            valid_until: None,
+            source_fact_ids: vec![loser_id.clone(), winner_id.clone()],
+            synthesizer_version: 1,
+            reasoning: None,
+            created_at: now,
+            updated_at: now,
+            superseded_by: None,
+            stale: false,
+        };
+        belief_store.upsert_belief(&sole_belief).await.unwrap();
+        belief_store.upsert_belief(&multi_belief).await.unwrap();
+
+        let propagator = Arc::new(crate::sleep::belief_propagator::BeliefPropagator::new(
+            belief_store.clone(),
+            true,
+        ));
+
+        let judge = Arc::new(MockJudge::new(ConflictResponse {
+            decision: "contradicts".into(),
+            confidence: 0.9,
+            reason: "opposite prescriptions".into(),
+        }));
+        let resolver = ConflictResolver::new(
+            h.memory_store.clone(),
+            h.compaction_store.clone(),
+            judge,
+            Duration::ZERO,
+        )
+        .with_belief_propagator(Some(propagator));
+
+        let stats = resolver.run_cycle("run-prop", "agent-prop").await.unwrap();
+        assert_eq!(stats.conflicts_resolved, 1);
+
+        // Sole-source belief: retracted (valid_until set).
+        let sole_after = belief_store
+            .get_belief_by_id("belief-sole")
+            .await
+            .unwrap()
+            .expect("sole belief persists");
+        assert!(
+            sole_after.valid_until.is_some(),
+            "sole-source belief must be retracted; got: {:?}",
+            sole_after.valid_until
+        );
+
+        // Multi-source belief: marked stale.
+        let multi_after = belief_store
+            .get_belief_by_id("belief-multi")
+            .await
+            .unwrap()
+            .expect("multi belief persists");
+        assert!(
+            multi_after.stale,
+            "multi-source belief must be marked stale"
+        );
+        assert!(
+            multi_after.valid_until.is_none(),
+            "multi-source belief must NOT be retracted"
+        );
+    }
+
+    /// When the propagator is `None` (Belief Network disabled), the
+    /// resolver still supersedes facts but does not touch beliefs.
+    #[tokio::test]
+    async fn supersession_without_propagator_is_unchanged() {
+        let h = setup();
+        seed_two_schemas(
+            &h.memory_store,
+            "agent-nop",
+            "Always rebase",
+            "Never rebase",
+        )
+        .await;
+
+        let judge = Arc::new(MockJudge::new(ConflictResponse {
+            decision: "contradicts".into(),
+            confidence: 0.9,
+            reason: "test".into(),
+        }));
+        // No propagator wired — `belief_propagator: None` path.
+        let resolver = ConflictResolver::new(
+            h.memory_store.clone(),
+            h.compaction_store.clone(),
+            judge,
+            Duration::ZERO,
+        );
+
+        let stats = resolver.run_cycle("run-nop", "agent-nop").await.unwrap();
+        assert_eq!(stats.conflicts_resolved, 1, "supersession still runs");
     }
 }

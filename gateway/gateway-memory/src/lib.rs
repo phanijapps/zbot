@@ -22,6 +22,7 @@ pub use sleep::belief_contradiction_detector::{
     BeliefContradictionConfig, BeliefContradictionDetector, ContradictionDetectionStats,
     ContradictionJudgeLlm, ContradictionJudgeResponse, JudgeDecision, LlmContradictionJudge,
 };
+pub use sleep::belief_propagator::{BeliefPropagationStats, BeliefPropagator};
 pub use sleep::belief_synthesizer::{
     BeliefSynthesisLlm, BeliefSynthesisStats, BeliefSynthesizer, LlmBeliefSynthesizer,
     SynthesisLlmResponse,
@@ -402,8 +403,8 @@ impl Default for MemorySettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BeliefNetworkConfig {
-    /// Master switch — covers both B-1 synthesis and B-2 detection.
-    /// Default: `false`.
+    /// Master switch — covers B-1 synthesis, B-2 detection, and B-3
+    /// confidence propagation. Default: `false`.
     #[serde(default)]
     pub enabled: bool,
     /// Minimum hours between belief / contradiction cycles. Default: 24.
@@ -420,6 +421,12 @@ pub struct BeliefNetworkConfig {
     /// Default: 20.
     #[serde(default = "default_contradiction_budget_per_cycle")]
     pub contradiction_budget_per_cycle: usize,
+    /// Phase B-3: threshold for fact-confidence-drop propagation. The
+    /// DecayEngine fires `belief_invalidate` on a fact when EITHER its
+    /// new confidence falls below this floor (and was above it before)
+    /// OR the single-cycle drop exceeds this value. Default: `0.3`.
+    #[serde(default = "default_fact_confidence_drop_threshold")]
+    pub fact_confidence_drop_threshold: f64,
 }
 
 pub fn default_belief_network_interval_hours() -> u32 {
@@ -434,6 +441,10 @@ pub fn default_contradiction_budget_per_cycle() -> usize {
     20
 }
 
+pub fn default_fact_confidence_drop_threshold() -> f64 {
+    0.3
+}
+
 impl Default for BeliefNetworkConfig {
     fn default() -> Self {
         Self {
@@ -441,6 +452,7 @@ impl Default for BeliefNetworkConfig {
             interval_hours: default_belief_network_interval_hours(),
             neighborhood_prefix_depth: default_neighborhood_prefix_depth(),
             contradiction_budget_per_cycle: default_contradiction_budget_per_cycle(),
+            fact_confidence_drop_threshold: default_fact_confidence_drop_threshold(),
         }
     }
 }
@@ -809,19 +821,39 @@ mod tests {
         assert_eq!(cfg.interval_hours, 24);
         assert_eq!(cfg.neighborhood_prefix_depth, 1);
         assert_eq!(cfg.contradiction_budget_per_cycle, 20);
+        assert!(
+            (cfg.fact_confidence_drop_threshold - 0.3).abs() < 1e-9,
+            "B-3 threshold defaults to 0.3"
+        );
     }
 
     #[test]
     fn belief_network_legacy_json_back_compat() {
         // Existing settings.json from B-1 users only carries `enabled` +
-        // `intervalHours`. Missing B-2 fields must fall back to defaults
-        // without failing deserialization.
+        // `intervalHours`. Missing B-2 / B-3 fields must fall back to
+        // defaults without failing deserialization.
         let json = r#"{"enabled": true, "intervalHours": 24}"#;
         let cfg: BeliefNetworkConfig = serde_json::from_str(json).unwrap();
         assert!(cfg.enabled);
         assert_eq!(cfg.interval_hours, 24);
         assert_eq!(cfg.neighborhood_prefix_depth, 1);
         assert_eq!(cfg.contradiction_budget_per_cycle, 20);
+        assert!((cfg.fact_confidence_drop_threshold - 0.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn belief_network_b3_only_legacy_json_keeps_b3_default() {
+        // A settings.json that knows B-1 + B-2 but predates B-3 must
+        // still parse and fall through to the 0.3 default for the new
+        // field.
+        let json = r#"{
+            "enabled": true,
+            "intervalHours": 24,
+            "neighborhoodPrefixDepth": 2,
+            "contradictionBudgetPerCycle": 50
+        }"#;
+        let cfg: BeliefNetworkConfig = serde_json::from_str(json).unwrap();
+        assert!((cfg.fact_confidence_drop_threshold - 0.3).abs() < 1e-9);
     }
 
     #[test]
@@ -830,13 +862,15 @@ mod tests {
             "enabled": true,
             "intervalHours": 12,
             "neighborhoodPrefixDepth": 2,
-            "contradictionBudgetPerCycle": 50
+            "contradictionBudgetPerCycle": 50,
+            "factConfidenceDropThreshold": 0.45
         }"#;
         let cfg: BeliefNetworkConfig = serde_json::from_str(json).unwrap();
         assert!(cfg.enabled);
         assert_eq!(cfg.interval_hours, 12);
         assert_eq!(cfg.neighborhood_prefix_depth, 2);
         assert_eq!(cfg.contradiction_budget_per_cycle, 50);
+        assert!((cfg.fact_confidence_drop_threshold - 0.45).abs() < 1e-9);
     }
 
     #[test]

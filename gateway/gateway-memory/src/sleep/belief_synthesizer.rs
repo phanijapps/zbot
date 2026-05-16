@@ -21,7 +21,7 @@
 //! 5. Generic from day one: schema uses `partition_id`, not `ward_id` —
 //!    when the R-series rename lands, beliefs won't need migration.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -52,6 +52,13 @@ const MAX_FACTS_PER_CYCLE: usize = 1000;
 /// Stats returned from one synthesis cycle. Tracked separately for
 /// short-circuit vs LLM paths so we can confirm the optimization is
 /// firing on real data.
+///
+/// `stale_beliefs_resynthesized` (B-3) counts beliefs the cycle picked
+/// up from the stale-flag queue at the top of the cycle, before the
+/// normal dirty-subject pass. These overlap with `beliefs_synthesized`
+/// (every stale resynth still increments the synthesized counter) but
+/// are reported separately so operators can see the propagation
+/// pathway firing.
 #[derive(Debug, Default, Clone)]
 pub struct BeliefSynthesisStats {
     pub subjects_examined: u64,
@@ -60,6 +67,7 @@ pub struct BeliefSynthesisStats {
     pub beliefs_llm_synthesized: u64,
     pub llm_calls: u64,
     pub errors: u64,
+    pub stale_beliefs_resynthesized: u64,
 }
 
 /// Parsed multi-fact LLM response shape.
@@ -155,7 +163,20 @@ impl BeliefSynthesizer {
 
         stats.subjects_examined = by_subject.len() as u64;
 
-        for (key, mut group) in by_subject {
+        // B-3: stale beliefs go FIRST. Propagation marked them dirty
+        // when a source fact was invalidated; we re-derive content +
+        // confidence from the surviving sources, then clear the flag.
+        // Subjects re-synthesized here are returned so the normal pass
+        // below can skip them.
+        let stale_subjects = self
+            .process_stale_beliefs(run_id, partition_id, &by_subject, &mut stats)
+            .await;
+
+        // Filter the normal pass to skip already-processed stale subjects.
+        for (key, mut group) in by_subject
+            .into_iter()
+            .filter(|(k, _)| !stale_subjects.contains(k))
+        {
             // Sort oldest-first so the most-recent fact lands at the end
             // of the slice — both paths below treat the tail as primary.
             group.sort_by(|a, b| {
@@ -184,6 +205,105 @@ impl BeliefSynthesizer {
 
         *self.last_run.lock().unwrap() = Some(Instant::now());
         Ok(stats)
+    }
+
+    /// B-3: process stale beliefs from the propagation queue at the
+    /// top of each cycle, before the normal dirty-subject pass.
+    ///
+    /// For each stale belief: look up its subject's facts in the
+    /// already-grouped `by_subject` map, re-run synthesis via
+    /// `synthesize_one` (which UPSERTs the belief), then call
+    /// `clear_stale`. Subjects re-synthesized here are returned as a
+    /// `HashSet` so the caller can skip them in the normal pass.
+    ///
+    /// Errors are logged and skipped — a single failing stale belief
+    /// does not abort the cycle.
+    async fn process_stale_beliefs(
+        &self,
+        run_id: &str,
+        partition_id: &str,
+        by_subject: &HashMap<String, Vec<MemoryFact>>,
+        stats: &mut BeliefSynthesisStats,
+    ) -> HashSet<String> {
+        let mut processed = HashSet::new();
+        let stale = match self
+            .belief_store
+            .list_stale(partition_id, MAX_FACTS_PER_CYCLE)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    run_id,
+                    partition_id,
+                    error = %e,
+                    "belief-synthesizer: list_stale failed; skipping stale-first pass"
+                );
+                stats.errors += 1;
+                return processed;
+            }
+        };
+
+        for belief in stale {
+            // Skip if we've already covered this subject this cycle —
+            // multiple stale beliefs in the same subject collapse to a
+            // single re-synthesis call.
+            if processed.contains(&belief.subject) {
+                if let Err(e) = self.belief_store.clear_stale(&belief.id).await {
+                    tracing::warn!(belief_id = %belief.id, error = %e, "clear_stale failed");
+                    stats.errors += 1;
+                } else {
+                    stats.stale_beliefs_resynthesized += 1;
+                }
+                continue;
+            }
+            let Some(group) = by_subject.get(&belief.subject) else {
+                // The subject has no active facts left — propagation
+                // already retracted the sole-source path; nothing to
+                // re-synthesize. Leave the stale flag set so the next
+                // cycle (or recall path) can observe the unresolved
+                // state. This branch should be rare since sole-source
+                // propagation retracts directly without setting stale.
+                tracing::debug!(
+                    belief_id = %belief.id,
+                    subject = %belief.subject,
+                    "belief-synthesizer: stale belief has no active facts; leaving stale"
+                );
+                continue;
+            };
+            // Re-synthesize with the surviving facts.
+            let mut group = group.clone();
+            group.sort_by(|a, b| {
+                let av = a.valid_from.as_deref().unwrap_or(&a.created_at);
+                let bv = b.valid_from.as_deref().unwrap_or(&b.created_at);
+                av.cmp(bv)
+            });
+            match self
+                .synthesize_one(run_id, partition_id, &belief.subject, &group, stats)
+                .await
+            {
+                Ok(()) => {
+                    stats.beliefs_synthesized += 1;
+                    stats.stale_beliefs_resynthesized += 1;
+                    processed.insert(belief.subject.clone());
+                    if let Err(e) = self.belief_store.clear_stale(&belief.id).await {
+                        tracing::warn!(belief_id = %belief.id, error = %e, "clear_stale failed");
+                        stats.errors += 1;
+                    }
+                }
+                Err(e) => {
+                    stats.errors += 1;
+                    tracing::warn!(
+                        run_id,
+                        partition_id,
+                        subject = %belief.subject,
+                        error = %e,
+                        "belief-synthesizer: stale re-synthesis failed"
+                    );
+                }
+            }
+        }
+        processed
     }
 
     /// Returns true if enough time has elapsed since the last run (or
@@ -257,6 +377,7 @@ impl BeliefSynthesizer {
             created_at: now,
             updated_at: now,
             superseded_by: None,
+            stale: false,
         };
 
         self.belief_store.upsert_belief(&belief).await?;
@@ -801,7 +922,97 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // The memory tool's belief action — covered separately in memory.rs
-    // tests; here we just confirm the wiring round-trips a belief.
+    // B-3: Synthesizer picks up stale beliefs first and clears the flag.
     // ------------------------------------------------------------------
+
+    /// A stale belief is re-synthesized at the top of the cycle and its
+    /// stale flag is cleared. The fact set is unchanged, so the
+    /// content stays the same — what we verify is the prioritization
+    /// pathway (stats track stale_beliefs_resynthesized > 0 and the
+    /// flag transitions from true → false).
+    #[tokio::test]
+    async fn synthesizer_picks_up_stale_and_clears_flag() {
+        let llm = Arc::new(MockLlm::ok("ignored", "ignored"));
+        let (synth, fact_store, belief_store, _tmp) = setup_with_llm(llm, true);
+        let vf = Utc::now();
+        seed_fact(
+            &fact_store,
+            "ag",
+            "user.location",
+            "Mason, OH",
+            0.9,
+            Some(vf),
+        )
+        .await;
+
+        // First cycle: synthesize the belief. Then mark it stale.
+        synth.run_cycle("setup", "ag").await.unwrap();
+        let listed = belief_store.list_beliefs("ag", 10).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        let belief_id = listed[0].id.clone();
+        belief_store.mark_stale(&belief_id).await.unwrap();
+        assert!(belief_store.list_beliefs("ag", 10).await.unwrap()[0].stale);
+
+        // Second cycle: stale belief is picked up FIRST.
+        let stats = synth.run_cycle("resynth", "ag").await.unwrap();
+        assert!(
+            stats.stale_beliefs_resynthesized >= 1,
+            "stale resynth path must fire; got stats={stats:?}"
+        );
+
+        // Flag is cleared after the cycle.
+        let after = belief_store.list_beliefs("ag", 10).await.unwrap();
+        assert!(!after[0].stale, "synthesizer must clear stale flag");
+    }
+
+    /// When both a stale belief and a fresh subject exist, the stale
+    /// belief is processed FIRST (stats reflect the stale pathway), and
+    /// the normal pass still covers the other subject in the same cycle.
+    #[tokio::test]
+    async fn synthesizer_prioritizes_stale_before_dirty() {
+        let llm = Arc::new(MockLlm::ok("ignored", "ignored"));
+        let (synth, fact_store, belief_store, _tmp) = setup_with_llm(llm, true);
+
+        // Two subjects, each with a single fact. First cycle synthesizes both.
+        seed_fact(
+            &fact_store,
+            "ag",
+            "user.location",
+            "Mason, OH",
+            0.9,
+            Some(Utc::now()),
+        )
+        .await;
+        seed_fact(
+            &fact_store,
+            "ag",
+            "user.name",
+            "Phani",
+            0.9,
+            Some(Utc::now()),
+        )
+        .await;
+        synth.run_cycle("setup", "ag").await.unwrap();
+        assert_eq!(belief_store.list_beliefs("ag", 10).await.unwrap().len(), 2);
+
+        // Mark one of the beliefs stale.
+        let listed = belief_store.list_beliefs("ag", 10).await.unwrap();
+        let target = listed
+            .iter()
+            .find(|b| b.subject == "user.location")
+            .unwrap();
+        belief_store.mark_stale(&target.id).await.unwrap();
+
+        // Re-run. Stale subject is re-synthesized AND the other subject
+        // still gets its normal pass — stats reflect both.
+        let stats = synth.run_cycle("mixed", "ag").await.unwrap();
+        assert!(
+            stats.stale_beliefs_resynthesized >= 1,
+            "stale path must fire: {stats:?}"
+        );
+        assert!(
+            stats.beliefs_synthesized >= 1,
+            "normal pass also runs: {stats:?}"
+        );
+    }
 }

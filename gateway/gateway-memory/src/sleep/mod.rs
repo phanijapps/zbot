@@ -2,6 +2,7 @@
 //! during the gateway-memory crate extraction (Phase B).
 
 pub mod belief_contradiction_detector;
+pub mod belief_propagator;
 pub mod belief_synthesizer;
 pub mod compactor;
 pub mod conflict_resolver;
@@ -21,6 +22,7 @@ pub use belief_contradiction_detector::{
     BeliefContradictionConfig, BeliefContradictionDetector, ContradictionDetectionStats,
     ContradictionJudgeLlm, ContradictionJudgeResponse, JudgeDecision, LlmContradictionJudge,
 };
+pub use belief_propagator::{BeliefPropagationStats, BeliefPropagator};
 pub use belief_synthesizer::{
     BeliefSynthesisLlm, BeliefSynthesisStats, BeliefSynthesizer, LlmBeliefSynthesizer,
     SynthesisLlmResponse,
