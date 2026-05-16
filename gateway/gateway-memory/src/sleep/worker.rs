@@ -12,8 +12,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::sleep::{
-    BeliefSynthesizer, Compactor, ConflictResolver, CorrectionsAbstractor, DecayEngine,
-    OrphanArchiver, PatternExtractor, Pruner, Synthesizer,
+    BeliefContradictionDetector, BeliefSynthesizer, Compactor, ConflictResolver,
+    CorrectionsAbstractor, DecayEngine, OrphanArchiver, PatternExtractor, Pruner, Synthesizer,
 };
 
 /// Bundle of optional sleep-time ops passed to [`SleepTimeWorker::start`].
@@ -30,6 +30,11 @@ pub struct SleepOps {
     /// skips the belief step entirely — beliefs are opt-in via
     /// `MemorySettings.belief_network.enabled`.
     pub belief_synthesizer: Option<Arc<BeliefSynthesizer>>,
+    /// Belief contradiction detector (Phase B-2). Runs strictly AFTER
+    /// `belief_synthesizer` so freshly-synthesized beliefs are visible
+    /// to the pairwise judge. When `None`, the cycle skips the detection
+    /// step entirely — same opt-in flag as B-1.
+    pub belief_contradiction_detector: Option<Arc<BeliefContradictionDetector>>,
 }
 
 /// Background worker that orchestrates the full sleep-time pipeline.
@@ -139,6 +144,8 @@ pub struct CycleStats {
     pub kg_relationships_decayed: u64,
     /// Belief Network — Phase B-1.
     pub beliefs_synthesized: u64,
+    /// Belief Network — Phase B-2: contradictions inserted (logical + tension).
+    pub belief_contradictions_detected: u64,
 }
 
 async fn run_cycle(
@@ -251,6 +258,22 @@ async fn run_cycle(
         }
     }
 
+    // Belief contradiction detection — opt-in. Runs strictly AFTER
+    // synthesis so the fresh belief set is visible to the pair-wise
+    // judge. Same opt-in flag as B-1 (the detector is only Some when
+    // both the contradiction store and the network are enabled).
+    if let Some(detector) = ops.belief_contradiction_detector.as_ref() {
+        match detector.run_cycle(&run_id, agent_id).await {
+            Ok(s) => {
+                stats.belief_contradictions_detected =
+                    s.contradictions_logical + s.contradictions_tension;
+            }
+            Err(e) => {
+                tracing::warn!(%run_id, error = %e, "belief contradiction detector cycle failed");
+            }
+        }
+    }
+
     tracing::info!(
         kind,
         %run_id,
@@ -270,6 +293,7 @@ async fn run_cycle(
         kg_entities_decayed = stats.kg_entities_decayed,
         kg_relationships_decayed = stats.kg_relationships_decayed,
         beliefs_synthesized = stats.beliefs_synthesized,
+        belief_contradictions_detected = stats.belief_contradictions_detected,
         "sleep-time cycle done"
     );
     stats
@@ -476,6 +500,7 @@ mod tests {
             corrections_abstractor: None,
             conflict_resolver: None,
             belief_synthesizer: None,
+            belief_contradiction_detector: None,
         };
         let stats = run_cycle(
             "test",
@@ -580,6 +605,7 @@ mod tests {
             corrections_abstractor: None,
             conflict_resolver: None,
             belief_synthesizer: None,
+            belief_contradiction_detector: None,
         };
         let stats = run_cycle(
             "test",

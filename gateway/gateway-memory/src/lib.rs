@@ -18,6 +18,10 @@ pub use recall::scored_item::{
     intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, ScoredItem,
 };
 pub use recall::MemoryRecall;
+pub use sleep::belief_contradiction_detector::{
+    BeliefContradictionConfig, BeliefContradictionDetector, ContradictionDetectionStats,
+    ContradictionJudgeLlm, ContradictionJudgeResponse, JudgeDecision, LlmContradictionJudge,
+};
 pub use sleep::belief_synthesizer::{
     BeliefSynthesisLlm, BeliefSynthesisStats, BeliefSynthesizer, LlmBeliefSynthesizer,
     SynthesisLlmResponse,
@@ -385,24 +389,49 @@ impl Default for MemorySettings {
     }
 }
 
-/// Belief Network configuration. Controls the `BeliefSynthesizer`
-/// sleep-time worker that aggregates `MemoryFact`s into beliefs.
+/// Belief Network configuration. Controls both the `BeliefSynthesizer`
+/// (Phase B-1) and the `BeliefContradictionDetector` (Phase B-2)
+/// sleep-time workers — a single block governs the whole reflective-memory
+/// pillar so operators flip one master switch.
 ///
 /// Disabled by default — operators opt in by setting `enabled: true`.
 /// Throttled by `interval_hours` (default 24) to keep LLM cost bounded.
+/// B-2 additions (`neighborhood_prefix_depth`, `contradiction_budget_per_cycle`)
+/// only kick in when contradiction detection runs, which still gates on
+/// the shared `enabled` flag.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BeliefNetworkConfig {
-    /// Master switch. Default: `false`.
+    /// Master switch — covers both B-1 synthesis and B-2 detection.
+    /// Default: `false`.
     #[serde(default)]
     pub enabled: bool,
-    /// Minimum hours between synthesis cycles. Default: 24.
+    /// Minimum hours between belief / contradiction cycles. Default: 24.
     #[serde(default = "default_belief_network_interval_hours")]
     pub interval_hours: u32,
+    /// Phase B-2: how many dot-separated subject components define a
+    /// contradiction-detection "neighborhood". `1` = top-level prefix
+    /// (e.g. `user`); `2` = first two levels (`user.dietary`).
+    /// Default: `1`.
+    #[serde(default = "default_neighborhood_prefix_depth")]
+    pub neighborhood_prefix_depth: usize,
+    /// Phase B-2: maximum LLM judge calls per detection cycle. Pairs
+    /// beyond the cap are skipped this cycle and may be picked up later.
+    /// Default: 20.
+    #[serde(default = "default_contradiction_budget_per_cycle")]
+    pub contradiction_budget_per_cycle: usize,
 }
 
 pub fn default_belief_network_interval_hours() -> u32 {
     24
+}
+
+pub fn default_neighborhood_prefix_depth() -> usize {
+    1
+}
+
+pub fn default_contradiction_budget_per_cycle() -> usize {
+    20
 }
 
 impl Default for BeliefNetworkConfig {
@@ -410,6 +439,8 @@ impl Default for BeliefNetworkConfig {
         Self {
             enabled: false,
             interval_hours: default_belief_network_interval_hours(),
+            neighborhood_prefix_depth: default_neighborhood_prefix_depth(),
+            contradiction_budget_per_cycle: default_contradiction_budget_per_cycle(),
         }
     }
 }
@@ -769,6 +800,43 @@ mod tests {
         assert_eq!(cfg.max_subqueries, 6);
         assert_eq!(cfg.max_subquery_len, 120);
         assert_eq!(cfg.timeout_ms, 5000);
+    }
+
+    #[test]
+    fn belief_network_default_values() {
+        let cfg = BeliefNetworkConfig::default();
+        assert!(!cfg.enabled, "belief network must default to disabled");
+        assert_eq!(cfg.interval_hours, 24);
+        assert_eq!(cfg.neighborhood_prefix_depth, 1);
+        assert_eq!(cfg.contradiction_budget_per_cycle, 20);
+    }
+
+    #[test]
+    fn belief_network_legacy_json_back_compat() {
+        // Existing settings.json from B-1 users only carries `enabled` +
+        // `intervalHours`. Missing B-2 fields must fall back to defaults
+        // without failing deserialization.
+        let json = r#"{"enabled": true, "intervalHours": 24}"#;
+        let cfg: BeliefNetworkConfig = serde_json::from_str(json).unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.interval_hours, 24);
+        assert_eq!(cfg.neighborhood_prefix_depth, 1);
+        assert_eq!(cfg.contradiction_budget_per_cycle, 20);
+    }
+
+    #[test]
+    fn belief_network_full_json_round_trips() {
+        let json = r#"{
+            "enabled": true,
+            "intervalHours": 12,
+            "neighborhoodPrefixDepth": 2,
+            "contradictionBudgetPerCycle": 50
+        }"#;
+        let cfg: BeliefNetworkConfig = serde_json::from_str(json).unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.interval_hours, 12);
+        assert_eq!(cfg.neighborhood_prefix_depth, 2);
+        assert_eq!(cfg.contradiction_budget_per_cycle, 50);
     }
 
     #[test]

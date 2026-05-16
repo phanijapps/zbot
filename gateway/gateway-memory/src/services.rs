@@ -12,14 +12,16 @@ use std::time::Duration;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use zero_stores::KnowledgeGraphStore;
 use zero_stores_traits::{
-    BeliefStore, CompactionStore, ConversationStore, EpisodeStore, MemoryFactStore, ProcedureStore,
+    BeliefContradictionStore, BeliefStore, CompactionStore, ConversationStore, EpisodeStore,
+    MemoryFactStore, ProcedureStore,
 };
 
 use crate::sleep::{
-    BeliefSynthesizer, Compactor, ConflictResolver, CorrectionsAbstractor, DecayConfig,
-    DecayEngine, LlmBeliefSynthesizer, LlmConflictJudge, LlmCorrectionsAbstractor,
-    LlmPairwiseVerifier, LlmPatternExtractor, LlmSynthesizer, OrphanArchiver, PairwiseVerifier,
-    PatternExtractor, Pruner, SleepOps, SleepTimeWorker, Synthesizer,
+    BeliefContradictionConfig, BeliefContradictionDetector, BeliefSynthesizer, Compactor,
+    ConflictResolver, CorrectionsAbstractor, DecayConfig, DecayEngine, LlmBeliefSynthesizer,
+    LlmConflictJudge, LlmContradictionJudge, LlmCorrectionsAbstractor, LlmPairwiseVerifier,
+    LlmPatternExtractor, LlmSynthesizer, OrphanArchiver, PairwiseVerifier, PatternExtractor,
+    Pruner, SleepOps, SleepTimeWorker, Synthesizer,
 };
 use crate::{KgDecayConfig, MemoryLlmFactory};
 
@@ -51,6 +53,17 @@ pub struct MemoryServicesConfig {
     pub belief_store: Option<Arc<dyn BeliefStore>>,
     pub belief_network_enabled: bool,
     pub belief_network_interval: Duration,
+    /// Phase B-2: optional contradiction store. When `Some` AND
+    /// `belief_network_enabled = true` AND a `belief_store` is wired,
+    /// the `BeliefContradictionDetector` joins the sleep cycle right
+    /// after the synthesizer. Detector reuses the same enable flag and
+    /// interval as B-1 so operators flip one switch.
+    pub belief_contradiction_store: Option<Arc<dyn BeliefContradictionStore>>,
+    /// Phase B-2: how many subject-prefix components define a
+    /// neighborhood. Mirrors `BeliefNetworkConfig.neighborhood_prefix_depth`.
+    pub belief_contradiction_neighborhood_prefix_depth: usize,
+    /// Phase B-2: LLM call cap per detection cycle.
+    pub belief_contradiction_budget_per_cycle: usize,
 }
 
 /// Bundle of ready-to-use memory subsystem handles.
@@ -85,6 +98,9 @@ impl MemoryServices {
             belief_store,
             belief_network_enabled,
             belief_network_interval,
+            belief_contradiction_store,
+            belief_contradiction_neighborhood_prefix_depth,
+            belief_contradiction_budget_per_cycle,
         } = config;
 
         let verifier: Option<Arc<dyn PairwiseVerifier>> =
@@ -141,19 +157,39 @@ impl MemoryServices {
         // Belief Network — opt-in, requires a wired BeliefStore. Even
         // when the flag is on, missing the store falls back to None so
         // mis-configuration degrades gracefully rather than panicking.
-        let belief_synthesizer = match (belief_network_enabled, belief_store) {
-            (true, Some(bs)) => {
-                let belief_llm = Arc::new(LlmBeliefSynthesizer::new(llm_factory.clone()));
-                Some(Arc::new(BeliefSynthesizer::new(
-                    memory_store.clone(),
-                    bs,
-                    belief_llm,
-                    belief_network_interval,
-                    true,
-                )))
-            }
-            _ => None,
-        };
+        let (belief_synthesizer, belief_contradiction_detector) =
+            match (belief_network_enabled, belief_store) {
+                (true, Some(bs)) => {
+                    let belief_llm = Arc::new(LlmBeliefSynthesizer::new(llm_factory.clone()));
+                    let synth = Some(Arc::new(BeliefSynthesizer::new(
+                        memory_store.clone(),
+                        bs.clone(),
+                        belief_llm,
+                        belief_network_interval,
+                        true,
+                    )));
+                    // Detector requires both stores. If the contradiction
+                    // store is missing we degrade to "synthesis only" rather
+                    // than panicking.
+                    let detector = belief_contradiction_store.map(|cs| {
+                        let judge = Arc::new(LlmContradictionJudge::new(llm_factory.clone()));
+                        Arc::new(BeliefContradictionDetector::new(
+                            bs,
+                            cs,
+                            judge,
+                            BeliefContradictionConfig {
+                                enabled: true,
+                                neighborhood_prefix_depth:
+                                    belief_contradiction_neighborhood_prefix_depth,
+                                budget_per_cycle: belief_contradiction_budget_per_cycle,
+                            },
+                            belief_network_interval,
+                        ))
+                    });
+                    (synth, detector)
+                }
+                _ => (None, None),
+            };
 
         let ops = SleepOps {
             synthesizer: Some(synthesizer),
@@ -162,6 +198,7 @@ impl MemoryServices {
             corrections_abstractor: Some(corrections_abstractor),
             conflict_resolver: Some(conflict_resolver),
             belief_synthesizer,
+            belief_contradiction_detector,
         };
 
         let sleep_time_worker = Arc::new(SleepTimeWorker::start_with_ops(

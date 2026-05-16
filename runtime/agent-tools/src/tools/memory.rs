@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use zero_core::{FileSystemContext, Result, Tool, ToolContext, ToolPermissions, ZeroError};
-use zero_stores_traits::{BeliefStore, MemoryFactStore};
+use zero_stores_traits::{BeliefContradictionStore, BeliefStore, MemoryFactStore};
 
 // ============================================================================
 // CONFIGURATION
@@ -72,6 +72,10 @@ pub struct MemoryTool {
     /// `fact_store` plumbing so callers that don't wire the Belief
     /// Network see a clean "not configured" error instead of a panic.
     belief_store: Option<Arc<dyn BeliefStore>>,
+    /// Optional belief-contradiction store — when present, the
+    /// `contradictions` action surfaces detected contradictions for a
+    /// belief or partition. Phase B-2 of the Belief Network.
+    contradiction_store: Option<Arc<dyn BeliefContradictionStore>>,
 }
 
 impl MemoryTool {
@@ -85,6 +89,7 @@ impl MemoryTool {
             fs,
             fact_store,
             belief_store: None,
+            contradiction_store: None,
         }
     }
 
@@ -100,6 +105,25 @@ impl MemoryTool {
             fs,
             fact_store,
             belief_store,
+            contradiction_store: None,
+        }
+    }
+
+    /// Variant that wires both the Belief Network store (Phase B-1) AND
+    /// the contradiction store (Phase B-2). The `contradictions` action
+    /// becomes available when this is set.
+    #[must_use]
+    pub fn with_contradiction_store(
+        fs: Arc<dyn FileSystemContext>,
+        fact_store: Option<Arc<dyn MemoryFactStore>>,
+        belief_store: Option<Arc<dyn BeliefStore>>,
+        contradiction_store: Option<Arc<dyn BeliefContradictionStore>>,
+    ) -> Self {
+        Self {
+            fs,
+            fact_store,
+            belief_store,
+            contradiction_store,
         }
     }
 
@@ -219,7 +243,8 @@ impl Tool for MemoryTool {
         save_fact (structured fact with category/key/content/confidence — automatically embedded for semantic search), \
         recall (hybrid semantic + keyword search over saved facts), \
         get_fact (exact-key lookup for ctx-namespaced session state — use this to fetch intent/prompt/plan/state.<exec_id> by precise key), \
-        belief (synthesized aggregate stance about a subject — returns the active belief for a (partition, subject) at as_of). \
+        belief (synthesized aggregate stance about a subject — returns the active belief for a (partition, subject) at as_of), \
+        contradictions (list belief contradictions — by belief_id or recent in partition). \
         Scopes: 'agent' (default), 'shared' (cross-session). \
         Shared memory requires a 'file' parameter: user_info, workspace, patterns, or session_summaries."
     }
@@ -230,12 +255,16 @@ impl Tool for MemoryTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["get", "set", "delete", "list", "search", "save_fact", "recall", "get_fact", "belief"],
+                    "enum": ["get", "set", "delete", "list", "search", "save_fact", "recall", "get_fact", "belief", "contradictions"],
                     "description": "The memory operation to perform"
                 },
                 "subject": {
                     "type": "string",
                     "description": "Subject key for the 'belief' action — e.g. 'user.location' or 'domain.finance.acn.valuation_verdict'"
+                },
+                "belief_id": {
+                    "type": "string",
+                    "description": "Belief ID to scope 'contradictions' to — when omitted, returns recent contradictions in the partition"
                 },
                 "category": {
                     "type": "string",
@@ -349,6 +378,10 @@ impl Tool for MemoryTool {
             "recall" => self.action_recall(ctx.as_ref(), &agent_id, &args).await,
             "get_fact" => self.action_get_fact(ctx.as_ref(), &args).await,
             "belief" => self.action_belief(ctx.as_ref(), &agent_id, &args).await,
+            "contradictions" => {
+                self.action_contradictions(ctx.as_ref(), &agent_id, &args)
+                    .await
+            }
             _ => Err(ZeroError::Tool(format!("Unknown action: {}", action))),
         }
     }
@@ -927,6 +960,72 @@ impl MemoryTool {
             None => json!({ "belief": null }),
         };
         Ok(payload)
+    }
+
+    /// List belief contradictions — Phase B-2 of the Belief Network.
+    ///
+    /// - When `belief_id` is provided: returns every contradiction
+    ///   involving that belief (either side of the pair).
+    /// - When `belief_id` is omitted: returns the most recent
+    ///   contradictions in the agent's partition (or `ward_id` override),
+    ///   capped by `limit` (default 10).
+    ///
+    /// Returns `{"contradictions": null}` when the contradiction store
+    /// isn't wired so the model gets a clean signal that the Belief
+    /// Network isn't enabled.
+    async fn action_contradictions(
+        &self,
+        ctx: &dyn ToolContext,
+        agent_id: &str,
+        args: &Value,
+    ) -> Result<Value> {
+        let Some(store) = self.contradiction_store.as_ref() else {
+            return Err(ZeroError::Tool(
+                "Belief Network is not configured (enable execution.memory.beliefNetwork in settings)"
+                    .to_string(),
+            ));
+        };
+
+        let limit = args
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .unwrap_or(10);
+
+        let rows = if let Some(belief_id) = args.get("belief_id").and_then(|v| v.as_str()) {
+            store.for_belief(belief_id).await.map_err(ZeroError::Tool)?
+        } else {
+            let partition_id = ctx
+                .get_state("ward_id")
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_else(|| agent_id.to_string());
+            store
+                .list_recent(&partition_id, limit)
+                .await
+                .map_err(ZeroError::Tool)?
+        };
+
+        let serialized: Vec<Value> = rows
+            .into_iter()
+            .map(|c| {
+                json!({
+                    "id": c.id,
+                    "belief_a_id": c.belief_a_id,
+                    "belief_b_id": c.belief_b_id,
+                    "contradiction_type": c.contradiction_type,
+                    "severity": c.severity,
+                    "judge_reasoning": c.judge_reasoning,
+                    "detected_at": c.detected_at.to_rfc3339(),
+                    "resolved_at": c.resolved_at.map(|t| t.to_rfc3339()),
+                    "resolution": c.resolution,
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "count": serialized.len(),
+            "contradictions": serialized,
+        }))
     }
 
     /// Search memory entries
@@ -1829,6 +1928,188 @@ mod tests {
         let args = json!({ "subject": "no.such.subject" });
         let result = tool.action_belief(&ctx, "root", &args).await.unwrap();
         assert_eq!(result["belief"], Value::Null);
+    }
+
+    // ========================================================================
+    // Contradictions action tests — Phase B-2
+    //
+    // Stub the contradiction store directly so we exercise the tool's
+    // routing + JSON-serialization paths without standing up SQLite.
+    // ========================================================================
+
+    fn make_contradiction_ctx() -> impl ToolContext + 'static {
+        use zero_core::{CallbackContext, Content, EventActions, ReadonlyContext, ToolContext};
+        struct Ctx;
+        impl ReadonlyContext for Ctx {
+            fn invocation_id(&self) -> &str {
+                "t"
+            }
+            fn agent_name(&self) -> &str {
+                "t"
+            }
+            fn user_id(&self) -> &str {
+                "t"
+            }
+            fn app_name(&self) -> &str {
+                "t"
+            }
+            fn session_id(&self) -> &str {
+                "sess-contradictions"
+            }
+            fn branch(&self) -> &str {
+                "t"
+            }
+            fn user_content(&self) -> &Content {
+                use std::sync::LazyLock;
+                static C: LazyLock<Content> = LazyLock::new(|| Content {
+                    role: "user".to_string(),
+                    parts: vec![],
+                });
+                &C
+            }
+        }
+        impl CallbackContext for Ctx {
+            fn get_state(&self, _key: &str) -> Option<Value> {
+                None
+            }
+            fn set_state(&self, _key: String, _value: Value) {}
+        }
+        impl ToolContext for Ctx {
+            fn function_call_id(&self) -> String {
+                "t".to_string()
+            }
+            fn actions(&self) -> EventActions {
+                EventActions::default()
+            }
+            fn set_actions(&self, _: EventActions) {}
+        }
+        Ctx
+    }
+
+    fn sample_contradiction(id: &str, a: &str, b: &str) -> zero_stores_traits::BeliefContradiction {
+        use zero_stores_traits::{BeliefContradiction, ContradictionType};
+        BeliefContradiction {
+            id: id.to_string(),
+            belief_a_id: a.to_string(),
+            belief_b_id: b.to_string(),
+            contradiction_type: ContradictionType::Logical,
+            severity: 0.9,
+            judge_reasoning: Some("test reasoning".to_string()),
+            detected_at: chrono::Utc::now(),
+            resolved_at: None,
+            resolution: None,
+        }
+    }
+
+    /// In-memory contradiction store stub. `for_belief` returns
+    /// `for_belief_rows`; `list_recent` returns `list_recent_rows`. Lets
+    /// tests assert routing without an SQLite dependency.
+    struct StubContradictionStore {
+        for_belief_rows: std::sync::Mutex<Vec<zero_stores_traits::BeliefContradiction>>,
+        list_recent_rows: std::sync::Mutex<Vec<zero_stores_traits::BeliefContradiction>>,
+    }
+
+    #[async_trait::async_trait]
+    impl zero_stores_traits::BeliefContradictionStore for StubContradictionStore {
+        async fn insert_contradiction(
+            &self,
+            _c: &zero_stores_traits::BeliefContradiction,
+        ) -> std::result::Result<(), String> {
+            Ok(())
+        }
+        async fn for_belief(
+            &self,
+            _belief_id: &str,
+        ) -> std::result::Result<Vec<zero_stores_traits::BeliefContradiction>, String> {
+            Ok(self.for_belief_rows.lock().unwrap().clone())
+        }
+        async fn list_recent(
+            &self,
+            _partition_id: &str,
+            _limit: usize,
+        ) -> std::result::Result<Vec<zero_stores_traits::BeliefContradiction>, String> {
+            Ok(self.list_recent_rows.lock().unwrap().clone())
+        }
+        async fn pair_exists(&self, _a: &str, _b: &str) -> std::result::Result<bool, String> {
+            Ok(false)
+        }
+        async fn resolve(
+            &self,
+            _id: &str,
+            _r: zero_stores_traits::Resolution,
+        ) -> std::result::Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn action_contradictions_by_belief_id_returns_rows() {
+        let store = Arc::new(StubContradictionStore {
+            for_belief_rows: std::sync::Mutex::new(vec![
+                sample_contradiction("c-1", "b-a", "b-b"),
+                sample_contradiction("c-2", "b-b", "b-c"),
+            ]),
+            list_recent_rows: std::sync::Mutex::new(vec![]),
+        });
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
+        let tool = MemoryTool::with_contradiction_store(
+            fs,
+            None,
+            None,
+            Some(store as Arc<dyn zero_stores_traits::BeliefContradictionStore>),
+        );
+        let ctx = make_contradiction_ctx();
+
+        let args = json!({ "belief_id": "b-b" });
+        let result = tool
+            .action_contradictions(&ctx, "root", &args)
+            .await
+            .unwrap();
+        assert_eq!(result["count"], 2);
+        let rows = result["contradictions"].as_array().unwrap();
+        assert_eq!(rows[0]["id"], "c-1");
+        assert_eq!(rows[0]["contradiction_type"], "logical");
+        assert_eq!(rows[1]["id"], "c-2");
+    }
+
+    #[tokio::test]
+    async fn action_contradictions_without_belief_id_uses_list_recent() {
+        let store = Arc::new(StubContradictionStore {
+            for_belief_rows: std::sync::Mutex::new(vec![]),
+            list_recent_rows: std::sync::Mutex::new(vec![sample_contradiction(
+                "c-recent", "b-1", "b-2",
+            )]),
+        });
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
+        let tool = MemoryTool::with_contradiction_store(
+            fs,
+            None,
+            None,
+            Some(store as Arc<dyn zero_stores_traits::BeliefContradictionStore>),
+        );
+        let ctx = make_contradiction_ctx();
+
+        let args = json!({ "limit": 5 });
+        let result = tool
+            .action_contradictions(&ctx, "root", &args)
+            .await
+            .unwrap();
+        assert_eq!(result["count"], 1);
+        let rows = result["contradictions"].as_array().unwrap();
+        assert_eq!(rows[0]["id"], "c-recent");
+    }
+
+    #[tokio::test]
+    async fn action_contradictions_errors_when_store_missing() {
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
+        let tool = MemoryTool::new(fs, None);
+        let ctx = make_contradiction_ctx();
+        let args = json!({});
+        let err = tool.action_contradictions(&ctx, "root", &args).await;
+        assert!(err.is_err(), "missing store must surface as a tool error");
     }
 
     #[tokio::test]

@@ -1,6 +1,7 @@
 //! Sleep-time memory components — moved here from gateway/gateway-execution/src/sleep/
 //! during the gateway-memory crate extraction (Phase B).
 
+pub mod belief_contradiction_detector;
 pub mod belief_synthesizer;
 pub mod compactor;
 pub mod conflict_resolver;
@@ -16,6 +17,10 @@ pub mod worker;
 // Convenience re-exports so `crate::sleep::Compactor` etc. resolve inside
 // gateway-memory (used by `worker.rs` and the `services` factory). External
 // callers still hit the crate-root re-exports in `lib.rs`.
+pub use belief_contradiction_detector::{
+    BeliefContradictionConfig, BeliefContradictionDetector, ContradictionDetectionStats,
+    ContradictionJudgeLlm, ContradictionJudgeResponse, JudgeDecision, LlmContradictionJudge,
+};
 pub use belief_synthesizer::{
     BeliefSynthesisLlm, BeliefSynthesisStats, BeliefSynthesizer, LlmBeliefSynthesizer,
     SynthesisLlmResponse,
