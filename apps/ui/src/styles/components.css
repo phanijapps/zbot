@@ -3364,6 +3364,13 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  /* B-6 added BeliefNetworkPanel as a flex-column sibling of __main.
+     The panel has tall intrinsic content (~2000px) that consumed all
+     the column space, squeezing __main (which has flex: 1, basis 0%)
+     down to 0 and collapsing the graph canvas. Make the observatory
+     scrollable so the panel can extend below the graph instead of
+     fighting it for height. */
+  overflow-y: auto;
 }
 
 .observatory__toolbar {
@@ -3391,7 +3398,12 @@
 
 .observatory__main {
   display: flex;
-  flex: 1;
+  /* Don't grow/shrink — use min-height instead so the graph canvas
+     keeps a visible footprint even when the BeliefNetworkPanel below
+     pushes total content above the viewport. The container scroll
+     (on .observatory) handles overflow. */
+  flex: 0 0 auto;
+  min-height: 600px;
   overflow: hidden;
 }
 
