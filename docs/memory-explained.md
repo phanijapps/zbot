@@ -142,6 +142,117 @@ The agent-callable `memory` tool exposes `as_of` as an optional ISO-8601 paramet
 - **Decay and supersession are different concerns.** Supersession means "newer fact replaces this one"; truth-interval expiry means "the world moved on." The recall layer treats them separately.
 - **The graph schema is symmetric.** `memory_facts`, `kg_entities`, and `kg_relationships` all use the same `valid_from` / `valid_until` columns, so traversal can apply the same point-in-time filter to all three.
 
+## The Belief Network
+
+Facts are atomic — one row says one thing from one source. **Beliefs** are aggregates: synthesized stances built from one or more facts about the same subject. The Belief Network is the layer that turns "a pile of facts" into "a reasoned stance the agent maintains."
+
+The Belief Network ships in phases. Phase B-1 (synthesis) and Phase B-2 (contradiction detection) are live; B-3 (confidence propagation) and B-4 (recall integration) are planned. Storage lives in two new tables: `kg_beliefs` (the synthesized stances) and `kg_belief_contradictions` (relationships between conflicting beliefs).
+
+Both phases are opt-in via `execution.memory.beliefNetwork.enabled`. When disabled, the synthesizer and detector workers no-op — no LLM calls, no rows written.
+
+### Phase B-1 — Belief synthesis
+
+A sleep-time worker (`BeliefSynthesizer`) groups facts by `(partition_id, subject)` and produces a single belief per group. The output captures:
+
+- `content` — one sentence stating what the agent currently believes
+- `confidence` — derived from constituent fact confidences with recency weighting
+- `source_fact_ids` — the facts that contributed (queryable provenance)
+- `valid_from` / `valid_until` — bi-temporal interval matching the underlying facts
+- `reasoning` — the LLM's brief explanation (only set when synthesis required an LLM call)
+
+**The cost optimization that makes this affordable: single-fact short-circuit.** Real-data audit found that 95%+ of subjects have only one fact backing them. For those, the belief is just a wrapper — `content = fact.content`, `confidence = fact.confidence × recency_weight`, zero LLM calls. Only multi-fact subjects invoke the synthesizer LLM. Across 709 facts in production, that's ~15 LLM calls per cycle, not 709.
+
+The recency weight uses a 90-day half-life: `weight(t) = 1 / (1 + age_days(t) / 90)`. A 3-month-old fact contributes at half weight; a year-old fact at about 20%.
+
+### Phase B-2 — Belief contradictions
+
+Synthesis tells you what the agent believes about a subject. Contradiction detection answers a different question: **does the agent hold conflicting beliefs about similar subjects?**
+
+A second sleep-time worker (`BeliefContradictionDetector`) examines pairs of beliefs within the same topical neighborhood and asks an LLM judge to classify each pair. The result lives in `kg_belief_contradictions` — a first-class entity with type, severity, and resolution status.
+
+#### Topical neighborhoods
+
+Comparing every pair of beliefs in the database is O(N²) — intractable past a few thousand beliefs. The detector scopes comparisons to **topical neighborhoods** defined by subject prefix:
+
+```
+belief.subject = "user.dietary.vegetarian"
+belief.subject = "user.dietary_preferences.vegetarian"
+belief.subject = "user.family.wife"
+   ↓ (prefix depth = 1)
+all three are in the "user" neighborhood
+```
+
+Default `neighborhoodPrefixDepth = 1` (split subject on `.`, keep the first component). Pairs are formed within neighborhoods only; cross-neighborhood pairs are never evaluated.
+
+#### The four-way LLM verdict
+
+For each unevaluated pair, the LLM judge returns one of:
+
+| Decision | Meaning | Effect |
+|---|---|---|
+| `logical_contradiction` | A and B cannot both be true at the same time. Different "current employer" beliefs, different "lives in" cities. | Row written to `kg_belief_contradictions` with `contradiction_type = "logical"` |
+| `tension` | Both could be true with context — different facets of the same subject. "Prefers dark mode" + "prefers light mode" probably means "prefers based on context." | Row written with `contradiction_type = "tension"` |
+| `compatible` | About different things, or fully consistent. | No row written. Logged at debug level. |
+| `duplicate` | Same content, different subject naming. Canonicalization signal. | No row written in B-2. Logged at info level. (Auto-merge is a future phase.) |
+
+The judge's reasoning is stored on the row (`judge_reasoning`) so a human can audit why a pair was classified that way.
+
+#### Budget enforcement
+
+Each cycle has a hard cap on LLM calls (`contradictionBudgetPerCycle`, default 20). Pairs are processed largest-neighborhood-first (more contradiction potential per call). Once budget is exhausted, the cycle exits cleanly and resumes next time. Pairs that already have a row are skipped — no re-evaluation in B-2.
+
+#### Worked example: dietary preferences conflict
+
+Suppose the user has these facts over time:
+
+```
+2026-02-01  "I'm vegetarian"        → fact F1 (key: user.dietary.vegetarian, conf=0.9)
+2026-04-15  "I love beef"           → fact F2 (key: user.dietary.beef, conf=0.85)
+```
+
+B-1 (BeliefSynthesizer) produces two beliefs from two different subjects:
+
+```
+belief B1: subject=user.dietary.vegetarian
+           content="User is vegetarian"
+           source_fact_ids=[F1]
+
+belief B2: subject=user.dietary.beef
+           content="User enjoys beef"
+           source_fact_ids=[F2]
+```
+
+Single-fact subjects, no LLM was called by the synthesizer.
+
+B-2 (BeliefContradictionDetector) then runs:
+
+1. Groups all `user.*` beliefs into the `user` neighborhood
+2. For each pair (B1, B2), checks `pair_exists` — false (new pair)
+3. Calls the LLM judge with both belief contents
+4. Judge returns: `{"decision": "logical_contradiction", "severity": 0.88, "reasoning": "Vegetarianism excludes beef consumption."}`
+5. Row inserted in `kg_belief_contradictions` with `belief_a_id` set to the lex-smaller of B1.id and B2.id
+
+Now the agent can be **asked** about it. `memory(action="contradictions", belief_id="...")` returns the contradiction row. A future UI phase (B-5) will surface a yellow badge in the /memory tab. Phase B-3 (confidence propagation) will let the agent factor the contradiction into how confidently it asserts either belief in conversation.
+
+Without B-2, the agent would happily assert both beliefs in different conversations and never realize they conflict. The user would have to notice.
+
+### Why this matters
+
+The Belief Network changes what the agent can do in three concrete ways:
+
+- **Queryable provenance.** The agent can answer "why do you believe X?" by walking back to source facts. Beliefs aren't opaque — they cite their evidence.
+- **Conflict awareness.** Today the agent has no way to know it holds contradicting positions. After B-2, contradictions are first-class data the agent can read about itself.
+- **Foundation for trust gradients.** Phase B-3 will propagate confidence: when a source fact is retracted, dependent beliefs weaken. Phase B-4 will let recall return beliefs alongside facts, with category weight 1.5 (same as corrections — conservative until empirically validated). The agent's recall block becomes a mix of raw evidence and synthesized stance.
+
+### What's not yet built
+
+- **B-3 — Confidence propagation.** When a source fact is contradicted or retracted, dependent beliefs lose confidence proportionally. Cascades capped at 3 hops to prevent runaway.
+- **B-4 — Recall integration.** Beliefs surface alongside facts in recall results, with their own category weight.
+- **B-5 — /memory UI.** Beliefs list, detail drawer, contradiction badge + resolver, filters, subject browser.
+- **B-6 — /observatory UI.** Worker stats, contradiction activity feed, propagation chain visualizer.
+
+Design lives in `memory-bank/future-state/2026-05-15-belief-network-design.md`.
+
 ## Recall: finding candidates
 
 Recall is the first half of retrieval. Given a query (the user's message, or a synthetic query the bootstrap constructed), it returns a candidate set scored by raw relevance.

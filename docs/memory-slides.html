@@ -978,9 +978,68 @@ intent routing as usual</span></pre>
     </div>
   </section>
 
-  <!-- ============= SLIDE 8 — RECALL: FINDING CANDIDATES ============= -->
+  <!-- ============= SLIDE 8 — THE BELIEF NETWORK ============= -->
   <section class="slide">
-    <div class="slide-tag"><span class="accent">08</span> &nbsp;/&nbsp; recall — finding candidates</div>
+    <div class="slide-tag"><span class="accent">08</span> &nbsp;/&nbsp; the belief network</div>
+    <div class="detail-head" style="border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:30px;">
+      <span class="stamp">opt-in · sleep-time</span>
+      <h3>From a pile of facts to a reasoned stance.</h3>
+    </div>
+    <div class="split">
+      <div>
+        <div class="config-note" style="margin-top:0">
+          <span style="color:var(--ink);font-weight:500">phase B-1 · belief synthesis</span>
+        </div>
+        <p class="caption" style="margin-top:14px">A sleep-time worker groups facts by <span class="mono">(partition_id, subject)</span> and produces a single <strong>belief</strong> per group: synthesized content, derived confidence, source-fact provenance, bi-temporal interval.</p>
+        <p class="caption" style="margin-top:10px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">Critical optimization:</strong> 95%+ of subjects have only one fact. Single-fact subjects <strong>short-circuit</strong> — no LLM call, just <span class="mono">content = fact.content</span> with recency-weighted confidence. Across 709 production facts, that's ~15 LLM calls per cycle, not 709.</p>
+        <pre style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-dim);background:var(--bg-soft);border:1px solid var(--rule);border-radius:3px;padding:14px;margin-top:14px;line-height:1.55;white-space:pre-wrap"><span style="color:var(--ink-faint)">multi-fact subject:</span> user.employment
+  fact F1: "Anthropic"  (2026-01-15)
+  fact F2: "OpenAI"     (2026-04-01)
+       ↓ <span style="color:var(--accent)">LLM synthesizer</span>
+belief B: "User works at OpenAI"
+       <span class="k">source_fact_ids</span>=[F1, F2]
+       <span class="k">confidence</span>=recency-weighted avg
+       <span class="k">reasoning</span>="2026-04-01 supersedes earlier"</pre>
+      </div>
+      <div>
+        <div class="config-note" style="margin-top:0">
+          <span style="color:var(--ink);font-weight:500">phase B-2 · contradiction detection</span>
+        </div>
+        <p class="caption" style="margin-top:14px">A second worker scopes pairs to <strong>topical neighborhoods</strong> by subject prefix (default depth 1 — <span class="mono">user.dietary.vegetarian</span> and <span class="mono">user.family.wife</span> both group under <span class="mono">user</span>). Within each neighborhood, an LLM judge classifies each unevaluated pair.</p>
+        <table style="width:100%;border-collapse:collapse;margin-top:12px;font-family:'JetBrains Mono',monospace;font-size:11px">
+          <thead>
+            <tr style="border-bottom:1px solid var(--rule)">
+              <th style="text-align:left;padding:6px 10px 6px 0;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">DECISION</th>
+              <th style="text-align:left;padding:6px 0 6px 10px;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">EFFECT</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:5px 10px 5px 0;color:var(--accent);vertical-align:top">logical</td>
+              <td style="padding:5px 0 5px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">cannot both be true. Row inserted.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:5px 10px 5px 0;color:var(--accent);vertical-align:top">tension</td>
+              <td style="padding:5px 0 5px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">context-dependent. Row inserted.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:5px 10px 5px 0;color:var(--accent);vertical-align:top">compatible</td>
+              <td style="padding:5px 0 5px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">consistent. Logged only.</td>
+            </tr>
+            <tr>
+              <td style="padding:5px 10px 5px 0;color:var(--accent);vertical-align:top">duplicate</td>
+              <td style="padding:5px 0 5px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">canonicalization signal. Logged.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong>Budget cap</strong> per cycle (default 20 LLM calls). Pairs are processed largest-neighborhood first. Already-evaluated pairs skip. Phases B-3 (propagation), B-4 (recall integration), B-5/B-6 (UI) build on top.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 9 — RECALL: FINDING CANDIDATES ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">09</span> &nbsp;/&nbsp; recall — finding candidates</div>
     <div class="stack-vert">
       <div class="svg-frame" data-label="query → embed → hybrid search → RRF blend">
         <svg viewBox="0 0 1100 280" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
@@ -1053,7 +1112,7 @@ intent routing as usual</span></pre>
 
   <!-- ============= SLIDE 8 — RESCORE ============= -->
   <section class="slide">
-    <div class="slide-tag"><span class="accent">09</span> &nbsp;/&nbsp; rescore — adjusting the scores</div>
+    <div class="slide-tag"><span class="accent">10</span> &nbsp;/&nbsp; rescore — adjusting the scores</div>
     <div class="split">
       <div>
         <div class="svg-frame" data-label="rescore steps" style="padding:6px 0">
@@ -1119,7 +1178,7 @@ intent routing as usual</span></pre>
 
   <!-- ============= SLIDE 9 — GRAPH TRAVERSAL ============= -->
   <section class="slide">
-    <div class="slide-tag"><span class="accent">10</span> &nbsp;/&nbsp; graph traversal</div>
+    <div class="slide-tag"><span class="accent">11</span> &nbsp;/&nbsp; graph traversal</div>
     <div class="split">
       <div class="svg-frame" data-label="top-K → walk graph · 2 hops · decay 0.6">
         <svg viewBox="0 0 700 460" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
@@ -1228,7 +1287,7 @@ intent routing as usual</span></pre>
 
   <!-- ============= SLIDE 10 — SESSION LIFECYCLE ============= -->
   <section class="slide">
-    <div class="slide-tag"><span class="accent">11</span> &nbsp;/&nbsp; session lifecycle</div>
+    <div class="slide-tag"><span class="accent">12</span> &nbsp;/&nbsp; session lifecycle</div>
     <div class="stack-vert">
       <div class="svg-frame" data-label="memory wraps every session">
         <svg viewBox="0 0 1100 360" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
@@ -1312,7 +1371,7 @@ intent routing as usual</span></pre>
 
   <!-- ============= SLIDE 11 — BACKGROUND MAINTENANCE ============= -->
   <section class="slide">
-    <div class="slide-tag"><span class="accent">12</span> &nbsp;/&nbsp; background maintenance</div>
+    <div class="slide-tag"><span class="accent">13</span> &nbsp;/&nbsp; background maintenance</div>
     <div class="split">
       <div class="svg-frame" data-label="hourly worker · 8 components">
         <svg viewBox="0 0 580 460" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
@@ -1415,7 +1474,7 @@ intent routing as usual</span></pre>
 
   <!-- ============= SLIDE 12 — CONFIGURABILITY ============= -->
   <section class="slide">
-    <div class="slide-tag"><span class="accent">13</span> &nbsp;/&nbsp; configurability</div>
+    <div class="slide-tag"><span class="accent">14</span> &nbsp;/&nbsp; configurability</div>
     <div class="detail-head" style="border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:36px;">
       <span class="stamp">two files</span>
       <h3>Every knob exposed. Sane defaults.</h3>
@@ -1548,7 +1607,7 @@ intent routing as usual</span></pre>
 
   <!-- ============= SLIDE 13 — THE CLOSED LOOP ============= -->
   <section class="slide">
-    <div class="slide-tag"><span class="accent">14</span> &nbsp;/&nbsp; the closed loop</div>
+    <div class="slide-tag"><span class="accent">15</span> &nbsp;/&nbsp; the closed loop</div>
     <div class="split">
       <div class="svg-frame" data-label="correction → schema → conflict → retire">
         <svg viewBox="0 0 540 540" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
