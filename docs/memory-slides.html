@@ -1033,7 +1033,8 @@ belief B: "User works at OpenAI"
           </tbody>
         </table>
         <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong>Budget cap</strong> per cycle (default 20 LLM calls). Pairs are processed largest-neighborhood first. Already-evaluated pairs skip.</p>
-        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">B-3 propagation</strong> closes the loop: when a fact is superseded or decays below <span class="mono">factConfidenceDropThreshold</span> (default 0.3), dependent beliefs respond inline — sole-source beliefs retract; multi-source mark stale + re-synthesize next cycle. Event-driven, not polling. Phases B-4 (recall integration), B-5/B-6 (UI) build on top.</p>
+        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">B-3 propagation</strong> closes the loop: when a fact is superseded or decays below <span class="mono">factConfidenceDropThreshold</span> (default 0.3), dependent beliefs respond inline — sole-source beliefs retract; multi-source mark stale + re-synthesize next cycle. Event-driven, not polling.</p>
+        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">B-4 recall integration</strong> surfaces beliefs in the agent's context window. Embeddings stored as BLOB on row (no vec0 table — belief count is bounded). New <span class="mono">ItemKind::Belief</span>, category weight <span class="mono">1.5</span> (conservative; reconsider post-validation). Rendered as <span class="mono">## Active Beliefs</span> distinct from <span class="mono">## Recalled Context</span>. Phases B-5/B-6 (UI) build on top.</p>
       </div>
     </div>
   </section>
