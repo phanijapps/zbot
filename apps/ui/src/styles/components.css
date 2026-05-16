@@ -3364,13 +3364,9 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  /* B-6 added BeliefNetworkPanel as a flex-column sibling of __main.
-     The panel has tall intrinsic content (~2000px) that consumed all
-     the column space, squeezing __main (which has flex: 1, basis 0%)
-     down to 0 and collapsing the graph canvas. Make the observatory
-     scrollable so the panel can extend below the graph instead of
-     fighting it for height. */
-  overflow-y: auto;
+  /* No internal scroll needed — BeliefNetworkPanel was removed from the
+     default render and its totals fold into LearningHealthBar. The graph
+     + thin status strip fit cleanly in viewport. */
 }
 
 .observatory__toolbar {
@@ -3398,12 +3394,12 @@
 
 .observatory__main {
   display: flex;
-  /* Don't grow/shrink — use min-height instead so the graph canvas
-     keeps a visible footprint even when the BeliefNetworkPanel below
-     pushes total content above the viewport. The container scroll
-     (on .observatory) handles overflow. */
-  flex: 0 0 auto;
-  min-height: 600px;
+  /* With BeliefNetworkPanel removed from the default page, __main can
+     resume its original `flex: 1` (fill remaining column space) so the
+     graph gets all the height it deserves. Keep a sensible minimum for
+     short pages. */
+  flex: 1;
+  min-height: 500px;
   overflow: hidden;
 }
 
@@ -6999,10 +6995,22 @@
 }
 
 .belief-network-panel__totals {
+  display: flex;
+  flex-wrap: wrap;
+  /* Three spans (343 beliefs · 3 contradictions · 3 unresolved) sat
+     flush against each other before this — `display: flex` with
+     `gap` gives them breathing room. */
+  gap: var(--spacing-1) var(--spacing-3);
   font-size: var(--text-xs);
   font-family: var(--font-mono);
   color: var(--muted-foreground);
   letter-spacing: 0.02em;
+}
+
+.belief-network-panel__totals > span:not(:first-child)::before {
+  content: "·";
+  margin-right: var(--spacing-2);
+  opacity: 0.5;
 }
 
 .belief-network-panel__cards {
@@ -7062,7 +7070,12 @@
 
 .belief-network-card__metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  /* Bumped from 80px to 110px minmax so long uppercase labels
+     ("short-circuited", "marked stale", "LLM calls") don't collide
+     in the narrow slideover viewport (~420px card width). 110px is
+     enough for 11–14 character uppercase 10px labels with the
+     0.05em letter-spacing we use. */
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: var(--spacing-2) var(--spacing-3);
 }
 
@@ -7078,6 +7091,11 @@
   color: var(--subtle-foreground);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  /* Defensive: if the slideover is even narrower than 420px on a
+     small viewport, let labels wrap rather than overflow into the
+     next column. */
+  overflow-wrap: anywhere;
+  line-height: 1.25;
 }
 
 .belief-network-card__metric-value {
@@ -7092,11 +7110,22 @@
 }
 
 .belief-network-card__sparkline {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
   width: 100%;
-  max-width: 200px;
-  height: 24px;
+  /* Was: fixed `height: 24px`. Container holds TWO children — the
+     SVG (24px) AND the caption ("synthesized / cycle (0)"). The fixed
+     height clipped the caption out of the card, so the text visually
+     overflowed below the card boundary. Letting the container grow
+     (flex-column, auto height) keeps both pieces inside the card. */
   margin-top: var(--spacing-1);
+}
+
+.belief-network-card__sparkline svg {
+  display: block;
+  max-width: 100%;
 }
 
 .belief-network-card__sparkline-caption {
@@ -7104,6 +7133,9 @@
   font-family: var(--font-mono);
   color: var(--subtle-foreground);
   letter-spacing: 0.04em;
+  /* If the card is narrow, allow the caption text to wrap inside
+     its column rather than push past the card edge. */
+  overflow-wrap: anywhere;
 }
 
 .belief-network-card__warning {
@@ -7141,13 +7173,64 @@
 
 .belief-activity__item {
   display: grid;
-  grid-template-columns: auto 1fr;
+  /* JSX renders THREE children per item: <kind badge> <summary> <time>.
+     The original `auto 1fr` was wrong — `time` overflowed onto a second
+     row. Three explicit columns with `min-width: 0` on the middle one
+     lets the (often long) summary wrap inside its column without
+     pushing the time off-edge. */
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
   gap: var(--spacing-2);
-  padding: var(--spacing-1) var(--spacing-2);
+  padding: var(--spacing-1-5) var(--spacing-2);
   font-size: var(--text-xs);
   border-left: 2px solid var(--border);
   background: var(--background-surface);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.belief-activity__kind {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  background: var(--background-elevated);
+  color: var(--subtle-foreground);
+  border: 1px solid var(--border);
+}
+
+.belief-activity__kind--synthesized {
+  color: #6ee7a4;
+  background: color-mix(in srgb, #6ee7a4 10%, transparent);
+  border-color: color-mix(in srgb, #6ee7a4 25%, transparent);
+}
+.belief-activity__kind--retracted {
+  color: #ff7a7a;
+  background: color-mix(in srgb, #ff7a7a 10%, transparent);
+  border-color: color-mix(in srgb, #ff7a7a 25%, transparent);
+}
+.belief-activity__kind--marked-stale {
+  color: var(--subtle-foreground);
+  font-style: italic;
+}
+.belief-activity__kind--contradiction-detected {
+  color: #f6c453;
+  background: color-mix(in srgb, #f6c453 10%, transparent);
+  border-color: color-mix(in srgb, #f6c453 25%, transparent);
+}
+.belief-activity__kind--contradiction-resolved {
+  color: #6ee7a4;
+  background: color-mix(in srgb, #6ee7a4 10%, transparent);
+  border-color: color-mix(in srgb, #6ee7a4 25%, transparent);
+}
+.belief-activity__kind--propagation-cascade {
+  color: var(--primary);
+  background: var(--primary-muted);
+  border-color: color-mix(in srgb, var(--primary) 25%, transparent);
 }
 
 .belief-activity__time {
@@ -7158,7 +7241,11 @@
 
 .belief-activity__summary {
   color: var(--muted-foreground);
-  word-break: break-word;
+  /* `overflow-wrap: anywhere` handles long unbreakable strings like
+     belief-IDs (UUIDs) so they wrap inside the column rather than
+     forcing horizontal overflow. */
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .belief-activity__empty {

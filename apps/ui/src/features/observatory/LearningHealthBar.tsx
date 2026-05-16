@@ -2,11 +2,21 @@
 // LEARNING HEALTH BAR — Bottom status bar for Observatory
 // ============================================================================
 
+import { useState } from "react";
+import { ArrowUpRight } from "lucide-react";
 import { useGraphStats, useDistillationStatus, useBackfill } from "./graph-hooks";
+import { useBeliefNetworkStats } from "./belief-network/hooks";
+import { Slideover } from "@/components/Slideover";
+import { BeliefNetworkPanel } from "./belief-network/BeliefNetworkPanel";
 
 export function LearningHealthBar() {
   const { stats, loading: statsLoading } = useGraphStats();
   const { status, loading: distLoading, refetch: refetchStatus } = useDistillationStatus();
+  // Belief Network totals fold into this strip so the page doesn't carry
+  // a separate 3-card panel. The detail surface (3 cards + activity feed
+  // + propagation chain) lives in a slideover opened from the strip.
+  const { stats: beliefStats } = useBeliefNetworkStats();
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const { run, isRunning, isDone, progress, error: backfillError } = useBackfill(
     refetchStatus
@@ -50,6 +60,35 @@ export function LearningHealthBar() {
           </div>
         </>
       )}
+
+      {/* Belief Network totals — folded into this strip so the page
+          stays compact. Detail surface lives in the Memory tab
+          (Beliefs / Contradictions sub-tabs). */}
+      {beliefStats?.enabled ? (
+        <>
+          <div className="observatory__health-item">
+            Beliefs:{" "}
+            <span className="observatory__health-value">
+              {beliefStats.totals.total_beliefs}
+            </span>
+          </div>
+          {beliefStats.totals.total_unresolved_contradictions > 0 ? (
+            <div className="observatory__health-item">
+              Contradictions:{" "}
+              <span className="observatory__health-value observatory__health-value--warning">
+                {beliefStats.totals.total_unresolved_contradictions} unresolved
+              </span>
+            </div>
+          ) : beliefStats.totals.total_contradictions > 0 ? (
+            <div className="observatory__health-item">
+              Contradictions:{" "}
+              <span className="observatory__health-value">
+                {beliefStats.totals.total_contradictions}
+              </span>
+            </div>
+          ) : null}
+        </>
+      ) : null}
 
       {/* Distillation counts from /api/distillation/status */}
       {status && (
@@ -96,7 +135,37 @@ export function LearningHealthBar() {
             Backfill
           </button>
         )}
+
+        {/* Belief Network details drawer trigger \u2014 only when the
+            network is enabled. Opens a right-side slideover with
+            the 3 worker stats cards + activity feed + propagation
+            chain. Default state is closed so the strip stays clean.
+            Using lucide's ArrowUpRight (same icon family as the rest
+            of the app) \u2014 the unicode arrow U+2197 rendered as a
+            fallback glyph in IBM Plex Sans. */}
+        {beliefStats?.enabled ? (
+          <button
+            type="button"
+            className="btn btn--sm btn--secondary"
+            onClick={() => setDetailsOpen(true)}
+            aria-label="Open belief network details"
+            title="Belief network worker stats, activity feed, propagation chain"
+            style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+          >
+            <ArrowUpRight style={{ width: 14, height: 14 }} aria-hidden />
+            details
+          </button>
+        ) : null}
       </div>
+
+      <Slideover
+        open={detailsOpen}
+        onClose={() => setDetailsOpen(false)}
+        title="Belief Network details"
+        subtitle="Worker stats · activity feed · propagation chain"
+      >
+        <BeliefNetworkPanel />
+      </Slideover>
     </div>
   );
 }
