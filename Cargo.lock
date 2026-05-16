@@ -2006,7 +2006,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "zero-core",
  "zero-stores",
  "zero-stores-domain",
  "zero-stores-sqlite",

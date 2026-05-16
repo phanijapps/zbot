@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// (e.g. `zero-stores-sqlite` parses `tool_calls` JSON, an HTTP gateway may
 /// flatten differently). Consumers that need rich types (`ChatMessage`,
 /// `ToolCall`) convert from this domain type via the helper in
-/// `gateway-memory::sleep::handoff_writer::messages_to_chat_format` or
+/// `gateway-execution::sleep::handoff_writer::messages_to_chat_format` or
 /// equivalent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
