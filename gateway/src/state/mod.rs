@@ -827,6 +827,18 @@ impl AppState {
                         Arc::new(zero_stores_sqlite::SqliteBeliefStore::new(kdb.clone()))
                             as Arc<dyn zero_stores::BeliefStore>
                     });
+                // Phase B-2: contradiction store mirrors the belief store
+                // — built only when the KG DB is wired. The detector
+                // wiring further gates on the shared `enabled` flag inside
+                // MemoryServices, so flipping `enabled: false` keeps the
+                // store-construction path harmless.
+                let belief_contradiction_store: Option<
+                    Arc<dyn zero_stores::BeliefContradictionStore>,
+                > = knowledge_db.as_ref().map(|kdb| {
+                    Arc::new(zero_stores_sqlite::SqliteBeliefContradictionStore::new(
+                        kdb.clone(),
+                    )) as Arc<dyn zero_stores::BeliefContradictionStore>
+                });
                 let memory_services =
                     gateway_memory::MemoryServices::new(gateway_memory::MemoryServicesConfig {
                         agent_id: "root".to_string(),
@@ -852,6 +864,11 @@ impl AppState {
                         belief_network_interval: std::time::Duration::from_secs(
                             belief_network_cfg.interval_hours as u64 * 3600,
                         ),
+                        belief_contradiction_store,
+                        belief_contradiction_neighborhood_prefix_depth: belief_network_cfg
+                            .neighborhood_prefix_depth,
+                        belief_contradiction_budget_per_cycle: belief_network_cfg
+                            .contradiction_budget_per_cycle,
                     });
                 Some(memory_services.sleep_time_worker.clone())
             }

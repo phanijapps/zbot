@@ -18,6 +18,7 @@ pub mod reindex;
 
 // -- Per-table stores (originally gateway-database) ---------------------------
 pub mod auxiliary_stores;
+pub mod belief_contradiction_store;
 pub mod belief_store;
 pub mod compaction_repository;
 pub mod compaction_store;
@@ -48,6 +49,7 @@ pub use knowledge_graph::SqliteKgStore;
 
 // -- Public surface (originally gateway-database lib.rs) ----------------------
 pub use auxiliary_stores::{GatewayDistillationStore, GatewayGoalStore, GatewayRecallLogStore};
+pub use belief_contradiction_store::SqliteBeliefContradictionStore;
 pub use belief_store::SqliteBeliefStore;
 pub use compaction_repository::{Compaction, CompactionRepository, RunSummary};
 pub use compaction_store::GatewayCompactionStore;

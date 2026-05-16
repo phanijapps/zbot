@@ -18,6 +18,7 @@
 //!   (they can derive From/Into the domain types here).
 
 pub mod belief;
+pub mod belief_contradiction;
 pub mod distillation_ops;
 pub mod goal;
 pub mod kg_episode;
@@ -29,6 +30,7 @@ pub mod session_episode;
 pub mod wiki;
 
 pub use belief::Belief;
+pub use belief_contradiction::{BeliefContradiction, ContradictionType, Resolution};
 pub use distillation_ops::{DistillationStats, UndistilledSession};
 pub use goal::Goal;
 pub use kg_episode::{EpisodeSource, KgEpisode};
