@@ -7110,11 +7110,22 @@
 }
 
 .belief-network-card__sparkline {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
   width: 100%;
-  max-width: 200px;
-  height: 24px;
+  /* Was: fixed `height: 24px`. Container holds TWO children — the
+     SVG (24px) AND the caption ("synthesized / cycle (0)"). The fixed
+     height clipped the caption out of the card, so the text visually
+     overflowed below the card boundary. Letting the container grow
+     (flex-column, auto height) keeps both pieces inside the card. */
   margin-top: var(--spacing-1);
+}
+
+.belief-network-card__sparkline svg {
+  display: block;
+  max-width: 100%;
 }
 
 .belief-network-card__sparkline-caption {
@@ -7122,6 +7133,9 @@
   font-family: var(--font-mono);
   color: var(--subtle-foreground);
   letter-spacing: 0.04em;
+  /* If the card is narrow, allow the caption text to wrap inside
+     its column rather than push past the card edge. */
+  overflow-wrap: anywhere;
 }
 
 .belief-network-card__warning {

@@ -162,7 +162,7 @@ export function LearningHealthBar() {
         open={detailsOpen}
         onClose={() => setDetailsOpen(false)}
         title="Belief Network details"
-        subtitle="Worker stats \u00b7 activity feed \u00b7 propagation chain"
+        subtitle="Worker stats · activity feed · propagation chain"
       >
         <BeliefNetworkPanel />
       </Slideover>
