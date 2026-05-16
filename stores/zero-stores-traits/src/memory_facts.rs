@@ -81,6 +81,15 @@ pub trait MemoryFactStore: Send + Sync {
     ///
     /// On conflict (same agent_id + scope + key), updates content and bumps
     /// mention_count. Returns a JSON summary of the operation.
+    ///
+    /// `valid_from` records the bi-temporal "world time" at which the fact
+    /// became true. When `Some(t)`, the implementation persists `t` on the
+    /// row. When `None`, the implementation defaults to `Utc::now()`. Pass
+    /// `None` for procedural / convention facts that have always been true.
+    // Established signature: each field corresponds to a column on
+    // `memory_facts`, so collapsing into a builder/struct would buy
+    // little while breaking every existing call site.
+    #[allow(clippy::too_many_arguments)]
     async fn save_fact(
         &self,
         agent_id: &str,
@@ -89,6 +98,7 @@ pub trait MemoryFactStore: Send + Sync {
         content: &str,
         confidence: f64,
         session_id: Option<&str>,
+        valid_from: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Value, String>;
 
     /// Recall facts relevant to a query using hybrid search.
@@ -108,13 +118,20 @@ pub trait MemoryFactStore: Send + Sync {
     /// priority engine used by system-level recall: corrections first,
     /// strategies second, user preferences third, etc.
     ///
+    /// `as_of` enables point-in-time recall. When `Some(t)`, returns facts
+    /// that were valid at time `t` (their `valid_from <= t < valid_until`).
+    /// When `None`, returns currently-valid facts using `Utc::now()` as the
+    /// cutoff. Pass `None` for the default "what is true now?" query.
+    ///
     /// Default implementation falls back to `recall_facts`.
     async fn recall_facts_prioritized(
         &self,
         agent_id: &str,
         query: &str,
         limit: usize,
+        as_of: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Value, String> {
+        let _ = as_of;
         self.recall_facts(agent_id, query, limit).await
     }
 
@@ -332,8 +349,17 @@ pub trait MemoryFactStore: Send + Sync {
     }
 
     /// Mark a fact as superseded by a newer fact. Both ids should already
-    /// exist. Default returns no-op error so misuse is loud.
-    async fn supersede_fact(&self, _old_id: &str, _new_id: &str) -> Result<(), String> {
+    /// exist. `transition_time` is the moment at which the old fact stops
+    /// being valid — typically `Utc::now()` for distillation paths, or the
+    /// winner's `created_at` for bi-temporal conflict resolution where the
+    /// system actually learned otherwise when the winning fact was recorded.
+    /// Default returns no-op error so misuse is loud.
+    async fn supersede_fact(
+        &self,
+        _old_id: &str,
+        _new_id: &str,
+        _transition_time: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), String> {
         Err("supersede_fact not implemented for this store".to_string())
     }
 
@@ -348,6 +374,15 @@ pub trait MemoryFactStore: Send + Sync {
     /// `ward_id` filters to a specific ward when set.
     /// Each row in the returned Vec carries a `match_source` field
     /// (`"fts"`, `"vec"`, `"hybrid"`) for downstream ranking display.
+    ///
+    /// `as_of` enables point-in-time recall. When `Some(t)`, returns facts
+    /// that were valid at time `t` (their `valid_from <= t < valid_until`).
+    /// When `None`, returns currently-valid facts using `Utc::now()` as the
+    /// cutoff. Pass `None` for the default "what is true now?" query.
+    // Established signature: each field corresponds to a search dimension;
+    // collapsing into a builder would buy little while breaking every
+    // existing call site.
+    #[allow(clippy::too_many_arguments)]
     async fn search_memory_facts_hybrid(
         &self,
         _agent_id: Option<&str>,
@@ -356,6 +391,7 @@ pub trait MemoryFactStore: Send + Sync {
         _limit: usize,
         _ward_id: Option<&str>,
         _query_embedding: Option<&[f32]>,
+        _as_of: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<Value>, String> {
         Ok(Vec::new())
     }
@@ -365,6 +401,12 @@ pub trait MemoryFactStore: Send + Sync {
     /// deserialises the Value-based result so backends only need to
     /// implement `search_memory_facts_hybrid` (with `score` and
     /// `match_source` populated alongside the fact fields).
+    ///
+    /// `as_of` is threaded through to `search_memory_facts_hybrid` for
+    /// point-in-time recall; see that method's docs for semantics.
+    // Established signature: matches search_memory_facts_hybrid one-to-one
+    // so the typed wrapper can pass everything through unchanged.
+    #[allow(clippy::too_many_arguments)]
     async fn search_memory_facts_hybrid_typed(
         &self,
         agent_id: Option<&str>,
@@ -373,9 +415,18 @@ pub trait MemoryFactStore: Send + Sync {
         limit: usize,
         ward_id: Option<&str>,
         query_embedding: Option<&[f32]>,
+        as_of: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<(MemoryFact, f64, String)>, String> {
         let rows = self
-            .search_memory_facts_hybrid(agent_id, query, mode, limit, ward_id, query_embedding)
+            .search_memory_facts_hybrid(
+                agent_id,
+                query,
+                mode,
+                limit,
+                ward_id,
+                query_embedding,
+                as_of,
+            )
             .await?;
         rows.into_iter()
             .map(|mut v| {
@@ -470,6 +521,16 @@ pub trait MemoryFactStore: Send + Sync {
         _ward_id: &str,
         _key: &str,
     ) -> Result<Option<MemoryFact>, String> {
+        Ok(None)
+    }
+
+    // ---- Per-fact embeddings -------------------------------------------
+
+    /// Return the stored embedding vector for a fact by its id, or `None`
+    /// if no embedding has been indexed for it. Backends that keep
+    /// embeddings in a side-table (e.g. sqlite-vec) implement this;
+    /// others return the default `Ok(None)`.
+    async fn get_fact_embedding(&self, _fact_id: &str) -> Result<Option<Vec<f32>>, String> {
         Ok(None)
     }
 

@@ -386,7 +386,7 @@ use zero_stores_traits::MemoryFactStore;
 
 pub async fn memory_save_and_count<S: MemoryFactStore>(store: &S) {
     let _ = store
-        .save_fact("conf", "preference", "k1", "loves coffee", 0.9, None)
+        .save_fact("conf", "preference", "k1", "loves coffee", 0.9, None, None)
         .await
         .unwrap();
     let n = store.count_all_facts(Some("conf")).await.unwrap();
@@ -402,6 +402,7 @@ pub async fn memory_recall_finds_match<S: MemoryFactStore>(store: &S) {
             "Bob really likes espresso",
             0.9,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -412,11 +413,27 @@ pub async fn memory_recall_finds_match<S: MemoryFactStore>(store: &S) {
 
 pub async fn memory_recall_respects_agent_isolation<S: MemoryFactStore>(store: &S) {
     let _ = store
-        .save_fact("agent-mem-a", "preference", "k1", "agent A note", 0.9, None)
+        .save_fact(
+            "agent-mem-a",
+            "preference",
+            "k1",
+            "agent A note",
+            0.9,
+            None,
+            None,
+        )
         .await
         .unwrap();
     let _ = store
-        .save_fact("agent-mem-b", "preference", "k1", "agent B note", 0.9, None)
+        .save_fact(
+            "agent-mem-b",
+            "preference",
+            "k1",
+            "agent B note",
+            0.9,
+            None,
+            None,
+        )
         .await
         .unwrap();
     let result = store.recall_facts("agent-mem-a", "note", 10).await.unwrap();
@@ -438,15 +455,24 @@ pub async fn memory_list_facts_filters_and_paginates<S: MemoryFactStore>(store: 
             "Alice likes coffee",
             0.9,
             None,
+            None,
         )
         .await
         .unwrap();
     let _ = store
-        .save_fact("conf-a", "skill", "k2", "Alice knows Rust", 0.8, None)
+        .save_fact("conf-a", "skill", "k2", "Alice knows Rust", 0.8, None, None)
         .await
         .unwrap();
     let _ = store
-        .save_fact("conf-b", "preference", "k3", "Bob likes tea", 0.9, None)
+        .save_fact(
+            "conf-b",
+            "preference",
+            "k3",
+            "Bob likes tea",
+            0.9,
+            None,
+            None,
+        )
         .await
         .unwrap();
 
@@ -488,7 +514,15 @@ pub async fn memory_list_facts_filters_and_paginates<S: MemoryFactStore>(store: 
 
 pub async fn memory_get_by_id_round_trip<S: MemoryFactStore>(store: &S) {
     let _ = store
-        .save_fact("conf-gbi", "preference", "k1", "Milk no sugar", 0.9, None)
+        .save_fact(
+            "conf-gbi",
+            "preference",
+            "k1",
+            "Milk no sugar",
+            0.9,
+            None,
+            None,
+        )
         .await
         .unwrap();
 
@@ -516,7 +550,15 @@ pub async fn memory_get_by_id_round_trip<S: MemoryFactStore>(store: &S) {
 
 pub async fn memory_delete_fact_removes_it<S: MemoryFactStore>(store: &S) {
     let _ = store
-        .save_fact("conf-del", "preference", "k1", "To be deleted", 0.9, None)
+        .save_fact(
+            "conf-del",
+            "preference",
+            "k1",
+            "To be deleted",
+            0.9,
+            None,
+            None,
+        )
         .await
         .unwrap();
 
@@ -542,7 +584,15 @@ pub async fn memory_delete_fact_removes_it<S: MemoryFactStore>(store: &S) {
 
 pub async fn memory_archive_fact_hides_from_listing<S: MemoryFactStore>(store: &S) {
     let _ = store
-        .save_fact("conf-arch", "preference", "k1", "To be archived", 0.9, None)
+        .save_fact(
+            "conf-arch",
+            "preference",
+            "k1",
+            "To be archived",
+            0.9,
+            None,
+            None,
+        )
         .await
         .unwrap();
 
@@ -580,7 +630,7 @@ pub async fn memory_archive_fact_hides_from_listing<S: MemoryFactStore>(store: &
 
 pub async fn memory_supersede_fact_succeeds<S: MemoryFactStore>(store: &S) {
     let _ = store
-        .save_fact("conf-sup", "preference", "k1", "Old fact", 0.9, None)
+        .save_fact("conf-sup", "preference", "k1", "Old fact", 0.9, None, None)
         .await
         .unwrap();
 
@@ -591,7 +641,7 @@ pub async fn memory_supersede_fact_succeeds<S: MemoryFactStore>(store: &S) {
     let old_id = listed[0]["id"].as_str().expect("id should be a string");
 
     store
-        .supersede_fact(old_id, "replacement-fact-id")
+        .supersede_fact(old_id, "replacement-fact-id", chrono::Utc::now())
         .await
         .expect("supersede should not error");
 }
@@ -645,6 +695,7 @@ pub async fn memory_hybrid_search_finds_match<S: MemoryFactStore>(store: &S) {
             "Dark roast coffee beans",
             0.9,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -656,12 +707,13 @@ pub async fn memory_hybrid_search_finds_match<S: MemoryFactStore>(store: &S) {
             "Herbal tea at night",
             0.8,
             None,
+            None,
         )
         .await
         .unwrap();
 
     let results = store
-        .search_memory_facts_hybrid(Some("conf-hybrid"), "coffee", "fts", 10, None, None)
+        .search_memory_facts_hybrid(Some("conf-hybrid"), "coffee", "fts", 10, None, None, None)
         .await
         .expect("hybrid search should not error");
     assert!(

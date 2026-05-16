@@ -401,9 +401,9 @@ mod tests {
                 "INSERT INTO kg_relationships
                     (id, agent_id, source_entity_id, target_entity_id, relationship_type,
                      properties, epistemic_class, confidence, mention_count, access_count,
-                     first_seen_at, last_seen_at, source_episode_ids)
+                     first_seen_at, last_seen_at, valid_from, source_episode_ids)
                  VALUES (?1, 'agent', ?2, ?3, 'relates_to', ?4,
-                         'current', 0.9, 1, 0, ?5, ?5, ?6)",
+                         'current', 0.9, 1, 0, ?5, ?5, ?5, ?6)",
                 params![id, src, tgt, properties, now, source_episode_ids],
             )?;
             Ok(())

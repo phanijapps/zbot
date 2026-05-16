@@ -4,6 +4,8 @@
 
 mod agents;
 mod artifacts;
+mod belief_network;
+mod beliefs;
 mod bridge;
 mod chat;
 mod cleanup;
@@ -242,6 +244,26 @@ pub fn create_http_router(
             "/api/memory/:agent_id/facts/:fact_id",
             delete(memory::delete_memory_fact),
         )
+        // Belief Network endpoints (Phase B-5 — UI surface).
+        // Gated by `execution.memory.beliefNetwork.enabled`; handlers
+        // return 503 when the feature is off.
+        .route("/api/beliefs/:agent_id", get(beliefs::list_beliefs))
+        .route(
+            "/api/beliefs/:agent_id/:belief_id",
+            get(beliefs::get_belief_detail),
+        )
+        .route(
+            "/api/beliefs/:agent_id/:belief_id/contradictions",
+            get(beliefs::list_belief_contradictions),
+        )
+        .route(
+            "/api/contradictions/:agent_id",
+            get(beliefs::list_recent_contradictions),
+        )
+        .route(
+            "/api/contradictions/:contradiction_id/resolve",
+            post(beliefs::resolve_contradiction),
+        )
         // Ward listing (Memory Tab Command Deck — Task 9)
         .route("/api/wards", get(ward_content::list_wards))
         // Ward content aggregator (Memory Tab Command Deck — Task 5)
@@ -309,6 +331,12 @@ pub fn create_http_router(
         .route(
             "/api/graph/ingest/:source_id/progress",
             get(ingest::progress),
+        )
+        // Belief Network observability (Phase B-6)
+        .route("/api/belief-network/stats", get(belief_network::get_stats))
+        .route(
+            "/api/belief-network/activity",
+            get(belief_network::get_activity),
         )
         // Distillation endpoints
         .route("/api/distillation/status", get(graph::distillation_status))

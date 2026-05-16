@@ -40,6 +40,7 @@ members = [
     "gateway/gateway-events",
     "gateway/gateway-templates",
     "gateway/gateway-connectors",
+    "gateway/gateway-memory",
     "gateway/gateway-services",
     "gateway/gateway-execution",
     "gateway/gateway-hooks",

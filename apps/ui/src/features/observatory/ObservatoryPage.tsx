@@ -10,6 +10,11 @@ import { useGraphData } from "./graph-hooks";
 import { GraphCanvas } from "./GraphCanvas";
 import { EntityDetail } from "./EntityDetail";
 import { LearningHealthBar } from "./LearningHealthBar";
+// BeliefNetworkPanel (the 3-card detail surface) intentionally removed
+// from the default Observatory render. Belief totals now live in the
+// LearningHealthBar strip. The detail view stays available for power
+// users via the Memory tab (Beliefs / Contradictions sub-tabs) and the
+// `/api/belief-network/{stats,activity}` endpoints directly.
 
 // ============================================================================
 // Component
@@ -175,7 +180,9 @@ export function ObservatoryPage() {
         )}
       </div>
 
-      {/* Health bar */}
+      {/* Health bar — now also surfaces Belief Network totals
+          (beliefs + unresolved contradictions) so the 3-card panel
+          can stay out of the default layout. */}
       <LearningHealthBar />
     </div>
   );

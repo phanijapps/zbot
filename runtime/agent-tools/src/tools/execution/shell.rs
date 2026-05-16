@@ -459,6 +459,7 @@ impl Tool for ShellTool {
 
         // Build the command
         let mut cmd = Command::new(&shell);
+        cmd.stdin(std::process::Stdio::null());
 
         // Add shell args
         for arg in &shell_args {

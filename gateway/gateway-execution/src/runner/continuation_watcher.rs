@@ -66,6 +66,7 @@ pub(crate) struct RunnerContinuationInvoker {
     pub(crate) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
     pub(crate) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     pub(crate) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
+    pub(crate) handoff_writer: Option<Arc<crate::sleep::HandoffWriter>>,
     pub(crate) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     /// ArcSwap handle — NOT the inner `Option<Arc<ModelRegistry>>`. Reads
     /// the live value at fire time via `.load_full()`.
@@ -107,6 +108,7 @@ impl ContinuationSpawner for RunnerContinuationInvoker {
             memory_store: self.memory_store.clone(),
             embedding_client: self.embedding_client.clone(),
             distiller: self.distiller.clone(),
+            handoff_writer: self.handoff_writer.clone(),
             memory_recall: self.memory_recall.clone(),
             // Read the live registry at fire time — not a stale capture.
             model_registry: self.model_registry.load_full(),

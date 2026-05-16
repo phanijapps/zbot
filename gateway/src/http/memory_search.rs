@@ -425,7 +425,7 @@ async fn run_facts(
         return Vec::new();
     }
     memory_store
-        .search_memory_facts_hybrid_typed(agent_id, query, mode, limit, ward, embedding)
+        .search_memory_facts_hybrid_typed(agent_id, query, mode, limit, ward, embedding, None)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -614,6 +614,7 @@ mod helpers_tests {
             _content: &str,
             _confidence: f64,
             _session_id: Option<&str>,
+            _valid_from: Option<chrono::DateTime<chrono::Utc>>,
         ) -> Result<Value, String> {
             unreachable!()
         }

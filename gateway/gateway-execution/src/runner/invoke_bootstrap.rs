@@ -26,6 +26,7 @@ use gateway_services::{
 use tokio::sync::RwLock;
 use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
+use crate::agent_pool::AgentResultBus;
 use crate::config::ExecutionConfig;
 use crate::handle::ExecutionHandle;
 use crate::invoke::{collect_agents_summary, collect_skills_summary, AgentLoader, ExecutorBuilder};
@@ -66,6 +67,7 @@ pub(super) struct InvokeBootstrap {
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     pub(super) steering_registry: Option<Arc<agent_runtime::SteeringRegistry>>,
+    pub(super) agent_result_bus: Option<Arc<AgentResultBus>>,
     pub(super) event_bus: Arc<EventBus>,
     pub(super) handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
 }
@@ -129,6 +131,34 @@ struct IntentAnalysisCtx<'a> {
 struct IntentOutcome {
     recommended_skills: Vec<String>,
     instructions_injection: String,
+}
+
+// ============================================================================
+// FREE FUNCTIONS
+// ============================================================================
+
+fn format_corrections_block(facts: &[zero_stores_traits::MemoryFact]) -> Option<String> {
+    if facts.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = facts.iter().map(|f| format!("- {}", f.content)).collect();
+    Some(format!("## Active Corrections\n{}", lines.join("\n")))
+}
+
+fn format_goals_block(goals: &[agent_tools::GoalSummary]) -> Option<String> {
+    let active: Vec<&agent_tools::GoalSummary> =
+        goals.iter().filter(|g| g.state == "active").collect();
+    if active.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = active
+        .iter()
+        .map(|g| match &g.description {
+            Some(desc) => format!("- {} — {}", g.title, desc),
+            None => format!("- {}", g.title),
+        })
+        .collect();
+    Some(format!("## Active Goals\n{}", lines.join("\n")))
 }
 
 // ============================================================================
@@ -311,6 +341,103 @@ impl InvokeBootstrap {
             }
         }
 
+        // Targeted recall from last session topics — surfaces related facts
+        // from the handoff summary even before the user's first message.
+        // Injected after user-query recall so reading order is:
+        // handoff → goals → corrections → handoff-recall → user-recall
+        if let (Some(recall), Some(store)) = (&self.memory_recall, &self.memory_store) {
+            use crate::sleep::handoff_writer::{
+                HANDOFF_AGENT_SENTINEL, HANDOFF_SCOPE, HANDOFF_WARD,
+            };
+            if let Ok(Some(fact)) = store
+                .get_fact_by_key(
+                    HANDOFF_AGENT_SENTINEL,
+                    HANDOFF_SCOPE,
+                    HANDOFF_WARD,
+                    "handoff.latest",
+                )
+                .await
+            {
+                if let Ok(entry) = serde_json::from_str::<crate::sleep::handoff_writer::HandoffEntry>(
+                    &fact.content,
+                ) {
+                    if !entry.summary.is_empty() {
+                        match recall
+                            .recall_unified(
+                                &config.agent_id,
+                                &entry.summary,
+                                ward_id.as_deref(),
+                                &[],
+                                5,
+                            )
+                            .await
+                        {
+                            Ok(items) if !items.is_empty() => {
+                                let formatted = crate::recall::format_scored_items(&items);
+                                if !formatted.is_empty() {
+                                    history.insert(
+                                        0,
+                                        ChatMessage::system(format!(
+                                            "## Context from Last Session\n{formatted}"
+                                        )),
+                                    );
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::warn!(
+                                    agent_id = %config.agent_id,
+                                    "handoff targeted recall failed: {e}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Always-active corrections — injected unconditionally so agent never misses hard rules.
+        if let Some(store) = &self.memory_store {
+            match store
+                .get_facts_by_category(&config.agent_id, "correction", 30)
+                .await
+            {
+                Ok(facts) => {
+                    if let Some(block) = format_corrections_block(&facts) {
+                        history.insert(0, ChatMessage::system(block));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(agent_id = %config.agent_id, "corrections inject failed: {e}");
+                }
+            }
+        }
+
+        // Active goals — injected so agent picks up any in-flight objectives.
+        if let Some(adapter) = &self.goal_adapter {
+            match adapter.list_active(&config.agent_id).await {
+                Ok(goals) => {
+                    if let Some(block) = format_goals_block(&goals) {
+                        history.insert(0, ChatMessage::system(block));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(agent_id = %config.agent_id, "goals inject failed: {e}");
+                }
+            }
+        }
+
+        // Session handoff — injected after recall so it lands at history[0]
+        // (the last insert(0, ..) wins the front slot; agent reads handoff
+        // first, giving orientation before noisy recall facts).
+        if let Some(store) = &self.memory_store {
+            if let Some(block) =
+                crate::sleep::handoff_writer::read_handoff_block(store, ward_id.as_deref()).await
+            {
+                history.insert(0, ChatMessage::system(block));
+            }
+        }
+
         // Create executor (restore ward_id from existing session if available)
         let (executor, recommended_skills) = match self
             .create_executor(CreateExecutorArgs {
@@ -479,6 +606,12 @@ impl InvokeBootstrap {
         }
         if let Some(ref sr) = self.steering_registry {
             builder = builder.with_steering_registry(sr.clone());
+        }
+        if let Some(ref bus) = self.agent_result_bus {
+            builder = builder
+                .with_agent_result_bus(bus.clone())
+                .with_state_service(self.state_service.clone())
+                .with_conversation_repo(self.conversation_repo.clone());
         }
 
         // Intent analysis for root agent first turns only.
@@ -850,6 +983,7 @@ mod tests {
             ingestion_adapter: None,
             goal_adapter: None,
             steering_registry: None,
+            agent_result_bus: None,
             event_bus: Arc::new(EventBus::new()),
             handles,
         };

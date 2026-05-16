@@ -10,6 +10,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::RwLock;
 
+// Re-export so `gateway_services::settings::MemorySettings` keeps working;
+// `lib.rs` continues to surface it as `gateway_services::MemorySettings`.
+pub use gateway_memory::MemorySettings;
+
 /// Application settings.
 ///
 /// Stored in `{data_dir}/settings.json` and persisted across restarts.
@@ -71,6 +75,9 @@ pub struct ExecutionSettings {
     /// Wiki / Obsidian vault ward configuration.
     #[serde(default)]
     pub wiki: WikiConfig,
+    /// Background memory worker configuration.
+    #[serde(default)]
+    pub memory: MemorySettings,
     /// Experimental UI feature flags. Free-form bag persisted verbatim so
     /// we can gate beta surfaces without schema churn.
     #[serde(default)]
@@ -222,6 +229,7 @@ impl Default for ExecutionSettings {
             multimodal: MultimodalConfig::default(),
             chat: ChatConfig::default(),
             wiki: WikiConfig::default(),
+            memory: MemorySettings::default(),
             feature_flags: std::collections::HashMap::new(),
         }
     }
@@ -595,6 +603,28 @@ mod tests {
             parsed["tools"]["python"].as_bool(),
             Some(true),
             "typed field update must still take effect"
+        );
+    }
+}
+
+#[cfg(test)]
+mod memory_settings_tests {
+    use super::*;
+
+    #[test]
+    fn default_conflict_resolver_interval_is_24() {
+        let m = MemorySettings::default();
+        assert_eq!(m.conflict_resolver_interval_hours, 24);
+    }
+
+    #[test]
+    fn memory_settings_deserializes_partial() {
+        let json = r#"{"conflictResolverIntervalHours": 6}"#;
+        let m: MemorySettings = serde_json::from_str(json).unwrap();
+        assert_eq!(m.conflict_resolver_interval_hours, 6);
+        assert_eq!(
+            m.corrections_abstractor_interval_hours, 24,
+            "default preserved"
         );
     }
 }

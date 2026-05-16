@@ -93,6 +93,7 @@ impl Tool for PythonTool {
         // Execute Python
         let output = tokio::process::Command::new(&python)
             .arg(&script_path)
+            .stdin(std::process::Stdio::null())
             .output()
             .await
             .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to execute Python: {}", e)))?;

@@ -41,6 +41,10 @@ pub struct WorkingMemory {
     corrections: Vec<String>,
     delegations: Vec<DelegationSummary>,
     token_budget: usize,
+    /// Number of parallel delegations that have been fired but not yet completed.
+    /// Incremented when a parallel delegate_to_agent call returns; decremented when
+    /// the corresponding callback system message arrives.
+    pending_parallel_count: u32,
 }
 
 impl WorkingMemory {
@@ -52,7 +56,23 @@ impl WorkingMemory {
             corrections: Vec::new(),
             delegations: Vec::new(),
             token_budget,
+            pending_parallel_count: 0,
         }
+    }
+
+    /// Increment the count of parallel agents awaiting completion.
+    pub fn add_pending_parallel(&mut self) {
+        self.pending_parallel_count += 1;
+    }
+
+    /// Decrement the count of parallel agents awaiting completion (floor 0).
+    pub fn complete_pending_parallel(&mut self) {
+        self.pending_parallel_count = self.pending_parallel_count.saturating_sub(1);
+    }
+
+    /// Current count of parallel agents still running.
+    pub fn pending_parallel_count(&self) -> u32 {
+        self.pending_parallel_count
     }
 
     /// Add or update an entity in working memory.
@@ -223,6 +243,13 @@ impl WorkingMemory {
             }
         }
 
+        if self.pending_parallel_count > 0 {
+            output.push_str(&format!(
+                "\n\u{23f3} **{} parallel agent(s) still running** — wait for their callbacks before synthesizing results.\n",
+                self.pending_parallel_count
+            ));
+        }
+
         output
     }
 
@@ -237,6 +264,7 @@ impl WorkingMemory {
             && self.discoveries.is_empty()
             && self.corrections.is_empty()
             && self.delegations.is_empty()
+            && self.pending_parallel_count == 0
     }
 }
 
@@ -340,5 +368,38 @@ mod tests {
         assert!(output.contains("Working Memory"));
         // No sections rendered
         assert!(!output.contains("Active Entities"));
+    }
+
+    #[test]
+    fn pending_parallel_shows_in_prompt() {
+        let mut wm = WorkingMemory::new(5000);
+        wm.add_pending_parallel();
+        wm.add_pending_parallel();
+        let output = wm.format_for_prompt();
+        assert!(output.contains("2 parallel agent(s) still running"));
+        assert!(!wm.is_empty());
+    }
+
+    #[test]
+    fn complete_pending_parallel_decrements() {
+        let mut wm = WorkingMemory::new(5000);
+        wm.add_pending_parallel();
+        wm.add_pending_parallel();
+        wm.complete_pending_parallel();
+        assert_eq!(wm.pending_parallel_count(), 1);
+        wm.complete_pending_parallel();
+        assert_eq!(wm.pending_parallel_count(), 0);
+        // Saturating sub — no underflow
+        wm.complete_pending_parallel();
+        assert_eq!(wm.pending_parallel_count(), 0);
+    }
+
+    #[test]
+    fn zero_pending_parallel_not_shown() {
+        let mut wm = WorkingMemory::new(5000);
+        wm.add_pending_parallel();
+        wm.complete_pending_parallel();
+        let output = wm.format_for_prompt();
+        assert!(!output.contains("parallel agent"));
     }
 }

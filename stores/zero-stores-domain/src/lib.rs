@@ -17,15 +17,20 @@
 //! - HTTP request/response shapes — those live in the gateway HTTP layer
 //!   (they can derive From/Into the domain types here).
 
+pub mod belief;
+pub mod belief_contradiction;
 pub mod distillation_ops;
 pub mod goal;
 pub mod kg_episode;
 pub mod kg_ops;
 pub mod memory_fact;
+pub mod message;
 pub mod procedure;
 pub mod session_episode;
 pub mod wiki;
 
+pub use belief::{Belief, ScoredBelief};
+pub use belief_contradiction::{BeliefContradiction, ContradictionType, Resolution};
 pub use distillation_ops::{DistillationStats, UndistilledSession};
 pub use goal::Goal;
 pub use kg_episode::{EpisodeSource, KgEpisode};
@@ -34,6 +39,7 @@ pub use kg_ops::{
     StrategyCandidate,
 };
 pub use memory_fact::{MemoryFact, ScoredFact, StrategyFactInsert, StrategyFactMatch};
+pub use message::Message;
 pub use procedure::{PatternProcedureInsert, Procedure, ProcedureSummary};
 pub use session_episode::{ScoredEpisode, SessionEpisode, SuccessfulEpisode};
 pub use wiki::{WikiArticle, WikiHit};

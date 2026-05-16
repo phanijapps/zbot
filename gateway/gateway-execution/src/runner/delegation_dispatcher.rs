@@ -37,6 +37,7 @@ use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio::task::JoinHandle;
 use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
+use crate::agent_pool::AgentResultBus;
 use crate::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
 use crate::handle::ExecutionHandle;
 use crate::runner::session_invoker::DelegationSpawner;
@@ -229,6 +230,7 @@ pub(crate) struct RunnerDelegationInvoker {
     pub(crate) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(crate) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     pub(crate) steering_registry: Arc<agent_runtime::SteeringRegistry>,
+    pub(crate) agent_result_bus: Arc<AgentResultBus>,
 }
 
 #[async_trait]
@@ -261,6 +263,7 @@ impl DelegationSpawner for RunnerDelegationInvoker {
             self.ingestion_adapter.clone(),
             self.goal_adapter.clone(),
             self.steering_registry.clone(),
+            self.agent_result_bus.clone(),
         )
         .await
         .map(|_| ())

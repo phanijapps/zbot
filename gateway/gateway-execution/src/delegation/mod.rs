@@ -17,9 +17,9 @@ mod spawn;
 
 // Re-export public types
 pub use callback::{
-    format_agent_display_name, format_callback_message, format_error_callback_message,
-    handle_delegation_failure, handle_delegation_success, handle_subagent_completion,
-    send_callback_to_parent,
+    extract_structured_result, format_agent_display_name, format_callback_message,
+    format_error_callback_message, handle_delegation_failure, handle_delegation_success,
+    handle_subagent_completion, send_callback_to_parent,
 };
 pub use context::{DelegationContext, DelegationRequest};
 pub use registry::DelegationRegistry;

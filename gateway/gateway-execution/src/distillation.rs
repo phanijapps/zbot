@@ -549,7 +549,11 @@ impl SessionDistiller {
             if let Some(ref existing) = existing_fact {
                 if existing.content != ef.content && !existing.pinned {
                     let supersede_res = match self.memory_store.as_ref() {
-                        Some(store) => store.supersede_fact(&existing.id, &fact_id).await,
+                        Some(store) => {
+                            store
+                                .supersede_fact(&existing.id, &fact_id, chrono::Utc::now())
+                                .await
+                        }
                         None => Err("no memory store wired".to_string()),
                     };
                     if let Err(e) = supersede_res {
@@ -1298,7 +1302,11 @@ impl SessionDistiller {
         if let Some(ref existing) = existing_strategy {
             if existing.content != strategy_description && !existing.pinned {
                 let supersede_res = match self.memory_store.as_ref() {
-                    Some(store) => store.supersede_fact(&existing.id, &strategy_fact_id).await,
+                    Some(store) => {
+                        store
+                            .supersede_fact(&existing.id, &strategy_fact_id, chrono::Utc::now())
+                            .await
+                    }
                     None => Err("no memory store wired".to_string()),
                 };
                 if let Err(e) = supersede_res {
@@ -1447,7 +1455,7 @@ impl SessionDistiller {
                 let supersede_res = match self.memory_store.as_ref() {
                     Some(store) => {
                         store
-                            .supersede_fact(&existing.id, &correction_fact_id)
+                            .supersede_fact(&existing.id, &correction_fact_id, chrono::Utc::now())
                             .await
                     }
                     None => Err("no memory store wired".to_string()),

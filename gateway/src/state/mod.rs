@@ -163,6 +163,24 @@ pub struct AppState {
     /// backend that doesn't care can inherit them.
     pub compaction_store: Option<Arc<dyn zero_stores_traits::CompactionStore>>,
 
+    /// Trait-routed belief store (Belief Network Phase B-5 HTTP surface).
+    /// `Some(...)` only when `execution.memory.beliefNetwork.enabled = true`
+    /// AND the knowledge DB is wired. The HTTP handlers in
+    /// `http::beliefs` and `http::belief_network` use this for 503-vs-200
+    /// disambiguation: a `None` here means the Belief Network is disabled,
+    /// not that the data is missing.
+    pub belief_store: Option<Arc<dyn zero_stores_traits::BeliefStore>>,
+
+    /// Trait-routed belief-contradiction store (Belief Network Phase B-5
+    /// HTTP surface). Same opt-in gating as `belief_store`.
+    pub belief_contradiction_store: Option<Arc<dyn zero_stores_traits::BeliefContradictionStore>>,
+
+    /// In-memory recorder of recent Belief Network worker stats (Phase
+    /// B-6). Always wired when the sleep-time worker is wired so the
+    /// HTTP layer can render the Observatory belief panel even when the
+    /// network itself is disabled (empty history + `enabled: false`).
+    pub belief_network_activity: Option<Arc<gateway_memory::RecentBeliefNetworkActivity>>,
+
     /// Model capabilities registry (bundled + local overrides).
     pub model_registry: Arc<ModelRegistry>,
 
@@ -242,6 +260,12 @@ impl AppState {
         let skills = Arc::new(SkillService::with_roots(skills_roots));
         let provider_service = Arc::new(ProviderService::new(paths.clone()));
         let mcp_service = Arc::new(McpService::new(paths.clone()));
+
+        // Factory for sleep-time memory LLM clients — built once, shared
+        // across every sleep-time component that needs an LLM call.
+        let memory_llm_factory: Arc<dyn gateway_memory::MemoryLlmFactory> = Arc::new(
+            crate::memory_llm_factory::ProviderServiceLlmFactory::new(provider_service.clone()),
+        );
 
         // Initialize model capabilities registry (bundled + local overrides)
         let bundled_models = gateway_templates::Templates::get("models_registry.json")
@@ -536,6 +560,86 @@ impl AppState {
             recall.set_kg_store(ks.clone());
         }
 
+        // Phase B-4: wire BeliefStore into MemoryRecall, gated on
+        // `execution.memory.beliefNetwork.enabled`. Reads settings
+        // eagerly here so the store is attached before MemoryRecall is
+        // sealed in `Arc::new` below. When the flag is off (default)
+        // OR the knowledge DB is missing, no store is wired and recall
+        // stays byte-for-byte identical to pre-B-4 behavior.
+        let belief_network_enabled_for_recall =
+            gateway_services::SettingsService::new(paths.clone())
+                .load()
+                .map(|s| s.execution.memory.belief_network.enabled)
+                .unwrap_or(false);
+        if belief_network_enabled_for_recall {
+            if let Some(kdb) = knowledge_db.as_ref() {
+                let belief_store_for_recall: Arc<dyn zero_stores_traits::BeliefStore> =
+                    Arc::new(zero_stores_sqlite::SqliteBeliefStore::new(kdb.clone()));
+                if let Some(recall) = memory_recall_inner.as_mut() {
+                    recall.set_belief_store(belief_store_for_recall);
+                }
+                tracing::info!("Belief Network recall: enabled (B-4 — beliefs in recall_unified)");
+            } else {
+                tracing::info!(
+                    "Belief Network recall: enabled in settings but knowledge DB unavailable; skipping"
+                );
+            }
+        } else {
+            tracing::debug!("Belief Network recall: disabled (default)");
+        }
+
+        // Self-RAG retrieval gate (opt-in via `memory.queryGate.enabled` in
+        // settings.json). Reads settings eagerly here so the gate is attached
+        // before MemoryRecall is sealed in Arc below. When the block is
+        // missing, disabled, or unreadable, the gate stays None and recall
+        // behaves identically to pre-gate behavior.
+        let query_gate_cfg: gateway_memory::QueryGateConfig =
+            gateway_services::SettingsService::new(paths.clone())
+                .load()
+                .map(|s| s.execution.memory.query_gate.clone())
+                .unwrap_or_default();
+        if query_gate_cfg.enabled {
+            let llm = Arc::new(gateway_memory::LlmQueryGate::new(
+                memory_llm_factory.clone(),
+            ));
+            let gate = Arc::new(gateway_memory::QueryGate::new(llm, query_gate_cfg.clone()));
+            if let Some(recall) = memory_recall_inner.as_mut() {
+                recall.set_query_gate(gate);
+            }
+            tracing::info!(
+                "Memory query gate: enabled (model={:?}, max_subqueries={}, timeout_ms={})",
+                query_gate_cfg.model_id,
+                query_gate_cfg.max_subqueries,
+                query_gate_cfg.timeout_ms,
+            );
+        } else {
+            tracing::info!("Memory query gate: disabled");
+        }
+
+        // MMR diversity reranking (opt-in via `memory.mmr.enabled` in
+        // settings.json). Default-disabled: when the block is missing or
+        // `enabled = false`, recall is byte-for-byte identical to pre-MMR.
+        // The config block is attached unconditionally so the runtime can
+        // read the current values; only `enabled = true` triggers the
+        // rerank step inside `recall_unified`.
+        let mmr_cfg: gateway_memory::MmrConfig =
+            gateway_services::SettingsService::new(paths.clone())
+                .load()
+                .map(|s| s.execution.memory.mmr.clone())
+                .unwrap_or_default();
+        if let Some(recall) = memory_recall_inner.as_mut() {
+            recall.set_mmr_config(mmr_cfg.clone());
+        }
+        if mmr_cfg.enabled {
+            tracing::info!(
+                "Memory MMR rerank: enabled (lambda={}, candidate_pool={})",
+                mmr_cfg.lambda,
+                mmr_cfg.candidate_pool,
+            );
+        } else {
+            tracing::debug!("Memory MMR rerank: disabled (default)");
+        }
+
         let memory_recall: Option<Arc<MemoryRecall>> = memory_recall_inner.map(Arc::new);
 
         // Clone embedding client before it's moved into distiller — the runner
@@ -708,6 +812,7 @@ impl AppState {
             kg_episode_repo.clone(),
             ingestion_adapter,
             goal_adapter,
+            memory_llm_factory.clone(),
         ));
 
         // Phase 4: CompactionRepository + SleepTimeWorker (background maintenance).
@@ -755,6 +860,49 @@ impl AppState {
             }
         }
 
+        // Belief Network stores (Phase B-1/B-2 + B-5 HTTP surface + B-6 observatory).
+        //
+        // Two layers of gating:
+        //   1. Trait store handles can only be built when `knowledge_db`
+        //      is wired (SQLite-backed).
+        //   2. We only park them on `AppState` for the HTTP layer when
+        //      `execution.memory.beliefNetwork.enabled = true` — so the
+        //      `/api/beliefs/*`, `/api/contradictions/*`, and
+        //      `/api/belief-network/*` endpoints cleanly return 503/empty
+        //      when the feature is off.
+        //
+        // The sleep-time worker block below still gets to consume the
+        // handles either way (it has its own internal enable flag).
+        let belief_network_cfg = settings
+            .get_execution_settings()
+            .map(|s| s.memory.belief_network.clone())
+            .unwrap_or_default();
+        let belief_store_raw: Option<Arc<dyn zero_stores::BeliefStore>> =
+            knowledge_db.as_ref().map(|kdb| {
+                Arc::new(zero_stores_sqlite::SqliteBeliefStore::new(kdb.clone()))
+                    as Arc<dyn zero_stores::BeliefStore>
+            });
+        let belief_contradiction_store_raw: Option<Arc<dyn zero_stores::BeliefContradictionStore>> =
+            knowledge_db.as_ref().map(|kdb| {
+                Arc::new(zero_stores_sqlite::SqliteBeliefContradictionStore::new(
+                    kdb.clone(),
+                )) as Arc<dyn zero_stores::BeliefContradictionStore>
+            });
+        // HTTP surface only exposes the stores when the feature is on.
+        let belief_store_for_http: Option<Arc<dyn zero_stores_traits::BeliefStore>> =
+            if belief_network_cfg.enabled {
+                belief_store_raw.clone()
+            } else {
+                None
+            };
+        let belief_contradiction_store_for_http: Option<
+            Arc<dyn zero_stores_traits::BeliefContradictionStore>,
+        > = if belief_network_cfg.enabled {
+            belief_contradiction_store_raw.clone()
+        } else {
+            None
+        };
+
         // Sleep-time worker requires the entire SQLite knowledge cluster.
         // Build only when ALL of (compaction_repo, memory_repo, knowledge_db,
         // procedure_repo, kg_store, compaction_store) are present. The
@@ -764,7 +912,7 @@ impl AppState {
         // compaction_store) all wired above from the SQLite repos.
         // Conversation store is always SQLite-backed (per design) and
         // built unconditionally above.
-        let sleep_time_worker = match (
+        let (sleep_time_worker, belief_network_activity) = match (
             kg_store.as_ref(),
             episode_store_for_state.as_ref(),
             memory_store.as_ref(),
@@ -772,66 +920,55 @@ impl AppState {
             compaction_store.as_ref(),
         ) {
             (Some(kgs), Some(eps), Some(mems), Some(prs), Some(compstore)) => {
-                let verifier: Option<
-                    Arc<dyn gateway_execution::sleep::compactor::PairwiseVerifier>,
-                > = Some(Arc::new(
-                    gateway_execution::sleep::LlmPairwiseVerifier::new(provider_service.clone()),
-                ));
-                let compactor = Arc::new(gateway_execution::sleep::Compactor::new(
-                    kgs.clone(),
-                    compstore.clone(),
-                    verifier,
-                ));
-                let decay = Arc::new(gateway_execution::sleep::DecayEngine::new(
-                    kgs.clone(),
-                    gateway_execution::sleep::DecayConfig::default(),
-                ));
-                let pruner = Arc::new(gateway_execution::sleep::Pruner::new(
-                    kgs.clone(),
-                    compstore.clone(),
-                ));
-                let synth_llm = Arc::new(gateway_execution::sleep::LlmSynthesizer::new(
-                    provider_service.clone(),
-                ));
-                let synthesizer = Arc::new(gateway_execution::sleep::Synthesizer::new(
-                    kgs.clone(),
-                    eps.clone(),
-                    mems.clone(),
-                    compstore.clone(),
-                    synth_llm,
-                    embedding_client.clone(),
-                ));
-                let pattern_llm = Arc::new(gateway_execution::sleep::LlmPatternExtractor::new(
-                    provider_service.clone(),
-                ));
-                let pattern_extractor = Arc::new(gateway_execution::sleep::PatternExtractor::new(
-                    eps.clone(),
-                    conversation_store_for_state.clone(),
-                    prs.clone(),
-                    compstore.clone(),
-                    pattern_llm,
-                ));
-                let orphan_archiver = Arc::new(gateway_execution::sleep::OrphanArchiver::new(
-                    kgs.clone(),
-                    compstore.clone(),
-                ));
-                let ops = gateway_execution::sleep::SleepOps {
-                    synthesizer: Some(synthesizer),
-                    pattern_extractor: Some(pattern_extractor),
-                    orphan_archiver: Some(orphan_archiver),
-                };
-                Some(Arc::new(
-                    gateway_execution::sleep::SleepTimeWorker::start_with_ops(
-                        compactor,
-                        decay,
-                        pruner,
-                        ops,
-                        std::time::Duration::from_secs(60 * 60),
-                        "root".to_string(),
-                    ),
-                ))
+                let abstractions_interval_hours = settings
+                    .get_execution_settings()
+                    .map(|s| s.memory.corrections_abstractor_interval_hours)
+                    .unwrap_or(24);
+                let conflict_interval_hours = settings
+                    .get_execution_settings()
+                    .map(|s| s.memory.conflict_resolver_interval_hours)
+                    .unwrap_or(24);
+                // `belief_network_cfg` is already defined in the outer
+                // scope above (used for HTTP-store gating). Reuse it here.
+                let memory_services =
+                    gateway_memory::MemoryServices::new(gateway_memory::MemoryServicesConfig {
+                        agent_id: "root".to_string(),
+                        interval: std::time::Duration::from_secs(60 * 60),
+                        llm_factory: memory_llm_factory.clone(),
+                        kg_store: kgs.clone(),
+                        episode_store: eps.clone(),
+                        memory_store: mems.clone(),
+                        compaction_store: compstore.clone(),
+                        procedure_store: prs.clone(),
+                        conversation_store: conversation_store_for_state.clone(),
+                        embedding_client: embedding_client.clone(),
+                        kg_decay_config: recall_config.kg_decay.clone(),
+                        corrections_abstractor_interval: std::time::Duration::from_secs(
+                            abstractions_interval_hours as u64 * 3600,
+                        ),
+                        conflict_resolver_interval: std::time::Duration::from_secs(
+                            conflict_interval_hours as u64 * 3600,
+                        ),
+                        decay_config: gateway_memory::sleep::DecayConfig::default(),
+                        belief_store: belief_store_raw.clone(),
+                        belief_network_enabled: belief_network_cfg.enabled,
+                        belief_network_interval: std::time::Duration::from_secs(
+                            belief_network_cfg.interval_hours as u64 * 3600,
+                        ),
+                        belief_contradiction_store: belief_contradiction_store_raw.clone(),
+                        belief_contradiction_neighborhood_prefix_depth: belief_network_cfg
+                            .neighborhood_prefix_depth,
+                        belief_contradiction_budget_per_cycle: belief_network_cfg
+                            .contradiction_budget_per_cycle,
+                        belief_fact_confidence_drop_threshold: belief_network_cfg
+                            .fact_confidence_drop_threshold,
+                    });
+                (
+                    Some(memory_services.sleep_time_worker.clone()),
+                    Some(memory_services.belief_network_activity.clone()),
+                )
             }
-            _ => None,
+            _ => (None, None),
         };
 
         // Create hook registry
@@ -892,6 +1029,9 @@ impl AppState {
             ingestion_backpressure,
             advertiser: discovery::noop(),
             advertise_handle: Arc::new(std::sync::Mutex::new(None)),
+            belief_store: belief_store_for_http,
+            belief_contradiction_store: belief_contradiction_store_for_http,
+            belief_network_activity,
         }
     }
 
@@ -1029,6 +1169,9 @@ impl AppState {
             ingestion_backpressure: None,
             advertiser: discovery::noop(),
             advertise_handle: Arc::new(std::sync::Mutex::new(None)),
+            belief_store: None,
+            belief_contradiction_store: None,
+            belief_network_activity: None,
         }
     }
 
@@ -1166,6 +1309,9 @@ impl AppState {
             ingestion_backpressure: None,
             advertiser: discovery::noop(),
             advertise_handle: Arc::new(std::sync::Mutex::new(None)),
+            belief_store: None,
+            belief_contradiction_store: None,
+            belief_network_activity: None,
         }
     }
 

@@ -132,6 +132,32 @@ pub trait KnowledgeGraphStore: Send + Sync {
     /// archiver. Atomically applies all writes via a single transaction.
     async fn mark_entity_archival(&self, id: &EntityId, reason: &str) -> StoreResult<()>;
 
+    /// Apply temporal confidence decay to non-archival entities for an agent.
+    ///
+    /// For each entity whose `last_seen_at` is older than `skip_recent_hours`,
+    /// compute `new_confidence = max(min_confidence, old * 0.5^(days/half_life))`
+    /// where `days = now - last_seen_at`. Returns the number of rows updated.
+    async fn decay_entity_confidence(
+        &self,
+        _agent_id: &str,
+        _half_life_days: f64,
+        _min_confidence: f64,
+        _skip_recent_hours: i64,
+    ) -> StoreResult<u64> {
+        Ok(0)
+    }
+
+    /// Same as [`KnowledgeGraphStore::decay_entity_confidence`] but for `kg_relationships`.
+    async fn decay_relationship_confidence(
+        &self,
+        _agent_id: &str,
+        _half_life_days: f64,
+        _min_confidence: f64,
+        _skip_recent_hours: i64,
+    ) -> StoreResult<u64> {
+        Ok(0)
+    }
+
     // ---- HTTP read paths (graph.rs handlers) ------------------------------
 
     /// Aggregate stats view used by `GET /api/graph/:agent_id/stats`.

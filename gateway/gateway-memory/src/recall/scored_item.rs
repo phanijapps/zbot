@@ -16,6 +16,12 @@ pub enum ItemKind {
     GraphNode,
     Goal,
     Episode,
+    /// Synthesized belief from the Belief Network (Phase B-4).
+    /// Surfaces alongside facts in `recall_unified`; the consumer
+    /// (`gateway-execution::recall::format_scored_items`) renders these
+    /// under a dedicated `## Active Beliefs` heading so the agent can
+    /// distinguish aggregated stances from raw facts.
+    Belief,
 }
 
 #[derive(Debug, Clone)]

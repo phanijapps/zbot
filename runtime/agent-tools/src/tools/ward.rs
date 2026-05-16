@@ -134,7 +134,10 @@ impl WardTool {
             })?;
 
         let query = format!("ward {} context patterns corrections", ward_name);
-        match store.recall_facts_prioritized(&agent_id, &query, 5).await {
+        match store
+            .recall_facts_prioritized(&agent_id, &query, 5, None)
+            .await
+        {
             Ok(result) => {
                 let count = result.get("count").and_then(|c| c.as_u64()).unwrap_or(0);
                 if count > 0 {
