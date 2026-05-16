@@ -12,8 +12,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::sleep::{
-    Compactor, ConflictResolver, CorrectionsAbstractor, DecayEngine, OrphanArchiver,
-    PatternExtractor, Pruner, Synthesizer,
+    BeliefSynthesizer, Compactor, ConflictResolver, CorrectionsAbstractor, DecayEngine,
+    OrphanArchiver, PatternExtractor, Pruner, Synthesizer,
 };
 
 /// Bundle of optional sleep-time ops passed to [`SleepTimeWorker::start`].
@@ -26,6 +26,10 @@ pub struct SleepOps {
     pub orphan_archiver: Option<Arc<OrphanArchiver>>,
     pub corrections_abstractor: Option<Arc<CorrectionsAbstractor>>,
     pub conflict_resolver: Option<Arc<ConflictResolver>>,
+    /// Belief Network synthesizer (Phase B-1). When `None`, the cycle
+    /// skips the belief step entirely — beliefs are opt-in via
+    /// `MemorySettings.belief_network.enabled`.
+    pub belief_synthesizer: Option<Arc<BeliefSynthesizer>>,
 }
 
 /// Background worker that orchestrates the full sleep-time pipeline.
@@ -133,6 +137,8 @@ pub struct CycleStats {
     pub orphans_failed: u64,
     pub kg_entities_decayed: u64,
     pub kg_relationships_decayed: u64,
+    /// Belief Network — Phase B-1.
+    pub beliefs_synthesized: u64,
 }
 
 async fn run_cycle(
@@ -232,6 +238,19 @@ async fn run_cycle(
         }
     }
 
+    // Belief synthesis — opt-in. Runs after conflict resolution so the
+    // active fact set is stable. No-op when the synthesizer is None.
+    if let Some(bs) = ops.belief_synthesizer.as_ref() {
+        match bs.run_cycle(&run_id, agent_id).await {
+            Ok(s) => {
+                stats.beliefs_synthesized = s.beliefs_synthesized;
+            }
+            Err(e) => {
+                tracing::warn!(%run_id, error = %e, "belief synthesizer cycle failed");
+            }
+        }
+    }
+
     tracing::info!(
         kind,
         %run_id,
@@ -250,6 +269,7 @@ async fn run_cycle(
         orphans_failed = stats.orphans_failed,
         kg_entities_decayed = stats.kg_entities_decayed,
         kg_relationships_decayed = stats.kg_relationships_decayed,
+        beliefs_synthesized = stats.beliefs_synthesized,
         "sleep-time cycle done"
     );
     stats
@@ -455,6 +475,7 @@ mod tests {
             orphan_archiver: Some(archiver),
             corrections_abstractor: None,
             conflict_resolver: None,
+            belief_synthesizer: None,
         };
         let stats = run_cycle(
             "test",
@@ -558,6 +579,7 @@ mod tests {
             orphan_archiver: None,
             corrections_abstractor: None,
             conflict_resolver: None,
+            belief_synthesizer: None,
         };
         let stats = run_cycle(
             "test",

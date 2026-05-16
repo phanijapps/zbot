@@ -18,6 +18,10 @@ pub use recall::scored_item::{
     intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, ScoredItem,
 };
 pub use recall::MemoryRecall;
+pub use sleep::belief_synthesizer::{
+    BeliefSynthesisLlm, BeliefSynthesisStats, BeliefSynthesizer, LlmBeliefSynthesizer,
+    SynthesisLlmResponse,
+};
 pub use sleep::compactor::{CompactionStats, Compactor, PairwiseVerifier};
 pub use sleep::conflict_resolver::{
     ConflictJudgeLlm, ConflictResolver, ConflictResponse, ConflictStats,
@@ -356,6 +360,10 @@ pub struct MemorySettings {
     /// Disabled by default; opt-in via `enabled: true`.
     #[serde(default)]
     pub query_gate: QueryGateConfig,
+    /// Belief Network synthesizer configuration. Phase B-1 of the
+    /// reflective memory roadmap — opt-in (disabled by default).
+    #[serde(default)]
+    pub belief_network: BeliefNetworkConfig,
 }
 
 pub fn default_corrections_abstractor_interval_hours() -> u32 {
@@ -372,6 +380,36 @@ impl Default for MemorySettings {
             corrections_abstractor_interval_hours: default_corrections_abstractor_interval_hours(),
             conflict_resolver_interval_hours: default_conflict_resolver_interval_hours(),
             query_gate: QueryGateConfig::default(),
+            belief_network: BeliefNetworkConfig::default(),
+        }
+    }
+}
+
+/// Belief Network configuration. Controls the `BeliefSynthesizer`
+/// sleep-time worker that aggregates `MemoryFact`s into beliefs.
+///
+/// Disabled by default — operators opt in by setting `enabled: true`.
+/// Throttled by `interval_hours` (default 24) to keep LLM cost bounded.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BeliefNetworkConfig {
+    /// Master switch. Default: `false`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Minimum hours between synthesis cycles. Default: 24.
+    #[serde(default = "default_belief_network_interval_hours")]
+    pub interval_hours: u32,
+}
+
+pub fn default_belief_network_interval_hours() -> u32 {
+    24
+}
+
+impl Default for BeliefNetworkConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_hours: default_belief_network_interval_hours(),
         }
     }
 }

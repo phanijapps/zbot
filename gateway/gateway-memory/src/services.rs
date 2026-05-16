@@ -12,14 +12,14 @@ use std::time::Duration;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use zero_stores::KnowledgeGraphStore;
 use zero_stores_traits::{
-    CompactionStore, ConversationStore, EpisodeStore, MemoryFactStore, ProcedureStore,
+    BeliefStore, CompactionStore, ConversationStore, EpisodeStore, MemoryFactStore, ProcedureStore,
 };
 
 use crate::sleep::{
-    Compactor, ConflictResolver, CorrectionsAbstractor, DecayConfig, DecayEngine, LlmConflictJudge,
-    LlmCorrectionsAbstractor, LlmPairwiseVerifier, LlmPatternExtractor, LlmSynthesizer,
-    OrphanArchiver, PairwiseVerifier, PatternExtractor, Pruner, SleepOps, SleepTimeWorker,
-    Synthesizer,
+    BeliefSynthesizer, Compactor, ConflictResolver, CorrectionsAbstractor, DecayConfig,
+    DecayEngine, LlmBeliefSynthesizer, LlmConflictJudge, LlmCorrectionsAbstractor,
+    LlmPairwiseVerifier, LlmPatternExtractor, LlmSynthesizer, OrphanArchiver, PairwiseVerifier,
+    PatternExtractor, Pruner, SleepOps, SleepTimeWorker, Synthesizer,
 };
 use crate::{KgDecayConfig, MemoryLlmFactory};
 
@@ -45,6 +45,12 @@ pub struct MemoryServicesConfig {
     pub corrections_abstractor_interval: Duration,
     pub conflict_resolver_interval: Duration,
     pub decay_config: DecayConfig,
+    /// Optional belief store. When `Some`, the Belief Network worker is
+    /// constructed alongside the rest of the sleep ops; when `None` (or
+    /// when `belief_network_enabled = false`), the worker is omitted.
+    pub belief_store: Option<Arc<dyn BeliefStore>>,
+    pub belief_network_enabled: bool,
+    pub belief_network_interval: Duration,
 }
 
 /// Bundle of ready-to-use memory subsystem handles.
@@ -76,6 +82,9 @@ impl MemoryServices {
             corrections_abstractor_interval,
             conflict_resolver_interval,
             decay_config,
+            belief_store,
+            belief_network_enabled,
+            belief_network_interval,
         } = config;
 
         let verifier: Option<Arc<dyn PairwiseVerifier>> =
@@ -129,12 +138,30 @@ impl MemoryServices {
             conflict_resolver_interval,
         ));
 
+        // Belief Network — opt-in, requires a wired BeliefStore. Even
+        // when the flag is on, missing the store falls back to None so
+        // mis-configuration degrades gracefully rather than panicking.
+        let belief_synthesizer = match (belief_network_enabled, belief_store) {
+            (true, Some(bs)) => {
+                let belief_llm = Arc::new(LlmBeliefSynthesizer::new(llm_factory.clone()));
+                Some(Arc::new(BeliefSynthesizer::new(
+                    memory_store.clone(),
+                    bs,
+                    belief_llm,
+                    belief_network_interval,
+                    true,
+                )))
+            }
+            _ => None,
+        };
+
         let ops = SleepOps {
             synthesizer: Some(synthesizer),
             pattern_extractor: Some(pattern_extractor),
             orphan_archiver: Some(orphan_archiver),
             corrections_abstractor: Some(corrections_abstractor),
             conflict_resolver: Some(conflict_resolver),
+            belief_synthesizer,
         };
 
         let sleep_time_worker = Arc::new(SleepTimeWorker::start_with_ops(

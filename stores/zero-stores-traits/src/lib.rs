@@ -9,6 +9,7 @@
 //! `zero_stores::*` import paths.
 
 pub mod auxiliary;
+pub mod belief;
 pub mod compaction;
 pub mod conversation;
 pub mod episodes;
@@ -19,7 +20,10 @@ pub mod procedures;
 pub mod wiki;
 
 pub use auxiliary::{DistillationStore, GoalStore, RecallLogStore};
+pub use belief::BeliefStore;
 pub use compaction::{CompactionRunSummary, CompactionStore};
+// Re-export the Belief domain type so callers of BeliefStore only need
+// one crate in their imports.
 pub use conversation::ConversationStore;
 pub use episodes::{EpisodeStats, EpisodeStore, SessionEpisode, SuccessfulEpisode};
 pub use kg_episodes::{KgEpisodeStatusCounts, KgEpisodeStore};
@@ -32,3 +36,4 @@ pub use procedures::{
     PatternProcedureInsert, Procedure, ProcedureStats, ProcedureStore, ProcedureSummary,
 };
 pub use wiki::{WikiStats, WikiStore};
+pub use zero_stores_domain::Belief;
