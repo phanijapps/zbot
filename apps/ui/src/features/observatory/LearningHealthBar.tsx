@@ -3,10 +3,14 @@
 // ============================================================================
 
 import { useGraphStats, useDistillationStatus, useBackfill } from "./graph-hooks";
+import { useBeliefNetworkStats } from "./belief-network/hooks";
 
 export function LearningHealthBar() {
   const { stats, loading: statsLoading } = useGraphStats();
   const { status, loading: distLoading, refetch: refetchStatus } = useDistillationStatus();
+  // Belief Network totals fold into this strip so the page doesn't carry
+  // a separate 3-card panel. Details still available via the API + memory tab.
+  const { stats: beliefStats } = useBeliefNetworkStats();
 
   const { run, isRunning, isDone, progress, error: backfillError } = useBackfill(
     refetchStatus
@@ -50,6 +54,35 @@ export function LearningHealthBar() {
           </div>
         </>
       )}
+
+      {/* Belief Network totals — folded into this strip so the page
+          stays compact. Detail surface lives in the Memory tab
+          (Beliefs / Contradictions sub-tabs). */}
+      {beliefStats?.enabled ? (
+        <>
+          <div className="observatory__health-item">
+            Beliefs:{" "}
+            <span className="observatory__health-value">
+              {beliefStats.totals.total_beliefs}
+            </span>
+          </div>
+          {beliefStats.totals.total_unresolved_contradictions > 0 ? (
+            <div className="observatory__health-item">
+              Contradictions:{" "}
+              <span className="observatory__health-value observatory__health-value--warning">
+                {beliefStats.totals.total_unresolved_contradictions} unresolved
+              </span>
+            </div>
+          ) : beliefStats.totals.total_contradictions > 0 ? (
+            <div className="observatory__health-item">
+              Contradictions:{" "}
+              <span className="observatory__health-value">
+                {beliefStats.totals.total_contradictions}
+              </span>
+            </div>
+          ) : null}
+        </>
+      ) : null}
 
       {/* Distillation counts from /api/distillation/status */}
       {status && (
