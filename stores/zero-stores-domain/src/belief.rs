@@ -42,4 +42,22 @@ pub struct Belief {
     pub superseded_by: Option<String>,
     #[serde(default)]
     pub stale: bool,
+    /// Embedding vector for semantic recall (Phase B-4). Stored on the
+    /// belief row as little-endian f32 bytes; `None` means the belief
+    /// was synthesized without an available embedding client and won't
+    /// surface in `search_beliefs` (only via direct lookup).
+    #[serde(default)]
+    pub embedding: Option<Vec<u8>>,
+}
+
+/// A belief scored by similarity to a recall query (Phase B-4).
+///
+/// Returned by `BeliefStore::search_beliefs`. `score` is the cosine
+/// similarity (`[-1, 1]`) between the query embedding and the belief's
+/// stored embedding. Callers project these into `ScoredItem`s with
+/// `ItemKind::Belief` for RRF fusion against other recall sources.
+#[derive(Debug, Clone)]
+pub struct ScoredBelief {
+    pub belief: Belief,
+    pub score: f64,
 }

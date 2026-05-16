@@ -299,6 +299,7 @@ mod tests {
             updated_at: now,
             superseded_by: None,
             stale: false,
+            embedding: None,
         };
         belief_store.upsert_belief(&b).await.unwrap();
     }

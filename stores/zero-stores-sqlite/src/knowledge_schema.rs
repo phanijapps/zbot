@@ -1,11 +1,11 @@
-//! Schema v29 for `knowledge.db`.
+//! Schema v30 for `knowledge.db`.
 //!
 //! All long-term memory + graph + vector indexes live here.
 //! Applied idempotently on daemon boot. No migrations — clean slate.
 
 use rusqlite::Connection;
 
-const SCHEMA_VERSION: i32 = 29;
+const SCHEMA_VERSION: i32 = 30;
 
 /// v23 delta: full-text search over `ward_wiki_articles` with sync triggers.
 const V23_WIKI_FTS_SQL: &str = include_str!("../migrations/v23_wiki_fts.sql");
@@ -56,7 +56,17 @@ const V28_KG_BELIEF_CONTRADICTIONS_SQL: &str =
 /// idempotency, same pattern as v26).
 const V29_KG_BELIEFS_STALE_SQL: &str = include_str!("../migrations/v29_kg_beliefs_stale.sql");
 
-/// Initialize the knowledge database schema (v26).
+/// v30 delta: add `embedding BLOB` column to `kg_beliefs` for B-4
+/// recall integration. Belief recall uses in-memory cosine over a
+/// bounded candidate set rather than a separate vec0 table — see the
+/// migration SQL for the rationale. The `ALTER TABLE ADD COLUMN` is
+/// handled by `ensure_kg_beliefs_embedding_column` (PRAGMA-guarded,
+/// mirroring v29). The migration file itself is documentation-only
+/// (no DDL beyond the inline schema and the guard helper).
+const V30_KG_BELIEFS_EMBEDDING_SQL: &str =
+    include_str!("../migrations/v30_kg_beliefs_embedding.sql");
+
+/// Initialize the knowledge database schema (v30).
 ///
 /// Creates all tables and indexes if they don't exist. Records the
 /// schema version in `schema_version` table. Safe to call on an
@@ -75,6 +85,8 @@ pub fn initialize_knowledge_database(conn: &Connection) -> Result<(), rusqlite::
     conn.execute_batch(V28_KG_BELIEF_CONTRADICTIONS_SQL)?;
     ensure_kg_beliefs_stale_column(conn)?;
     conn.execute_batch(V29_KG_BELIEFS_STALE_SQL)?;
+    ensure_kg_beliefs_embedding_column(conn)?;
+    conn.execute_batch(V30_KG_BELIEFS_EMBEDDING_SQL)?;
     conn.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?1, datetime('now'))",
         rusqlite::params![SCHEMA_VERSION],
@@ -131,6 +143,24 @@ fn ensure_kg_beliefs_stale_column(conn: &Connection) -> Result<(), rusqlite::Err
             "ALTER TABLE kg_beliefs ADD COLUMN stale INTEGER NOT NULL DEFAULT 0",
             [],
         )?;
+    }
+    Ok(())
+}
+
+/// Ensure `kg_beliefs` carries the `embedding` BLOB column introduced
+/// in schema v30. The column is nullable — beliefs synthesized without
+/// an available embedding client store NULL and won't surface in
+/// semantic recall (only via direct lookup). Fresh databases get the
+/// column via the inline `CREATE TABLE` body; this function is the
+/// idempotent ALTER guard for existing DBs.
+fn ensure_kg_beliefs_embedding_column(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare("PRAGMA table_info(kg_beliefs)")?;
+    let has_embedding = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "embedding");
+    if !has_embedding {
+        conn.execute("ALTER TABLE kg_beliefs ADD COLUMN embedding BLOB", [])?;
     }
     Ok(())
 }
@@ -457,6 +487,13 @@ CREATE TABLE IF NOT EXISTS kg_episode_payloads (
 --
 -- v29: `stale` column added so a multi-source belief whose source fact
 -- was invalidated can be queued for re-synthesis on the next sleep cycle.
+--
+-- v30: `embedding` BLOB column added for B-4 recall integration. Stores
+-- a serialized f32 vector (little-endian bytes, same format as other
+-- caches in this crate) so the in-memory cosine search in
+-- `SqliteBeliefStore::search_beliefs` can match beliefs against query
+-- embeddings. NULL means "no embedding generated" — belief is still
+-- usable via direct lookup but won't surface in semantic recall.
 CREATE TABLE IF NOT EXISTS kg_beliefs (
     id TEXT PRIMARY KEY,
     partition_id TEXT NOT NULL,
@@ -472,6 +509,7 @@ CREATE TABLE IF NOT EXISTS kg_beliefs (
     updated_at TEXT NOT NULL,
     superseded_by TEXT,
     stale INTEGER NOT NULL DEFAULT 0,
+    embedding BLOB,
     UNIQUE(partition_id, subject, valid_from)
 );
 CREATE INDEX IF NOT EXISTS idx_beliefs_partition_subject ON kg_beliefs(partition_id, subject);
@@ -777,7 +815,7 @@ mod tests {
         let version: i32 = conn
             .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 29);
+        assert_eq!(version, 30);
 
         // Regular tables.
         for table in [
@@ -1218,6 +1256,47 @@ mod tests {
             )
             .expect("query index");
         assert_eq!(index_count, 1, "idx_beliefs_stale index must exist");
+    }
+
+    /// v30 belief-embedding migration is idempotent: the `embedding`
+    /// BLOB column is added once on first init and re-running the full
+    /// init path is a no-op that preserves the column. Same PRAGMA-guarded
+    /// ALTER pattern as v26 / v29.
+    #[test]
+    fn v30_kg_beliefs_embedding_migration_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        // Column must exist after fresh init.
+        let mut stmt = conn.prepare("PRAGMA table_info(kg_beliefs)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            cols.contains(&"embedding".to_string()),
+            "kg_beliefs must have embedding column after init; got: {cols:?}"
+        );
+
+        // Re-running the full init path must not error and the column
+        // must still be there exactly once.
+        initialize_knowledge_database(&conn).expect("re-init is idempotent");
+        ensure_kg_beliefs_embedding_column(&conn).expect("rerun ALTER guard");
+        conn.execute_batch(V30_KG_BELIEFS_EMBEDDING_SQL)
+            .expect("rerun v30 migration SQL");
+
+        let mut stmt = conn.prepare("PRAGMA table_info(kg_beliefs)").unwrap();
+        let embedding_count = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .filter(|name| name == "embedding")
+            .count();
+        assert_eq!(
+            embedding_count, 1,
+            "embedding column must be present exactly once"
+        );
     }
 
     /// v27 belief table creation is idempotent: re-running the migration

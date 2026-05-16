@@ -13,7 +13,7 @@ pub mod knowledge_graph;
 pub mod memory_facts;
 pub mod types;
 
-pub use belief::{Belief, BeliefStore};
+pub use belief::{Belief, BeliefStore, ScoredBelief};
 pub use belief_contradiction::{
     BeliefContradiction, BeliefContradictionStore, ContradictionType, Resolution,
 };

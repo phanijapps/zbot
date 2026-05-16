@@ -13,7 +13,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, OptionalExtension};
-use zero_stores_domain::Belief;
+use zero_stores_domain::{Belief, ScoredBelief};
 use zero_stores_traits::BeliefStore;
 
 use crate::KnowledgeDatabase;
@@ -49,7 +49,7 @@ impl BeliefStore for SqliteBeliefStore {
                     "SELECT id, partition_id, subject, content, confidence,
                         valid_from, valid_until, source_fact_ids,
                         synthesizer_version, reasoning, created_at,
-                        updated_at, superseded_by, stale
+                        updated_at, superseded_by, stale, embedding
                  FROM kg_beliefs
                  WHERE partition_id = ?1
                    AND subject = ?2
@@ -74,7 +74,7 @@ impl BeliefStore for SqliteBeliefStore {
                 "SELECT id, partition_id, subject, content, confidence,
                         valid_from, valid_until, source_fact_ids,
                         synthesizer_version, reasoning, created_at,
-                        updated_at, superseded_by, stale
+                        updated_at, superseded_by, stale, embedding
                  FROM kg_beliefs
                  WHERE partition_id = ?1
                  ORDER BY updated_at DESC
@@ -107,6 +107,7 @@ impl BeliefStore for SqliteBeliefStore {
         let reasoning = belief.reasoning.clone();
         let superseded_by = belief.superseded_by.clone();
         let stale = i32::from(belief.stale);
+        let embedding = belief.embedding.clone();
 
         self.db.with_connection(move |conn| {
             conn.execute(
@@ -114,9 +115,9 @@ impl BeliefStore for SqliteBeliefStore {
                     id, partition_id, subject, content, confidence,
                     valid_from, valid_until, source_fact_ids,
                     synthesizer_version, reasoning, created_at, updated_at,
-                    superseded_by, stale
+                    superseded_by, stale, embedding
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
                 )
                 ON CONFLICT(partition_id, subject, valid_from) DO UPDATE SET
                     content = excluded.content,
@@ -127,7 +128,8 @@ impl BeliefStore for SqliteBeliefStore {
                     reasoning = excluded.reasoning,
                     updated_at = excluded.updated_at,
                     superseded_by = excluded.superseded_by,
-                    stale = excluded.stale",
+                    stale = excluded.stale,
+                    embedding = excluded.embedding",
                 params![
                     id,
                     partition_id,
@@ -143,6 +145,7 @@ impl BeliefStore for SqliteBeliefStore {
                     updated_at,
                     superseded_by,
                     stale,
+                    embedding,
                 ],
             )?;
             Ok(())
@@ -206,7 +209,7 @@ impl BeliefStore for SqliteBeliefStore {
                 "SELECT id, partition_id, subject, content, confidence,
                         valid_from, valid_until, source_fact_ids,
                         synthesizer_version, reasoning, created_at,
-                        updated_at, superseded_by, stale
+                        updated_at, superseded_by, stale, embedding
                  FROM kg_beliefs
                  WHERE id = ?1
                  LIMIT 1",
@@ -246,7 +249,7 @@ impl BeliefStore for SqliteBeliefStore {
                 "SELECT id, partition_id, subject, content, confidence,
                         valid_from, valid_until, source_fact_ids,
                         synthesizer_version, reasoning, created_at,
-                        updated_at, superseded_by, stale
+                        updated_at, superseded_by, stale, embedding
                  FROM kg_beliefs
                  WHERE partition_id = ?1 AND stale = 1
                  ORDER BY updated_at ASC
@@ -271,6 +274,62 @@ impl BeliefStore for SqliteBeliefStore {
             Ok(())
         })
     }
+
+    async fn search_beliefs(
+        &self,
+        partition_id: &str,
+        query_embedding: &[f32],
+        limit: usize,
+    ) -> Result<Vec<ScoredBelief>, String> {
+        // B-4 in-memory cosine: belief count is bounded (real-data has
+        // ~15 multi-fact subjects, even at 100x growth ~1k beliefs).
+        // A separate vec0 table would add maintenance cost for no
+        // measurable benefit at this scale. We SELECT all live beliefs
+        // in the partition, score them in this thread, sort, and
+        // truncate.
+        if query_embedding.is_empty() {
+            return Ok(Vec::new());
+        }
+        let partition_id = partition_id.to_string();
+        let now_str = Utc::now().to_rfc3339();
+        let rows = self.db.with_connection(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, partition_id, subject, content, confidence,
+                        valid_from, valid_until, source_fact_ids,
+                        synthesizer_version, reasoning, created_at,
+                        updated_at, superseded_by, stale, embedding
+                 FROM kg_beliefs
+                 WHERE partition_id = ?1
+                   AND superseded_by IS NULL
+                   AND (valid_from IS NULL OR valid_from <= ?2)
+                   AND (valid_until IS NULL OR valid_until > ?2)",
+            )?;
+            let rows = stmt
+                .query_map(params![partition_id, now_str], row_to_belief)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })?;
+        // Flatten Result<Belief, String> per row before scoring.
+        let beliefs: Vec<Belief> = rows.into_iter().collect::<Result<Vec<_>, _>>()?;
+
+        let mut scored: Vec<ScoredBelief> = beliefs
+            .into_iter()
+            .filter_map(|b| {
+                let bytes = b.embedding.as_deref()?;
+                let emb = embedding_from_bytes(bytes)?;
+                let score = cosine_similarity_f64(query_embedding, &emb);
+                Some(ScoredBelief { belief: b, score })
+            })
+            .collect();
+
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        scored.truncate(limit);
+        Ok(scored)
+    }
 }
 
 /// Map one row of `kg_beliefs` to a `Belief`. The `source_fact_ids` JSON
@@ -292,6 +351,7 @@ fn row_to_belief(row: &rusqlite::Row) -> rusqlite::Result<Result<Belief, String>
     let superseded_by: Option<String> = row.get(12)?;
     let stale_int: i32 = row.get(13)?;
     let stale = stale_int != 0;
+    let embedding: Option<Vec<u8>> = row.get(14)?;
 
     let source_fact_ids: Vec<String> = match serde_json::from_str(&source_fact_ids_json) {
         Ok(v) => v,
@@ -336,7 +396,48 @@ fn row_to_belief(row: &rusqlite::Row) -> rusqlite::Result<Result<Belief, String>
         updated_at,
         superseded_by,
         stale,
+        embedding,
     }))
+}
+
+/// Decode a `Vec<u8>` of little-endian f32 bytes into a `Vec<f32>`. The
+/// caller is responsible for handling NULL columns before invoking; an
+/// empty or non-multiple-of-4 byte slice yields `None` (treat as
+/// "embedding not available").
+fn embedding_from_bytes(bytes: &[u8]) -> Option<Vec<f32>> {
+    if bytes.is_empty() || !bytes.len().is_multiple_of(4) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4);
+    for chunk in bytes.chunks_exact(4) {
+        // chunks_exact yields slices of exactly 4 — the unwrap is safe.
+        let arr: [u8; 4] = chunk.try_into().ok()?;
+        out.push(f32::from_le_bytes(arr));
+    }
+    Some(out)
+}
+
+/// Cosine similarity in `f64` precision between two equal-length
+/// embeddings. Returns `0.0` for empty / mismatched / zero-magnitude
+/// inputs so search ranks them last rather than panicking.
+fn cosine_similarity_f64(a: &[f32], b: &[f32]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0f64;
+    let mut na = 0f64;
+    let mut nb = 0f64;
+    for (x, y) in a.iter().zip(b.iter()) {
+        let x = *x as f64;
+        let y = *y as f64;
+        dot += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    if na == 0.0 || nb == 0.0 {
+        return 0.0;
+    }
+    dot / (na.sqrt() * nb.sqrt())
 }
 
 #[cfg(test)]
@@ -371,6 +472,7 @@ mod tests {
             updated_at: now,
             superseded_by: None,
             stale: false,
+            embedding: None,
         }
     }
 
@@ -614,5 +716,178 @@ mod tests {
 
         store.clear_stale("b-clear").await.unwrap();
         assert!(!store.list_beliefs("default", 10).await.unwrap()[0].stale);
+    }
+
+    // -----------------------------------------------------------------
+    // B-4: embedding round-trip + search_beliefs cosine + filters
+    // -----------------------------------------------------------------
+
+    /// Helper — serialize `[f32]` to little-endian bytes for embedding
+    /// storage. Mirrors the helper in BeliefSynthesizer; co-located
+    /// here so tests don't depend on gateway-memory.
+    fn to_bytes(v: &[f32]) -> Vec<u8> {
+        v.iter().flat_map(|f| f.to_le_bytes()).collect()
+    }
+
+    /// Round-trip: a belief upserted with an embedding loads back with
+    /// the exact same bytes. Verifies the BLOB column accepts non-NULL
+    /// data and the SELECT reads it.
+    #[tokio::test]
+    async fn upsert_with_embedding_round_trips_the_bytes() {
+        let (store, _tmp) = make_store();
+        let mut b = sample_belief("b-emb", "user.x", Some(Utc::now()));
+        let emb_f32 = vec![1.0_f32, 0.5, -0.25, 0.0];
+        let emb_bytes = to_bytes(&emb_f32);
+        b.embedding = Some(emb_bytes.clone());
+        store.upsert_belief(&b).await.unwrap();
+
+        let got = store
+            .get_belief("default", "user.x", None)
+            .await
+            .unwrap()
+            .expect("belief present");
+        assert_eq!(
+            got.embedding.as_deref(),
+            Some(emb_bytes.as_slice()),
+            "embedding round-trips exactly"
+        );
+    }
+
+    /// `search_beliefs` sorts by cosine similarity descending. Seed
+    /// three beliefs with known embeddings, query with a fourth, and
+    /// assert the top result is the closest one.
+    #[tokio::test]
+    async fn search_beliefs_sorts_by_cosine_descending() {
+        let (store, _tmp) = make_store();
+        let now = Utc::now();
+
+        // Distinct (subject, valid_from) keeps the upsert key unique.
+        for (id, subject, vec) in [
+            ("b-near", "s.near", vec![1.0_f32, 0.0, 0.0]),
+            ("b-mid", "s.mid", vec![0.7_f32, 0.7, 0.0]),
+            ("b-far", "s.far", vec![0.0_f32, 0.0, 1.0]),
+        ] {
+            let mut b = sample_belief(id, subject, Some(now));
+            b.embedding = Some(to_bytes(&vec));
+            store.upsert_belief(&b).await.unwrap();
+        }
+        // Query parallel to b-near's vector.
+        let query = vec![1.0_f32, 0.0, 0.0];
+        let scored = store.search_beliefs("default", &query, 10).await.unwrap();
+        let ids: Vec<&str> = scored.iter().map(|s| s.belief.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["b-near", "b-mid", "b-far"],
+            "ordering must follow cosine score"
+        );
+        assert!(scored[0].score > scored[1].score);
+        assert!(scored[1].score > scored[2].score);
+    }
+
+    /// Superseded beliefs are excluded from `search_beliefs` so the
+    /// agent never sees a stance that's been replaced.
+    #[tokio::test]
+    async fn search_beliefs_filters_out_superseded() {
+        let (store, _tmp) = make_store();
+        let now = Utc::now();
+        let mut live = sample_belief("b-live", "s.live", Some(now));
+        live.embedding = Some(to_bytes(&[1.0, 0.0, 0.0]));
+        let mut dead = sample_belief("b-dead", "s.dead", Some(now));
+        dead.embedding = Some(to_bytes(&[1.0, 0.0, 0.0]));
+        dead.superseded_by = Some("b-live".to_string());
+        store.upsert_belief(&live).await.unwrap();
+        store.upsert_belief(&dead).await.unwrap();
+
+        let scored = store
+            .search_beliefs("default", &[1.0, 0.0, 0.0], 10)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = scored.iter().map(|s| s.belief.id.as_str()).collect();
+        assert_eq!(ids, vec!["b-live"], "superseded belief must be excluded");
+    }
+
+    /// Beliefs whose interval is fully in the past (closed `valid_until`
+    /// before "now") must not surface — they're historical context, not
+    /// active stance.
+    #[tokio::test]
+    async fn search_beliefs_filters_out_past_intervals() {
+        let (store, _tmp) = make_store();
+        let two_years_ago = chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let one_year_ago = chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let mut past = sample_belief("b-past", "s.past", Some(two_years_ago));
+        past.valid_until = Some(one_year_ago);
+        past.embedding = Some(to_bytes(&[1.0, 0.0, 0.0]));
+        let mut current = sample_belief("b-curr", "s.curr", Some(Utc::now()));
+        current.embedding = Some(to_bytes(&[1.0, 0.0, 0.0]));
+        store.upsert_belief(&past).await.unwrap();
+        store.upsert_belief(&current).await.unwrap();
+
+        let scored = store
+            .search_beliefs("default", &[1.0, 0.0, 0.0], 10)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = scored.iter().map(|s| s.belief.id.as_str()).collect();
+        assert_eq!(ids, vec!["b-curr"], "historical belief must be excluded");
+    }
+
+    /// Beliefs with NULL embedding can't be scored semantically and
+    /// must be excluded — they're still queryable via `get_belief`.
+    #[tokio::test]
+    async fn search_beliefs_skips_null_embeddings() {
+        let (store, _tmp) = make_store();
+        let now = Utc::now();
+        // One belief with embedding; one without.
+        let mut with_emb = sample_belief("b-emb", "s.emb", Some(now));
+        with_emb.embedding = Some(to_bytes(&[1.0, 0.0, 0.0]));
+        let without_emb = sample_belief("b-noemb", "s.noemb", Some(now));
+        // embedding stays None.
+        store.upsert_belief(&with_emb).await.unwrap();
+        store.upsert_belief(&without_emb).await.unwrap();
+
+        let scored = store
+            .search_beliefs("default", &[1.0, 0.0, 0.0], 10)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = scored.iter().map(|s| s.belief.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["b-emb"],
+            "NULL-embedding belief excluded from semantic recall"
+        );
+        // But `get_belief` direct lookup still works for it.
+        let direct = store
+            .get_belief("default", "s.noemb", None)
+            .await
+            .unwrap()
+            .expect("direct get returns the NULL-embedding belief");
+        assert_eq!(direct.id, "b-noemb");
+    }
+
+    /// Partition isolation: a query against `p1` must never return
+    /// beliefs stored in `p2`. Multi-tenant safety.
+    #[tokio::test]
+    async fn search_beliefs_respects_partition() {
+        let (store, _tmp) = make_store();
+        let now = Utc::now();
+        let mut in_p1 = sample_belief("b-p1", "s.x", Some(now));
+        in_p1.partition_id = "p1".into();
+        in_p1.embedding = Some(to_bytes(&[1.0, 0.0, 0.0]));
+        let mut in_p2 = sample_belief("b-p2", "s.x", Some(now));
+        in_p2.partition_id = "p2".into();
+        in_p2.embedding = Some(to_bytes(&[1.0, 0.0, 0.0]));
+        store.upsert_belief(&in_p1).await.unwrap();
+        store.upsert_belief(&in_p2).await.unwrap();
+
+        let scored = store
+            .search_beliefs("p1", &[1.0, 0.0, 0.0], 10)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = scored.iter().map(|s| s.belief.id.as_str()).collect();
+        assert_eq!(ids, vec!["b-p1"]);
     }
 }

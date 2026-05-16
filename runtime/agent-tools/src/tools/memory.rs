@@ -1788,6 +1788,14 @@ mod tests {
             async fn clear_stale(&self, _belief_id: &str) -> std::result::Result<(), String> {
                 Ok(())
             }
+            async fn search_beliefs(
+                &self,
+                _partition_id: &str,
+                _query_embedding: &[f32],
+                _limit: usize,
+            ) -> std::result::Result<Vec<zero_stores_traits::ScoredBelief>, String> {
+                Ok(vec![])
+            }
         }
 
         use zero_core::{CallbackContext, Content, EventActions, ReadonlyContext, ToolContext};
@@ -1852,6 +1860,7 @@ mod tests {
             updated_at: now,
             superseded_by: None,
             stale: false,
+            embedding: None,
         };
         let store: Arc<dyn BeliefStore> = Arc::new(StubBeliefStore {
             stored: StdMutex::new(Some(belief)),
@@ -1935,6 +1944,14 @@ mod tests {
             }
             async fn clear_stale(&self, _: &str) -> std::result::Result<(), String> {
                 Ok(())
+            }
+            async fn search_beliefs(
+                &self,
+                _: &str,
+                _: &[f32],
+                _: usize,
+            ) -> std::result::Result<Vec<zero_stores_traits::ScoredBelief>, String> {
+                Ok(vec![])
             }
         }
 
