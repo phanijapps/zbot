@@ -1,11 +1,11 @@
-//! Schema v28 for `knowledge.db`.
+//! Schema v29 for `knowledge.db`.
 //!
 //! All long-term memory + graph + vector indexes live here.
 //! Applied idempotently on daemon boot. No migrations — clean slate.
 
 use rusqlite::Connection;
 
-const SCHEMA_VERSION: i32 = 28;
+const SCHEMA_VERSION: i32 = 29;
 
 /// v23 delta: full-text search over `ward_wiki_articles` with sync triggers.
 const V23_WIKI_FTS_SQL: &str = include_str!("../migrations/v23_wiki_fts.sql");
@@ -46,6 +46,16 @@ const V27_KG_BELIEFS_SQL: &str = include_str!("../migrations/v27_kg_beliefs.sql"
 const V28_KG_BELIEF_CONTRADICTIONS_SQL: &str =
     include_str!("../migrations/v28_kg_belief_contradictions.sql");
 
+/// v29 delta: add `stale INTEGER NOT NULL DEFAULT 0` column to
+/// `kg_beliefs` to support B-3 confidence propagation. When a source
+/// fact is invalidated and the belief has multiple sources, the belief
+/// is marked stale (stale = 1); the next BeliefSynthesizer cycle picks
+/// it up and re-synthesizes from the remaining sources. The migration
+/// SQL only carries the partial index — the `ALTER TABLE ADD COLUMN`
+/// is handled by `ensure_kg_beliefs_stale_column` (PRAGMA-guarded for
+/// idempotency, same pattern as v26).
+const V29_KG_BELIEFS_STALE_SQL: &str = include_str!("../migrations/v29_kg_beliefs_stale.sql");
+
 /// Initialize the knowledge database schema (v26).
 ///
 /// Creates all tables and indexes if they don't exist. Records the
@@ -63,6 +73,8 @@ pub fn initialize_knowledge_database(conn: &Connection) -> Result<(), rusqlite::
     conn.execute_batch(V26_KG_RELATIONSHIPS_BITEMPORAL_SQL)?;
     conn.execute_batch(V27_KG_BELIEFS_SQL)?;
     conn.execute_batch(V28_KG_BELIEF_CONTRADICTIONS_SQL)?;
+    ensure_kg_beliefs_stale_column(conn)?;
+    conn.execute_batch(V29_KG_BELIEFS_STALE_SQL)?;
     conn.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?1, datetime('now'))",
         rusqlite::params![SCHEMA_VERSION],
@@ -99,6 +111,26 @@ fn ensure_evidence_column(conn: &Connection, table: &str) -> Result<(), rusqlite
         .any(|name| name == "evidence");
     if !has_evidence {
         conn.execute(&format!("ALTER TABLE {table} ADD COLUMN evidence TEXT"), [])?;
+    }
+    Ok(())
+}
+
+/// Ensure `kg_beliefs` carries the `stale` column introduced in schema
+/// v29. SQLite errors on duplicate `ADD COLUMN`, so we PRAGMA-probe the
+/// table before each ALTER. Fresh databases get the column via the
+/// `CREATE TABLE` body and this function is a no-op. The companion
+/// migration SQL file creates the partial index on `stale = 1`.
+fn ensure_kg_beliefs_stale_column(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare("PRAGMA table_info(kg_beliefs)")?;
+    let has_stale = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "stale");
+    if !has_stale {
+        conn.execute(
+            "ALTER TABLE kg_beliefs ADD COLUMN stale INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
     }
     Ok(())
 }
@@ -422,6 +454,9 @@ CREATE TABLE IF NOT EXISTS kg_episode_payloads (
 -- v27: Belief Network — aggregate of one or more facts about a subject.
 -- See migrations/v27_kg_beliefs.sql for the canonical definition; this
 -- inline copy keeps fresh-DB init self-contained.
+--
+-- v29: `stale` column added so a multi-source belief whose source fact
+-- was invalidated can be queued for re-synthesis on the next sleep cycle.
 CREATE TABLE IF NOT EXISTS kg_beliefs (
     id TEXT PRIMARY KEY,
     partition_id TEXT NOT NULL,
@@ -436,10 +471,12 @@ CREATE TABLE IF NOT EXISTS kg_beliefs (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     superseded_by TEXT,
+    stale INTEGER NOT NULL DEFAULT 0,
     UNIQUE(partition_id, subject, valid_from)
 );
 CREATE INDEX IF NOT EXISTS idx_beliefs_partition_subject ON kg_beliefs(partition_id, subject);
 CREATE INDEX IF NOT EXISTS idx_beliefs_valid ON kg_beliefs(valid_from, valid_until);
+CREATE INDEX IF NOT EXISTS idx_beliefs_stale ON kg_beliefs(stale) WHERE stale = 1;
 
 -- v28: Belief Network — pair-wise contradictions between two beliefs.
 -- See migrations/v28_kg_belief_contradictions.sql for the canonical
@@ -740,7 +777,7 @@ mod tests {
         let version: i32 = conn
             .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 28);
+        assert_eq!(version, 29);
 
         // Regular tables.
         for table in [
@@ -1134,6 +1171,53 @@ mod tests {
             )
             .expect("recount kg_belief_contradictions");
         assert_eq!(count_after, 1, "no duplicate table after rerun");
+    }
+
+    /// v29 belief-staleness migration is idempotent: the `stale` column
+    /// is added once, and re-running the full init path is a no-op that
+    /// preserves the column. Mirrors the v26 PRAGMA-guarded ALTER pattern.
+    #[test]
+    fn v29_kg_beliefs_stale_migration_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        let mut stmt = conn.prepare("PRAGMA table_info(kg_beliefs)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            cols.contains(&"stale".to_string()),
+            "kg_beliefs must have stale column after init; got: {cols:?}"
+        );
+
+        // Re-running the full init path must not error and the column
+        // must still be there exactly once.
+        initialize_knowledge_database(&conn).expect("re-init is idempotent");
+        ensure_kg_beliefs_stale_column(&conn).expect("rerun ALTER guard");
+        conn.execute_batch(V29_KG_BELIEFS_STALE_SQL)
+            .expect("rerun v29 migration SQL");
+
+        let mut stmt = conn.prepare("PRAGMA table_info(kg_beliefs)").unwrap();
+        let stale_count = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .filter(|name| name == "stale")
+            .count();
+        assert_eq!(stale_count, 1, "stale column must be present exactly once");
+
+        // The partial index must also be present (idempotent CREATE).
+        let index_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='index' AND name='idx_beliefs_stale'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query index");
+        assert_eq!(index_count, 1, "idx_beliefs_stale index must exist");
     }
 
     /// v27 belief table creation is idempotent: re-running the migration

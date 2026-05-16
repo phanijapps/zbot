@@ -7,7 +7,10 @@
 
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use zero_stores::KnowledgeGraphStore;
+
+use crate::sleep::belief_propagator::{BeliefPropagationStats, BeliefPropagator};
 
 /// Tuning knobs for the decay pass.
 #[derive(Debug, Clone)]
@@ -49,14 +52,93 @@ pub struct PruneCandidate {
 /// which works on both backends — SQLite uses the orphan-age JOIN
 /// against `kg_relationships`, Surreal uses a subquery against the
 /// `relationship` edge table with server-side date arithmetic.
+///
+/// B-3: optionally carries a [`BeliefPropagator`] plus a confidence
+/// threshold. When a fact-confidence drop is observed (either crossing
+/// below `fact_confidence_drop_threshold` or dropping by more than that
+/// fraction in a single cycle), the caller passes the affected fact ids
+/// to [`DecayEngine::propagate_fact_confidence_drops`] which fires the
+/// propagator for each. The propagator never bubbles errors.
 pub struct DecayEngine {
     kg_store: Arc<dyn KnowledgeGraphStore>,
     config: DecayConfig,
+    /// B-3: optional propagator. `None` when the Belief Network is
+    /// disabled — fact decay still runs but skips the propagation call.
+    belief_propagator: Option<Arc<BeliefPropagator>>,
+    /// B-3: threshold matching `BeliefNetworkConfig.fact_confidence_drop_threshold`.
+    /// A fact-confidence transition fires propagation when EITHER
+    /// `new < threshold && old >= threshold` (crossed the floor) OR
+    /// `old - new > threshold` (dropped by more than the threshold in
+    /// one cycle).
+    fact_confidence_drop_threshold: f64,
 }
 
 impl DecayEngine {
     pub fn new(kg_store: Arc<dyn KnowledgeGraphStore>, config: DecayConfig) -> Self {
-        Self { kg_store, config }
+        Self {
+            kg_store,
+            config,
+            belief_propagator: None,
+            fact_confidence_drop_threshold: 0.3,
+        }
+    }
+
+    /// Builder-style: attach a [`BeliefPropagator`] and the configured
+    /// drop threshold so fact-confidence drops fire B-3 propagation.
+    /// Pass `None` to leave the engine in pre-B-3 behavior.
+    #[must_use]
+    pub fn with_belief_propagator(
+        mut self,
+        propagator: Option<Arc<BeliefPropagator>>,
+        threshold: f64,
+    ) -> Self {
+        self.belief_propagator = propagator;
+        self.fact_confidence_drop_threshold = threshold;
+        self
+    }
+
+    /// Should a fact-confidence transition trigger propagation? Either
+    /// the new confidence crossed below the configured floor OR the
+    /// drop in a single cycle exceeded that floor (sharp decay).
+    fn should_propagate(&self, old_confidence: f64, new_confidence: f64) -> bool {
+        let crossed_floor = new_confidence < self.fact_confidence_drop_threshold
+            && old_confidence >= self.fact_confidence_drop_threshold;
+        let sharp_drop = (old_confidence - new_confidence) > self.fact_confidence_drop_threshold;
+        crossed_floor || sharp_drop
+    }
+
+    /// Propagate fact-confidence drops to dependent beliefs. Caller
+    /// supplies `(fact_id, old_confidence, new_confidence)` tuples that
+    /// came out of whatever decay path it ran (e.g. the SQLite-level
+    /// `decay_stale_facts`).
+    ///
+    /// Per fact: if `should_propagate` matches, the [`BeliefPropagator`]
+    /// is fired with the given `transition_time`. Aggregate stats from
+    /// every propagation call are merged and returned. No-op when the
+    /// propagator is absent (Belief Network disabled).
+    pub async fn propagate_fact_confidence_drops(
+        &self,
+        drops: &[(String, f64, f64)],
+        transition_time: DateTime<Utc>,
+    ) -> BeliefPropagationStats {
+        let mut agg = BeliefPropagationStats::default();
+        let Some(propagator) = self.belief_propagator.as_ref() else {
+            return agg;
+        };
+        for (fact_id, old_conf, new_conf) in drops {
+            if !self.should_propagate(*old_conf, *new_conf) {
+                continue;
+            }
+            let stats = propagator
+                .propagate_invalidation(fact_id, transition_time)
+                .await;
+            agg.beliefs_invalidated += stats.beliefs_invalidated;
+            agg.beliefs_retracted += stats.beliefs_retracted;
+            agg.beliefs_marked_stale += stats.beliefs_marked_stale;
+            agg.errors += stats.errors;
+            agg.max_propagation_depth = agg.max_propagation_depth.max(stats.max_propagation_depth);
+        }
+        agg
     }
 
     /// Apply temporal confidence decay to KG entities and relationships.
@@ -280,5 +362,144 @@ mod tests {
         let stats = engine.decay_kg_confidence("any", &config).await;
         assert_eq!(stats.entities_decayed, 0);
         assert_eq!(stats.relationships_decayed, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // B-3: fact-confidence drop propagation
+    // ------------------------------------------------------------------
+
+    /// A fact crossing below the configured threshold fires
+    /// propagation. A fact whose new confidence stays above is ignored.
+    /// A fact whose drop in one cycle exceeds the threshold also fires
+    /// even if the new value is still above the floor.
+    #[tokio::test]
+    async fn propagate_fact_confidence_drops_threshold_logic() {
+        use crate::sleep::belief_propagator::BeliefPropagator;
+        use zero_stores_sqlite::SqliteBeliefStore;
+        use zero_stores_traits::{Belief, BeliefStore};
+
+        let (_tmp, graph) = setup();
+        let kg_store: Arc<dyn KnowledgeGraphStore> =
+            Arc::new(zero_stores_sqlite::SqliteKgStore::new(graph.clone()));
+
+        // Wire a real belief store against the same knowledge DB.
+        let knowledge_db = graph.knowledge_db().clone();
+        let belief_store: Arc<dyn BeliefStore> = Arc::new(SqliteBeliefStore::new(knowledge_db));
+        let now = chrono::Utc::now();
+        // Two beliefs: one sourced from "F-crossing", one from
+        // "F-stable". Only the first should be touched.
+        let b_crossing = Belief {
+            id: "b-crossing".into(),
+            partition_id: "p".into(),
+            subject: "user.x".into(),
+            content: "c".into(),
+            confidence: 0.8,
+            valid_from: Some(now),
+            valid_until: None,
+            source_fact_ids: vec!["F-crossing".into()],
+            synthesizer_version: 1,
+            reasoning: None,
+            created_at: now,
+            updated_at: now,
+            superseded_by: None,
+            stale: false,
+        };
+        let b_stable = Belief {
+            id: "b-stable".into(),
+            partition_id: "p".into(),
+            subject: "user.y".into(),
+            content: "c".into(),
+            confidence: 0.8,
+            valid_from: Some(now),
+            valid_until: None,
+            source_fact_ids: vec!["F-stable".into()],
+            synthesizer_version: 1,
+            reasoning: None,
+            created_at: now,
+            updated_at: now,
+            superseded_by: None,
+            stale: false,
+        };
+        belief_store.upsert_belief(&b_crossing).await.unwrap();
+        belief_store.upsert_belief(&b_stable).await.unwrap();
+
+        let propagator = Arc::new(BeliefPropagator::new(belief_store.clone(), true));
+        let engine = DecayEngine::new(kg_store, DecayConfig::default())
+            .with_belief_propagator(Some(propagator), 0.3);
+
+        // F-crossing: 0.5 → 0.2 (crosses below 0.3 floor)
+        // F-stable: 0.9 → 0.8 (stays above floor and drop < 0.3)
+        let drops = vec![
+            ("F-crossing".to_string(), 0.5_f64, 0.2_f64),
+            ("F-stable".to_string(), 0.9_f64, 0.8_f64),
+        ];
+        let stats = engine
+            .propagate_fact_confidence_drops(&drops, chrono::Utc::now())
+            .await;
+        assert_eq!(
+            stats.beliefs_invalidated, 1,
+            "exactly one belief touched: {stats:?}"
+        );
+        assert_eq!(stats.beliefs_retracted, 1, "sole-source belief retracted");
+    }
+
+    /// Sharp drop in a single cycle (>threshold) fires propagation
+    /// even when the new value still sits above the floor.
+    #[tokio::test]
+    async fn propagate_sharp_drop_fires_even_above_floor() {
+        use crate::sleep::belief_propagator::BeliefPropagator;
+        use zero_stores_sqlite::SqliteBeliefStore;
+        use zero_stores_traits::{Belief, BeliefStore};
+
+        let (_tmp, graph) = setup();
+        let kg_store: Arc<dyn KnowledgeGraphStore> =
+            Arc::new(zero_stores_sqlite::SqliteKgStore::new(graph.clone()));
+        let knowledge_db = graph.knowledge_db().clone();
+        let belief_store: Arc<dyn BeliefStore> = Arc::new(SqliteBeliefStore::new(knowledge_db));
+        let now = chrono::Utc::now();
+        let b = Belief {
+            id: "b-sharp".into(),
+            partition_id: "p".into(),
+            subject: "user.x".into(),
+            content: "c".into(),
+            confidence: 0.9,
+            valid_from: Some(now),
+            valid_until: None,
+            source_fact_ids: vec!["F-sharp".into()],
+            synthesizer_version: 1,
+            reasoning: None,
+            created_at: now,
+            updated_at: now,
+            superseded_by: None,
+            stale: false,
+        };
+        belief_store.upsert_belief(&b).await.unwrap();
+
+        let propagator = Arc::new(BeliefPropagator::new(belief_store.clone(), true));
+        let engine = DecayEngine::new(kg_store, DecayConfig::default())
+            .with_belief_propagator(Some(propagator), 0.3);
+
+        // 0.9 → 0.5: still above 0.3 floor but the drop (0.4) exceeds it.
+        let drops = vec![("F-sharp".to_string(), 0.9_f64, 0.5_f64)];
+        let stats = engine
+            .propagate_fact_confidence_drops(&drops, chrono::Utc::now())
+            .await;
+        assert_eq!(stats.beliefs_invalidated, 1, "sharp-drop case fires");
+    }
+
+    /// Engine without a wired propagator is a no-op on fact-drop calls.
+    #[tokio::test]
+    async fn propagate_no_op_without_propagator() {
+        let (_tmp, graph) = setup();
+        let kg_store: Arc<dyn KnowledgeGraphStore> =
+            Arc::new(zero_stores_sqlite::SqliteKgStore::new(graph));
+        let engine = DecayEngine::new(kg_store, DecayConfig::default());
+
+        let drops = vec![("F-any".to_string(), 0.9_f64, 0.1_f64)];
+        let stats = engine
+            .propagate_fact_confidence_drops(&drops, chrono::Utc::now())
+            .await;
+        assert_eq!(stats.beliefs_invalidated, 0);
+        assert_eq!(stats.errors, 0);
     }
 }

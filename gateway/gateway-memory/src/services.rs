@@ -17,11 +17,11 @@ use zero_stores_traits::{
 };
 
 use crate::sleep::{
-    BeliefContradictionConfig, BeliefContradictionDetector, BeliefSynthesizer, Compactor,
-    ConflictResolver, CorrectionsAbstractor, DecayConfig, DecayEngine, LlmBeliefSynthesizer,
-    LlmConflictJudge, LlmContradictionJudge, LlmCorrectionsAbstractor, LlmPairwiseVerifier,
-    LlmPatternExtractor, LlmSynthesizer, OrphanArchiver, PairwiseVerifier, PatternExtractor,
-    Pruner, SleepOps, SleepTimeWorker, Synthesizer,
+    BeliefContradictionConfig, BeliefContradictionDetector, BeliefPropagator, BeliefSynthesizer,
+    Compactor, ConflictResolver, CorrectionsAbstractor, DecayConfig, DecayEngine,
+    LlmBeliefSynthesizer, LlmConflictJudge, LlmContradictionJudge, LlmCorrectionsAbstractor,
+    LlmPairwiseVerifier, LlmPatternExtractor, LlmSynthesizer, OrphanArchiver, PairwiseVerifier,
+    PatternExtractor, Pruner, SleepOps, SleepTimeWorker, Synthesizer,
 };
 use crate::{KgDecayConfig, MemoryLlmFactory};
 
@@ -64,6 +64,10 @@ pub struct MemoryServicesConfig {
     pub belief_contradiction_neighborhood_prefix_depth: usize,
     /// Phase B-2: LLM call cap per detection cycle.
     pub belief_contradiction_budget_per_cycle: usize,
+    /// Phase B-3: threshold below which a fact-confidence drop fires
+    /// the belief propagator. Mirrors
+    /// `BeliefNetworkConfig.fact_confidence_drop_threshold`.
+    pub belief_fact_confidence_drop_threshold: f64,
 }
 
 /// Bundle of ready-to-use memory subsystem handles.
@@ -101,6 +105,7 @@ impl MemoryServices {
             belief_contradiction_store,
             belief_contradiction_neighborhood_prefix_depth,
             belief_contradiction_budget_per_cycle,
+            belief_fact_confidence_drop_threshold,
         } = config;
 
         let verifier: Option<Arc<dyn PairwiseVerifier>> =
@@ -111,7 +116,23 @@ impl MemoryServices {
             verifier,
         ));
 
-        let decay = Arc::new(DecayEngine::new(kg_store.clone(), decay_config));
+        // B-3: optional propagator gating on the same `enabled` flag
+        // as the rest of the Belief Network. Construct it once and
+        // inject into both ConflictResolver and DecayEngine — the same
+        // instance is shared so propagation stats merge naturally if
+        // we ever want to aggregate them.
+        let belief_propagator: Option<Arc<BeliefPropagator>> =
+            match (belief_network_enabled, belief_store.as_ref()) {
+                (true, Some(bs)) => Some(Arc::new(BeliefPropagator::new(bs.clone(), true))),
+                _ => None,
+            };
+
+        let decay = Arc::new(
+            DecayEngine::new(kg_store.clone(), decay_config).with_belief_propagator(
+                belief_propagator.clone(),
+                belief_fact_confidence_drop_threshold,
+            ),
+        );
         let pruner = Arc::new(Pruner::new(kg_store.clone(), compaction_store.clone()));
 
         let synth_llm = Arc::new(LlmSynthesizer::new(llm_factory.clone()));
@@ -147,12 +168,15 @@ impl MemoryServices {
         ));
 
         let conflict_llm = Arc::new(LlmConflictJudge::new(llm_factory.clone()));
-        let conflict_resolver = Arc::new(ConflictResolver::new(
-            memory_store.clone(),
-            compaction_store.clone(),
-            conflict_llm,
-            conflict_resolver_interval,
-        ));
+        let conflict_resolver = Arc::new(
+            ConflictResolver::new(
+                memory_store.clone(),
+                compaction_store.clone(),
+                conflict_llm,
+                conflict_resolver_interval,
+            )
+            .with_belief_propagator(belief_propagator.clone()),
+        );
 
         // Belief Network — opt-in, requires a wired BeliefStore. Even
         // when the flag is on, missing the store falls back to None so

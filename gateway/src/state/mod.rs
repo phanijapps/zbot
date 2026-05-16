@@ -869,6 +869,8 @@ impl AppState {
                             .neighborhood_prefix_depth,
                         belief_contradiction_budget_per_cycle: belief_network_cfg
                             .contradiction_budget_per_cycle,
+                        belief_fact_confidence_drop_threshold: belief_network_cfg
+                            .fact_confidence_drop_threshold,
                     });
                 Some(memory_services.sleep_time_worker.clone())
             }

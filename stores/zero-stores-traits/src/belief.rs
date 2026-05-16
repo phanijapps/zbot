@@ -41,4 +41,39 @@ pub trait BeliefStore: Send + Sync {
         new_id: &str,
         transition_time: DateTime<Utc>,
     ) -> Result<(), String>;
+
+    /// Mark a belief stale — the next synthesizer cycle re-derives it
+    /// from its (remaining) source facts. B-3 propagation calls this on
+    /// a multi-source belief whose source fact was invalidated.
+    async fn mark_stale(&self, belief_id: &str) -> Result<(), String>;
+
+    /// Retract a belief — set its `valid_until` to `transition_time`.
+    /// B-3 propagation calls this on a sole-source belief whose only
+    /// fact was invalidated. Differs from `supersede_belief` in that no
+    /// replacement belief id is recorded.
+    async fn retract_belief(
+        &self,
+        belief_id: &str,
+        transition_time: DateTime<Utc>,
+    ) -> Result<(), String>;
+
+    /// Find beliefs whose `source_fact_ids` JSON array contains the given
+    /// fact_id and that are still active (valid_until IS NULL). Returns
+    /// belief ids only — callers load the full `Belief` on demand via
+    /// [`BeliefStore::get_belief_by_id`].
+    async fn beliefs_referencing_fact(&self, fact_id: &str) -> Result<Vec<String>, String>;
+
+    /// Load a belief by its primary-key id. Returns `None` when the id
+    /// is unknown. Used by B-3 propagation to read `source_fact_ids`
+    /// without needing to know the belief's partition.
+    async fn get_belief_by_id(&self, belief_id: &str) -> Result<Option<Belief>, String>;
+
+    /// List stale beliefs in a partition, oldest-first by `updated_at`.
+    /// Used by the synthesizer to pick up re-synthesis candidates at the
+    /// top of each cycle.
+    async fn list_stale(&self, partition_id: &str, limit: usize) -> Result<Vec<Belief>, String>;
+
+    /// Clear the stale flag on a belief. Called by the synthesizer right
+    /// after a successful re-synthesis pass.
+    async fn clear_stale(&self, belief_id: &str) -> Result<(), String>;
 }

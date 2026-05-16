@@ -1756,6 +1756,38 @@ mod tests {
             ) -> std::result::Result<(), String> {
                 Ok(())
             }
+            async fn mark_stale(&self, _belief_id: &str) -> std::result::Result<(), String> {
+                Ok(())
+            }
+            async fn retract_belief(
+                &self,
+                _belief_id: &str,
+                _t: chrono::DateTime<chrono::Utc>,
+            ) -> std::result::Result<(), String> {
+                Ok(())
+            }
+            async fn beliefs_referencing_fact(
+                &self,
+                _fact_id: &str,
+            ) -> std::result::Result<Vec<String>, String> {
+                Ok(vec![])
+            }
+            async fn get_belief_by_id(
+                &self,
+                _belief_id: &str,
+            ) -> std::result::Result<Option<Belief>, String> {
+                Ok(self.stored.lock().unwrap().clone())
+            }
+            async fn list_stale(
+                &self,
+                _partition_id: &str,
+                _limit: usize,
+            ) -> std::result::Result<Vec<Belief>, String> {
+                Ok(vec![])
+            }
+            async fn clear_stale(&self, _belief_id: &str) -> std::result::Result<(), String> {
+                Ok(())
+            }
         }
 
         use zero_core::{CallbackContext, Content, EventActions, ReadonlyContext, ToolContext};
@@ -1819,6 +1851,7 @@ mod tests {
             created_at: now,
             updated_at: now,
             superseded_by: None,
+            stale: false,
         };
         let store: Arc<dyn BeliefStore> = Arc::new(StubBeliefStore {
             stored: StdMutex::new(Some(belief)),
@@ -1869,6 +1902,38 @@ mod tests {
                 _: &str,
                 _: chrono::DateTime<chrono::Utc>,
             ) -> std::result::Result<(), String> {
+                Ok(())
+            }
+            async fn mark_stale(&self, _: &str) -> std::result::Result<(), String> {
+                Ok(())
+            }
+            async fn retract_belief(
+                &self,
+                _: &str,
+                _: chrono::DateTime<chrono::Utc>,
+            ) -> std::result::Result<(), String> {
+                Ok(())
+            }
+            async fn beliefs_referencing_fact(
+                &self,
+                _: &str,
+            ) -> std::result::Result<Vec<String>, String> {
+                Ok(vec![])
+            }
+            async fn get_belief_by_id(
+                &self,
+                _: &str,
+            ) -> std::result::Result<Option<Belief>, String> {
+                Ok(None)
+            }
+            async fn list_stale(
+                &self,
+                _: &str,
+                _: usize,
+            ) -> std::result::Result<Vec<Belief>, String> {
+                Ok(vec![])
+            }
+            async fn clear_stale(&self, _: &str) -> std::result::Result<(), String> {
                 Ok(())
             }
         }

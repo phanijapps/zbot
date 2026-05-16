@@ -236,18 +236,71 @@ Now the agent can be **asked** about it. `memory(action="contradictions", belief
 
 Without B-2, the agent would happily assert both beliefs in different conversations and never realize they conflict. The user would have to notice.
 
+### Phase B-3 — Confidence propagation
+
+B-1 and B-2 build the belief layer; B-3 closes the loop. **When a source fact loses confidence — because it was superseded, contradicted, or decayed — the beliefs built on it must respond.** Without propagation, retracting a fact leaves stale beliefs in place at their original confidence; the agent would happily assert "User works at Anthropic" long after a newer fact correctly said "User works at OpenAI."
+
+Propagation is **event-driven, not polling.** Two existing fact-lifecycle paths now call `BeliefPropagator::propagate_invalidation(fact_id, transition_time)` immediately when the trigger fires:
+
+| Trigger | When it fires | How the threshold works |
+|---|---|---|
+| `ConflictResolver::supersede_fact` | Whenever the conflict resolver picks a winner over a loser | Always — every supersession propagates |
+| `DecayEngine::propagate_fact_confidence_drops` | When a fact's confidence drops in a cycle | Fires when EITHER (a) confidence crossed below `factConfidenceDropThreshold` (default 0.3) AND was above it before, OR (b) the single-cycle drop exceeded that threshold |
+
+When propagation fires, the propagator looks up beliefs whose `source_fact_ids` JSON array contains the invalidated fact (via a `json_each` query — fine at current scale; a GIN-style index would help if production volume grows). For each affected belief:
+
+| Belief shape | Action |
+|---|---|
+| Single-source (only this fact) | **Retract** — set `valid_until = transition_time`. The belief becomes historical; default recall stops returning it. Point-in-time queries (`as_of`) still surface it for pre-retraction timestamps. |
+| Multi-source | **Mark stale** — set the new `stale` column to 1. The next BeliefSynthesizer cycle re-derives the belief from the remaining valid sources, then clears the flag. Confidence drops naturally as the underlying fact contribution weakens. |
+
+The two outcomes intentionally differ: a sole-source belief has no other evidence to fall back on, so retraction is clean; a multi-source belief has surviving sources, so re-synthesis recovers what's still defensible.
+
+#### Propagation cap
+
+Cascade depth is capped at 3 hops to prevent runaway. In B-3's schema, beliefs only reference facts as sources (not other beliefs), so effective depth is 1. The cap is reserved for later phases that might allow belief-derived-from-belief.
+
+#### Failure mode
+
+If the propagator errors (e.g., belief store temporarily unreachable), it **logs a warning and continues.** The upstream fact operation always succeeds — supersession of a fact must not be blocked by belief bookkeeping. Errors are surfaced in `BeliefPropagationStats.errors` for observability.
+
+#### Worked example: retraction
+
+```
+Initial state:
+  fact F1: "User's manager is Alice" (conf=0.9)
+  belief B1: subject="user.reporting_chain"
+             content="User reports to Alice"
+             source_fact_ids=[F1]
+             confidence=0.9
+
+User retracts: "Actually that was wrong, Alice is in a different team"
+
+[ConflictResolver creates fact F2 contradicting F1, marks F1.confidence ↓ to 0.2,
+ then calls supersede_fact(F1.id, F2.id, now)]
+
+→ propagate_invalidation(F1.id, now) fires
+→ B1 lookup: source_fact_ids=[F1], single-source
+→ B1 retracted: valid_until = now
+
+Future recall:
+  belief_query("user.reporting_chain") → None (retracted)
+  belief_query("user.reporting_chain", as_of=yesterday) → B1 (still valid then)
+```
+
+Without B-3, B1 would still surface at confidence 0.9 — the agent would confidently assert a fact whose only source is now untrusted. Propagation closes that gap.
+
 ### Why this matters
 
 The Belief Network changes what the agent can do in three concrete ways:
 
 - **Queryable provenance.** The agent can answer "why do you believe X?" by walking back to source facts. Beliefs aren't opaque — they cite their evidence.
 - **Conflict awareness.** Today the agent has no way to know it holds contradicting positions. After B-2, contradictions are first-class data the agent can read about itself.
-- **Foundation for trust gradients.** Phase B-3 will propagate confidence: when a source fact is retracted, dependent beliefs weaken. Phase B-4 will let recall return beliefs alongside facts, with category weight 1.5 (same as corrections — conservative until empirically validated). The agent's recall block becomes a mix of raw evidence and synthesized stance.
+- **Trust gradients that reflect reality.** After B-3, retracting evidence weakens dependent beliefs automatically — the agent's confidence about a topic tracks the evidence it actually has, not the evidence it had when first synthesized.
 
 ### What's not yet built
 
-- **B-3 — Confidence propagation.** When a source fact is contradicted or retracted, dependent beliefs lose confidence proportionally. Cascades capped at 3 hops to prevent runaway.
-- **B-4 — Recall integration.** Beliefs surface alongside facts in recall results, with their own category weight.
+- **B-4 — Recall integration.** Beliefs surface alongside facts in recall results, with category weight 1.5 (conservative until empirically validated).
 - **B-5 — /memory UI.** Beliefs list, detail drawer, contradiction badge + resolver, filters, subject browser.
 - **B-6 — /observatory UI.** Worker stats, contradiction activity feed, propagation chain visualizer.
 
@@ -410,7 +463,8 @@ Two files *can* own every knob. Both are optional — missing keys, missing file
         "enabled": false,
         "intervalHours": 24,
         "neighborhoodPrefixDepth": 1,
-        "contradictionBudgetPerCycle": 20
+        "contradictionBudgetPerCycle": 20,
+        "factConfidenceDropThreshold": 0.3
       },
 
       "mmr": {
@@ -446,7 +500,7 @@ What each block does:
 | `correctionsAbstractorIntervalHours` | `24` | Throttle for the CorrectionsAbstractor sleep job (distills 3+ similar corrections into a `schema` fragment). Set `0` to run every cycle. |
 | `conflictResolverIntervalHours` | `24` | Throttle for the ConflictResolver sleep job (LLM-judges contradicting `schema` fragments, marks loser `superseded_by`). Set `0` to run every cycle. |
 | `queryGate` | disabled | **Self-RAG retrieval gate.** Small LLM call before hybrid search that returns `Skip` (no recall needed), `Direct(reformulated_query)`, or `Split([sub1, sub2, ...])`. Fixes multi-topic query dilution. Failure-safe — any LLM error falls back to using the raw input. Adds ~200-800ms per recall when enabled. |
-| `beliefNetwork` | disabled | **Belief synthesis (B-1) + contradiction detection (B-2).** Two sleep-time workers gated on a single flag. **B-1** aggregates facts by subject into a belief; single-fact subjects short-circuit (no LLM); multi-fact subjects invoke the synthesizer LLM. **B-2** examines pairs of beliefs within subject-prefix topical neighborhoods and runs an LLM judge per pair, classifying each as `logical_contradiction` / `tension` / `compatible` / `duplicate`. Sub-fields: `intervalHours` throttles both workers (set `0` for every cycle); `neighborhoodPrefixDepth` (default `1`) controls neighborhood granularity (1 = first dot-component, e.g. `user.*`; 2 = `user.dietary.*`); `contradictionBudgetPerCycle` (default `20`) caps the detector's LLM calls per cycle, processed largest-neighborhood first. Queryable via `memory(action="belief", subject=...)` and `memory(action="contradictions", belief_id=...)`. Recall integration (beliefs surfacing alongside facts) lands in B-4. |
+| `beliefNetwork` | disabled | **Belief synthesis (B-1) + contradiction detection (B-2) + confidence propagation (B-3).** Three sleep-time / event-driven components gated on a single flag. **B-1** aggregates facts by subject; single-fact subjects short-circuit (no LLM); multi-fact subjects invoke the synthesizer LLM. **B-2** runs an LLM judge per pair within subject-prefix topical neighborhoods, classifying each as `logical_contradiction` / `tension` / `compatible` / `duplicate`. **B-3** propagates invalidations from facts to dependent beliefs inline at `ConflictResolver::supersede_fact` and at `DecayEngine` confidence drops — sole-source beliefs are retracted, multi-source beliefs are marked stale for re-synthesis. Sub-fields: `intervalHours` (default `24`) throttles synthesizer + detector cycles; `neighborhoodPrefixDepth` (default `1`) controls B-2 granularity; `contradictionBudgetPerCycle` (default `20`) caps B-2's LLM calls per cycle; `factConfidenceDropThreshold` (default `0.3`) controls when B-3's decay-driven propagation fires (either confidence crossed below the floor or a single-cycle drop exceeded the value). Queryable via `memory(action="belief", subject=...)` and `memory(action="contradictions", belief_id=...)`. Recall integration (beliefs surfacing alongside facts) lands in B-4. |
 | `mmr` | enabled | **Maximal Marginal Relevance** diversity reranking. `lambda` balances relevance vs diversity (1.0 = pure relevance, 0.0 = pure diversity). `candidate_pool` is the over-fetch size before MMR selection. |
 | `rerank` | disabled | **Cross-encoder reranker** via `fastembed-rs`. Loads a local reranker model (default BGE-reranker-base, ~280MB). Higher quality top-K than MMR alone; adds latency and disk. |
 | `intentRouter` | disabled | **kNN-based intent classifier** that picks per-intent category-weight profiles. `k` = nearest neighbours considered; `confidence_threshold` = minimum to apply a profile. When disabled, default category weights are used universally. |

@@ -1032,7 +1032,8 @@ belief B: "User works at OpenAI"
             </tr>
           </tbody>
         </table>
-        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong>Budget cap</strong> per cycle (default 20 LLM calls). Pairs are processed largest-neighborhood first. Already-evaluated pairs skip. Phases B-3 (propagation), B-4 (recall integration), B-5/B-6 (UI) build on top.</p>
+        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong>Budget cap</strong> per cycle (default 20 LLM calls). Pairs are processed largest-neighborhood first. Already-evaluated pairs skip.</p>
+        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">B-3 propagation</strong> closes the loop: when a fact is superseded or decays below <span class="mono">factConfidenceDropThreshold</span> (default 0.3), dependent beliefs respond inline — sole-source beliefs retract; multi-source mark stale + re-synthesize next cycle. Event-driven, not polling. Phases B-4 (recall integration), B-5/B-6 (UI) build on top.</p>
       </div>
     </div>
   </section>
@@ -1492,7 +1493,7 @@ belief B: "User works at OpenAI"
       "<span class="k">conflictResolverIntervalHours</span>": 24,
 
       "<span class="k">queryGate</span>": { "enabled": false },
-      "<span class="k">beliefNetwork</span>": { "enabled": false, "intervalHours": 24, "neighborhoodPrefixDepth": 1, "contradictionBudgetPerCycle": 20 },
+      "<span class="k">beliefNetwork</span>": { "enabled": false, "intervalHours": 24, "neighborhoodPrefixDepth": 1, "contradictionBudgetPerCycle": 20, "factConfidenceDropThreshold": 0.3 },
       "<span class="k">mmr</span>": { "enabled": true, "lambda": 0.6 },
       "<span class="k">rerank</span>": { "enabled": false },
       "<span class="k">intentRouter</span>": { "enabled": false }
@@ -1517,7 +1518,7 @@ belief B: "User works at OpenAI"
             </tr>
             <tr style="border-bottom:1px solid #1c2535">
               <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">beliefNetwork</td>
-              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Belief synthesis (B-1) + contradiction detection (B-2). Single-fact short-circuit. <span class="mono">neighborhoodPrefixDepth</span> controls topical scoping; <span class="mono">contradictionBudgetPerCycle</span> caps LLM calls.</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Belief synthesis (B-1) + contradiction detection (B-2) + confidence propagation (B-3). <span class="mono">factConfidenceDropThreshold</span> controls when fact-decay fires belief invalidation. Sole-source beliefs retract; multi-source mark stale + re-synthesize.</td>
             </tr>
             <tr style="border-bottom:1px solid #1c2535">
               <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">mmr</td>
