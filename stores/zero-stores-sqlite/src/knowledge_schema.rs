@@ -514,7 +514,15 @@ CREATE TABLE IF NOT EXISTS kg_beliefs (
 );
 CREATE INDEX IF NOT EXISTS idx_beliefs_partition_subject ON kg_beliefs(partition_id, subject);
 CREATE INDEX IF NOT EXISTS idx_beliefs_valid ON kg_beliefs(valid_from, valid_until);
-CREATE INDEX IF NOT EXISTS idx_beliefs_stale ON kg_beliefs(stale) WHERE stale = 1;
+-- NOTE: idx_beliefs_stale is intentionally NOT defined here.
+-- The `stale` column was added by v29 via `ensure_kg_beliefs_stale_column`,
+-- which runs AFTER this inline schema. On databases created before v29,
+-- the column doesn't exist when this batch executes — creating the
+-- partial index here would fail with "no such column: stale".
+-- The index is created in `V29_KG_BELIEFS_STALE_SQL` (migration file),
+-- which runs after the ensure-column helper. For fresh DBs the column
+-- exists (declared above) but the index still waits for the v29 step,
+-- which is idempotent via IF NOT EXISTS.
 
 -- v28: Belief Network — pair-wise contradictions between two beliefs.
 -- See migrations/v28_kg_belief_contradictions.sql for the canonical
@@ -1214,6 +1222,76 @@ mod tests {
     /// v29 belief-staleness migration is idempotent: the `stale` column
     /// is added once, and re-running the full init path is a no-op that
     /// preserves the column. Mirrors the v26 PRAGMA-guarded ALTER pattern.
+    /// Regression test for the daemon-startup crash on databases created
+    /// before v29: pre-v29 databases have a `kg_beliefs` table without a
+    /// `stale` column. If the inline `SCHEMA_SQL` tries to `CREATE INDEX
+    /// ON kg_beliefs(stale)` BEFORE `ensure_kg_beliefs_stale_column` runs
+    /// the ADD COLUMN guard, init crashes with `no such column: stale`.
+    ///
+    /// This test simulates a pre-v29 database (kg_beliefs without stale)
+    /// and then runs `initialize_knowledge_database`. It must succeed —
+    /// the ensure-column helper adds the column, then v29 SQL creates the
+    /// index. The fix is the absence of the stale-index line from inline
+    /// SCHEMA_SQL.
+    #[test]
+    fn initialize_succeeds_on_pre_v29_database_without_stale_column() {
+        let conn = Connection::open_in_memory().expect("open");
+
+        // Bootstrap minimum schema_version table + a pre-v29 kg_beliefs
+        // shape (no `stale`, no `embedding`).
+        conn.execute_batch(
+            "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+             CREATE TABLE kg_beliefs (
+                id TEXT PRIMARY KEY,
+                partition_id TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                content TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                valid_from TEXT,
+                valid_until TEXT,
+                source_fact_ids TEXT NOT NULL,
+                synthesizer_version INTEGER NOT NULL DEFAULT 1,
+                reasoning TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                superseded_by TEXT,
+                UNIQUE(partition_id, subject, valid_from)
+             );",
+        )
+        .expect("seed pre-v29 schema");
+
+        // Now run init — must NOT panic with `no such column: stale`.
+        initialize_knowledge_database(&conn).expect(
+            "init must succeed on a pre-v29 database; the inline schema must \
+             not reference the `stale` column in any CREATE INDEX statement, \
+             because the column is added later by ensure_kg_beliefs_stale_column",
+        );
+
+        // After init, stale + embedding must both exist on the existing table.
+        let mut stmt = conn.prepare("PRAGMA table_info(kg_beliefs)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(cols.contains(&"stale".to_string()), "stale column added");
+        assert!(
+            cols.contains(&"embedding".to_string()),
+            "embedding column added"
+        );
+
+        // And the partial stale index must exist.
+        let stale_index_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='index' AND name='idx_beliefs_stale'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query stale index");
+        assert_eq!(stale_index_count, 1, "idx_beliefs_stale must be created by v29 migration");
+    }
+
     #[test]
     fn v29_kg_beliefs_stale_migration_is_idempotent() {
         let conn = Connection::open_in_memory().expect("open");
