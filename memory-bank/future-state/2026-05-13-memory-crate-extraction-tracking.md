@@ -89,12 +89,17 @@ These are the *new* memory components built across the three phases. All live in
 
 ## 4. Settings Additions
 
-`gateway/gateway-services/src/settings.rs` gained a new `MemorySettings` struct nested inside `ExecutionSettings`:
+`gateway/gateway-services/src/settings.rs` gained a `MemorySettings` struct nested inside `ExecutionSettings`. It now exposes multiple recall-pipeline and sleep-cycle knobs:
 
 ```rust
 pub struct MemorySettings {
     pub corrections_abstractor_interval_hours: u32,  // default 24, Phase 2
     pub conflict_resolver_interval_hours: u32,       // default 24, Phase 3
+    pub query_gate: Option<QueryGateConfig>,          // Phase 5 (Self-RAG, opt-in)
+    pub mmr: Option<MmrConfig>,                       // MMR diversity rerank
+    pub rerank: Option<RerankConfig>,                 // cross-encoder rerank, opt-in
+    pub intent_router: Option<IntentRouterConfig>,    // kNN intent classifier
+    pub kg_decay: Option<KgDecayConfig>,              // Phase 4 foundation
 }
 ```
 
@@ -205,6 +210,25 @@ Listed in reverse-chronological order. All on branch `feat/parallel-delegation-a
 ### Phase A — Memory crate extraction begins (2026-05-13)
 - `a1e96a74` feat(gateway-memory): extract config types — Phase A of memory crate extraction
 
+### Phase 5 — Bi-Temporal Memory + Self-RAG Query Gate (2026-05-15)
+
+This phase completes the truth-interval model for facts/entities/relationships and adds an opt-in retrieval-gate ahead of hybrid search. Design doc: `memory-bank/future-state/2026-05-15-bitemporal-wiring-design.md`. Survey-borrow context: arxiv 2602.05665 (Yang et al., graph memory survey — Graphiti bi-temporal pattern) + arxiv 2603.07670 (Du, memory mechanisms survey — Self-RAG retrieval gate).
+
+**Recall pre-fix (prerequisite for bi-temporal):**
+- `25da415b` fix(memory): distinguish bi-temporal `valid_until` from supersession in recall (PR #142) — `apply_class_aware_penalty` now checks `superseded_by.is_some()` instead of `valid_until.is_some()`. Without this, populating `valid_until` for genuine time-bounded facts would silently penalize them as if superseded.
+
+**Bi-temporal wiring (4 PRs landed as separate phases):**
+- `6913ff3f` feat(memory): populate `valid_from` on fact creation (PR #143, Phase 1) — `save_fact` trait gained `valid_from: Option<DateTime<Utc>>` parameter, default `Utc::now()`. v25 migration backfills legacy rows: `UPDATE memory_facts SET valid_from = created_at WHERE valid_from IS NULL`.
+- `fca6abc8` feat(memory): point-in-time recall via `as_of` parameter (PR #144, Phase 2) — `recall_facts_prioritized` and `search_memory_facts_hybrid` (plus `_typed` variant) gained `as_of: Option<DateTime<Utc>>`. Default `None` = `Utc::now()`. Filter: `(valid_from IS NULL OR valid_from <= ?as_of) AND (valid_until IS NULL OR valid_until > ?as_of)`. Agent-callable `memory recall` tool exposes `as_of` as optional ISO-8601 param. Behavioral change: facts with past `valid_until` are now correctly excluded from default "now" queries.
+- `faf450fe` feat(memory): align `kg_relationships` with bi-temporal schema (PR #145, Phase 3) — added `valid_from` + `valid_until` to `kg_relationships`. v26 migration backfills from legacy `valid_at`/`invalidated_at`. Legacy columns kept (gradual deprecation). `kg/storage.rs::store_relationship` now mirrors `first_seen_at` into `valid_from`.
+- `5c9cb278` feat(memory): bi-temporal conflict transition semantics (PR #146, Phase 4) — `supersede_fact(old_id, new_id, transition_time)`. ConflictResolver passes `winner.created_at` so the loser's `valid_until` reflects when the world changed, not when the resolver ran. Continuous timeline, no gap, no overlap.
+
+**Self-RAG retrieval gate (open):**
+- PR #147 (feat/recall-self-rag-query-gate) — new `gateway/gateway-memory/src/recall/query_gate.rs` with `QueryGate` / `LlmQueryGate` / `RetrievalDecision::{Skip, Direct, Split}`. Wired into `MemoryRecall::recall` before hybrid search. Opt-in via `execution.memory.queryGate.enabled = true`. Failure-safe — any LLM error falls back to `Direct(raw_input)`. Goes through existing `MemoryLlmFactory`.
+
+**Recall double-boost fix (back-merged):**
+- `25da415b`'s sibling — PR #139 / cherry-pick #141 — removed `* 1.5` pre-boost on corrections in `recall_facts_prioritized` (corrections were getting 2.25× total instead of 1.5×, crowding out user-facts). Also bumped agent-callable memory tool recall default limit from 5 → 15.
+
 ### Phase 4 Foundation — KG Confidence Decay (2026-05-13)
 - `e3a606a4` feat(sleep): wire KG confidence decay into sleep worker
 - `8e7e22ee` feat(sleep): add decay_kg_confidence to DecayEngine
@@ -254,6 +278,7 @@ Each phase has a written plan that describes the *intent* of the change set. The
 - `docs/superpowers/plans/2026-05-12-recall-min-score-threshold.md`
 - `docs/superpowers/plans/2026-05-12-pattern-abstraction.md` *(Phase 2)*
 - `docs/superpowers/plans/2026-05-13-conflict-resolution.md` *(Phase 3)*
+- `memory-bank/future-state/2026-05-15-bitemporal-wiring-design.md` *(Phase 5 — bi-temporal wiring across all 4 sub-phases)*
 
 ---
 

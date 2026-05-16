@@ -874,9 +874,113 @@
     </div>
   </section>
 
-  <!-- ============= SLIDE 7 — RECALL: FINDING CANDIDATES ============= -->
+  <!-- ============= SLIDE 6 — BI-TEMPORAL MEMORY ============= -->
   <section class="slide">
-    <div class="slide-tag"><span class="accent">06</span> &nbsp;/&nbsp; recall — finding candidates</div>
+    <div class="slide-tag"><span class="accent">06</span> &nbsp;/&nbsp; bi-temporal memory</div>
+    <div class="detail-head" style="border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:30px;">
+      <span class="stamp">truth-intervals</span>
+      <h3>Every fact knows when it was true.</h3>
+    </div>
+    <div class="split">
+      <div>
+        <p class="caption">Every fragment and relationship records a <strong>truth-interval</strong>, not a single timestamp.</p>
+        <p class="caption"><span class="mono">valid_from</span> — when the fact became true in the world.<br><span class="mono">valid_until</span> — when it stopped being true (<span class="mono">NULL</span> = still true).</p>
+        <p class="caption">Distinct from <span class="mono">created_at</span> (when the row hit disk). The split lets the agent answer historical questions correctly when the world changes.</p>
+        <div class="config-note">
+          <strong style="color:var(--accent)">point-in-time recall:</strong><br>
+          <span class="mono">memory recall(query, as_of="2026-02-15")</span><br>
+          filters: <span class="mono">valid_from &le; as_of &lt; valid_until</span>
+        </div>
+        <p class="caption" style="margin-top:18px;font-size:13px;color:var(--ink-dim)">Default recall uses <span class="mono">Utc::now()</span> as the cutoff — so facts whose interval ended are correctly excluded from "what's true now" queries.</p>
+      </div>
+      <div>
+        <div class="config-note" style="margin-top:0">
+          <span style="color:var(--ink);font-weight:500">worked example · employment history</span>
+        </div>
+        <pre style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-dim);background:var(--bg-soft);border:1px solid var(--rule);border-radius:3px;padding:16px;margin-top:14px;line-height:1.65;white-space:pre-wrap"><span style="color:var(--accent)">2026-01-15</span>  user: "I work at Anthropic."
+  → fact A:  <span class="k">valid_from</span> = 2026-01-15
+              <span class="k">valid_until</span> = NULL
+
+<span style="color:var(--accent)">2026-04-01</span>  user: "I just joined OpenAI."
+  → fact B:  <span class="k">valid_from</span> = 2026-04-01
+              <span class="k">valid_until</span> = NULL
+
+<span style="color:var(--ink-faint)">[conflict-resolver runs]</span>
+  → fact A:  <span class="k">valid_until</span> = 2026-04-01
+              <span class="k">superseded_by</span> = B.id</pre>
+        <p class="caption" style="margin-top:18px;font-size:13px"><strong style="color:var(--accent)">The transition records when the world changed</strong> — not when the resolver happened to run. Loser's <span class="mono">valid_until</span> = winner's <span class="mono">created_at</span>. Continuous timeline, no gap, no overlap.</p>
+        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)">Months later: <em>"What was my role at Anthropic?"</em><br>→ recall with <span class="mono">as_of = 2026-02-15</span> → returns fact A. Currently? Returns nothing useful.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 7 — QUERY GATE (Self-RAG) ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">07</span> &nbsp;/&nbsp; the query gate (Self-RAG)</div>
+    <div class="detail-head" style="border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:30px;">
+      <span class="stamp">opt-in · before hybrid search</span>
+      <h3>Multi-topic queries get split before they dilute.</h3>
+    </div>
+    <div class="split">
+      <div>
+        <p class="caption">A small LLM call <strong>before</strong> the hybrid search returns one of three decisions:</p>
+        <table style="width:100%;border-collapse:collapse;margin-top:14px;font-family:'JetBrains Mono',monospace;font-size:11px">
+          <thead>
+            <tr style="border-bottom:1px solid var(--rule)">
+              <th style="text-align:left;padding:6px 10px 6px 0;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">DECISION</th>
+              <th style="text-align:left;padding:6px 0 6px 10px;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">WHAT RECALL DOES</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">Skip</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Small talk or self-contained. Hybrid search skipped. Corrections still always-inject.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">Direct(q)</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Clean single-topic query — possibly reformulated for clarity.</td>
+            </tr>
+            <tr>
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">Split([…])</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Multiple topics. Run hybrid search per subquery, dedup-merge results.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="caption" style="margin-top:18px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">Failure-safe.</strong> LLM error, timeout, or malformed JSON falls back to <span class="mono">Direct(raw_input)</span>. The gate never blocks recall.</p>
+        <div class="config-note" style="margin-top:18px">
+          opt-in: <span class="k">execution.memory.queryGate.enabled = true</span><br>
+          adds ~200-800ms when enabled
+        </div>
+      </div>
+      <div>
+        <div class="config-note" style="margin-top:0">
+          <span style="color:var(--ink);font-weight:500">worked example · noisy multi-topic query</span>
+        </div>
+        <pre style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-dim);background:var(--bg-soft);border:1px solid var(--rule);border-radius:3px;padding:16px;margin-top:14px;line-height:1.65;white-space:pre-wrap"><span style="color:var(--ink-faint)">user:</span> "I'm hosting dinner. Where do
+I live, what are my dietary
+restrictions, and which
+restaurants near me can
+accommodate everyone?"
+
+<span style="color:var(--ink-faint)">gate:</span> <span style="color:var(--accent)">Split([</span>
+  "user location address",
+  "user dietary restrictions allergies",
+  "saved restaurants near user location"
+<span style="color:var(--accent)">])</span>
+
+<span style="color:var(--ink-faint)">each subquery runs a focused
+hybrid search · results merge
+by fact_id · then MMR / rerank /
+intent routing as usual</span></pre>
+        <p class="caption" style="margin-top:18px;font-size:13px"><strong style="color:var(--accent)">Without the gate</strong>: single embedding dominated by "restaurants" — <span class="mono">user.location</span> (conf 1.0) gets crowded out at the embedding-similarity stage.</p>
+        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong>With the gate</strong>: each subquery has a clean semantic signal; <span class="mono">user.location</span> surfaces cleanly for the first subquery.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 8 — RECALL: FINDING CANDIDATES ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">08</span> &nbsp;/&nbsp; recall — finding candidates</div>
     <div class="stack-vert">
       <div class="svg-frame" data-label="query → embed → hybrid search → RRF blend">
         <svg viewBox="0 0 1100 280" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
@@ -949,7 +1053,7 @@
 
   <!-- ============= SLIDE 8 — RESCORE ============= -->
   <section class="slide">
-    <div class="slide-tag"><span class="accent">07</span> &nbsp;/&nbsp; rescore — adjusting the scores</div>
+    <div class="slide-tag"><span class="accent">09</span> &nbsp;/&nbsp; rescore — adjusting the scores</div>
     <div class="split">
       <div>
         <div class="svg-frame" data-label="rescore steps" style="padding:6px 0">
@@ -1015,7 +1119,7 @@
 
   <!-- ============= SLIDE 9 — GRAPH TRAVERSAL ============= -->
   <section class="slide">
-    <div class="slide-tag"><span class="accent">08</span> &nbsp;/&nbsp; graph traversal</div>
+    <div class="slide-tag"><span class="accent">10</span> &nbsp;/&nbsp; graph traversal</div>
     <div class="split">
       <div class="svg-frame" data-label="top-K → walk graph · 2 hops · decay 0.6">
         <svg viewBox="0 0 700 460" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
@@ -1124,7 +1228,7 @@
 
   <!-- ============= SLIDE 10 — SESSION LIFECYCLE ============= -->
   <section class="slide">
-    <div class="slide-tag"><span class="accent">09</span> &nbsp;/&nbsp; session lifecycle</div>
+    <div class="slide-tag"><span class="accent">11</span> &nbsp;/&nbsp; session lifecycle</div>
     <div class="stack-vert">
       <div class="svg-frame" data-label="memory wraps every session">
         <svg viewBox="0 0 1100 360" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
@@ -1208,7 +1312,7 @@
 
   <!-- ============= SLIDE 11 — BACKGROUND MAINTENANCE ============= -->
   <section class="slide">
-    <div class="slide-tag"><span class="accent">10</span> &nbsp;/&nbsp; background maintenance</div>
+    <div class="slide-tag"><span class="accent">12</span> &nbsp;/&nbsp; background maintenance</div>
     <div class="split">
       <div class="svg-frame" data-label="hourly worker · 8 components">
         <svg viewBox="0 0 580 460" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
@@ -1311,7 +1415,7 @@
 
   <!-- ============= SLIDE 12 — CONFIGURABILITY ============= -->
   <section class="slide">
-    <div class="slide-tag"><span class="accent">11</span> &nbsp;/&nbsp; configurability</div>
+    <div class="slide-tag"><span class="accent">13</span> &nbsp;/&nbsp; configurability</div>
     <div class="detail-head" style="border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:36px;">
       <span class="stamp">two files</span>
       <h3>Every knob exposed. Sane defaults.</h3>
@@ -1322,16 +1426,50 @@
           <span class="k">settings.json</span> → <span class="k">execution.memory</span><br>
           <span style="color:var(--ink);font-weight:500">background-job throttles</span>
         </div>
-        <pre style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--ink-dim);background:var(--bg-soft);border:1px solid var(--rule);border-radius:3px;padding:18px;margin-top:14px;line-height:1.6;white-space:pre-wrap">{
+        <pre style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-dim);background:var(--bg-soft);border:1px solid var(--rule);border-radius:3px;padding:16px;margin-top:14px;line-height:1.55;white-space:pre-wrap">{
   "execution": {
     "memory": {
       "<span class="k">correctionsAbstractorIntervalHours</span>": 24,
-      "<span class="k">conflictResolverIntervalHours</span>": 24
+      "<span class="k">conflictResolverIntervalHours</span>": 24,
+
+      "<span class="k">queryGate</span>": { "enabled": false },
+      "<span class="k">mmr</span>": { "enabled": true, "lambda": 0.6 },
+      "<span class="k">rerank</span>": { "enabled": false },
+      "<span class="k">intentRouter</span>": { "enabled": false }
     }
   }
 }</pre>
-        <p class="caption" style="margin-top:18px;font-size:14px">Set either to <span class="mono">0</span> to fire on every hourly cycle. Missing keys fall back to compiled defaults. A corrupted file logs a warning and uses defaults.</p>
-        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">Partial files deep-merge</strong> with defaults — user values win per key.</p>
+        <table style="width:100%;border-collapse:collapse;margin-top:14px;font-family:'JetBrains Mono',monospace;font-size:11px">
+          <thead>
+            <tr style="border-bottom:1px solid var(--rule)">
+              <th style="text-align:left;padding:6px 10px 6px 0;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">BLOCK</th>
+              <th style="text-align:left;padding:6px 0 6px 10px;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">WHAT IT DOES</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">throttles</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">CorrectionsAbstractor + ConflictResolver cadence. <span class="mono">0</span> = every cycle.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">queryGate</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Self-RAG. LLM call before hybrid search returns <span class="mono">Skip</span> / <span class="mono">Direct</span> / <span class="mono">Split</span>. Fixes multi-topic dilution.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">mmr</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Maximal Marginal Relevance diversity rerank. <span class="mono">lambda</span> trades relevance vs diversity.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">rerank</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Cross-encoder reranker (BGE) via fastembed-rs. Higher quality, adds latency + ~280MB on disk.</td>
+            </tr>
+            <tr>
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">intentRouter</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">kNN intent classifier picks per-intent category-weight profiles.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">Partial files deep-merge</strong> with defaults — user values win per key. Missing blocks fall through to compiled defaults.</p>
       </div>
       <div>
         <div class="config-note" style="margin-top:0">
@@ -1405,7 +1543,7 @@
 
   <!-- ============= SLIDE 13 — THE CLOSED LOOP ============= -->
   <section class="slide">
-    <div class="slide-tag"><span class="accent">12</span> &nbsp;/&nbsp; the closed loop</div>
+    <div class="slide-tag"><span class="accent">14</span> &nbsp;/&nbsp; the closed loop</div>
     <div class="split">
       <div class="svg-frame" data-label="correction → schema → conflict → retire">
         <svg viewBox="0 0 540 540" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">

@@ -90,9 +90,98 @@ Two SQLite databases own the physical layout, kept under the agent's data direct
 
 **`conversations.db`** is the daily log: chat history, separate file, separate concerns. The memory subsystem never touches it directly — it goes through the `ConversationStore` trait, which decouples memory from any specific chat backend.
 
+## Bi-temporal memory
+
+Every fragment and every relationship records a **truth-interval**, not a single timestamp. Two columns answer different questions:
+
+- `valid_from` — when the fact became true **in the world**
+- `valid_until` — when the fact stopped being true in the world (`NULL` = still true)
+
+This is separate from `created_at` (when the row was written to the database). The distinction matters when the world changes and the agent has to keep history straight.
+
+### Worked example: employment history
+
+Imagine a user tells the agent about their job over time:
+
+```
+2026-01-15  User: "I work at Anthropic."
+            → Fact A written:  content = "User works at Anthropic"
+                                valid_from = 2026-01-15  valid_until = NULL
+
+2026-04-01  User: "I just started a new role at OpenAI."
+            → Fact B written:  content = "User works at OpenAI"
+                                valid_from = 2026-04-01  valid_until = NULL
+```
+
+Two facts, both currently appearing valid. The ConflictResolver sleep job notices the contradiction, judges B as the winner (more recent, higher confidence), and records the transition:
+
+```
+            → Fact A updated:   valid_until = 2026-04-01  (= B.created_at)
+                                superseded_by = B.id
+```
+
+`valid_until` is set to **when B was first recorded** — the moment the system learned the world had changed — not when the resolver happened to run. That preserves a continuous timeline with no gap and no overlap.
+
+### Point-in-time recall
+
+Months later the user asks: *"What was my role at Anthropic again?"*
+
+The recall pass runs with `as_of = some_date_in_february_2026`. The SQL filter becomes:
+
+```sql
+WHERE valid_from <= ?as_of AND (valid_until IS NULL OR valid_until > ?as_of)
+```
+
+Fact A passes (`2026-01-15 <= 2026-02-15 < 2026-04-01`). Fact B doesn't (`2026-04-01 > 2026-02-15`). The agent answers from A. Without bi-temporal modeling this query would have either returned both facts (confusing) or just B (wrong).
+
+The agent-callable `memory` tool exposes `as_of` as an optional ISO-8601 parameter. When omitted, the filter uses `Utc::now()` — so default recall correctly excludes facts whose interval has ended.
+
+### Why it matters operationally
+
+- **Conflict resolution preserves history.** Superseded facts are filtered from default recall (via `superseded_by`) but stay queryable with `as_of`.
+- **Decay and supersession are different concerns.** Supersession means "newer fact replaces this one"; truth-interval expiry means "the world moved on." The recall layer treats them separately.
+- **The graph schema is symmetric.** `memory_facts`, `kg_entities`, and `kg_relationships` all use the same `valid_from` / `valid_until` columns, so traversal can apply the same point-in-time filter to all three.
+
 ## Recall: finding candidates
 
 Recall is the first half of retrieval. Given a query (the user's message, or a synthetic query the bootstrap constructed), it returns a candidate set scored by raw relevance.
+
+### Optional pre-step: the query gate (Self-RAG)
+
+When `execution.memory.queryGate.enabled = true`, recall runs an extra LLM call **before** the hybrid search. The gate looks at the raw input and returns one of three decisions:
+
+| Decision | What recall does |
+|---|---|
+| `Skip` | The input is small talk or already self-contained. Skip hybrid search entirely. Corrections still always-inject — they don't go through this path. |
+| `Direct(query)` | The input is a clean single-topic question. Use `query` as the retrieval query (possibly reformulated for clarity). |
+| `Split([q1, q2, q3])` | The input mixes multiple topics. Run hybrid search per subquery and dedup-merge the results. |
+
+### Worked example: a noisy multi-topic query
+
+User asks the agent:
+
+> *"I'm hosting dinner. Where do I live, what are my dietary restrictions, and which restaurants near me can accommodate everyone?"*
+
+Without the gate, a single embedding gets dominated by "restaurants" — the user's location and dietary facts both lose at the embedding-similarity stage because the query vector points mostly at "places to eat." The gate avoids this by splitting:
+
+```
+Input  → gate → Split([
+            "user location address",
+            "user dietary restrictions allergies",
+            "saved restaurants near user location"
+         ])
+
+Each subquery runs a focused hybrid search. The results get deduplicated
+by fact_id, then continue through MMR, rerank, intent routing, etc.
+```
+
+The `user.location` fact (confidence 1.0) cleanly surfaces for subquery #1, the dietary fact for subquery #2, the restaurant facts for subquery #3.
+
+### Failure mode
+
+The gate is **failure-safe**. Any LLM error, timeout, or malformed JSON response falls back to `Direct(raw_input)` — the system always retrieves something. The gate adds ~200-800ms when enabled (one fast LLM call). It's opt-in via settings; if you turn it off the recall path is byte-for-byte identical to the pre-gate behavior.
+
+### Default recall path
 
 1. **Embed the query.** The caller's embedding client turns the text into a vector. If no embedding client is wired, recall degrades gracefully to keyword-only.
 2. **Hybrid search.** `search_memory_facts_hybrid` runs two queries in parallel:
@@ -129,11 +218,13 @@ The steps run in order:
 
 2. **Contradiction penalty.** If the fragment's `contradicted_by` column is set, the score is multiplied by `contradiction_penalty = 0.7`. The fragment is still visible — recall just trusts it less.
 
-3. **Temporal decay (class-aware).** If `valid_until` is set, the fragment has been retired in time but not formally superseded. The multiplier depends on `epistemic_class`:
+3. **Supersession penalty (class-aware).** If `superseded_by` is set, the fragment has been formally replaced by a newer one. The multiplier depends on `epistemic_class`:
    - `current` → `0.1×` (the replacement is what matters now)
    - `archival` → `0.3×` (historical record; age isn't a defect, but supersession is meaningful)
    - `convention` / `procedural` → no penalty (rule-based, no temporal meaning)
    - unknown → conservative `0.3×`
+
+   Note this is distinct from bi-temporal expiry. A fragment whose `valid_until` is in the past (its truth-interval has ended in the world) is filtered out earlier — at the SQL layer — by the default point-in-time filter. Step 3 only fires when the fragment is still bi-temporally valid but a newer fact has overridden it.
 
 4. **Ward affinity boost.** If the candidate's ward matches the active ward, the score is multiplied by `ward_affinity_boost = 1.3`. This is what keeps a maritime-tracking conversation pulling maritime-tracking memory instead of bleeding across the agent's whole history.
 
@@ -186,22 +277,63 @@ The LLM-using jobs each have their own throttle so the hourly cycle doesn't burn
 
 ## Configurability
 
-Two files own every knob.
+Two files *can* own every knob. Both are optional — missing keys, missing files, and corrupted files all fall through to compiled defaults.
 
-**`settings.json` → `execution.memory`** controls the LLM-using background jobs' throttles:
+**`settings.json` → `execution.memory`** controls background-job throttles *and* opt-in recall-pipeline features. Every key is optional; missing keys fall through to compiled defaults.
 
 ```json
 {
   "execution": {
     "memory": {
       "correctionsAbstractorIntervalHours": 24,
-      "conflictResolverIntervalHours": 24
+      "conflictResolverIntervalHours": 24,
+
+      "queryGate": {
+        "enabled": false,
+        "maxSubqueries": 4,
+        "maxSubqueryLen": 200,
+        "timeoutMs": 3000
+      },
+
+      "mmr": {
+        "enabled": true,
+        "lambda": 0.6,
+        "candidate_pool": 30
+      },
+
+      "rerank": {
+        "enabled": false,
+        "model_id": "BAAI/bge-reranker-base",
+        "candidate_pool": 20,
+        "top_k_after": 10,
+        "score_threshold": 0.0
+      },
+
+      "intentRouter": {
+        "enabled": false,
+        "k": 5,
+        "confidence_threshold": 0.55
+      },
+
+      "kgDecay": null
     }
   }
 }
 ```
 
-Set either to `0` to run on every hourly cycle.
+What each block does:
+
+| Block | Default | What it does |
+|---|---|---|
+| `correctionsAbstractorIntervalHours` | `24` | Throttle for the CorrectionsAbstractor sleep job (distills 3+ similar corrections into a `schema` fragment). Set `0` to run every cycle. |
+| `conflictResolverIntervalHours` | `24` | Throttle for the ConflictResolver sleep job (LLM-judges contradicting `schema` fragments, marks loser `superseded_by`). Set `0` to run every cycle. |
+| `queryGate` | disabled | **Self-RAG retrieval gate.** Small LLM call before hybrid search that returns `Skip` (no recall needed), `Direct(reformulated_query)`, or `Split([sub1, sub2, ...])`. Fixes multi-topic query dilution. Failure-safe — any LLM error falls back to using the raw input. Adds ~200-800ms per recall when enabled. |
+| `mmr` | enabled | **Maximal Marginal Relevance** diversity reranking. `lambda` balances relevance vs diversity (1.0 = pure relevance, 0.0 = pure diversity). `candidate_pool` is the over-fetch size before MMR selection. |
+| `rerank` | disabled | **Cross-encoder reranker** via `fastembed-rs`. Loads a local reranker model (default BGE-reranker-base, ~280MB). Higher quality top-K than MMR alone; adds latency and disk. |
+| `intentRouter` | disabled | **kNN-based intent classifier** that picks per-intent category-weight profiles. `k` = nearest neighbours considered; `confidence_threshold` = minimum to apply a profile. When disabled, default category weights are used universally. |
+| `kgDecay` | `null` | Knowledge-graph decay tuning. `null` = compiled defaults. Override fields: `entityHalfLifeDays`, `relationshipHalfLifeDays`, `minConfidence`, `skipRecentHours`, `pruneMinAgeDays`, `pruneLimit`. |
+
+Set any interval to `0` to fire on every hourly cycle. Set any block's `enabled: false` to bypass it entirely. Partial blocks deep-merge with defaults — your values win per key, missing keys keep their default.
 
 **`config/recall_config.json`** controls the recall and rescore pipeline. Headline knobs:
 
@@ -254,9 +386,9 @@ One concrete trace, following a single correction through every stage of the sys
    ```
    The raw corrections aren't deleted. The schema (weight `1.6`) just outranks them (weight `1.5`).
 
-6. **A conflict appears.** Months later, a different schema fragment is written from a different conversation — *"Use Title Case for commit titles to match the project's existing convention."* The conflict-resolver cycle finds the pair by embedding cosine `≥ 0.85`, sends them to an LLM judge, picks the higher-confidence winner. The loser gets `superseded_by = winner.id`. From the next recall onward, the loser is filtered out entirely — not penalized, not visible.
+6. **A conflict appears.** Months later, a different schema fragment is written from a different conversation — *"Use Title Case for commit titles to match the project's existing convention."* The conflict-resolver cycle finds the pair by embedding cosine `≥ 0.85`, sends them to an LLM judge, picks the higher-confidence winner. The loser is marked with `superseded_by = winner.id` **and** `valid_until = winner.created_at` — recording both *which fact won* and *when the world changed*. From the next recall onward the loser is filtered out for "now" queries, but it stays queryable with a `valid_at` parameter pointing at any time before the transition. The historical record survives; current recall stays uncluttered.
 
-The reference book gets smaller, sharper, and more consistent with each cycle. Raw feedback becomes principles; principles get arbitrated against each other; stale principles disappear without anyone curating them by hand.
+The reference book gets smaller, sharper, and more consistent with each cycle. Raw feedback becomes principles; principles get arbitrated against each other; stale principles disappear from current recall without losing their place in history.
 
 ## Recap
 
