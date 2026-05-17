@@ -6,6 +6,7 @@
 //! consumed by `rrf_merge`.
 
 use crate::recall::scored_item::{ItemKind, Provenance, ScoredItem};
+use zero_stores::types::EntityId;
 use zero_stores_domain::{Belief, MemoryFact, Procedure, WikiArticle};
 
 /// Project a [`MemoryFact`] into a [`ScoredItem`].
@@ -65,6 +66,28 @@ pub fn belief_to_item(belief: &Belief, score: f64) -> ScoredItem {
             source_id: belief.id.clone(),
             session_id: None,
             ward_id: Some(belief.partition_id.clone()),
+        },
+    }
+}
+
+/// Project a hierarchical-memory path entity into a [`ScoredItem`]
+/// (Phase H-4 / LeanRAG LCA recall).
+///
+/// `score` is a layer-aware default the caller assigns; the recall
+/// pipeline multiplies it by the configured category weight before
+/// fusion. The content carries the layer + entity id so the consumer
+/// formatter can render the topical map without re-querying the DB.
+pub fn hier_entity_to_item(id: &EntityId, layer: i64, score: f64) -> ScoredItem {
+    ScoredItem {
+        kind: ItemKind::HierEntity,
+        id: id.0.clone(),
+        content: format!("[topic L{layer}] {}", id.0),
+        score,
+        provenance: Provenance {
+            source: "kg_entities.hier".to_string(),
+            source_id: id.0.clone(),
+            session_id: None,
+            ward_id: None,
         },
     }
 }

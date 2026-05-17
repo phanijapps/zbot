@@ -82,6 +82,9 @@ fn non_belief_tag(kind: &ItemKind) -> &'static str {
         // helper due to future refactoring, fall back to a sensible tag
         // rather than panicking — the heading already disambiguates.
         ItemKind::Belief => "belief",
+        // Hierarchy entities also have their own heading; fall back
+        // to a `topic` tag for forward compatibility.
+        ItemKind::HierEntity => "topic",
     }
 }
 

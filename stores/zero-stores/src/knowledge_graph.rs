@@ -460,6 +460,53 @@ pub trait KnowledgeGraphStore: Send + Sync {
     ) -> StoreResult<Vec<EntityWithEmbedding>> {
         Ok(Vec::new())
     }
+
+    /// Compute the Lowest Common Ancestor of a set of seed entities
+    /// in the hierarchical KG (Phase H-4 / LeanRAG).
+    ///
+    /// For each seed, walks `parent_cluster_id` upward until either
+    /// the path terminates (NULL parent at the top of the hierarchy)
+    /// or a fixed safety cap is reached. The LCA is the deepest entity
+    /// (highest `layer`) that appears in EVERY seed's ancestry chain.
+    ///
+    /// Returns:
+    /// - `lca`: the LCA entity id, or `None` if no common ancestor.
+    /// - `path_entities`: deduplicated set of all entities on every
+    ///   seed's path from itself up to (and including) the LCA. The
+    ///   seeds themselves are excluded — the recall pipeline already
+    ///   has them from the upstream graph-ANN step and we don't want
+    ///   to double-count.
+    /// - `max_layer`: layer of the LCA, or `0` when there's no LCA.
+    ///
+    /// Empty seed input yields an empty result. Single-seed input
+    /// yields `lca = Some(seed)` with an empty path (the seed is its
+    /// own LCA, and we exclude it). Layer-0 seeds with NULL parents
+    /// (hierarchy never built) yield `lca = None`.
+    ///
+    /// Default: empty. Backends that haven't implemented yet leave
+    /// recall byte-for-byte identical to pre-H-4 behaviour.
+    async fn compute_lca_path(
+        &self,
+        _agent_id: &str,
+        _seed_entity_ids: &[EntityId],
+    ) -> StoreResult<LcaPath> {
+        Ok(LcaPath::default())
+    }
+}
+
+/// Result of an LCA computation over a seed set (Phase H-4).
+///
+/// See [`KnowledgeGraphStore::compute_lca_path`].
+#[derive(Debug, Clone, Default)]
+pub struct LcaPath {
+    /// LCA entity id, or `None` when the seeds share no common ancestor.
+    pub lca: Option<EntityId>,
+    /// Union of every seed's ancestry chain up to (and including) the
+    /// LCA. Seeds themselves are excluded. Empty when `lca` is `None`.
+    /// Order is unspecified.
+    pub path_entities: Vec<EntityId>,
+    /// `layer` of the LCA, or `0` when there's no LCA.
+    pub max_layer: i64,
 }
 
 /// `(EntityId, name_embedding)` carrier for the layer-fetch API used

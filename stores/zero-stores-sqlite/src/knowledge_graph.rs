@@ -270,13 +270,14 @@ impl KnowledgeGraphStore for SqliteKgStore {
                 .search_entities_by_name_embedding(&query_embedding, top_k, &agent_id)
                 .map(|rows| {
                     rows.into_iter()
-                        .map(
-                            |(name, entity_type, distance)| zero_stores::EntityNameEmbeddingHit {
+                        .map(|(id, name, entity_type, distance)| {
+                            zero_stores::EntityNameEmbeddingHit {
+                                id,
                                 name,
                                 entity_type,
                                 distance,
-                            },
-                        )
+                            }
+                        })
                         .collect()
                 })
                 .map_err(map_graph_err)
@@ -606,6 +607,27 @@ impl KnowledgeGraphStore for SqliteKgStore {
                             embedding,
                         })
                         .collect()
+                })
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
+    async fn compute_lca_path(
+        &self,
+        agent_id: &str,
+        seed_entity_ids: &[zero_stores::types::EntityId],
+    ) -> StoreResult<zero_stores::LcaPath> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        let seeds: Vec<String> = seed_entity_ids.iter().map(|e| e.0.clone()).collect();
+        block(move || {
+            storage
+                .compute_lca_path(&agent_id, &seeds)
+                .map(|(lca, path, max_layer)| zero_stores::LcaPath {
+                    lca: lca.map(zero_stores::types::EntityId),
+                    path_entities: path.into_iter().map(zero_stores::types::EntityId).collect(),
+                    max_layer,
                 })
                 .map_err(map_graph_err)
         })
