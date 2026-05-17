@@ -63,6 +63,34 @@ pub trait KnowledgeGraphStore: Send + Sync {
         limit: usize,
     ) -> StoreResult<Vec<TraversalHit>>;
 
+    /// MEM-001 Part B-2 — confidence-aware BFS traversal for recall.
+    ///
+    /// Walks `kg_relationships` outward from `seed` up to `max_hops`,
+    /// skipping edges whose `confidence` is below `min_edge_confidence`
+    /// (so contradicted / decayed edges don't pollute recall). Returns
+    /// the data recall needs to compute the final score itself —
+    /// keeping the SQL focused on filtering + projection, not weighting.
+    ///
+    /// `min_edge_confidence` is applied to each edge along the path,
+    /// not just the final hop. `edge_confidence_product` is the product
+    /// of every edge's confidence along the shortest path from the
+    /// seed; recall multiplies it by `hop_decay^hop` and the target's
+    /// `entity_confidence`.
+    ///
+    /// Default: empty so backends that haven't implemented yet skip
+    /// the traversal step silently — the recall pipeline already
+    /// surfaces graph-ANN hits in step 4.
+    async fn traverse_weighted(
+        &self,
+        _seed: &EntityId,
+        _agent_id: &str,
+        _max_hops: usize,
+        _min_edge_confidence: f64,
+        _limit: usize,
+    ) -> StoreResult<Vec<WeightedTraversalHit>> {
+        Ok(Vec::new())
+    }
+
     async fn search_entities_by_name(
         &self,
         agent_id: &str,
@@ -623,4 +651,32 @@ pub struct EntityWithEmbedding {
 pub struct KgNodesForEpisodes {
     pub entity_ids: Vec<EntityId>,
     pub relationship_ids: Vec<RelationshipId>,
+}
+
+/// Carrier for `traverse_weighted` (MEM-001 Part B-2). One per
+/// reachable entity at the shortest hop-distance from the seed.
+///
+/// The store does the filtering + projection (min_edge_confidence,
+/// cycle detection, shortest-hop dedup) and returns enough data for
+/// recall to compute the final score without baking decay math into
+/// SQL: `score = seed_score * hop_decay^hop * edge_confidence_product *
+/// entity_confidence`. Keeping the math out of SQL means recall can
+/// tune `hop_decay` per-call without invalidating prepared statements.
+#[derive(Debug, Clone)]
+pub struct WeightedTraversalHit {
+    pub entity_id: EntityId,
+    pub name: String,
+    pub entity_type: String,
+    /// Shortest hop distance from the seed (1 = direct neighbour).
+    pub hop: usize,
+    /// Comma-separated relationship-type chain from seed to this hit.
+    /// Same shape as `TraversalHit.path`.
+    pub path: String,
+    /// `kg_entities.confidence` at this hit.
+    pub entity_confidence: f64,
+    /// Product of `kg_relationships.confidence` along the shortest
+    /// path from the seed (between 0 and 1 for well-behaved data).
+    /// Empty path (hop = 0) would be 1.0 but the seed itself is
+    /// excluded by the trait method.
+    pub edge_confidence_product: f64,
 }

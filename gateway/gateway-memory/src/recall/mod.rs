@@ -460,6 +460,91 @@ impl MemoryRecall {
                 _ => (Vec::new(), Vec::new()),
             };
 
+        // 4b. Confidence-weighted graph traversal from top seeds
+        // (MEM-001 Part B-2). For each top-3 graph-ANN seed, walk
+        // `kg_relationships` outward up to `max_hops`, skipping edges
+        // below `min_kg_confidence`. Score each hit as
+        //   hop_decay^hop * edge_confidence_product * entity_confidence
+        // Dedupe by entity_id (best score wins), exclude entities
+        // already surfaced as seeds, cap at `max_graph_facts`. Disabled
+        // when `graph_traversal.enabled = false` or `max_hops = 0`.
+        let traversal_max_hops = self.config.graph_traversal.max_hops as usize;
+        let traversal_hop_decay = self.config.graph_traversal.hop_decay;
+        let traversal_cap = self.config.graph_traversal.max_graph_facts;
+        let traversal_enabled =
+            self.config.graph_traversal.enabled && traversal_max_hops > 0 && traversal_cap > 0;
+
+        let traversal_items: Vec<ScoredItem> = if traversal_enabled {
+            match self.kg_store.as_ref() {
+                Some(store) if !graph_seed_ids.is_empty() => {
+                    let already_surfaced: std::collections::HashSet<String> =
+                        graph_seed_ids.iter().map(|e| e.0.clone()).collect();
+                    // Bound traversal cost: walk from the top-3 seeds
+                    // only. Beyond that the marginal value drops fast.
+                    let mut best_by_id: std::collections::HashMap<String, ScoredItem> =
+                        std::collections::HashMap::new();
+                    for seed in graph_seed_ids.iter().take(3) {
+                        let hits = store
+                            .traverse_weighted(
+                                seed,
+                                agent_id,
+                                traversal_max_hops,
+                                min_kg_conf,
+                                traversal_cap.saturating_mul(2),
+                            )
+                            .await
+                            .unwrap_or_default();
+                        for h in hits {
+                            if already_surfaced.contains(&h.entity_id.0) {
+                                continue;
+                            }
+                            let score = traversal_hop_decay.powi(h.hop as i32)
+                                * h.edge_confidence_product
+                                * h.entity_confidence;
+                            let item = ScoredItem {
+                                kind: ItemKind::GraphNode,
+                                id: format!("graph:{}", h.name),
+                                content: format!(
+                                    "Entity: {} [{}] (hop {}, edge ~ {:.2}, conf ~ {:.2})",
+                                    h.name,
+                                    h.entity_type,
+                                    h.hop,
+                                    h.edge_confidence_product,
+                                    h.entity_confidence
+                                ),
+                                score,
+                                provenance: Provenance {
+                                    source: "kg_traversal".to_string(),
+                                    source_id: h.name,
+                                    session_id: None,
+                                    ward_id: None,
+                                },
+                            };
+                            best_by_id
+                                .entry(h.entity_id.0)
+                                .and_modify(|prev| {
+                                    if item.score > prev.score {
+                                        *prev = item.clone();
+                                    }
+                                })
+                                .or_insert(item);
+                        }
+                    }
+                    let mut out: Vec<ScoredItem> = best_by_id.into_values().collect();
+                    out.sort_by(|a, b| {
+                        b.score
+                            .partial_cmp(&a.score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    out.truncate(traversal_cap);
+                    out
+                }
+                _ => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+
         // 5a. Previous episodes in this ward (chain continuity).
         let episode_items: Vec<ScoredItem> = match (self.episode_store.as_ref(), ward_id) {
             (Some(store), Some(wid)) => {
@@ -593,6 +678,7 @@ impl MemoryRecall {
             wiki_items,
             procedure_items,
             graph_items,
+            traversal_items,
             episode_items,
             belief_items,
             hier_items,
