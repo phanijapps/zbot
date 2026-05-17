@@ -962,6 +962,38 @@ impl AppState {
                             .contradiction_budget_per_cycle,
                         belief_fact_confidence_drop_threshold: belief_network_cfg
                             .fact_confidence_drop_threshold,
+                        // Phase H-3: hierarchical memory. Reads
+                        // execution.memory.hierarchy from settings; falls
+                        // back to a disabled HierarchySettings::default()
+                        // when settings aren't available so the daemon
+                        // boots cleanly even with a partial config.
+                        hierarchy_enabled: settings
+                            .get_execution_settings()
+                            .map(|s| s.memory.hierarchy.enabled)
+                            .unwrap_or(false),
+                        hierarchy_interval: std::time::Duration::from_secs(
+                            settings
+                                .get_execution_settings()
+                                .map(|s| s.memory.hierarchy.interval_hours)
+                                .unwrap_or(24) as u64
+                                * 3600,
+                        ),
+                        hierarchy_max_layers: settings
+                            .get_execution_settings()
+                            .map(|s| s.memory.hierarchy.max_layers)
+                            .unwrap_or(4),
+                        hierarchy_cluster_target_size: settings
+                            .get_execution_settings()
+                            .map(|s| s.memory.hierarchy.cluster_target_size)
+                            .unwrap_or(20),
+                        hierarchy_inter_cluster_relation_threshold: settings
+                            .get_execution_settings()
+                            .map(|s| s.memory.hierarchy.inter_cluster_relation_threshold)
+                            .unwrap_or(3),
+                        hierarchy_llm_budget_per_cycle: settings
+                            .get_execution_settings()
+                            .map(|s| s.memory.hierarchy.llm_budget_per_cycle)
+                            .unwrap_or(50),
                     });
                 (
                     Some(memory_services.sleep_time_worker.clone()),

@@ -68,6 +68,25 @@ pub struct MemoryServicesConfig {
     /// the belief propagator. Mirrors
     /// `BeliefNetworkConfig.fact_confidence_drop_threshold`.
     pub belief_fact_confidence_drop_threshold: f64,
+
+    // ---- Phase H-3 (Hierarchical Memory) --------------------------------
+    /// Master switch. When `false`, `SleepOps.hierarchy_builder` is set
+    /// to `None` and the cycle is byte-for-byte unchanged.
+    pub hierarchy_enabled: bool,
+    /// Minimum time between hierarchy cycles. Maps from
+    /// `HierarchySettings.interval_hours`.
+    pub hierarchy_interval: Duration,
+    /// Hard cap on layers per cycle. Maps from `HierarchySettings.max_layers`.
+    pub hierarchy_max_layers: u32,
+    /// Target K-means cluster size. Maps from
+    /// `HierarchySettings.cluster_target_size`.
+    pub hierarchy_cluster_target_size: usize,
+    /// λ > τ gate for inter-cluster relation synthesis. Maps from
+    /// `HierarchySettings.inter_cluster_relation_threshold`.
+    pub hierarchy_inter_cluster_relation_threshold: usize,
+    /// Per-cycle LLM call cap. Maps from
+    /// `HierarchySettings.llm_budget_per_cycle`.
+    pub hierarchy_llm_budget_per_cycle: u32,
 }
 
 /// Bundle of ready-to-use memory subsystem handles.
@@ -111,6 +130,12 @@ impl MemoryServices {
             belief_contradiction_neighborhood_prefix_depth,
             belief_contradiction_budget_per_cycle,
             belief_fact_confidence_drop_threshold,
+            hierarchy_enabled,
+            hierarchy_interval,
+            hierarchy_max_layers,
+            hierarchy_cluster_target_size,
+            hierarchy_inter_cluster_relation_threshold,
+            hierarchy_llm_budget_per_cycle,
         } = config;
 
         let verifier: Option<Arc<dyn PairwiseVerifier>> =
@@ -227,6 +252,31 @@ impl MemoryServices {
 
         let belief_network_activity = Arc::new(RecentBeliefNetworkActivity::new());
 
+        // Phase H-3: HierarchyBuilder is constructed when the operator
+        // flips `execution.memory.hierarchy.enabled = true`. When off,
+        // we leave it as None and the sleep cycle is byte-for-byte
+        // unchanged. Same opt-in shape as the Belief Network.
+        let hierarchy_builder = if hierarchy_enabled {
+            let agg_llm = Arc::new(crate::sleep::llm_aggregate_entity::LlmAggregateEntity::new(
+                llm_factory.clone(),
+            ));
+            let hierarchy_cfg = crate::sleep::hierarchy_builder::HierarchyConfig {
+                cluster_target_size: hierarchy_cluster_target_size,
+                max_layers: hierarchy_max_layers,
+                inter_cluster_relation_threshold: hierarchy_inter_cluster_relation_threshold,
+                llm_budget_per_cycle: hierarchy_llm_budget_per_cycle,
+                ..crate::sleep::hierarchy_builder::HierarchyConfig::default()
+            };
+            Some(Arc::new(
+                crate::sleep::hierarchy_builder::HierarchyBuilder::new(kg_store.clone(), agg_llm)
+                    .with_embedding_client(embedding_client.clone())
+                    .with_config(hierarchy_cfg)
+                    .with_interval(hierarchy_interval),
+            ))
+        } else {
+            None
+        };
+
         let ops = SleepOps {
             synthesizer: Some(synthesizer),
             pattern_extractor: Some(pattern_extractor),
@@ -236,11 +286,7 @@ impl MemoryServices {
             belief_synthesizer,
             belief_contradiction_detector,
             belief_network_activity: Some(belief_network_activity.clone()),
-            // Phase H-3: HierarchyBuilder is constructed by a separate
-            // factory once we have settings.hierarchy.enabled wired into
-            // this services builder. Defaults to None so the existing
-            // cycle is unchanged.
-            hierarchy_builder: None,
+            hierarchy_builder,
         };
 
         let sleep_time_worker = Arc::new(SleepTimeWorker::start_with_ops(
