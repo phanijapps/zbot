@@ -383,22 +383,48 @@ impl HierarchyBuilder {
         members: &[EntityId],
         stats: &mut HierarchyStats,
     ) -> Result<EntityId, ()> {
-        // Singleton short-circuit — no LLM, no extra description, just
-        // promote the member by wrapping it under a new layer entry.
-        // We still need a name + description for the aggregate row,
-        // so we recycle the member's id-as-name (the H-3 v1 cut keeps
-        // singleton naming dumb; H-3e-v2 can fetch the real name).
+        // Singleton short-circuit — no LLM call, but still produce a
+        // readable name + description so the agent's recall surface
+        // shows e.g. `[topic L1] research agent` instead of the raw
+        // UUID. Falls back to the member id when the entity lookup
+        // returns nothing (defensive — we just clustered on this
+        // entity's embedding so it must exist).
         if members.len() == 1 {
-            let name = members[0].0.clone();
+            let display_name = match self.kg_store.get_entity(&members[0]).await {
+                Ok(Some(entity)) => entity.name,
+                _ => members[0].0.clone(),
+            };
+            let description = format!("Singleton aggregate of \"{display_name}\"");
+            // Embed the description so the singleton aggregate
+            // participates in higher-layer clustering — without this
+            // it has no `kg_name_index` row and the next layer's
+            // clustering can't see it. Same conservative fallback as
+            // the multi-member path: embed failures degrade to None
+            // rather than aborting promotion.
+            let embedding = match &self.embedding_client {
+                Some(client) => match client.embed(&[description.as_str()]).await {
+                    Ok(mut vs) if !vs.is_empty() => vs.pop(),
+                    Ok(_) => None,
+                    Err(e) => {
+                        warn!(
+                            agent_id,
+                            layer, error = %e,
+                            "hierarchy: singleton embed failed"
+                        );
+                        None
+                    }
+                },
+                None => None,
+            };
             let result = self
                 .kg_store
                 .promote_cluster_to_aggregate(
                     agent_id,
                     layer,
                     members,
-                    &name,
-                    "singleton aggregate (no LLM)",
-                    None,
+                    &display_name,
+                    &description,
+                    embedding,
                 )
                 .await;
             match result {
@@ -707,6 +733,92 @@ mod tests {
             stats.aggregates_created
         );
         assert_eq!(llm.synth_call_count(), stats.aggregates_created);
+    }
+
+    /// Singleton aggregates carry the member entity's `name`, not its
+    /// raw id — so the agent's recall surface shows e.g. "research
+    /// agent" instead of `entity_root_16f3503f-...`. Seeds two
+    /// entities with distinct human-readable names and forces k = n
+    /// so each entity ends up in its own (singleton) cluster.
+    #[tokio::test]
+    async fn singleton_aggregate_uses_member_display_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Arc::new(VaultPaths::new(dir.path().to_path_buf()));
+        std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
+        let db = Arc::new(KnowledgeDatabase::new(paths).unwrap());
+        let storage = Arc::new(GraphStorage::new(db.clone()).unwrap());
+
+        // Two entities with id != name. Place them on opposite poles
+        // so K-means trivially splits them when k = 2.
+        let seeds = [
+            ("uuid-aaaaaaa", "research-agent", 1.0_f32, 0.0_f32),
+            ("uuid-bbbbbbb", "planner-agent", -1.0_f32, 0.0_f32),
+        ];
+        for (id, name, dx, dy) in seeds.iter() {
+            let mut emb = vec![0.0_f32; 384];
+            emb[0] = *dx;
+            emb[1] = *dy;
+            let id = id.to_string();
+            let name = name.to_string();
+            db.with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         first_seen_at, last_seen_at, layer)
+                     VALUES (?1, 'agent-sg', 'Concept', ?2, ?2, ?2,
+                             datetime('now'), datetime('now'), 0)",
+                    rusqlite::params![id, name],
+                )?;
+                let emb_json = serde_json::to_string(&emb).unwrap();
+                conn.execute(
+                    "INSERT INTO kg_name_index (entity_id, name_embedding) VALUES (?1, ?2)",
+                    rusqlite::params![id, emb_json],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        }
+
+        let kg: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(storage));
+        let llm = MockLlm::new();
+        // target_size = 1 → k = n = 2 → both clusters are singletons.
+        let config = HierarchyConfig {
+            cluster_target_size: 1,
+            ..Default::default()
+        };
+        let builder = HierarchyBuilder::new(kg.clone(), llm.clone()).with_config(config);
+        let stats = builder.run_for_agent("agent-sg").await;
+
+        assert_eq!(stats.singletons_promoted, 2, "both clusters are singletons");
+        assert_eq!(stats.aggregates_created, 0, "no multi-member aggregates");
+        assert_eq!(
+            llm.synth_call_count(),
+            0,
+            "singleton path must not call the LLM"
+        );
+
+        // The aggregate rows at layer 1 must use the member's `name`,
+        // not its raw id, as their own `name`.
+        let layer1_names: Vec<String> = db
+            .with_connection(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT name FROM kg_entities WHERE layer = 1 AND agent_id = 'agent-sg'",
+                )?;
+                let names: Vec<String> = stmt
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .filter_map(Result::ok)
+                    .collect();
+                Ok(names)
+            })
+            .unwrap();
+        let mut sorted = layer1_names.clone();
+        sorted.sort();
+        assert_eq!(
+            sorted,
+            vec!["planner-agent".to_string(), "research-agent".to_string()],
+            "singleton aggregates must inherit the member's display name, \
+             not the raw uuid; got {layer1_names:?}"
+        );
     }
 
     #[tokio::test]
