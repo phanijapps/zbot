@@ -25,7 +25,8 @@
 //! reindex pass picks them up).
 
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 use agent_runtime::llm::EmbeddingClient;
@@ -159,6 +160,12 @@ pub struct HierarchyBuilder {
     llm: Arc<dyn AggregateEntityLlm>,
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
     config: HierarchyConfig,
+    /// Minimum time between cycles. `Duration::ZERO` (default) runs
+    /// the builder every time the sleep cycle invokes it — matches
+    /// the test-friendly shape of `BeliefSynthesizer`. The sleep-cycle
+    /// wrapper sets this from `HierarchySettings.interval_hours`.
+    interval: Duration,
+    last_run: Mutex<Option<Instant>>,
 }
 
 impl HierarchyBuilder {
@@ -168,6 +175,8 @@ impl HierarchyBuilder {
             llm,
             embedding_client: None,
             config: HierarchyConfig::default(),
+            interval: Duration::ZERO,
+            last_run: Mutex::new(None),
         }
     }
 
@@ -181,11 +190,43 @@ impl HierarchyBuilder {
         self
     }
 
+    /// Minimum time between successful cycles. `Duration::ZERO` runs
+    /// every tick (the test-friendly default). Production wiring
+    /// passes `Duration::from_secs(interval_hours * 3600)` from
+    /// `HierarchySettings.interval_hours`.
+    pub fn with_interval(mut self, interval: Duration) -> Self {
+        self.interval = interval;
+        self
+    }
+
+    /// Has enough time passed since the last successful cycle? Always
+    /// `true` when `interval == ZERO` (the test path).
+    fn throttle_allows_run(&self) -> bool {
+        if self.interval.is_zero() {
+            return true;
+        }
+        match *self.last_run.lock().unwrap() {
+            Some(last) => last.elapsed() >= self.interval,
+            None => true,
+        }
+    }
+
     /// Run one build cycle for a single agent. Returns stats; never
     /// errors — partial failures (LLM, write) are logged and counted
     /// in `stats.errors` so the daemon's hourly loop keeps moving.
+    /// Skipped (no DB / LLM cost) when the throttle interval hasn't
+    /// elapsed since the previous successful cycle.
     pub async fn run_for_agent(&self, agent_id: &str) -> HierarchyStats {
         let mut stats = HierarchyStats::default();
+        if !self.throttle_allows_run() {
+            debug!(agent_id, "hierarchy: throttled (interval not elapsed)");
+            return stats;
+        }
+        // Record the cycle start so subsequent calls within `interval`
+        // are skipped. Same shape as BeliefSynthesizer — timestamping
+        // any "we got past the throttle" entry, not just successful
+        // ones, prevents busy-looping on PoolTooSmall etc.
+        *self.last_run.lock().unwrap() = Some(Instant::now());
         let mut prev_sparsity: Option<f32> = None;
 
         for layer in 0..self.config.max_layers {
@@ -731,6 +772,34 @@ mod tests {
             stats.llm_calls <= 5,
             "must not exceed soft budget by more than the in-flight loop ({})",
             stats.llm_calls
+        );
+    }
+
+    #[tokio::test]
+    async fn nonzero_interval_throttles_second_call() {
+        let (kg, _dir) = build_store_with_layer_zero("agent-throttle", 10, 3);
+        let llm = MockLlm::new();
+        let config = HierarchyConfig {
+            cluster_target_size: 10,
+            ..Default::default()
+        };
+        let builder = HierarchyBuilder::new(kg, llm.clone())
+            .with_config(config)
+            .with_interval(Duration::from_secs(3600));
+
+        // First call runs.
+        let first = builder.run_for_agent("agent-throttle").await;
+        assert!(first.aggregates_created > 0, "first call must run");
+        let first_calls = llm.synth_call_count();
+
+        // Second call is throttled — same hour. No new LLM calls.
+        let second = builder.run_for_agent("agent-throttle").await;
+        assert_eq!(second.aggregates_created, 0, "second call throttled");
+        assert_eq!(second.layers_built, 0);
+        assert_eq!(
+            llm.synth_call_count(),
+            first_calls,
+            "LLM must not be invoked while throttled"
         );
     }
 

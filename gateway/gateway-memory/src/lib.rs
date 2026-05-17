@@ -384,6 +384,13 @@ pub struct MemorySettings {
     /// identical to pre-MMR behavior.
     #[serde(default)]
     pub mmr: MmrConfig,
+    /// Hierarchical-memory builder (Phase H-3). Opt-in (`enabled: false`
+    /// by default). When enabled, an extra sleep-time worker clusters
+    /// the current layer-N entities, synthesises layer-N+1 aggregates
+    /// via an LLM, and writes LeanRAG-style inter-cluster relations
+    /// between them. See `project_hierarchical_memory_plan.md`.
+    #[serde(default)]
+    pub hierarchy: HierarchySettings,
 }
 
 pub fn default_corrections_abstractor_interval_hours() -> u32 {
@@ -402,6 +409,71 @@ impl Default for MemorySettings {
             query_gate: QueryGateConfig::default(),
             belief_network: BeliefNetworkConfig::default(),
             mmr: MmrConfig::default(),
+            hierarchy: HierarchySettings::default(),
+        }
+    }
+}
+
+/// Hierarchical-memory configuration (Phase H-3). Toggled by a master
+/// `enabled` flag; when off, the sleep-time `HierarchyBuilder` is never
+/// constructed and the existing recall path is byte-for-byte unchanged.
+///
+/// All tuning knobs map 1:1 onto `sleep::hierarchy_builder::HierarchyConfig`
+/// fields — see that struct's docs for the per-knob semantics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HierarchySettings {
+    /// Master switch. Default: `false`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Minimum hours between cycles. Default: 24.
+    #[serde(default = "default_hierarchy_interval_hours")]
+    pub interval_hours: u32,
+    /// Hard cap on layers built per cycle. Default: 4.
+    #[serde(default = "default_hierarchy_max_layers")]
+    pub max_layers: u32,
+    /// Target K-means cluster size (k ≈ n / target). Default: 20.
+    #[serde(default = "default_hierarchy_cluster_target_size")]
+    pub cluster_target_size: usize,
+    /// Connectivity strength λ threshold above which inter-cluster
+    /// relations are synthesised. Default: 3.
+    #[serde(default = "default_inter_cluster_relation_threshold")]
+    pub inter_cluster_relation_threshold: usize,
+    /// Hard cap on LLM calls per cycle (sum of aggregate + relation
+    /// synthesis). Default: 50.
+    #[serde(default = "default_hierarchy_llm_budget")]
+    pub llm_budget_per_cycle: u32,
+}
+
+pub fn default_hierarchy_interval_hours() -> u32 {
+    24
+}
+
+pub fn default_hierarchy_max_layers() -> u32 {
+    4
+}
+
+pub fn default_hierarchy_cluster_target_size() -> usize {
+    20
+}
+
+pub fn default_inter_cluster_relation_threshold() -> usize {
+    3
+}
+
+pub fn default_hierarchy_llm_budget() -> u32 {
+    50
+}
+
+impl Default for HierarchySettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_hours: default_hierarchy_interval_hours(),
+            max_layers: default_hierarchy_max_layers(),
+            cluster_target_size: default_hierarchy_cluster_target_size(),
+            inter_cluster_relation_threshold: default_inter_cluster_relation_threshold(),
+            llm_budget_per_cycle: default_hierarchy_llm_budget(),
         }
     }
 }
@@ -1011,5 +1083,57 @@ mod tests {
         assert_eq!(m.query_gate.max_subquery_len, 200);
         assert_eq!(m.query_gate.timeout_ms, 3000);
         assert!(m.query_gate.model_id.is_none());
+    }
+
+    #[test]
+    fn hierarchy_settings_default_is_disabled() {
+        let cfg = HierarchySettings::default();
+        assert!(!cfg.enabled, "hierarchy must default to disabled");
+        assert_eq!(cfg.interval_hours, 24);
+        assert_eq!(cfg.max_layers, 4);
+        assert_eq!(cfg.cluster_target_size, 20);
+        assert_eq!(cfg.inter_cluster_relation_threshold, 3);
+        assert_eq!(cfg.llm_budget_per_cycle, 50);
+    }
+
+    #[test]
+    fn memory_settings_default_hierarchy_disabled() {
+        let m = MemorySettings::default();
+        assert!(!m.hierarchy.enabled);
+    }
+
+    #[test]
+    fn hierarchy_settings_deserialises_camel_case() {
+        let json = r#"{
+            "enabled": true,
+            "intervalHours": 12,
+            "maxLayers": 3,
+            "clusterTargetSize": 30,
+            "interClusterRelationThreshold": 5,
+            "llmBudgetPerCycle": 100
+        }"#;
+        let cfg: HierarchySettings = serde_json::from_str(json).unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.interval_hours, 12);
+        assert_eq!(cfg.max_layers, 3);
+        assert_eq!(cfg.cluster_target_size, 30);
+        assert_eq!(cfg.inter_cluster_relation_threshold, 5);
+        assert_eq!(cfg.llm_budget_per_cycle, 100);
+    }
+
+    #[test]
+    fn memory_settings_with_hierarchy_block_round_trips() {
+        let json = r#"{
+            "hierarchy": {
+                "enabled": true,
+                "maxLayers": 2
+            }
+        }"#;
+        let m: MemorySettings = serde_json::from_str(json).unwrap();
+        assert!(m.hierarchy.enabled);
+        assert_eq!(m.hierarchy.max_layers, 2);
+        // unspecified fields keep defaults
+        assert_eq!(m.hierarchy.interval_hours, 24);
+        assert_eq!(m.hierarchy.cluster_target_size, 20);
     }
 }

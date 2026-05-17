@@ -236,6 +236,11 @@ impl MemoryServices {
             belief_synthesizer,
             belief_contradiction_detector,
             belief_network_activity: Some(belief_network_activity.clone()),
+            // Phase H-3: HierarchyBuilder is constructed by a separate
+            // factory once we have settings.hierarchy.enabled wired into
+            // this services builder. Defaults to None so the existing
+            // cycle is unchanged.
+            hierarchy_builder: None,
         };
 
         let sleep_time_worker = Arc::new(SleepTimeWorker::start_with_ops(
