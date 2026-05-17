@@ -1,11 +1,11 @@
-//! Schema v30 for `knowledge.db`.
+//! Schema v31 for `knowledge.db`.
 //!
 //! All long-term memory + graph + vector indexes live here.
 //! Applied idempotently on daemon boot. No migrations — clean slate.
 
 use rusqlite::Connection;
 
-const SCHEMA_VERSION: i32 = 30;
+const SCHEMA_VERSION: i32 = 31;
 
 /// v23 delta: full-text search over `ward_wiki_articles` with sync triggers.
 const V23_WIKI_FTS_SQL: &str = include_str!("../migrations/v23_wiki_fts.sql");
@@ -66,6 +66,18 @@ const V29_KG_BELIEFS_STALE_SQL: &str = include_str!("../migrations/v29_kg_belief
 const V30_KG_BELIEFS_EMBEDDING_SQL: &str =
     include_str!("../migrations/v30_kg_beliefs_embedding.sql");
 
+/// v31 delta: hierarchical-memory columns on `kg_entities` and
+/// `kg_relationships`. Lays the groundwork for HiRAG/LeanRAG-style
+/// recursive aggregation of entities into higher-layer summary entities
+/// plus explicit inter-cluster relations. The `ALTER TABLE ADD COLUMN`
+/// operations are handled by the `ensure_*_hierarchy_columns` guards
+/// below (PRAGMA-probe pattern, mirroring v29/v30). The migration SQL
+/// file only carries the supporting indexes (`IF NOT EXISTS`). No
+/// backfill — every existing row is a valid layer-0 base node/edge.
+/// See `project_hierarchical_memory_plan.md` for the full design.
+const V31_KG_HIERARCHY_COLUMNS_SQL: &str =
+    include_str!("../migrations/v31_kg_hierarchy_columns.sql");
+
 /// Initialize the knowledge database schema (v30).
 ///
 /// Creates all tables and indexes if they don't exist. Records the
@@ -87,6 +99,9 @@ pub fn initialize_knowledge_database(conn: &Connection) -> Result<(), rusqlite::
     conn.execute_batch(V29_KG_BELIEFS_STALE_SQL)?;
     ensure_kg_beliefs_embedding_column(conn)?;
     conn.execute_batch(V30_KG_BELIEFS_EMBEDDING_SQL)?;
+    ensure_kg_entities_hierarchy_columns(conn)?;
+    ensure_kg_relationships_hierarchy_columns(conn)?;
+    conn.execute_batch(V31_KG_HIERARCHY_COLUMNS_SQL)?;
     conn.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?1, datetime('now'))",
         rusqlite::params![SCHEMA_VERSION],
@@ -165,6 +180,74 @@ fn ensure_kg_beliefs_embedding_column(conn: &Connection) -> Result<(), rusqlite:
     Ok(())
 }
 
+/// Ensure `kg_entities` carries the hierarchical-memory columns
+/// `layer` and `parent_cluster_id` introduced in schema v31.
+///
+/// `layer` defaults to `0` (every base-extracted entity is layer 0).
+/// `parent_cluster_id` is nullable and references `kg_entities.id` as a
+/// soft foreign key (not enforced — SQLite-friendly + the parent may
+/// itself be an aggregate entity in the same table). The future
+/// HierarchyBuilder sleep worker sets these when it produces layer-N+1
+/// aggregate entities from layer-N clusters.
+///
+/// Fresh databases get the columns via the inline `CREATE TABLE` body;
+/// this function is the idempotent ALTER guard for existing DBs.
+fn ensure_kg_entities_hierarchy_columns(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare("PRAGMA table_info(kg_entities)")?;
+    let existing: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .collect();
+    if !existing.iter().any(|name| name == "layer") {
+        conn.execute(
+            "ALTER TABLE kg_entities ADD COLUMN layer INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !existing.iter().any(|name| name == "parent_cluster_id") {
+        conn.execute(
+            "ALTER TABLE kg_entities ADD COLUMN parent_cluster_id TEXT",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// Ensure `kg_relationships` carries the hierarchical-memory columns
+/// `layer` and `is_inter_cluster` introduced in schema v31.
+///
+/// `layer` defaults to `0` (every base-extracted edge is at layer 0,
+/// matching its endpoints). `is_inter_cluster` defaults to `0` (false)
+/// — only relations produced by the HierarchyBuilder between aggregate
+/// entities at layer N+1 carry `is_inter_cluster = 1`. This is the
+/// LeanRAG load-bearing distinction: same-cluster relations at higher
+/// layers are derivative; inter-cluster relations are the new
+/// information the LLM synthesised when the connectivity strength λ
+/// between two clusters crossed the threshold τ.
+///
+/// Fresh databases get the columns via the inline `CREATE TABLE` body;
+/// this function is the idempotent ALTER guard for existing DBs.
+fn ensure_kg_relationships_hierarchy_columns(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare("PRAGMA table_info(kg_relationships)")?;
+    let existing: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .collect();
+    if !existing.iter().any(|name| name == "layer") {
+        conn.execute(
+            "ALTER TABLE kg_relationships ADD COLUMN layer INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !existing.iter().any(|name| name == "is_inter_cluster") {
+        conn.execute(
+            "ALTER TABLE kg_relationships ADD COLUMN is_inter_cluster INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
 /// Ensure `kg_relationships` carries the bi-temporal `valid_from` and
 /// `valid_until` columns introduced in schema v26.
 ///
@@ -224,7 +307,11 @@ CREATE TABLE IF NOT EXISTS kg_entities (
     invalidated_by TEXT,
     compressed_into TEXT,
     source_episode_ids TEXT,
-    evidence TEXT
+    evidence TEXT,
+    -- v31: hierarchical memory. layer=0 for base-extracted entities;
+    -- HierarchyBuilder sets layer>0 + parent_cluster_id for aggregates.
+    layer INTEGER NOT NULL DEFAULT 0,
+    parent_cluster_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_entities_normalized_hash
     ON kg_entities(agent_id, entity_type, normalized_hash);
@@ -256,6 +343,11 @@ CREATE TABLE IF NOT EXISTS kg_relationships (
     invalidated_by TEXT,
     source_episode_ids TEXT,
     evidence TEXT,
+    -- v31: hierarchical memory. layer=0 for base-extracted edges;
+    -- is_inter_cluster=1 marks edges synthesised between aggregate
+    -- entities at higher layers (LeanRAG inter-cluster relations).
+    layer INTEGER NOT NULL DEFAULT 0,
+    is_inter_cluster INTEGER NOT NULL DEFAULT 0,
     UNIQUE(source_entity_id, target_entity_id, relationship_type),
     FOREIGN KEY (source_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE,
     FOREIGN KEY (target_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE
@@ -823,7 +915,7 @@ mod tests {
         let version: i32 = conn
             .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 30);
+        assert_eq!(version, 31);
 
         // Regular tables.
         for table in [
@@ -1289,7 +1381,10 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("query stale index");
-        assert_eq!(stale_index_count, 1, "idx_beliefs_stale must be created by v29 migration");
+        assert_eq!(
+            stale_index_count, 1,
+            "idx_beliefs_stale must be created by v29 migration"
+        );
     }
 
     #[test]
@@ -1459,5 +1554,242 @@ mod tests {
             "writers must populate valid_from on creation"
         );
         assert!(vu.is_none(), "valid_until must stay NULL on creation");
+    }
+
+    /// v31 hierarchy-columns migration is idempotent on a fresh DB:
+    /// `kg_entities` gets `layer` + `parent_cluster_id`, `kg_relationships`
+    /// gets `layer` + `is_inter_cluster`, and all four indexes are present.
+    /// Re-running init does not duplicate any column.
+    #[test]
+    fn v31_kg_hierarchy_columns_migration_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        let entity_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(kg_entities)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert!(
+            entity_cols.contains(&"layer".to_string()),
+            "kg_entities must have layer column after init; got: {entity_cols:?}"
+        );
+        assert!(
+            entity_cols.contains(&"parent_cluster_id".to_string()),
+            "kg_entities must have parent_cluster_id column after init; got: {entity_cols:?}"
+        );
+
+        let rel_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(kg_relationships)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert!(
+            rel_cols.contains(&"layer".to_string()),
+            "kg_relationships must have layer column after init; got: {rel_cols:?}"
+        );
+        assert!(
+            rel_cols.contains(&"is_inter_cluster".to_string()),
+            "kg_relationships must have is_inter_cluster column after init; got: {rel_cols:?}"
+        );
+
+        // All four indexes must exist.
+        for index_name in [
+            "idx_kg_entities_layer",
+            "idx_kg_entities_parent_cluster",
+            "idx_kg_relationships_layer",
+            "idx_kg_relationships_inter_cluster",
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master \
+                     WHERE type='index' AND name=?1",
+                    rusqlite::params![index_name],
+                    |r| r.get(0),
+                )
+                .unwrap_or_else(|e| panic!("query index {index_name}: {e}"));
+            assert_eq!(count, 1, "{index_name} must exist after init");
+        }
+
+        // Re-running the full init path must not duplicate the columns.
+        initialize_knowledge_database(&conn).expect("re-init is idempotent");
+        ensure_kg_entities_hierarchy_columns(&conn).expect("rerun entity ALTER guard");
+        ensure_kg_relationships_hierarchy_columns(&conn).expect("rerun rel ALTER guard");
+        conn.execute_batch(V31_KG_HIERARCHY_COLUMNS_SQL)
+            .expect("rerun v31 migration SQL");
+
+        let layer_count = conn
+            .prepare("PRAGMA table_info(kg_entities)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|name| name == "layer")
+            .count();
+        assert_eq!(
+            layer_count, 1,
+            "kg_entities.layer must be present exactly once after re-init"
+        );
+    }
+
+    /// v31 defaults: existing rows inserted without specifying the new
+    /// columns get `layer = 0`, `parent_cluster_id = NULL`,
+    /// `is_inter_cluster = 0`. This is the "no behaviour change" guarantee
+    /// — every existing entity is a valid layer-0 base node, every existing
+    /// relationship is a valid layer-0 base edge.
+    #[test]
+    fn v31_defaults_match_no_op_semantics_for_existing_rows() {
+        let conn = Connection::open_in_memory().expect("open");
+        initialize_knowledge_database(&conn).expect("init");
+
+        // Insert a minimal entity without setting the new columns.
+        conn.execute(
+            "INSERT INTO kg_entities
+                (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                 first_seen_at, last_seen_at)
+             VALUES ('e1', 'agent', 'Concept', 'thing', 'thing', 'h1',
+                     datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("insert entity");
+
+        let (layer, parent): (i64, Option<String>) = conn
+            .query_row(
+                "SELECT layer, parent_cluster_id FROM kg_entities WHERE id = 'e1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("read entity");
+        assert_eq!(layer, 0, "layer must default to 0");
+        assert!(parent.is_none(), "parent_cluster_id must default to NULL");
+
+        // Insert a partner entity + a relationship without the new columns.
+        conn.execute(
+            "INSERT INTO kg_entities
+                (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                 first_seen_at, last_seen_at)
+             VALUES ('e2', 'agent', 'Concept', 'other', 'other', 'h2',
+                     datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("insert partner entity");
+        conn.execute(
+            "INSERT INTO kg_relationships
+                (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                 first_seen_at, last_seen_at)
+             VALUES ('r1', 'agent', 'e1', 'e2', 'relates_to',
+                     datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("insert relationship");
+
+        let (rel_layer, is_inter): (i64, i64) = conn
+            .query_row(
+                "SELECT layer, is_inter_cluster FROM kg_relationships WHERE id = 'r1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("read relationship");
+        assert_eq!(rel_layer, 0, "layer must default to 0");
+        assert_eq!(is_inter, 0, "is_inter_cluster must default to 0");
+    }
+
+    /// Regression test for daemon-startup safety on a pre-v31 database.
+    /// Simulates a kg_entities / kg_relationships shape without the v31
+    /// hierarchy columns and verifies that `initialize_knowledge_database`
+    /// adds them via the `ensure_*_hierarchy_columns` ALTER guards.
+    ///
+    /// Note: the v31 migration SQL only carries the supporting indexes
+    /// — none of them reference the new columns in a way that fails
+    /// before the ALTER (the partial indexes use the columns but the
+    /// ALTER runs first), so this is mainly a structural assertion.
+    #[test]
+    fn initialize_succeeds_on_pre_v31_database_without_hierarchy_columns() {
+        let conn = Connection::open_in_memory().expect("open");
+
+        // Seed a pre-v31 shape of kg_entities + kg_relationships. The
+        // seed must include every column referenced by existing
+        // indexes (last_accessed_at, epistemic_class, etc.), because
+        // the inline SCHEMA_SQL's `CREATE INDEX IF NOT EXISTS` runs
+        // before our ALTER guards and would fail on a column it can't
+        // find. The v31 columns (layer, parent_cluster_id,
+        // is_inter_cluster) are intentionally omitted — that is what
+        // we're testing.
+        conn.execute_batch(
+            "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+             CREATE TABLE kg_entities (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                normalized_hash TEXT NOT NULL,
+                properties TEXT,
+                epistemic_class TEXT NOT NULL DEFAULT 'current',
+                confidence REAL NOT NULL DEFAULT 0.8,
+                mention_count INTEGER NOT NULL DEFAULT 1,
+                access_count INTEGER NOT NULL DEFAULT 0,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                last_accessed_at TEXT,
+                valid_from TEXT,
+                valid_until TEXT,
+                invalidated_by TEXT,
+                compressed_into TEXT,
+                source_episode_ids TEXT,
+                evidence TEXT
+             );
+             CREATE TABLE kg_relationships (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                source_entity_id TEXT NOT NULL,
+                target_entity_id TEXT NOT NULL,
+                relationship_type TEXT NOT NULL,
+                properties TEXT,
+                epistemic_class TEXT NOT NULL DEFAULT 'current',
+                confidence REAL NOT NULL DEFAULT 0.8,
+                mention_count INTEGER NOT NULL DEFAULT 1,
+                access_count INTEGER NOT NULL DEFAULT 0,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                last_accessed_at TEXT,
+                valid_at TEXT,
+                invalidated_at TEXT,
+                valid_from TEXT,
+                valid_until TEXT,
+                invalidated_by TEXT,
+                source_episode_ids TEXT,
+                evidence TEXT,
+                UNIQUE(source_entity_id, target_entity_id, relationship_type)
+             );",
+        )
+        .expect("seed pre-v31 schema");
+
+        // Init must succeed and add the new columns.
+        initialize_knowledge_database(&conn).expect("init must succeed on a pre-v31 database");
+
+        let entity_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(kg_entities)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert!(entity_cols.contains(&"layer".to_string()));
+        assert!(entity_cols.contains(&"parent_cluster_id".to_string()));
+
+        let rel_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(kg_relationships)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert!(rel_cols.contains(&"layer".to_string()));
+        assert!(rel_cols.contains(&"is_inter_cluster".to_string()));
     }
 }
