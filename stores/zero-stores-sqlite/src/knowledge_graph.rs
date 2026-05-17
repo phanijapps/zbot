@@ -588,6 +588,30 @@ impl KnowledgeGraphStore for SqliteKgStore {
         .await
     }
 
+    async fn list_entities_with_embeddings_at_layer(
+        &self,
+        agent_id: &str,
+        layer: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<zero_stores::EntityWithEmbedding>> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        block(move || {
+            storage
+                .list_entities_with_embeddings_at_layer(&agent_id, layer, limit)
+                .map(|rows| {
+                    rows.into_iter()
+                        .map(|(id, embedding)| zero_stores::EntityWithEmbedding {
+                            id: zero_stores::types::EntityId(id),
+                            embedding,
+                        })
+                        .collect()
+                })
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
     async fn vec_index_health(&self) -> StoreResult<VecIndexHealth> {
         // SQLite-vec maintains an aux `<table>_rowids` table per index;
         // counting its rows is the faithful "indexed row count" used by
