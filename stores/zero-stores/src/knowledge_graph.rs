@@ -435,4 +435,40 @@ pub trait KnowledgeGraphStore: Send + Sync {
             "write_inter_cluster_relation not implemented for this store".to_string(),
         ))
     }
+
+    /// List current-class entities at a specific hierarchy layer
+    /// together with their name embeddings (Phase H-3e).
+    ///
+    /// Used by the `HierarchyBuilder` orchestrator to fetch the
+    /// candidate pool for K-means at each layer. Entities without an
+    /// embedding row in the name-index are skipped — they're invisible
+    /// to clustering, but the orchestrator logs a count so an operator
+    /// can spot embedding-pipeline gaps.
+    ///
+    /// Returns `(EntityId, embedding)` pairs. The order is unspecified.
+    /// `limit = 0` is treated as "no limit" by impls — pass a real
+    /// cap unless you mean it.
+    ///
+    /// Default: empty. Backends that haven't implemented yet just
+    /// can't build the hierarchy on top of them, which is the right
+    /// degradation.
+    async fn list_entities_with_embeddings_at_layer(
+        &self,
+        _agent_id: &str,
+        _layer: i64,
+        _limit: usize,
+    ) -> StoreResult<Vec<EntityWithEmbedding>> {
+        Ok(Vec::new())
+    }
+}
+
+/// `(EntityId, name_embedding)` carrier for the layer-fetch API used
+/// by the HierarchyBuilder. Kept separate from `Entity` because the
+/// orchestrator only needs the id + the vector for K-means; pulling
+/// the full Entity row would mean joining `properties`, alias counts,
+/// and other columns that the clustering step doesn't read.
+#[derive(Debug, Clone)]
+pub struct EntityWithEmbedding {
+    pub id: EntityId,
+    pub embedding: Vec<f32>,
 }
