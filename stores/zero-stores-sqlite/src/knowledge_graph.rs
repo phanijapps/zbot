@@ -536,6 +536,58 @@ impl KnowledgeGraphStore for SqliteKgStore {
         .await
     }
 
+    async fn promote_cluster_to_aggregate(
+        &self,
+        agent_id: &str,
+        layer: i64,
+        members: &[zero_stores::types::EntityId],
+        name: &str,
+        description: &str,
+        embedding: Option<Vec<f32>>,
+    ) -> StoreResult<zero_stores::types::EntityId> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        let members: Vec<String> = members.iter().map(|e| e.0.clone()).collect();
+        let name = name.to_string();
+        let description = description.to_string();
+        block(move || {
+            storage
+                .promote_cluster_to_aggregate(
+                    &agent_id,
+                    layer,
+                    &members,
+                    &name,
+                    &description,
+                    embedding,
+                )
+                .map(zero_stores::types::EntityId)
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
+    async fn write_inter_cluster_relation(
+        &self,
+        agent_id: &str,
+        layer: i64,
+        source_aggregate: &zero_stores::types::EntityId,
+        target_aggregate: &zero_stores::types::EntityId,
+        relationship_type: &str,
+    ) -> StoreResult<zero_stores::types::RelationshipId> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        let src = source_aggregate.0.clone();
+        let tgt = target_aggregate.0.clone();
+        let rel_type = relationship_type.to_string();
+        block(move || {
+            storage
+                .write_inter_cluster_relation(&agent_id, layer, &src, &tgt, &rel_type)
+                .map(zero_stores::types::RelationshipId)
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
     async fn vec_index_health(&self) -> StoreResult<VecIndexHealth> {
         // SQLite-vec maintains an aux `<table>_rowids` table per index;
         // counting its rows is the faithful "indexed row count" used by
