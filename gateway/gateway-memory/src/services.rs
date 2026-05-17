@@ -18,10 +18,11 @@ use zero_stores_traits::{
 
 use crate::sleep::{
     BeliefContradictionConfig, BeliefContradictionDetector, BeliefPropagator, BeliefSynthesizer,
-    Compactor, ConflictResolver, CorrectionsAbstractor, DecayConfig, DecayEngine,
-    LlmBeliefSynthesizer, LlmConflictJudge, LlmContradictionJudge, LlmCorrectionsAbstractor,
-    LlmPairwiseVerifier, LlmPatternExtractor, LlmSynthesizer, OrphanArchiver, PairwiseVerifier,
-    PatternExtractor, Pruner, RecentBeliefNetworkActivity, SleepOps, SleepTimeWorker, Synthesizer,
+    Compactor, ConflictResolver, ContradictionPropagationConfig, CorrectionsAbstractor,
+    DecayConfig, DecayEngine, LlmBeliefSynthesizer, LlmConflictJudge, LlmContradictionJudge,
+    LlmCorrectionsAbstractor, LlmPairwiseVerifier, LlmPatternExtractor, LlmSynthesizer,
+    OrphanArchiver, PairwiseVerifier, PatternExtractor, Pruner, RecentBeliefNetworkActivity,
+    SleepOps, SleepTimeWorker, Synthesizer,
 };
 use crate::{KgDecayConfig, MemoryLlmFactory};
 
@@ -47,6 +48,11 @@ pub struct MemoryServicesConfig {
     pub corrections_abstractor_interval: Duration,
     pub conflict_resolver_interval: Duration,
     pub decay_config: DecayConfig,
+    /// MEM-001 Part A — configuration for contradiction propagation
+    /// from `memory_facts.contradicted_by` to KG entities/relationships
+    /// sharing the same source episodes. Defaults are safe — see
+    /// [`ContradictionPropagationConfig::default`].
+    pub contradiction_propagation_config: ContradictionPropagationConfig,
     /// Optional belief store. When `Some`, the Belief Network worker is
     /// constructed alongside the rest of the sleep ops; when `None` (or
     /// when `belief_network_enabled = false`), the worker is omitted.
@@ -136,6 +142,7 @@ impl MemoryServices {
             hierarchy_cluster_target_size,
             hierarchy_inter_cluster_relation_threshold,
             hierarchy_llm_budget_per_cycle,
+            contradiction_propagation_config,
         } = config;
 
         let verifier: Option<Arc<dyn PairwiseVerifier>> =
@@ -158,10 +165,15 @@ impl MemoryServices {
             };
 
         let decay = Arc::new(
-            DecayEngine::new(kg_store.clone(), decay_config).with_belief_propagator(
-                belief_propagator.clone(),
-                belief_fact_confidence_drop_threshold,
-            ),
+            DecayEngine::new(kg_store.clone(), decay_config)
+                .with_belief_propagator(
+                    belief_propagator.clone(),
+                    belief_fact_confidence_drop_threshold,
+                )
+                .with_contradiction_propagation(
+                    Some(memory_store.clone()),
+                    contradiction_propagation_config,
+                ),
         );
         let pruner = Arc::new(Pruner::new(kg_store.clone(), compaction_store.clone()));
 

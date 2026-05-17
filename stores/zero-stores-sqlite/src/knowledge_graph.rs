@@ -15,7 +15,7 @@ use zero_stores::types::{
     ResolveOutcome, StoreOutcome, TraversalHit, VecIndexHealth,
 };
 use zero_stores::KnowledgeGraphStore;
-use zero_stores::StoreResult;
+use zero_stores::{KgNodesForEpisodes, StoreResult};
 
 use crate::blocking::{block, map_graph_err};
 use crate::reindex;
@@ -974,6 +974,148 @@ impl KnowledgeGraphStore for SqliteKgStore {
         })
         .await
     }
+
+    // ---- Contradiction propagation (MEM-001 Part A) ----------------------
+
+    async fn find_kg_nodes_by_episode_ids(
+        &self,
+        agent_id: &str,
+        episode_ids: &[String],
+    ) -> StoreResult<KgNodesForEpisodes> {
+        if episode_ids.is_empty() {
+            return Ok(KgNodesForEpisodes::default());
+        }
+        let db = self.storage.knowledge_db().clone();
+        let agent_id = agent_id.to_string();
+        // Comma-flanked tokens so we don't match a longer episode id by
+        // substring: WHERE instr(',' || source_episode_ids || ',', ',<id>,') > 0
+        let needles: Vec<String> = episode_ids.iter().map(|id| format!(",{id},")).collect();
+
+        block(move || {
+            db.with_connection(|conn| {
+                let or_clauses: String = (0..needles.len())
+                    .map(|i| format!("instr(',' || source_episode_ids || ',', ?{}) > 0", i + 2))
+                    .collect::<Vec<_>>()
+                    .join(" OR ");
+
+                let entity_sql = format!(
+                    "SELECT id FROM kg_entities
+                     WHERE agent_id = ?1
+                       AND source_episode_ids IS NOT NULL
+                       AND epistemic_class != 'archival'
+                       AND ({or_clauses})"
+                );
+                let rel_sql = format!(
+                    "SELECT id FROM kg_relationships
+                     WHERE agent_id = ?1
+                       AND source_episode_ids IS NOT NULL
+                       AND epistemic_class != 'archival'
+                       AND ({or_clauses})"
+                );
+
+                let mut params: Vec<&dyn rusqlite::types::ToSql> =
+                    Vec::with_capacity(1 + needles.len());
+                params.push(&agent_id);
+                for n in &needles {
+                    params.push(n);
+                }
+
+                let mut entity_stmt = conn.prepare(&entity_sql)?;
+                let entity_ids: Vec<EntityId> = entity_stmt
+                    .query_map(params.as_slice(), |row| row.get::<_, String>(0))?
+                    .map(|r| r.map(EntityId))
+                    .collect::<Result<Vec<_>, _>>()?;
+                drop(entity_stmt);
+
+                let mut rel_stmt = conn.prepare(&rel_sql)?;
+                let relationship_ids: Vec<RelationshipId> = rel_stmt
+                    .query_map(params.as_slice(), |row| row.get::<_, String>(0))?
+                    .map(|r| r.map(RelationshipId))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                Ok(KgNodesForEpisodes {
+                    entity_ids,
+                    relationship_ids,
+                })
+            })
+            .map_err(StoreError::Backend)
+        })
+        .await
+    }
+
+    async fn apply_entity_confidence_multiplier(
+        &self,
+        agent_id: &str,
+        entity_ids: &[EntityId],
+        factor: f64,
+        min_floor: f64,
+    ) -> StoreResult<u64> {
+        if entity_ids.is_empty() {
+            return Ok(0);
+        }
+        let db = self.storage.knowledge_db().clone();
+        let agent_id = agent_id.to_string();
+        let id_strs: Vec<String> = entity_ids.iter().map(|e| e.0.clone()).collect();
+        block(move || {
+            db.with_connection(|conn| {
+                let placeholders = vec!["?"; id_strs.len()].join(",");
+                let sql = format!(
+                    "UPDATE kg_entities
+                     SET confidence = MAX(?1, confidence * ?2)
+                     WHERE agent_id = ?3 AND id IN ({placeholders})"
+                );
+                let mut params: Vec<&dyn rusqlite::types::ToSql> =
+                    Vec::with_capacity(3 + id_strs.len());
+                params.push(&min_floor);
+                params.push(&factor);
+                params.push(&agent_id);
+                for id in &id_strs {
+                    params.push(id);
+                }
+                let n = conn.execute(&sql, params.as_slice())?;
+                Ok(n as u64)
+            })
+            .map_err(StoreError::Backend)
+        })
+        .await
+    }
+
+    async fn apply_relationship_confidence_multiplier(
+        &self,
+        agent_id: &str,
+        relationship_ids: &[RelationshipId],
+        factor: f64,
+        min_floor: f64,
+    ) -> StoreResult<u64> {
+        if relationship_ids.is_empty() {
+            return Ok(0);
+        }
+        let db = self.storage.knowledge_db().clone();
+        let agent_id = agent_id.to_string();
+        let id_strs: Vec<String> = relationship_ids.iter().map(|r| r.0.clone()).collect();
+        block(move || {
+            db.with_connection(|conn| {
+                let placeholders = vec!["?"; id_strs.len()].join(",");
+                let sql = format!(
+                    "UPDATE kg_relationships
+                     SET confidence = MAX(?1, confidence * ?2)
+                     WHERE agent_id = ?3 AND id IN ({placeholders})"
+                );
+                let mut params: Vec<&dyn rusqlite::types::ToSql> =
+                    Vec::with_capacity(3 + id_strs.len());
+                params.push(&min_floor);
+                params.push(&factor);
+                params.push(&agent_id);
+                for id in &id_strs {
+                    params.push(id);
+                }
+                let n = conn.execute(&sql, params.as_slice())?;
+                Ok(n as u64)
+            })
+            .map_err(StoreError::Backend)
+        })
+        .await
+    }
 }
 
 // ============================================================================
@@ -1285,5 +1427,263 @@ mod tests {
             (fresh_conf - 0.8).abs() < 1e-6,
             "fresh conf should be unchanged"
         );
+    }
+
+    // ----- MEM-001 Part A: contradiction propagation helpers ----------
+
+    fn insert_entity(
+        graph: &crate::kg::storage::GraphStorage,
+        id: &str,
+        agent_id: &str,
+        confidence: f64,
+        source_episode_ids: Option<&str>,
+        epistemic_class: &str,
+    ) {
+        let now = chrono::Utc::now().to_rfc3339();
+        graph
+            .knowledge_db()
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         epistemic_class, confidence, mention_count, access_count,
+                         first_seen_at, last_seen_at, source_episode_ids)
+                     VALUES (?1, ?2, 'Concept', ?1, ?1, ?1, ?3, ?4, 1, 0, ?5, ?5, ?6)",
+                    rusqlite::params![
+                        id,
+                        agent_id,
+                        epistemic_class,
+                        confidence,
+                        now,
+                        source_episode_ids
+                    ],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)] // 9 args in a test helper is fine — keeps callers explicit.
+    fn insert_relationship(
+        graph: &crate::kg::storage::GraphStorage,
+        id: &str,
+        agent_id: &str,
+        src: &str,
+        tgt: &str,
+        rel_type: &str,
+        confidence: f64,
+        source_episode_ids: Option<&str>,
+        epistemic_class: &str,
+    ) {
+        let now = chrono::Utc::now().to_rfc3339();
+        graph
+            .knowledge_db()
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_relationships
+                        (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                         epistemic_class, confidence, mention_count, access_count,
+                         first_seen_at, last_seen_at, source_episode_ids)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 0, ?8, ?8, ?9)",
+                    rusqlite::params![
+                        id,
+                        agent_id,
+                        src,
+                        tgt,
+                        rel_type,
+                        epistemic_class,
+                        confidence,
+                        now,
+                        source_episode_ids
+                    ],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    fn setup_store() -> (
+        tempfile::TempDir,
+        std::sync::Arc<crate::kg::storage::GraphStorage>,
+        SqliteKgStore,
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = std::sync::Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        let db = std::sync::Arc::new(KnowledgeDatabase::new(paths).expect("db"));
+        let graph = std::sync::Arc::new(crate::kg::storage::GraphStorage::new(db).expect("graph"));
+        let store = SqliteKgStore::new(graph.clone());
+        (tmp, graph, store)
+    }
+
+    #[tokio::test]
+    async fn find_kg_nodes_by_episode_ids_empty_input_returns_empty() {
+        let (_tmp, _graph, store) = setup_store();
+        let out = store
+            .find_kg_nodes_by_episode_ids("a", &[])
+            .await
+            .expect("ok");
+        assert!(out.entity_ids.is_empty());
+        assert!(out.relationship_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn find_kg_nodes_by_episode_ids_matches_token_not_substring() {
+        let (_tmp, graph, store) = setup_store();
+        let agent = "a";
+        // e1 has episode "ep-1"; e2 has "ep-10" (longer episode id that
+        // would substring-match "ep-1" under a naive instr). Only e1
+        // should come back when we search for "ep-1".
+        insert_entity(&graph, "e1", agent, 0.8, Some("ep-1"), "current");
+        insert_entity(&graph, "e2", agent, 0.8, Some("ep-10"), "current");
+        insert_entity(&graph, "e3", agent, 0.8, Some("ep-2,ep-1"), "current"); // multi-token, should match
+        insert_entity(&graph, "e4", agent, 0.8, Some("ep-99"), "current"); // no match
+
+        let out = store
+            .find_kg_nodes_by_episode_ids(agent, &["ep-1".to_string()])
+            .await
+            .expect("ok");
+        let mut ids: Vec<String> = out.entity_ids.into_iter().map(|e| e.0).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["e1".to_string(), "e3".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn find_kg_nodes_by_episode_ids_scopes_by_agent_and_skips_archival() {
+        let (_tmp, graph, store) = setup_store();
+        insert_entity(&graph, "e-mine", "a", 0.8, Some("ep-1"), "current");
+        insert_entity(&graph, "e-other", "b", 0.8, Some("ep-1"), "current"); // wrong agent
+        insert_entity(&graph, "e-archival", "a", 0.8, Some("ep-1"), "archival"); // archived
+
+        let out = store
+            .find_kg_nodes_by_episode_ids("a", &["ep-1".to_string()])
+            .await
+            .expect("ok");
+        let ids: Vec<String> = out.entity_ids.into_iter().map(|e| e.0).collect();
+        assert_eq!(ids, vec!["e-mine".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn find_kg_nodes_by_episode_ids_returns_relationships_too() {
+        let (_tmp, graph, store) = setup_store();
+        insert_entity(&graph, "e-src", "a", 0.8, None, "current");
+        insert_entity(&graph, "e-tgt", "a", 0.8, None, "current");
+        insert_relationship(
+            &graph,
+            "r1",
+            "a",
+            "e-src",
+            "e-tgt",
+            "RelatedTo",
+            0.7,
+            Some("ep-1"),
+            "current",
+        );
+        insert_relationship(
+            &graph,
+            "r2",
+            "a",
+            "e-src",
+            "e-tgt",
+            "WorksFor",
+            0.7,
+            Some("ep-99"),
+            "current",
+        );
+
+        let out = store
+            .find_kg_nodes_by_episode_ids("a", &["ep-1".to_string()])
+            .await
+            .expect("ok");
+        let ids: Vec<String> = out.relationship_ids.into_iter().map(|r| r.0).collect();
+        assert_eq!(ids, vec!["r1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn apply_entity_confidence_multiplier_decays_and_floors() {
+        let (_tmp, graph, store) = setup_store();
+        insert_entity(&graph, "e1", "a", 0.8, None, "current");
+        insert_entity(&graph, "e2", "a", 0.04, None, "current");
+        insert_entity(&graph, "e-other", "b", 0.8, None, "current"); // wrong agent
+
+        let n = store
+            .apply_entity_confidence_multiplier(
+                "a",
+                &[EntityId("e1".into()), EntityId("e2".into())],
+                0.9,
+                0.05,
+            )
+            .await
+            .expect("ok");
+        assert_eq!(n, 2);
+
+        let read = |id: &str| -> f64 {
+            graph
+                .knowledge_db()
+                .with_connection(|conn| {
+                    conn.query_row(
+                        "SELECT confidence FROM kg_entities WHERE id = ?1",
+                        rusqlite::params![id],
+                        |row| row.get(0),
+                    )
+                })
+                .unwrap()
+        };
+        assert!((read("e1") - 0.72).abs() < 1e-6, "e1: 0.8 * 0.9 = 0.72");
+        assert!((read("e2") - 0.05).abs() < 1e-6, "e2: floor at 0.05");
+        assert!(
+            (read("e-other") - 0.8).abs() < 1e-6,
+            "other agent untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_entity_confidence_multiplier_empty_id_list_is_noop() {
+        let (_tmp, _graph, store) = setup_store();
+        let n = store
+            .apply_entity_confidence_multiplier("a", &[], 0.9, 0.05)
+            .await
+            .expect("ok");
+        assert_eq!(n, 0);
+    }
+
+    #[tokio::test]
+    async fn apply_relationship_confidence_multiplier_decays_and_floors() {
+        let (_tmp, graph, store) = setup_store();
+        insert_entity(&graph, "e-src", "a", 0.8, None, "current");
+        insert_entity(&graph, "e-tgt", "a", 0.8, None, "current");
+        insert_relationship(
+            &graph,
+            "r1",
+            "a",
+            "e-src",
+            "e-tgt",
+            "RelatedTo",
+            0.6,
+            None,
+            "current",
+        );
+
+        let n = store
+            .apply_relationship_confidence_multiplier(
+                "a",
+                &[RelationshipId("r1".into())],
+                0.5,
+                0.05,
+            )
+            .await
+            .expect("ok");
+        assert_eq!(n, 1);
+
+        let new_conf: f64 = graph
+            .knowledge_db()
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT confidence FROM kg_relationships WHERE id = 'r1'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert!((new_conf - 0.3).abs() < 1e-6, "0.6 * 0.5 = 0.3");
     }
 }
