@@ -1501,6 +1501,181 @@ impl GraphStorage {
             .map_err(GraphError::Other)
     }
 
+    /// Promote a cluster of layer-N entities to a single aggregate at
+    /// layer N+1 (Phase H-3d). Atomic — wraps the insert/updates in a
+    /// transaction so a member cluster never half-points to its parent.
+    ///
+    /// Steps:
+    ///   1. INSERT the aggregate entity with `layer = layer`, the
+    ///      caller-supplied `name`, and `properties = {"description":
+    ///      ..., "aggregate": true}` so readers can spot aggregates by
+    ///      shape.
+    ///   2. UPDATE `parent_cluster_id` on each member to point to the
+    ///      new aggregate's id.
+    ///   3. If `embedding` is provided, INSERT into `kg_name_index` so
+    ///      the aggregate participates in semantic recall and in
+    ///      higher-layer clustering. A missing embedding is logged as
+    ///      a no-op (the aggregate exists but won't surface in vector
+    ///      search until a future reindex catches it).
+    ///
+    /// Returns the new aggregate's id. Members not found in
+    /// `kg_entities` are simply skipped — they don't fail the whole
+    /// operation, the parent_cluster_id update affects zero rows for
+    /// missing ids.
+    pub fn promote_cluster_to_aggregate(
+        &self,
+        agent_id: &str,
+        layer: i64,
+        members: &[String],
+        name: &str,
+        description: &str,
+        embedding: Option<Vec<f32>>,
+    ) -> GraphResult<String> {
+        let new_id = format!("agg-{}", uuid::Uuid::new_v4());
+        let norm_name = name.trim().to_lowercase();
+        let norm_hash = {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut h = DefaultHasher::new();
+            norm_name.hash(&mut h);
+            format!("{:x}", h.finish())
+        };
+        let properties = serde_json::json!({
+            "description": description,
+            "aggregate": true,
+            "member_count": members.len(),
+        })
+        .to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Clone for the closure (db.with_connection takes Fn so we
+        // can't move borrowed slices in directly).
+        let new_id_for_db = new_id.clone();
+        let members_for_db: Vec<String> = members.to_vec();
+        let agent_id_for_db = agent_id.to_string();
+        let name_for_db = name.to_string();
+
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<()> {
+                    let tx = conn.unchecked_transaction().map_err(GraphError::Database)?;
+
+                    tx.execute(
+                        "INSERT INTO kg_entities
+                            (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                             properties, first_seen_at, last_seen_at, mention_count,
+                             layer, parent_cluster_id)
+                         VALUES (?1, ?2, 'Concept', ?3, ?4, ?5, ?6, ?7, ?7, 1, ?8, NULL)",
+                        params![
+                            new_id_for_db,
+                            agent_id_for_db,
+                            name_for_db,
+                            norm_name,
+                            norm_hash,
+                            properties,
+                            now,
+                            layer,
+                        ],
+                    )
+                    .map_err(GraphError::Database)?;
+
+                    // Update each member's parent_cluster_id. We do
+                    // one statement per id (bounded — ~20 members
+                    // per cluster) which is cleaner than building a
+                    // dynamic IN-list and harder to get wrong.
+                    let mut update_stmt = tx
+                        .prepare("UPDATE kg_entities SET parent_cluster_id = ?1 WHERE id = ?2")
+                        .map_err(GraphError::Database)?;
+                    for member_id in &members_for_db {
+                        update_stmt
+                            .execute(params![new_id_for_db, member_id])
+                            .map_err(GraphError::Database)?;
+                    }
+                    drop(update_stmt);
+
+                    // Persist the aggregate's embedding into the
+                    // name-index table if the caller provided one.
+                    // The orchestrator skips this when no embedding
+                    // client is wired (or when synthesis failed).
+                    if let Some(emb) = embedding.as_ref() {
+                        if !emb.is_empty() {
+                            let embedding_json = serde_json::to_string(emb).map_err(|e| {
+                                GraphError::Other(format!("serialize embedding: {e}"))
+                            })?;
+                            tx.execute(
+                                "INSERT INTO kg_name_index (entity_id, name_embedding) \
+                                 VALUES (?1, ?2)",
+                                params![new_id_for_db, embedding_json],
+                            )
+                            .map_err(GraphError::Database)?;
+                        }
+                    }
+
+                    tx.commit().map_err(GraphError::Database)?;
+                    Ok(())
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)?;
+
+        Ok(new_id)
+    }
+
+    /// Write a synthesised inter-cluster relation between two aggregate
+    /// entities at the same hierarchy layer (Phase H-3d).
+    ///
+    /// Sets `is_inter_cluster = 1` and `layer = layer` so recall (Phase
+    /// H-4) can distinguish hierarchy-synthesised edges from base ones.
+    /// The (source, target, type) triple inherits the existing
+    /// `UNIQUE` constraint on `kg_relationships` — calling this twice
+    /// with the same arguments returns the `UNIQUE` failure to the
+    /// caller, who should treat it as "already written" and move on.
+    pub fn write_inter_cluster_relation(
+        &self,
+        agent_id: &str,
+        layer: i64,
+        source_aggregate: &str,
+        target_aggregate: &str,
+        relationship_type: &str,
+    ) -> GraphResult<String> {
+        let new_id = format!("rel-agg-{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().to_rfc3339();
+
+        let new_id_for_db = new_id.clone();
+        let agent_id_for_db = agent_id.to_string();
+        let src_for_db = source_aggregate.to_string();
+        let tgt_for_db = target_aggregate.to_string();
+        let rel_type_for_db = relationship_type.to_string();
+
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<()> {
+                    conn.execute(
+                        "INSERT INTO kg_relationships
+                            (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                             epistemic_class, first_seen_at, last_seen_at, mention_count,
+                             layer, is_inter_cluster)
+                         VALUES (?1, ?2, ?3, ?4, ?5, 'current', ?6, ?6, 1, ?7, 1)",
+                        params![
+                            new_id_for_db,
+                            agent_id_for_db,
+                            src_for_db,
+                            tgt_for_db,
+                            rel_type_for_db,
+                            now,
+                            layer,
+                        ],
+                    )
+                    .map_err(GraphError::Database)?;
+                    Ok(())
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)?;
+
+        Ok(new_id)
+    }
+
     /// List entities across all agents with optional filters and pagination.
     ///
     /// Used by the Observatory "All Agents" mode.
@@ -3497,5 +3672,266 @@ mod tests {
             .connectivity_strength("agent-cs", &cluster_a, &cluster_b)
             .unwrap();
         assert_eq!(result, 0, "disconnected clusters → 0");
+    }
+
+    // -----------------------------------------------------------------
+    // promote_cluster_to_aggregate + write_inter_cluster_relation (H-3d)
+    // -----------------------------------------------------------------
+
+    /// Read a single column from a single row by id. Convenience for
+    /// the H-3d tests below.
+    fn read_entity_field<T: rusqlite::types::FromSql>(
+        storage: &GraphStorage,
+        id: &str,
+        column: &str,
+    ) -> Option<T> {
+        let id_owned = id.to_string();
+        let column_owned = column.to_string();
+        let sql = format!("SELECT {column_owned} FROM kg_entities WHERE id = ?1");
+        storage
+            .db
+            .with_connection(|conn| {
+                let value: rusqlite::Result<T> =
+                    conn.query_row(&sql, rusqlite::params![id_owned], |row| row.get(0));
+                Ok(value.ok())
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn promote_cluster_creates_layer_n_plus_1_entity() {
+        let storage = create_test_storage();
+        for id in ["m1", "m2", "m3"] {
+            seed_entity_raw(&storage, id, "agent-h");
+        }
+        let members = vec!["m1".to_string(), "m2".to_string(), "m3".to_string()];
+
+        let agg_id = storage
+            .promote_cluster_to_aggregate(
+                "agent-h",
+                1,
+                &members,
+                "test aggregate",
+                "Three concepts grouped together for testing.",
+                None,
+            )
+            .unwrap();
+        assert!(
+            agg_id.starts_with("agg-"),
+            "aggregate id should have agg- prefix, got {agg_id}"
+        );
+
+        let layer: Option<i64> = read_entity_field(&storage, &agg_id, "layer");
+        assert_eq!(layer, Some(1), "aggregate must live at layer 1");
+
+        let parent: Option<String> = read_entity_field(&storage, &agg_id, "parent_cluster_id");
+        assert!(parent.is_none(), "fresh aggregate has no parent");
+
+        let name: Option<String> = read_entity_field(&storage, &agg_id, "name");
+        assert_eq!(name, Some("test aggregate".to_string()));
+
+        // Description is stored in properties JSON.
+        let props: Option<String> = read_entity_field(&storage, &agg_id, "properties");
+        let props_json: serde_json::Value =
+            serde_json::from_str(&props.expect("properties present")).unwrap();
+        assert_eq!(props_json["aggregate"], serde_json::json!(true));
+        assert_eq!(
+            props_json["description"],
+            serde_json::json!("Three concepts grouped together for testing.")
+        );
+        assert_eq!(props_json["member_count"], serde_json::json!(3));
+    }
+
+    #[test]
+    fn promote_cluster_updates_member_parent_pointers() {
+        let storage = create_test_storage();
+        for id in ["m1", "m2"] {
+            seed_entity_raw(&storage, id, "agent-h");
+        }
+
+        let agg_id = storage
+            .promote_cluster_to_aggregate(
+                "agent-h",
+                1,
+                &["m1".to_string(), "m2".to_string()],
+                "agg",
+                "desc",
+                None,
+            )
+            .unwrap();
+
+        for member in ["m1", "m2"] {
+            let parent: Option<String> = read_entity_field(&storage, member, "parent_cluster_id");
+            assert_eq!(
+                parent.as_deref(),
+                Some(agg_id.as_str()),
+                "{member} should point to the new aggregate"
+            );
+        }
+    }
+
+    #[test]
+    fn promote_cluster_persists_embedding_when_provided() {
+        let storage = create_test_storage();
+        seed_entity_raw(&storage, "m1", "agent-h");
+
+        // The kg_name_index vec0 table is declared with FLOAT[384] in
+        // the default-dimension init path. Padded fixture vector so
+        // the dimension check passes (test doesn't care about the
+        // actual values — only that the row exists).
+        let mut embedding = vec![0.0_f32; 384];
+        embedding[0] = 0.1;
+        embedding[1] = 0.2;
+        let agg_id = storage
+            .promote_cluster_to_aggregate(
+                "agent-h",
+                1,
+                &["m1".to_string()],
+                "agg",
+                "desc",
+                Some(embedding.clone()),
+            )
+            .unwrap();
+
+        // kg_name_index should have a row for the aggregate's id.
+        let agg_id_for_db = agg_id.clone();
+        let row_count: i64 = storage
+            .db
+            .with_connection(|conn| {
+                let count: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM kg_name_index WHERE entity_id = ?1",
+                        rusqlite::params![agg_id_for_db],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                Ok(count)
+            })
+            .unwrap();
+        assert_eq!(
+            row_count, 1,
+            "kg_name_index should have a row for the aggregate"
+        );
+    }
+
+    #[test]
+    fn promote_cluster_skips_embedding_when_none() {
+        let storage = create_test_storage();
+        seed_entity_raw(&storage, "m1", "agent-h");
+
+        let agg_id = storage
+            .promote_cluster_to_aggregate("agent-h", 1, &["m1".to_string()], "agg", "desc", None)
+            .unwrap();
+
+        let agg_id_for_db = agg_id.clone();
+        let row_count: i64 = storage
+            .db
+            .with_connection(|conn| {
+                let count: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM kg_name_index WHERE entity_id = ?1",
+                        rusqlite::params![agg_id_for_db],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                Ok(count)
+            })
+            .unwrap();
+        assert_eq!(row_count, 0, "no embedding → no kg_name_index row");
+    }
+
+    #[test]
+    fn promote_cluster_is_atomic_under_missing_members() {
+        // A member id that doesn't exist must not fail the whole
+        // operation. The aggregate still gets created; the missing
+        // member's UPDATE simply affects zero rows.
+        let storage = create_test_storage();
+        seed_entity_raw(&storage, "m1", "agent-h");
+
+        let agg_id = storage
+            .promote_cluster_to_aggregate(
+                "agent-h",
+                1,
+                &["m1".to_string(), "ghost".to_string()],
+                "agg",
+                "desc",
+                None,
+            )
+            .unwrap();
+
+        let layer: Option<i64> = read_entity_field(&storage, &agg_id, "layer");
+        assert_eq!(layer, Some(1));
+
+        let m1_parent: Option<String> = read_entity_field(&storage, "m1", "parent_cluster_id");
+        assert_eq!(m1_parent, Some(agg_id));
+    }
+
+    #[test]
+    fn write_inter_cluster_relation_sets_flag_and_layer() {
+        let storage = create_test_storage();
+        seed_entity_raw(&storage, "agg-a", "agent-h");
+        seed_entity_raw(&storage, "agg-b", "agent-h");
+
+        let rel_id = storage
+            .write_inter_cluster_relation("agent-h", 2, "agg-a", "agg-b", "encompasses")
+            .unwrap();
+        assert!(
+            rel_id.starts_with("rel-agg-"),
+            "inter-cluster relation id should have rel-agg- prefix, got {rel_id}"
+        );
+
+        let rel_id_for_db = rel_id.clone();
+        let (layer, is_inter, src, tgt, rtype): (i64, i64, String, String, String) = storage
+            .db
+            .with_connection(|conn| {
+                let row = conn
+                    .query_row(
+                        "SELECT layer, is_inter_cluster, source_entity_id, target_entity_id,
+                                relationship_type
+                         FROM kg_relationships WHERE id = ?1",
+                        rusqlite::params![rel_id_for_db],
+                        |row| {
+                            Ok((
+                                row.get::<_, i64>(0)?,
+                                row.get::<_, i64>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, String>(3)?,
+                                row.get::<_, String>(4)?,
+                            ))
+                        },
+                    )
+                    .unwrap();
+                Ok(row)
+            })
+            .unwrap();
+        assert_eq!(layer, 2);
+        assert_eq!(is_inter, 1);
+        assert_eq!(src, "agg-a");
+        assert_eq!(tgt, "agg-b");
+        assert_eq!(rtype, "encompasses");
+    }
+
+    #[test]
+    fn write_inter_cluster_relation_rejects_duplicate_triple() {
+        let storage = create_test_storage();
+        seed_entity_raw(&storage, "agg-a", "agent-h");
+        seed_entity_raw(&storage, "agg-b", "agent-h");
+
+        storage
+            .write_inter_cluster_relation("agent-h", 2, "agg-a", "agg-b", "encompasses")
+            .unwrap();
+
+        // Same (src, tgt, type) — UNIQUE constraint fires.
+        let result =
+            storage.write_inter_cluster_relation("agent-h", 2, "agg-a", "agg-b", "encompasses");
+        assert!(
+            result.is_err(),
+            "second write with same (src, tgt, type) must fail with UNIQUE"
+        );
+
+        // Same (src, tgt) with a different type — allowed.
+        let _other = storage
+            .write_inter_cluster_relation("agent-h", 2, "agg-a", "agg-b", "differs-from")
+            .unwrap();
     }
 }
