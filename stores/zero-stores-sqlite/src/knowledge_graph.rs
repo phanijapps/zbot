@@ -613,6 +613,35 @@ impl KnowledgeGraphStore for SqliteKgStore {
         .await
     }
 
+    async fn list_inter_cluster_relations(
+        &self,
+        agent_id: &str,
+        entity_ids: &[zero_stores::types::EntityId],
+    ) -> StoreResult<Vec<zero_stores::InterClusterRelationHit>> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        let ids: Vec<String> = entity_ids.iter().map(|e| e.0.clone()).collect();
+        block(move || {
+            storage
+                .list_inter_cluster_relations(&agent_id, &ids)
+                .map(|rows| {
+                    rows.into_iter()
+                        .map(|(id, src, tgt, rel_type, layer)| {
+                            zero_stores::InterClusterRelationHit {
+                                id,
+                                source_entity_id: src,
+                                target_entity_id: tgt,
+                                relationship_type: rel_type,
+                                layer,
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
     async fn compute_lca_path(
         &self,
         agent_id: &str,

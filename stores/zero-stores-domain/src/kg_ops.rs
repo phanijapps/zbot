@@ -101,3 +101,17 @@ pub struct EntityNameEmbeddingHit {
     pub entity_type: String,
     pub distance: f32,
 }
+
+/// One hit returned by `KnowledgeGraphStore::list_inter_cluster_relations`
+/// (Phase H-4 follow-up). Captures the fields the recall consumer
+/// needs to render the edge into a `ScoredItem`. Callers filter on
+/// `epistemic_class = 'current'` at the SQL layer so we don't carry
+/// bi-temporal / lifecycle columns through this hit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterClusterRelationHit {
+    pub id: String,
+    pub source_entity_id: String,
+    pub target_entity_id: String,
+    pub relationship_type: String,
+    pub layer: i64,
+}

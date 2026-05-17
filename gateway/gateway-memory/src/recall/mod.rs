@@ -505,30 +505,72 @@ impl MemoryRecall {
         // double-query the kg_name_index. Category weight uses the
         // `pattern` slot (0.9) per `project_hierarchical_memory_plan.md`
         // — conservative until empirical validation justifies a bump.
-        let hier_items: Vec<ScoredItem> = match (self.kg_store.as_ref(), graph_seed_ids.is_empty())
-        {
-            (Some(store), false) => match store.compute_lca_path(agent_id, &graph_seed_ids).await {
-                Ok(lca) => {
-                    let weight = self.config.category_weight("pattern");
-                    lca.path_entities
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, id)| {
-                            // Higher-layer entities (closer to the LCA)
-                            // rank slightly higher in the per-source
-                            // order; downstream RRF takes over for
-                            // cross-source fusion.
-                            let raw = 1.0 / (1.0 + idx as f64);
-                            let mut item = adapters::hier_entity_to_item(id, lca.max_layer, raw);
-                            item.score *= weight;
-                            item
-                        })
-                        .collect()
+        //
+        // 5d (follow-up): once we have the LCA path entities, also fetch
+        // any inter-cluster relations whose both endpoints sit on the
+        // path. That's the "lean" part of LeanRAG — the edges between
+        // sibling abstractions that explain how they relate.
+        let (hier_items, hier_relation_items): (Vec<ScoredItem>, Vec<ScoredItem>) =
+            match (self.kg_store.as_ref(), graph_seed_ids.is_empty()) {
+                (Some(store), false) => {
+                    match store.compute_lca_path(agent_id, &graph_seed_ids).await {
+                        Ok(lca) => {
+                            let weight = self.config.category_weight("pattern");
+                            let entity_items: Vec<ScoredItem> = lca
+                                .path_entities
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, id)| {
+                                    // Higher-layer entities (closer to the LCA)
+                                    // rank slightly higher in the per-source
+                                    // order; downstream RRF takes over for
+                                    // cross-source fusion.
+                                    let raw = 1.0 / (1.0 + idx as f64);
+                                    let mut item =
+                                        adapters::hier_entity_to_item(id, lca.max_layer, raw);
+                                    item.score *= weight;
+                                    item
+                                })
+                                .collect();
+
+                            // Fetch the inter-cluster edges between path
+                            // entities. Empty path ⇒ skip the query (the trait
+                            // method short-circuits on empty input anyway, but
+                            // skipping at the call site saves an async hop).
+                            let relation_items: Vec<ScoredItem> = if lca.path_entities.is_empty() {
+                                Vec::new()
+                            } else {
+                                match store
+                                    .list_inter_cluster_relations(agent_id, &lca.path_entities)
+                                    .await
+                                {
+                                    Ok(edges) => edges
+                                        .into_iter()
+                                        .enumerate()
+                                        .map(|(idx, hit)| {
+                                            let raw = 1.0 / (1.0 + idx as f64);
+                                            let mut item = adapters::hier_relation_to_item(
+                                                &hit.id,
+                                                &hit.source_entity_id,
+                                                &hit.target_entity_id,
+                                                &hit.relationship_type,
+                                                hit.layer,
+                                                raw,
+                                            );
+                                            item.score *= weight;
+                                            item
+                                        })
+                                        .collect(),
+                                    Err(_) => Vec::new(),
+                                }
+                            };
+                            (entity_items, relation_items)
+                        }
+                        Err(_) => (Vec::new(), Vec::new()),
+                    }
                 }
-                Err(_) => Vec::new(),
-            },
-            _ => Vec::new(),
-        };
+                _ => (Vec::new(), Vec::new()),
+            };
 
         // Intent boost on non-goal lists.
         let mut all_lists = vec![
@@ -539,6 +581,7 @@ impl MemoryRecall {
             episode_items,
             belief_items,
             hier_items,
+            hier_relation_items,
         ];
         for list in &mut all_lists {
             intent_boost(list, active_goals);
@@ -585,7 +628,8 @@ impl MemoryRecall {
             | ItemKind::Wiki
             | ItemKind::Procedure
             | ItemKind::GraphNode
-            | ItemKind::HierEntity => {
+            | ItemKind::HierEntity
+            | ItemKind::HierRelation => {
                 let client = self.embedding_client.as_ref()?;
                 match client.embed(&[item.content.as_str()]).await {
                     Ok(mut v) if !v.is_empty() => Some(v.remove(0)),

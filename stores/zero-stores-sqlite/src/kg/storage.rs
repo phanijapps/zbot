@@ -10,6 +10,12 @@ use knowledge_graph::types::{
 use rusqlite::{params, Connection};
 use std::sync::Arc;
 
+/// Row tuple from `list_inter_cluster_relations`:
+/// `(id, source_entity_id, target_entity_id, relationship_type, layer)`.
+/// Aliased to keep the trait wrapper signature within clippy's
+/// `type_complexity` budget.
+type InterClusterRelationRow = (String, String, String, String, i64);
+
 /// Build a comma-separated list of positional placeholders for SQL
 /// `IN ()` clauses: `placeholder_list(2, 3)` → `"?2,?3,?4"`. Callers
 /// are responsible for binding the exact same number of parameters in
@@ -1411,6 +1417,71 @@ impl GraphStorage {
             .collect::<Result<Vec<Relationship>, _>>()?;
 
         Ok(relationships)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// List inter-cluster relations whose BOTH endpoints sit in
+    /// `entity_ids` (Phase H-4 follow-up).
+    ///
+    /// Used by recall step 5c after `compute_lca_path` to surface the
+    /// synthesised edges along the LCA path. Filters
+    /// `is_inter_cluster = 1` AND `epistemic_class = 'current'` AND
+    /// `agent_id` match. Empty input short-circuits to an empty
+    /// result (`IN ()` would be a SQL syntax error).
+    pub fn list_inter_cluster_relations(
+        &self,
+        agent_id: &str,
+        entity_ids: &[String],
+    ) -> GraphResult<Vec<InterClusterRelationRow>> {
+        if entity_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let n = entity_ids.len();
+        let src_in = placeholder_list(2, n);
+        let tgt_in = placeholder_list(2 + n, n);
+        let sql = format!(
+            "SELECT id, source_entity_id, target_entity_id, relationship_type, layer \
+             FROM kg_relationships \
+             WHERE agent_id = ?1 \
+               AND is_inter_cluster = 1 \
+               AND epistemic_class = 'current' \
+               AND source_entity_id IN ({src_in}) \
+               AND target_entity_id IN ({tgt_in})"
+        );
+
+        // Bind: agent_id, then the id list twice (once per IN).
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(1 + 2 * n);
+        params.push(Box::new(agent_id.to_string()));
+        for id in entity_ids {
+            params.push(Box::new(id.clone()));
+        }
+        for id in entity_ids {
+            params.push(Box::new(id.clone()));
+        }
+
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<InterClusterRelationRow>> {
+                    let mut stmt = conn.prepare(&sql).map_err(GraphError::Database)?;
+                    let rows = stmt
+                        .query_map(
+                            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                            |row| {
+                                Ok((
+                                    row.get::<_, String>(0)?,
+                                    row.get::<_, String>(1)?,
+                                    row.get::<_, String>(2)?,
+                                    row.get::<_, String>(3)?,
+                                    row.get::<_, i64>(4)?,
+                                ))
+                            },
+                        )
+                        .map_err(GraphError::Database)?;
+                    Ok(rows.filter_map(|r| r.ok()).collect())
                 })()
                 .map_err(graph_to_rusqlite)
             })
@@ -4465,6 +4536,89 @@ mod tests {
             lca_cross.is_none(),
             "cross-agent seeds must not share an LCA"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // list_inter_cluster_relations (Phase H-4 follow-up)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn list_inter_cluster_relations_empty_input_yields_empty() {
+        let storage = create_test_storage();
+        let out = storage
+            .list_inter_cluster_relations("agent-h", &[])
+            .unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn list_inter_cluster_relations_returns_only_marked_rows_in_set() {
+        let storage = create_test_storage();
+        for id in ["agg-a", "agg-b", "agg-c"] {
+            seed_entity_raw(&storage, id, "agent-h");
+        }
+        // One inter-cluster edge (the kind we want).
+        storage
+            .write_inter_cluster_relation("agent-h", 2, "agg-a", "agg-b", "encompasses")
+            .unwrap();
+        // One ordinary base edge — must NOT come back.
+        seed_relationship_raw(&storage, "r-base", "agent-h", "agg-a", "agg-c", "current");
+
+        let ids = vec![
+            "agg-a".to_string(),
+            "agg-b".to_string(),
+            "agg-c".to_string(),
+        ];
+        let out = storage
+            .list_inter_cluster_relations("agent-h", &ids)
+            .unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].1, "agg-a"); // source
+        assert_eq!(out[0].2, "agg-b"); // target
+        assert_eq!(out[0].3, "encompasses");
+        assert_eq!(out[0].4, 2); // layer
+    }
+
+    #[test]
+    fn list_inter_cluster_relations_excludes_edges_outside_id_set() {
+        let storage = create_test_storage();
+        for id in ["agg-a", "agg-b", "agg-c"] {
+            seed_entity_raw(&storage, id, "agent-h");
+        }
+        // Edge between agg-a and agg-c — but agg-c is not in our query set.
+        storage
+            .write_inter_cluster_relation("agent-h", 2, "agg-a", "agg-c", "encompasses")
+            .unwrap();
+
+        let ids = vec!["agg-a".to_string(), "agg-b".to_string()];
+        let out = storage
+            .list_inter_cluster_relations("agent-h", &ids)
+            .unwrap();
+        assert!(
+            out.is_empty(),
+            "edge whose target is outside the queried set must not surface"
+        );
+    }
+
+    #[test]
+    fn list_inter_cluster_relations_scopes_by_agent_id() {
+        let storage = create_test_storage();
+        for id in ["agg-a", "agg-b"] {
+            seed_entity_raw(&storage, id, "agent-a");
+            seed_entity_raw(&storage, &format!("{id}-b"), "agent-b");
+        }
+        storage
+            .write_inter_cluster_relation("agent-a", 2, "agg-a", "agg-b", "shares")
+            .unwrap();
+        storage
+            .write_inter_cluster_relation("agent-b", 2, "agg-a-b", "agg-b-b", "shares")
+            .unwrap();
+
+        let ids = vec!["agg-a".to_string(), "agg-b".to_string()];
+        let out = storage
+            .list_inter_cluster_relations("agent-a", &ids)
+            .unwrap();
+        assert_eq!(out.len(), 1, "agent-b's edge must not leak into agent-a");
     }
 
     #[test]
