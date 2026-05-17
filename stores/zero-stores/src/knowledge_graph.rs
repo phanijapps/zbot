@@ -373,4 +373,66 @@ pub trait KnowledgeGraphStore: Send + Sync {
     ) -> StoreResult<usize> {
         Ok(0)
     }
+
+    /// Promote a cluster of layer-N entities into a single aggregate
+    /// entity at layer N+1 (Phase H-3d).
+    ///
+    /// Three things happen atomically:
+    ///   1. INSERT a new entity into `kg_entities` with `layer = layer`
+    ///      and `parent_cluster_id = NULL` (it sits at the top of the
+    ///      hierarchy until the next layer is built on top of it).
+    ///   2. UPDATE each member's `parent_cluster_id` to point to the
+    ///      new aggregate.
+    ///   3. INSERT the aggregate's embedding into the name-index table
+    ///      when one is provided (so the aggregate participates in
+    ///      semantic recall and in further clustering at layer+1).
+    ///
+    /// The caller is responsible for synthesising `name` + `description`
+    /// (typically via an LLM, or short-circuit-copying from the single
+    /// member of a singleton cluster). This method does no LLM work.
+    ///
+    /// Returns the newly-allocated entity id. Backends that haven't
+    /// implemented yet return a `Backend` error so the orchestrator
+    /// fails loudly rather than silently dropping aggregates.
+    async fn promote_cluster_to_aggregate(
+        &self,
+        _agent_id: &str,
+        _layer: i64,
+        _members: &[EntityId],
+        _name: &str,
+        _description: &str,
+        _embedding: Option<Vec<f32>>,
+    ) -> StoreResult<EntityId> {
+        Err(crate::StoreError::Backend(
+            "promote_cluster_to_aggregate not implemented for this store".to_string(),
+        ))
+    }
+
+    /// Write an inter-cluster relation between two aggregate entities
+    /// at the same hierarchy layer (Phase H-3d).
+    ///
+    /// `source_aggregate` and `target_aggregate` must both live at the
+    /// same `layer` (this is the LeanRAG load-bearing edge — the one
+    /// that links abstract concepts at the same level of abstraction).
+    /// Sets `is_inter_cluster = 1` so recall can distinguish synthesised
+    /// hierarchy edges from base-extracted ones.
+    ///
+    /// The caller decides `relationship_type` (the LLM either picks a
+    /// specific verb or the caller falls back to a generic placeholder
+    /// like `"related-via"` when the LLM budget is exhausted).
+    ///
+    /// Returns the newly-allocated relationship id. Backends that
+    /// haven't implemented yet return a `Backend` error.
+    async fn write_inter_cluster_relation(
+        &self,
+        _agent_id: &str,
+        _layer: i64,
+        _source_aggregate: &EntityId,
+        _target_aggregate: &EntityId,
+        _relationship_type: &str,
+    ) -> StoreResult<RelationshipId> {
+        Err(crate::StoreError::Backend(
+            "write_inter_cluster_relation not implemented for this store".to_string(),
+        ))
+    }
 }
