@@ -1621,6 +1621,96 @@ impl GraphStorage {
         Ok(new_id)
     }
 
+    /// List current-class entities at a specific hierarchy layer
+    /// paired with their name embeddings (Phase H-3e).
+    ///
+    /// Joins `kg_entities` against `kg_name_index` so entities
+    /// without an embedding are silently dropped — they can't
+    /// participate in K-means anyway. The orchestrator should log
+    /// the count discrepancy if it cares.
+    ///
+    /// `limit = 0` means "no limit".
+    pub fn list_entities_with_embeddings_at_layer(
+        &self,
+        agent_id: &str,
+        layer: i64,
+        limit: usize,
+    ) -> GraphResult<Vec<(String, Vec<f32>)>> {
+        let agent_id_for_db = agent_id.to_string();
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<(String, Vec<f32>)>> {
+                    let sql = if limit == 0 {
+                        "SELECT e.id, k.name_embedding
+                         FROM kg_entities e
+                         JOIN kg_name_index k ON k.entity_id = e.id
+                         WHERE e.agent_id = ?1
+                           AND e.layer = ?2
+                           AND e.epistemic_class = 'current'"
+                            .to_string()
+                    } else {
+                        "SELECT e.id, k.name_embedding
+                         FROM kg_entities e
+                         JOIN kg_name_index k ON k.entity_id = e.id
+                         WHERE e.agent_id = ?1
+                           AND e.layer = ?2
+                           AND e.epistemic_class = 'current'
+                         LIMIT ?3"
+                            .to_string()
+                    };
+
+                    let mut stmt = conn.prepare(&sql).map_err(GraphError::Database)?;
+
+                    // sqlite-vec stores embeddings as packed little-endian
+                    // f32 BLOBs. Reads come back as a `Vec<u8>` we decode
+                    // here — the same pattern as in `find_duplicate_candidates`
+                    // above. Mismatched-length BLOBs are skipped silently
+                    // (consistent with elsewhere — better than failing the
+                    // whole layer fetch over one corrupt row).
+                    fn decode_blob(blob: Vec<u8>) -> Option<Vec<f32>> {
+                        if blob.is_empty() || !blob.len().is_multiple_of(4) {
+                            return None;
+                        }
+                        Some(
+                            blob.chunks_exact(4)
+                                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                                .collect(),
+                        )
+                    }
+
+                    let rows: Vec<(String, Vec<f32>)> = if limit == 0 {
+                        let mapped = stmt
+                            .query_map(params![agent_id_for_db, layer], |row| {
+                                let id: String = row.get(0)?;
+                                let emb_blob: Vec<u8> = row.get(1)?;
+                                Ok((id, emb_blob))
+                            })
+                            .map_err(GraphError::Database)?;
+                        mapped
+                            .filter_map(|r| r.ok())
+                            .filter_map(|(id, blob)| decode_blob(blob).map(|v| (id, v)))
+                            .collect()
+                    } else {
+                        let mapped = stmt
+                            .query_map(params![agent_id_for_db, layer, limit as i64], |row| {
+                                let id: String = row.get(0)?;
+                                let emb_blob: Vec<u8> = row.get(1)?;
+                                Ok((id, emb_blob))
+                            })
+                            .map_err(GraphError::Database)?;
+                        mapped
+                            .filter_map(|r| r.ok())
+                            .filter_map(|(id, blob)| decode_blob(blob).map(|v| (id, v)))
+                            .collect()
+                    };
+
+                    Ok(rows)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
     /// Write a synthesised inter-cluster relation between two aggregate
     /// entities at the same hierarchy layer (Phase H-3d).
     ///
@@ -3909,6 +3999,171 @@ mod tests {
         assert_eq!(src, "agg-a");
         assert_eq!(tgt, "agg-b");
         assert_eq!(rtype, "encompasses");
+    }
+
+    /// Helper for H-3e: insert an entity at a non-zero layer with an
+    /// embedding row in kg_name_index. Used to seed layer-N fixtures
+    /// for the list-by-layer tests below.
+    fn seed_entity_at_layer(
+        storage: &GraphStorage,
+        id: &str,
+        agent_id: &str,
+        layer: i64,
+        embedding: Vec<f32>,
+    ) {
+        let id = id.to_string();
+        let agent_id = agent_id.to_string();
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         first_seen_at, last_seen_at, layer)
+                     VALUES (?1, ?2, 'Concept', ?1, ?1, ?1,
+                             datetime('now'), datetime('now'), ?3)",
+                    rusqlite::params![id, agent_id, layer],
+                )?;
+                let embedding_json = serde_json::to_string(&embedding).unwrap();
+                conn.execute(
+                    "INSERT INTO kg_name_index (entity_id, name_embedding) VALUES (?1, ?2)",
+                    rusqlite::params![id, embedding_json],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    fn padded_embedding(seed: f32) -> Vec<f32> {
+        let mut v = vec![0.0_f32; 384];
+        v[0] = seed;
+        v[1] = seed * 0.5;
+        v
+    }
+
+    #[test]
+    fn list_entities_with_embeddings_at_layer_returns_only_matching_layer() {
+        let storage = create_test_storage();
+        seed_entity_at_layer(&storage, "l0a", "agent-h", 0, padded_embedding(1.0));
+        seed_entity_at_layer(&storage, "l0b", "agent-h", 0, padded_embedding(2.0));
+        seed_entity_at_layer(&storage, "l1a", "agent-h", 1, padded_embedding(3.0));
+
+        let layer0 = storage
+            .list_entities_with_embeddings_at_layer("agent-h", 0, 0)
+            .unwrap();
+        let mut layer0_ids: Vec<_> = layer0.iter().map(|(id, _)| id.clone()).collect();
+        layer0_ids.sort();
+        assert_eq!(layer0_ids, vec!["l0a".to_string(), "l0b".to_string()]);
+
+        let layer1 = storage
+            .list_entities_with_embeddings_at_layer("agent-h", 1, 0)
+            .unwrap();
+        assert_eq!(layer1.len(), 1);
+        assert_eq!(layer1[0].0, "l1a");
+        assert!(
+            layer1[0].1.len() == 384,
+            "embedding round-trip preserves dimension"
+        );
+    }
+
+    #[test]
+    fn list_entities_with_embeddings_at_layer_scopes_by_agent_id() {
+        let storage = create_test_storage();
+        seed_entity_at_layer(&storage, "agA-e1", "agent-a", 0, padded_embedding(1.0));
+        seed_entity_at_layer(&storage, "agB-e1", "agent-b", 0, padded_embedding(2.0));
+
+        let rows = storage
+            .list_entities_with_embeddings_at_layer("agent-a", 0, 0)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "agA-e1");
+    }
+
+    #[test]
+    fn list_entities_with_embeddings_at_layer_skips_entities_without_embedding() {
+        let storage = create_test_storage();
+        seed_entity_at_layer(&storage, "with-emb", "agent-h", 0, padded_embedding(1.0));
+        // Insert an entity WITHOUT a kg_name_index row.
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         first_seen_at, last_seen_at, layer)
+                     VALUES ('no-emb', 'agent-h', 'Concept', 'x', 'x', 'x',
+                             datetime('now'), datetime('now'), 0)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let rows = storage
+            .list_entities_with_embeddings_at_layer("agent-h", 0, 0)
+            .unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "entity without kg_name_index row must be skipped"
+        );
+        assert_eq!(rows[0].0, "with-emb");
+    }
+
+    #[test]
+    fn list_entities_with_embeddings_at_layer_respects_limit() {
+        let storage = create_test_storage();
+        for i in 0..5 {
+            seed_entity_at_layer(
+                &storage,
+                &format!("e{i}"),
+                "agent-h",
+                0,
+                padded_embedding(i as f32),
+            );
+        }
+
+        let unbounded = storage
+            .list_entities_with_embeddings_at_layer("agent-h", 0, 0)
+            .unwrap();
+        assert_eq!(unbounded.len(), 5, "limit=0 means no limit");
+
+        let bounded = storage
+            .list_entities_with_embeddings_at_layer("agent-h", 0, 2)
+            .unwrap();
+        assert_eq!(bounded.len(), 2);
+    }
+
+    #[test]
+    fn list_entities_with_embeddings_at_layer_excludes_archival_entities() {
+        let storage = create_test_storage();
+        seed_entity_at_layer(&storage, "current", "agent-h", 0, padded_embedding(1.0));
+        // Same shape as seed_entity_at_layer but with epistemic_class='archival'.
+        let archival_emb = serde_json::to_string(&padded_embedding(2.0)).unwrap();
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         epistemic_class, first_seen_at, last_seen_at, layer)
+                     VALUES ('archived', 'agent-h', 'Concept', 'x', 'x', 'x',
+                             'archival', datetime('now'), datetime('now'), 0)",
+                    [],
+                )?;
+                conn.execute(
+                    "INSERT INTO kg_name_index (entity_id, name_embedding) VALUES (?1, ?2)",
+                    rusqlite::params!["archived", archival_emb],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let rows = storage
+            .list_entities_with_embeddings_at_layer("agent-h", 0, 0)
+            .unwrap();
+        assert_eq!(rows.len(), 1, "only current-class entities count");
+        assert_eq!(rows[0].0, "current");
     }
 
     #[test]
