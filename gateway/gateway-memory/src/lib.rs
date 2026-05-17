@@ -7,7 +7,7 @@ pub mod services;
 pub mod sleep;
 pub mod util;
 
-pub use llm_factory::{LlmClientConfig, MemoryLlmFactory};
+pub use llm_factory::{CachedLlmClient, LlmClientConfig, MemoryLlmFactory};
 pub use services::{MemoryServices, MemoryServicesConfig};
 pub use util::{parse_llm_json, strip_code_fence};
 

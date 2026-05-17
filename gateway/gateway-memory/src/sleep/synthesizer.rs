@@ -21,7 +21,7 @@ use zero_stores::{KnowledgeGraphStore, StrategyCandidate};
 use zero_stores_traits::{CompactionStore, EpisodeStore, MemoryFactStore, StrategyFactInsert};
 
 use crate::util::parse_llm_json;
-use crate::{LlmClientConfig, MemoryLlmFactory};
+use crate::{CachedLlmClient, LlmClientConfig, MemoryLlmFactory};
 
 /// Maximum candidates fetched from the DB per cycle.
 const CANDIDATE_LIMIT: usize = 20;
@@ -354,22 +354,21 @@ fn slugify(s: &str) -> String {
 /// LLM-backed `SynthesisLlm` wired to the injected `MemoryLlmFactory`.
 /// Conservative on failure — propagates `Err` so `run_cycle` can log+skip.
 pub struct LlmSynthesizer {
-    factory: Arc<dyn MemoryLlmFactory>,
+    client: CachedLlmClient,
 }
 
 impl LlmSynthesizer {
     pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
-        Self { factory }
+        Self {
+            client: CachedLlmClient::new(factory, LlmClientConfig::new(0.0, 512)),
+        }
     }
 }
 
 #[async_trait]
 impl SynthesisLlm for LlmSynthesizer {
     async fn synthesize(&self, input: &SynthesisInput) -> Result<SynthesisResponse, String> {
-        let client = self
-            .factory
-            .build_client(LlmClientConfig::new(0.0, 512))
-            .await?;
+        let client = self.client.get().await?;
         let prompt = format!(
             "You identify reusable cross-session strategies from an agent's knowledge graph.\n\
              The entity below has appeared across {n} distinct sessions within the last 30 days.\n\

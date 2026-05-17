@@ -1319,61 +1319,36 @@ fn decay_kg_table(
     let cutoff = chrono::Utc::now() - chrono::Duration::hours(skip_recent_hours);
     let cutoff_rfc = cutoff.to_rfc3339();
     let decay_constant = std::f64::consts::LN_2 / half_life_days;
-    let now = chrono::Utc::now();
-
     let table = table.to_string();
     let agent_id = agent_id.to_string();
 
+    // MEM-004: single bulk UPDATE replaces the historical O(N) per-row
+    // SELECT+compute+UPDATE loop. SQLite's `exp()` + `julianday()` do the
+    // math server-side. rusqlite's `bundled` feature ships SQLite ≥3.35
+    // with `SQLITE_ENABLE_MATH_FUNCTIONS` so `exp()` is always available.
+    //
+    // Behaviour change from the old loop: rows whose new confidence equals
+    // their old confidence (e.g. already at `min_confidence` floor and
+    // exp() pushes them below) are counted by the bulk UPDATE but were
+    // skipped by the per-row loop. The cycle-summary semantics are
+    // "decay was applied to N rows in this pass" either way; callers
+    // don't rely on the exact pre-MEM-004 count meaning.
     storage
         .knowledge_db()
         .with_connection(move |conn| {
-            let tx = conn.unchecked_transaction()?;
-
-            let select_sql = format!(
-                "SELECT id, confidence, last_seen_at FROM {table}
-                 WHERE agent_id = ?1
-                   AND epistemic_class != 'archival'
-                   AND last_seen_at < ?2"
+            let sql = format!(
+                "UPDATE {table} \
+                 SET confidence = MAX(?1, confidence * exp(-?2 * \
+                                                          (julianday('now') - julianday(last_seen_at)))) \
+                 WHERE agent_id = ?3 \
+                   AND epistemic_class != 'archival' \
+                   AND last_seen_at < ?4"
             );
-            let mut stmt = tx.prepare(&select_sql)?;
-            let rows: Vec<(String, f64, String)> = stmt
-                .query_map(rusqlite::params![agent_id, cutoff_rfc], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, f64>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                })?
-                .filter_map(|r| r.ok())
-                .collect();
-            drop(stmt);
-
-            let update_sql = format!("UPDATE {table} SET confidence = ?1 WHERE id = ?2");
-            let mut update = tx.prepare(&update_sql)?;
-            let mut total_updated: u64 = 0;
-            // TODO: Replace this O(N) per-row UPDATE loop with a single bulk
-            // UPDATE using `exp()` once we confirm SQLite's math extension is
-            // always built into our rusqlite. For now we compute in Rust for
-            // portability.
-            for (id, old_conf, last_seen) in rows {
-                let last_seen_dt = match chrono::DateTime::parse_from_rfc3339(&last_seen) {
-                    Ok(dt) => dt.with_timezone(&chrono::Utc),
-                    Err(_) => continue,
-                };
-                let days = (now - last_seen_dt).num_seconds() as f64 / 86_400.0;
-                if days <= 0.0 {
-                    continue;
-                }
-                let new_conf = (old_conf * (-decay_constant * days).exp()).max(min_confidence);
-                if (new_conf - old_conf).abs() < 1e-6 {
-                    continue;
-                }
-                update.execute(rusqlite::params![new_conf, id])?;
-                total_updated += 1;
-            }
-            drop(update);
-            tx.commit()?;
-            Ok(total_updated)
+            let n = conn.execute(
+                &sql,
+                rusqlite::params![min_confidence, decay_constant, agent_id, cutoff_rfc],
+            )?;
+            Ok(n as u64)
         })
         .map_err(StoreError::Backend)
 }
@@ -1484,6 +1459,70 @@ mod tests {
             (fresh_conf - 0.8).abs() < 1e-6,
             "fresh conf should be unchanged"
         );
+    }
+
+    // ----- MEM-004: bulk decay UPDATE correctness ---------------------
+
+    /// Verify the bulk UPDATE (which uses the SQLite-side `exp()` UDF)
+    /// produces the same values as the canonical formula
+    /// `confidence × exp(-ln(2)/half_life × days)`. Three durations:
+    /// 1 day (small decay), 90 days (one half-life ≈ 0.5×), 180 days
+    /// (two half-lives ≈ 0.25×).
+    #[tokio::test]
+    async fn bulk_decay_matches_canonical_formula_at_1_90_and_180_days() {
+        use chrono::Duration as ChronoDuration;
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = std::sync::Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        let db = std::sync::Arc::new(KnowledgeDatabase::new(paths).expect("db"));
+        let graph = std::sync::Arc::new(crate::kg::storage::GraphStorage::new(db).expect("graph"));
+        let store = SqliteKgStore::new(graph.clone());
+
+        let agent_id = "agent-bulk-decay";
+        let half_life_days = 90.0_f64;
+        let cases: [(&str, i64); 3] = [("d1", 1), ("d90", 90), ("d180", 180)];
+
+        for (id, days_ago) in cases {
+            let ts = (chrono::Utc::now() - ChronoDuration::days(days_ago)).to_rfc3339();
+            graph
+                .knowledge_db()
+                .with_connection(|conn| {
+                    conn.execute(
+                        "INSERT INTO kg_entities
+                            (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                             epistemic_class, confidence, mention_count, access_count,
+                             first_seen_at, last_seen_at)
+                         VALUES (?1, ?2, 'Concept', ?1, ?1, ?1, 'current', 1.0, 1, 0, ?3, ?3)",
+                        rusqlite::params![id, agent_id, ts],
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+        }
+
+        let n = store
+            .decay_entity_confidence(agent_id, half_life_days, 0.01, 0)
+            .await
+            .expect("decay ok");
+        assert_eq!(n, 3, "all three test rows should be touched");
+
+        let decay_constant = std::f64::consts::LN_2 / half_life_days;
+        for (id, days_ago) in cases {
+            let actual: f64 = graph
+                .knowledge_db()
+                .with_connection(|conn| {
+                    conn.query_row(
+                        "SELECT confidence FROM kg_entities WHERE id = ?1",
+                        rusqlite::params![id],
+                        |row| row.get(0),
+                    )
+                })
+                .unwrap();
+            let expected = (1.0 * (-decay_constant * days_ago as f64).exp()).max(0.01);
+            assert!(
+                (actual - expected).abs() < 1e-3,
+                "{id}: actual {actual:.6} should match canonical {expected:.6} (Δ < 1e-3)"
+            );
+        }
     }
 
     // ----- MEM-001 Part A: contradiction propagation helpers ----------

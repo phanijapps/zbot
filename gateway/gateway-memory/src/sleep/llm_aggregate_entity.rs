@@ -30,7 +30,7 @@ use crate::sleep::hierarchy_builder::{
     AggregateEntityLlm, AggregateMemberContext, AggregateResponse,
 };
 use crate::util::parse_llm_json;
-use crate::{LlmClientConfig, MemoryLlmFactory};
+use crate::{CachedLlmClient, LlmClientConfig, MemoryLlmFactory};
 
 /// Default temperature for both calls. Zero so summaries are
 /// reproducible — clustering is already pinned by a seeded K-means,
@@ -65,14 +65,25 @@ struct RelationLlmResponse {
 // ---------------------------------------------------------------------------
 
 /// Production adapter — implements [`AggregateEntityLlm`] by routing
-/// each call through `MemoryLlmFactory::build_client`.
+/// each call through `MemoryLlmFactory::build_client`. Two cached
+/// clients because the two methods use different `max_tokens`.
 pub struct LlmAggregateEntity {
-    factory: Arc<dyn MemoryLlmFactory>,
+    aggregate_client: CachedLlmClient,
+    relation_client: CachedLlmClient,
 }
 
 impl LlmAggregateEntity {
     pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
-        Self { factory }
+        Self {
+            aggregate_client: CachedLlmClient::new(
+                factory.clone(),
+                LlmClientConfig::new(TEMPERATURE, MAX_TOKENS_AGGREGATE),
+            ),
+            relation_client: CachedLlmClient::new(
+                factory,
+                LlmClientConfig::new(TEMPERATURE, MAX_TOKENS_RELATION),
+            ),
+        }
     }
 
     /// Build the prompt body for the aggregate-synth call. Pulled out
@@ -165,10 +176,7 @@ impl AggregateEntityLlm for LlmAggregateEntity {
         members: &[AggregateMemberContext],
         prior_names: &[String],
     ) -> Result<AggregateResponse, String> {
-        let client = self
-            .factory
-            .build_client(LlmClientConfig::new(TEMPERATURE, MAX_TOKENS_AGGREGATE))
-            .await?;
+        let client = self.aggregate_client.get().await?;
         let prompt = Self::build_aggregate_prompt(members, prior_names);
         let messages = vec![
             ChatMessage::system("You return only valid JSON.".to_string()),
@@ -191,10 +199,7 @@ impl AggregateEntityLlm for LlmAggregateEntity {
         agg_b_name: &str,
         lambda: usize,
     ) -> Result<String, String> {
-        let client = self
-            .factory
-            .build_client(LlmClientConfig::new(TEMPERATURE, MAX_TOKENS_RELATION))
-            .await?;
+        let client = self.relation_client.get().await?;
         let prompt = Self::build_relation_prompt(agg_a_name, agg_b_name, lambda);
         let messages = vec![
             ChatMessage::system("You return only valid JSON.".to_string()),

@@ -32,7 +32,7 @@ use zero_stores_domain::{Belief, BeliefContradiction, ContradictionType};
 use zero_stores_traits::{BeliefContradictionStore, BeliefStore};
 
 use crate::util::parse_llm_json;
-use crate::{LlmClientConfig, MemoryLlmFactory};
+use crate::{CachedLlmClient, LlmClientConfig, MemoryLlmFactory};
 
 /// Hard ceiling on beliefs scanned per cycle. Mirrors the synthesizer's
 /// `MAX_FACTS_PER_CYCLE` — large enough for normal usage, small enough
@@ -406,12 +406,14 @@ impl BeliefContradictionDetector {
 
 /// Production `ContradictionJudgeLlm` wired to the injected `MemoryLlmFactory`.
 pub struct LlmContradictionJudge {
-    factory: Arc<dyn MemoryLlmFactory>,
+    client: CachedLlmClient,
 }
 
 impl LlmContradictionJudge {
     pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
-        Self { factory }
+        Self {
+            client: CachedLlmClient::new(factory, LlmClientConfig::new(0.0, 256)),
+        }
     }
 
     /// Build the judge prompt. Pulled out as a free function so tests
@@ -467,10 +469,7 @@ impl LlmContradictionJudge {
 #[async_trait]
 impl ContradictionJudgeLlm for LlmContradictionJudge {
     async fn judge(&self, a: &Belief, b: &Belief) -> Result<ContradictionJudgeResponse, String> {
-        let client = self
-            .factory
-            .build_client(LlmClientConfig::new(0.0, 256))
-            .await?;
+        let client = self.client.get().await?;
         let prompt = Self::build_prompt(a, b);
         let messages = vec![
             ChatMessage::system("You return only valid JSON.".to_string()),

@@ -93,7 +93,7 @@ None. Phase 4 foundation done.
 
 ## MEM-003 — ConflictResolver: cache LLM client across pair judgments
 
-**Status:** Pending. (Note: Phase D's `MemoryLlmFactory` abstraction makes implementing this easier — the factory can cache the client.)
+**Status:** ✅ Done. Shipped via the `CachedLlmClient` helper in `gateway-memory/src/llm_factory.rs` — every production Llm* impl (`LlmConflictJudge`, `LlmCorrectionsAbstractor`, `LlmSynthesizer`, `LlmBeliefSynthesizer`, `LlmContradictionJudge`, `LlmPatternExtractor`, `LlmPairwiseVerifier`, `LlmAggregateEntity`, `LlmQueryGate`) now caches its client lazily via `tokio::sync::OnceCell`. Errors are not memoized (transient factory failures retry on next call). 3 unit tests cover the cache contract (build-once across many gets, no error memoization, concurrent first-call coalescence).
 **Severity:** Low (perf nit)
 **Trigger:** Observed judge-call latency exceeds expectation, OR a single sleep cycle examines >20 pairs and you notice the cycle takes noticeably longer than expected.
 
@@ -117,7 +117,7 @@ Same pattern for the other LLM impls in `sleep/`.
 
 ## MEM-004 — DecayEngine: bulk UPDATE via SQLite math extension
 
-**Status:** Pending
+**Status:** ✅ Done. Single bulk `UPDATE … SET confidence = MAX(?, confidence * exp(-? * (julianday('now') - julianday(last_seen_at)))) WHERE …` replaces the historical SELECT+compute+UPDATE loop. SQLite's `exp()` is registered as a Rust-side scalar UDF on every pooled connection — rusqlite's `bundled` feature ships SQLite without `SQLITE_ENABLE_MATH_FUNCTIONS`, so we register `exp(x) = x.exp()` via `create_scalar_function` (deterministic, no I/O) and use it in the bulk decay UPDATE. The decay path is now one SQL round-trip regardless of row count. Tested at 1 / 90 / 180 days against the canonical formula.
 **Severity:** Low (perf nit)
 **Trigger:** Observed sleep-cycle duration exceeds 10 seconds, OR `kg_entities` row count exceeds 10,000.
 

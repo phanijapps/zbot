@@ -17,7 +17,7 @@ use serde::Deserialize;
 use zero_stores_traits::{CompactionStore, MemoryFactStore};
 
 use crate::util::parse_llm_json;
-use crate::{LlmClientConfig, MemoryLlmFactory};
+use crate::{CachedLlmClient, LlmClientConfig, MemoryLlmFactory};
 
 const MIN_CORRECTIONS_TO_ABSTRACT: usize = 3;
 const MAX_CORRECTIONS_PER_CALL: usize = 20;
@@ -195,12 +195,14 @@ fn short_hash(s: &str) -> String {
 
 /// Production `AbstractionLlm` wired to the injected `MemoryLlmFactory`.
 pub struct LlmCorrectionsAbstractor {
-    factory: Arc<dyn MemoryLlmFactory>,
+    client: CachedLlmClient,
 }
 
 impl LlmCorrectionsAbstractor {
     pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
-        Self { factory }
+        Self {
+            client: CachedLlmClient::new(factory, LlmClientConfig::new(0.0, 512)),
+        }
     }
 }
 
@@ -210,10 +212,7 @@ impl AbstractionLlm for LlmCorrectionsAbstractor {
         &self,
         corrections: &[String],
     ) -> Result<AbstractionResponse, String> {
-        let client = self
-            .factory
-            .build_client(LlmClientConfig::new(0.0, 512))
-            .await?;
+        let client = self.client.get().await?;
         let formatted = corrections
             .iter()
             .enumerate()
