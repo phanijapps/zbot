@@ -21,7 +21,7 @@ use zero_stores_traits::{
 };
 
 use crate::util::parse_llm_json;
-use crate::{LlmClientConfig, MemoryLlmFactory};
+use crate::{CachedLlmClient, LlmClientConfig, MemoryLlmFactory};
 
 /// Maximum successful session_episodes loaded per cycle.
 const CANDIDATE_LIMIT: usize = 50;
@@ -396,22 +396,21 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 /// LLM-backed `PatternExtractLlm`. Conservative on failure — propagates `Err`
 /// so `run_cycle` can log+skip.
 pub struct LlmPatternExtractor {
-    factory: Arc<dyn MemoryLlmFactory>,
+    client: CachedLlmClient,
 }
 
 impl LlmPatternExtractor {
     pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
-        Self { factory }
+        Self {
+            client: CachedLlmClient::new(factory, LlmClientConfig::new(0.0, 1024)),
+        }
     }
 }
 
 #[async_trait]
 impl PatternExtractLlm for LlmPatternExtractor {
     async fn generalize(&self, input: &PatternInput) -> Result<PatternResponse, String> {
-        let client = self
-            .factory
-            .build_client(LlmClientConfig::new(0.0, 1024))
-            .await?;
+        let client = self.client.get().await?;
         let prompt = format!(
             "Two recent successful agent sessions shared a recurring tool-call \
              sequence. Generalize it into a reusable procedure.\n\n\

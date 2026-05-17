@@ -34,7 +34,7 @@ use zero_stores_domain::{Belief, MemoryFact};
 use zero_stores_traits::{BeliefStore, MemoryFactStore};
 
 use crate::util::parse_llm_json;
-use crate::{LlmClientConfig, MemoryLlmFactory};
+use crate::{CachedLlmClient, LlmClientConfig, MemoryLlmFactory};
 
 /// Synthesizer algorithm + prompt version. Bump when the synthesis
 /// prompt or aggregation rules change so old beliefs can be flagged
@@ -514,12 +514,14 @@ fn earliest_valid_from(facts: &[MemoryFact]) -> Option<DateTime<Utc>> {
 
 /// Production `BeliefSynthesisLlm` wired to the injected `MemoryLlmFactory`.
 pub struct LlmBeliefSynthesizer {
-    factory: Arc<dyn MemoryLlmFactory>,
+    client: CachedLlmClient,
 }
 
 impl LlmBeliefSynthesizer {
     pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
-        Self { factory }
+        Self {
+            client: CachedLlmClient::new(factory, LlmClientConfig::new(0.0, 256)),
+        }
     }
 
     /// Build the prompt body. Pulled out as a free function so the test
@@ -560,10 +562,7 @@ impl BeliefSynthesisLlm for LlmBeliefSynthesizer {
         subject: &str,
         facts: &[MemoryFact],
     ) -> Result<SynthesisLlmResponse, String> {
-        let client = self
-            .factory
-            .build_client(LlmClientConfig::new(0.0, 256))
-            .await?;
+        let client = self.client.get().await?;
         let prompt = Self::build_prompt(subject, facts);
         let messages = vec![
             ChatMessage::system("You return only valid JSON.".to_string()),
