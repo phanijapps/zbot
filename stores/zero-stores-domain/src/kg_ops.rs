@@ -88,8 +88,15 @@ pub struct DecayCandidate {
 /// One hit returned by `KnowledgeGraphStore::search_entities_by_name_embedding`.
 /// `distance` is L2-squared on normalized vectors — convert to cosine
 /// similarity at the caller via `1 - distance / 2`.
+///
+/// `id` was added in Phase H-4 so the recall pipeline can seed
+/// `compute_lca_path` directly; backends that pre-date this field
+/// should default it to `String::new()` and the LCA step skips empty
+/// ids automatically.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityNameEmbeddingHit {
+    #[serde(default)]
+    pub id: String,
     pub name: String,
     pub entity_type: String,
     pub distance: f32,

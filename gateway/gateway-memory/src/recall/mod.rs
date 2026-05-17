@@ -398,13 +398,52 @@ impl MemoryRecall {
                 _ => Vec::new(),
             };
 
-        // 4. Graph ANN over the entity name embedding index.
-        let graph_items: Vec<ScoredItem> = match (self.kg_store.as_ref(), query_emb.as_ref()) {
-            (Some(store), Some(emb)) => adapters::graph_ann_to_items(store, emb, 10, agent_id)
-                .await
-                .unwrap_or_default(),
-            _ => Vec::new(),
-        };
+        // 4. Graph ANN over the entity name embedding index. We share
+        // the raw hit set with step 5c (hierarchy LCA) so both surfaces
+        // use the same seed entities without a second ANN query.
+        let (graph_items, graph_seed_ids): (Vec<ScoredItem>, Vec<zero_stores::types::EntityId>) =
+            match (self.kg_store.as_ref(), query_emb.as_ref()) {
+                (Some(store), Some(emb)) => match store
+                    .search_entities_by_name_embedding(agent_id, emb, 10)
+                    .await
+                {
+                    Ok(hits) => {
+                        let seed_ids: Vec<zero_stores::types::EntityId> = hits
+                            .iter()
+                            .filter(|h| !h.id.is_empty())
+                            .map(|h| zero_stores::types::EntityId(h.id.clone()))
+                            .collect();
+                        let items: Vec<ScoredItem> = hits
+                            .into_iter()
+                            .enumerate()
+                            .map(|(idx, hit)| {
+                                // Mirror graph_ann_to_items scoring exactly.
+                                let cosine = 1.0 - (hit.distance as f64) / 2.0;
+                                let rank_one = (idx as f64) + 1.0;
+                                let score = (1.0 / rank_one) * cosine;
+                                ScoredItem {
+                                    kind: ItemKind::GraphNode,
+                                    id: format!("graph:{}", hit.name),
+                                    content: format!(
+                                        "Entity: {} [{}] (cosine ~ {cosine:.2})",
+                                        hit.name, hit.entity_type
+                                    ),
+                                    score,
+                                    provenance: Provenance {
+                                        source: "kg_name_index".to_string(),
+                                        source_id: hit.name,
+                                        session_id: None,
+                                        ward_id: None,
+                                    },
+                                }
+                            })
+                            .collect();
+                        (items, seed_ids)
+                    }
+                    Err(_) => (Vec::new(), Vec::new()),
+                },
+                _ => (Vec::new(), Vec::new()),
+            };
 
         // 5a. Previous episodes in this ward (chain continuity).
         let episode_items: Vec<ScoredItem> = match (self.episode_store.as_ref(), ward_id) {
@@ -458,6 +497,39 @@ impl MemoryRecall {
             _ => Vec::new(),
         };
 
+        // 5c. Hierarchical-memory LCA path (Phase H-4 / LeanRAG).
+        // Opportunistic: when the hierarchy hasn't been built yet,
+        // `compute_lca_path` returns an empty result and this list
+        // stays empty — no extra cost beyond the parent-pointer walk.
+        // Seeds reuse the graph-ANN top-K from step 4 so we don't
+        // double-query the kg_name_index. Category weight uses the
+        // `pattern` slot (0.9) per `project_hierarchical_memory_plan.md`
+        // — conservative until empirical validation justifies a bump.
+        let hier_items: Vec<ScoredItem> = match (self.kg_store.as_ref(), graph_seed_ids.is_empty())
+        {
+            (Some(store), false) => match store.compute_lca_path(agent_id, &graph_seed_ids).await {
+                Ok(lca) => {
+                    let weight = self.config.category_weight("pattern");
+                    lca.path_entities
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, id)| {
+                            // Higher-layer entities (closer to the LCA)
+                            // rank slightly higher in the per-source
+                            // order; downstream RRF takes over for
+                            // cross-source fusion.
+                            let raw = 1.0 / (1.0 + idx as f64);
+                            let mut item = adapters::hier_entity_to_item(id, lca.max_layer, raw);
+                            item.score *= weight;
+                            item
+                        })
+                        .collect()
+                }
+                Err(_) => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
+
         // Intent boost on non-goal lists.
         let mut all_lists = vec![
             fact_items,
@@ -466,6 +538,7 @@ impl MemoryRecall {
             graph_items,
             episode_items,
             belief_items,
+            hier_items,
         ];
         for list in &mut all_lists {
             intent_boost(list, active_goals);
@@ -508,7 +581,11 @@ impl MemoryRecall {
                 let store = self.memory_store.as_ref()?;
                 store.get_fact_embedding(&item.id).await.ok().flatten()
             }
-            ItemKind::Belief | ItemKind::Wiki | ItemKind::Procedure | ItemKind::GraphNode => {
+            ItemKind::Belief
+            | ItemKind::Wiki
+            | ItemKind::Procedure
+            | ItemKind::GraphNode
+            | ItemKind::HierEntity => {
                 let client = self.embedding_client.as_ref()?;
                 match client.embed(&[item.content.as_str()]).await {
                     Ok(mut v) if !v.is_empty() => Some(v.remove(0)),
@@ -1635,5 +1712,34 @@ mod tests {
             .await
             .unwrap();
         assert!(out.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // H-4: hierarchical-memory LCA recall integration
+    // -----------------------------------------------------------------
+    //
+    // The KnowledgeGraphStore trait has 25+ required methods so a
+    // crate-local stub becomes 200+ lines of `Ok(Default::default())`.
+    // We rely instead on the focused tests below + the unit tests
+    // sitting next to the SQLite impl (zero-stores-sqlite::kg::storage
+    // `lca_*` family) for end-to-end coverage. The recall pipeline's
+    // H-4 branch is also exercised indirectly by the existing
+    // recall_unified_* tests above (which all pass after H-4 lands).
+
+    /// When no `kg_store` is wired, the LCA branch must short-circuit
+    /// — recall behaviour is byte-for-byte unchanged from pre-H-4.
+    #[tokio::test]
+    async fn recall_unified_does_not_query_lca_when_kg_store_absent() {
+        let config = Arc::new(RecallConfig::default());
+        let embed: Arc<dyn EmbeddingClient> = Arc::new(TestEmbed);
+        let recall = MemoryRecall::new(Some(embed), config);
+        let out = recall
+            .recall_unified("ag", "anything", None, &[], 20)
+            .await
+            .unwrap();
+        assert!(
+            !out.iter().any(|i| matches!(i.kind, ItemKind::HierEntity)),
+            "no kg_store wired ⇒ no HierEntity items"
+        );
     }
 }

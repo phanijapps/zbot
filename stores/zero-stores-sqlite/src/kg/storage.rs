@@ -511,7 +511,7 @@ impl GraphStorage {
         query_embedding: &[f32],
         top_k: usize,
         agent_id: &str,
-    ) -> GraphResult<Vec<(String, String, f32)>> {
+    ) -> GraphResult<Vec<(String, String, String, f32)>> {
         if query_embedding.is_empty() || top_k == 0 {
             return Ok(Vec::new());
         }
@@ -523,7 +523,7 @@ impl GraphStorage {
         // time. Pull top-K by distance, then filter against `kg_entities`.
         self.db
             .with_connection(|conn| {
-                (|| -> GraphResult<Vec<(String, String, f32)>> {
+                (|| -> GraphResult<Vec<(String, String, String, f32)>> {
                     let mut ann_stmt = conn
                         .prepare(
                             "SELECT entity_id, distance \
@@ -556,7 +556,7 @@ impl GraphStorage {
                         if let Some(r) = rows.next().map_err(GraphError::Database)? {
                             let name: String = r.get(0).map_err(GraphError::Database)?;
                             let etype: String = r.get(1).map_err(GraphError::Database)?;
-                            out.push((name, etype, dist));
+                            out.push((entity_id, name, etype, dist));
                         }
                     }
                     Ok(out)
@@ -1619,6 +1619,133 @@ impl GraphStorage {
             .map_err(GraphError::Other)?;
 
         Ok(new_id)
+    }
+
+    /// Compute the LCA of a set of seed entities by walking
+    /// `parent_cluster_id` upward (Phase H-4 / LeanRAG).
+    ///
+    /// Returns the LCA id, the union of all path entities (excluding
+    /// seeds themselves), and the LCA's layer. Empty input yields a
+    /// `(None, [], 0)` triple. The walk is capped at `MAX_LCA_WALK`
+    /// hops per seed so a parent-pointer cycle from a corrupt DB
+    /// can't run forever.
+    pub fn compute_lca_path(
+        &self,
+        agent_id: &str,
+        seed_entity_ids: &[String],
+    ) -> GraphResult<(Option<String>, Vec<String>, i64)> {
+        /// Hard cap on parent-pointer walks per seed. The plan allows
+        /// up to 4 layers, so anything beyond ~8 is a data-corruption
+        /// indicator we want to bail out of rather than loop on.
+        const MAX_LCA_WALK: usize = 16;
+
+        if seed_entity_ids.is_empty() {
+            return Ok((None, Vec::new(), 0));
+        }
+        if seed_entity_ids.len() == 1 {
+            // Single seed is its own LCA. Path excludes the seed
+            // itself (consistent with multi-seed semantics).
+            let id = seed_entity_ids[0].clone();
+            let layer = self.read_entity_layer(agent_id, &id)?.unwrap_or(0);
+            return Ok((Some(id), Vec::new(), layer));
+        }
+
+        let agent_id_for_db = agent_id.to_string();
+        let seeds_for_db: Vec<String> = seed_entity_ids.to_vec();
+
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<(Option<String>, Vec<String>, i64)> {
+                    // Build each seed's ancestry chain by repeatedly
+                    // looking up parent_cluster_id. We collect the
+                    // chain in order from the seed itself upward.
+                    let mut chains: Vec<Vec<String>> = Vec::with_capacity(seeds_for_db.len());
+                    let mut layer_of: std::collections::HashMap<String, i64> =
+                        std::collections::HashMap::new();
+
+                    let mut parent_stmt = conn
+                        .prepare(
+                            "SELECT parent_cluster_id, layer FROM kg_entities \
+                             WHERE id = ?1 AND agent_id = ?2",
+                        )
+                        .map_err(GraphError::Database)?;
+
+                    for seed in &seeds_for_db {
+                        let mut chain: Vec<String> = vec![seed.clone()];
+                        let mut current = seed.clone();
+                        for _ in 0..MAX_LCA_WALK {
+                            let row: Option<(Option<String>, i64)> = parent_stmt
+                                .query_row(params![current, agent_id_for_db], |row| {
+                                    Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?))
+                                })
+                                .ok();
+                            let Some((parent_opt, layer)) = row else {
+                                break;
+                            };
+                            layer_of.insert(current.clone(), layer);
+                            let Some(parent) = parent_opt else {
+                                break;
+                            };
+                            chain.push(parent.clone());
+                            current = parent;
+                        }
+                        chains.push(chain);
+                    }
+                    drop(parent_stmt);
+
+                    // The LCA is the deepest (closest to seeds) entity
+                    // that appears in every chain. Algorithm: walk one
+                    // chain from the seed outward; the first entity
+                    // that's present in ALL other chains is the LCA.
+                    let lca_id = chains[0].iter().find(|candidate| {
+                        chains[1..].iter().all(|chain| chain.contains(*candidate))
+                    });
+
+                    let Some(lca_id) = lca_id.cloned() else {
+                        return Ok((None, Vec::new(), 0));
+                    };
+
+                    // Collect union of all chain entities up to (and
+                    // including) the LCA, then strip the seeds.
+                    let mut path: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    for chain in &chains {
+                        for id in chain {
+                            path.insert(id.clone());
+                            if *id == lca_id {
+                                break;
+                            }
+                        }
+                    }
+                    for seed in &seeds_for_db {
+                        path.remove(seed);
+                    }
+                    let mut path_vec: Vec<String> = path.into_iter().collect();
+                    path_vec.sort();
+                    let max_layer = layer_of.get(&lca_id).copied().unwrap_or(0);
+                    Ok((Some(lca_id), path_vec, max_layer))
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Helper for `compute_lca_path` to read a single entity's `layer`
+    /// (single-seed short-circuit). Returns `Ok(None)` when the entity
+    /// isn't found rather than erroring.
+    fn read_entity_layer(&self, agent_id: &str, id: &str) -> GraphResult<Option<i64>> {
+        let agent_id = agent_id.to_string();
+        let id = id.to_string();
+        self.db
+            .with_connection(|conn| {
+                let result: rusqlite::Result<i64> = conn.query_row(
+                    "SELECT layer FROM kg_entities WHERE id = ?1 AND agent_id = ?2",
+                    params![id, agent_id],
+                    |row| row.get(0),
+                );
+                Ok(result.ok())
+            })
+            .map_err(GraphError::Other)
     }
 
     /// List current-class entities at a specific hierarchy layer
@@ -4164,6 +4291,180 @@ mod tests {
             .unwrap();
         assert_eq!(rows.len(), 1, "only current-class entities count");
         assert_eq!(rows[0].0, "current");
+    }
+
+    // -----------------------------------------------------------------
+    // compute_lca_path (Phase H-4a)
+    // -----------------------------------------------------------------
+
+    /// Seed an entity at `layer` with the given `parent_cluster_id`
+    /// (None = top-level). Used by the LCA tests below.
+    fn seed_hier_entity(
+        storage: &GraphStorage,
+        id: &str,
+        agent_id: &str,
+        layer: i64,
+        parent: Option<&str>,
+    ) {
+        let id = id.to_string();
+        let agent_id = agent_id.to_string();
+        let parent = parent.map(String::from);
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         first_seen_at, last_seen_at, layer, parent_cluster_id)
+                     VALUES (?1, ?2, 'Concept', ?1, ?1, ?1,
+                             datetime('now'), datetime('now'), ?3, ?4)",
+                    rusqlite::params![id, agent_id, layer, parent],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn lca_empty_seeds_yields_empty_result() {
+        let storage = create_test_storage();
+        let (lca, path, max_layer) = storage.compute_lca_path("agent-lca", &[]).unwrap();
+        assert!(lca.is_none());
+        assert!(path.is_empty());
+        assert_eq!(max_layer, 0);
+    }
+
+    #[test]
+    fn lca_single_seed_is_its_own_lca() {
+        let storage = create_test_storage();
+        seed_hier_entity(&storage, "e1", "agent-lca", 0, None);
+        let (lca, path, max_layer) = storage
+            .compute_lca_path("agent-lca", &["e1".to_string()])
+            .unwrap();
+        assert_eq!(lca.as_deref(), Some("e1"));
+        assert!(
+            path.is_empty(),
+            "path excludes the seed; single-seed path must be empty"
+        );
+        assert_eq!(max_layer, 0);
+    }
+
+    #[test]
+    fn lca_seeds_with_no_parents_have_no_common_ancestor() {
+        let storage = create_test_storage();
+        seed_hier_entity(&storage, "a", "agent-lca", 0, None);
+        seed_hier_entity(&storage, "b", "agent-lca", 0, None);
+        let (lca, path, max_layer) = storage
+            .compute_lca_path("agent-lca", &["a".to_string(), "b".to_string()])
+            .unwrap();
+        assert!(lca.is_none(), "two unparented seeds share no LCA");
+        assert!(path.is_empty());
+        assert_eq!(max_layer, 0);
+    }
+
+    #[test]
+    fn lca_two_seeds_under_same_parent_resolves_at_layer_1() {
+        let storage = create_test_storage();
+        // agg-1 (layer 1) parent of both a, b (layer 0)
+        seed_hier_entity(&storage, "agg-1", "agent-lca", 1, None);
+        seed_hier_entity(&storage, "a", "agent-lca", 0, Some("agg-1"));
+        seed_hier_entity(&storage, "b", "agent-lca", 0, Some("agg-1"));
+
+        let (lca, path, max_layer) = storage
+            .compute_lca_path("agent-lca", &["a".to_string(), "b".to_string()])
+            .unwrap();
+        assert_eq!(lca.as_deref(), Some("agg-1"));
+        assert_eq!(
+            path,
+            vec!["agg-1".to_string()],
+            "path contains just the LCA (seeds excluded)"
+        );
+        assert_eq!(max_layer, 1);
+    }
+
+    #[test]
+    fn lca_three_seeds_across_two_layers_resolves_at_layer_2() {
+        let storage = create_test_storage();
+        // Hierarchy:
+        //   top (L2)
+        //     ├── mid-1 (L1)
+        //     │     ├── a (L0)
+        //     │     └── b (L0)
+        //     └── mid-2 (L1)
+        //           └── c (L0)
+        // LCA(a, c) = top; LCA(a, b) = mid-1.
+        seed_hier_entity(&storage, "top", "agent-lca", 2, None);
+        seed_hier_entity(&storage, "mid-1", "agent-lca", 1, Some("top"));
+        seed_hier_entity(&storage, "mid-2", "agent-lca", 1, Some("top"));
+        seed_hier_entity(&storage, "a", "agent-lca", 0, Some("mid-1"));
+        seed_hier_entity(&storage, "b", "agent-lca", 0, Some("mid-1"));
+        seed_hier_entity(&storage, "c", "agent-lca", 0, Some("mid-2"));
+
+        // a, b → mid-1
+        let (lca, path, max_layer) = storage
+            .compute_lca_path("agent-lca", &["a".to_string(), "b".to_string()])
+            .unwrap();
+        assert_eq!(lca.as_deref(), Some("mid-1"));
+        assert_eq!(path, vec!["mid-1".to_string()]);
+        assert_eq!(max_layer, 1);
+
+        // a, c → top, path also contains both mids
+        let (lca, mut path, max_layer) = storage
+            .compute_lca_path("agent-lca", &["a".to_string(), "c".to_string()])
+            .unwrap();
+        assert_eq!(lca.as_deref(), Some("top"));
+        path.sort();
+        assert_eq!(
+            path,
+            vec!["mid-1".to_string(), "mid-2".to_string(), "top".to_string()]
+        );
+        assert_eq!(max_layer, 2);
+    }
+
+    #[test]
+    fn lca_walk_terminates_on_corrupt_parent_cycle() {
+        // Two seeds, one with a cycle in its parent chain. The walk
+        // must bail out at MAX_LCA_WALK rather than hang. The cycle
+        // means the seed eventually re-visits an ancestor but never
+        // hits the other seed's chain — result: no LCA, no panic.
+        let storage = create_test_storage();
+        seed_hier_entity(&storage, "x", "agent-lca", 1, Some("y"));
+        seed_hier_entity(&storage, "y", "agent-lca", 2, Some("x")); // cycle x→y→x
+        seed_hier_entity(&storage, "z", "agent-lca", 0, None);
+
+        let (lca, path, _) = storage
+            .compute_lca_path("agent-lca", &["x".to_string(), "z".to_string()])
+            .unwrap();
+        assert!(lca.is_none(), "z has no parent — no common ancestor");
+        assert!(path.is_empty());
+    }
+
+    #[test]
+    fn lca_scopes_by_agent_id() {
+        let storage = create_test_storage();
+        // Agent A: a, b → agg-A
+        seed_hier_entity(&storage, "agg-A", "agent-A", 1, None);
+        seed_hier_entity(&storage, "a", "agent-A", 0, Some("agg-A"));
+        seed_hier_entity(&storage, "b", "agent-A", 0, Some("agg-A"));
+        // Agent B has its own hierarchy with no overlap.
+        seed_hier_entity(&storage, "agg-B", "agent-B", 1, None);
+        seed_hier_entity(&storage, "p", "agent-B", 0, Some("agg-B"));
+
+        let (lca_a, _, _) = storage
+            .compute_lca_path("agent-A", &["a".to_string(), "b".to_string()])
+            .unwrap();
+        assert_eq!(lca_a.as_deref(), Some("agg-A"));
+
+        // Querying agent-A with an agent-B entity returns no LCA —
+        // the parent walk filters by agent_id, so p's parent pointer
+        // is invisible under agent-A.
+        let (lca_cross, _, _) = storage
+            .compute_lca_path("agent-A", &["a".to_string(), "p".to_string()])
+            .unwrap();
+        assert!(
+            lca_cross.is_none(),
+            "cross-agent seeds must not share an LCA"
+        );
     }
 
     #[test]

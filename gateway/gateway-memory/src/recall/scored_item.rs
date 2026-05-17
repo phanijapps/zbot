@@ -22,6 +22,14 @@ pub enum ItemKind {
     /// under a dedicated `## Active Beliefs` heading so the agent can
     /// distinguish aggregated stances from raw facts.
     Belief,
+    /// LCA-path entity from the hierarchical-memory builder
+    /// (Phase H-4 / LeanRAG). Recall walks `parent_cluster_id` up from
+    /// the top-N seed entities to their lowest common ancestor and
+    /// emits each ancestor on the path as a `HierEntity`. The consumer
+    /// renders these under a dedicated `## Topical Map` heading so the
+    /// agent can see the abstraction chain without confusing it with
+    /// the base entities.
+    HierEntity,
 }
 
 #[derive(Debug, Clone)]
