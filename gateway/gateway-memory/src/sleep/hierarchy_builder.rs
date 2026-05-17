@@ -829,4 +829,84 @@ mod tests {
             "every multi-member aggregate should have an embedding row"
         );
     }
+
+    /// Visible-output demo: seed 48 entities in 4 blobs, run the
+    /// hierarchy builder, and print the resulting graph state so a
+    /// human can eyeball "this is what the agent's memory looked like
+    /// before and after." Run with:
+    ///
+    /// ```text
+    /// cargo test -p gateway-memory --lib \
+    ///     sleep::hierarchy_builder::tests::demo -- --nocapture
+    /// ```
+    ///
+    /// Not asserting beyond what the other tests already cover — the
+    /// goal here is human-readable stdout.
+    #[tokio::test]
+    async fn demo_prints_resulting_graph_state() {
+        let agent = "agent-demo";
+        // 4 blobs × 12 members = 48 layer-0 entities. Target 12 → k=4.
+        let (kg, _dir) = build_store_with_layer_zero(agent, 12, 4);
+        let llm = MockLlm::new();
+        let embedder: Arc<dyn EmbeddingClient> = Arc::new(MockEmbedder);
+        let config = HierarchyConfig {
+            cluster_target_size: 12,
+            max_layers: 3,
+            inter_cluster_relation_threshold: 0,
+            ..Default::default()
+        };
+        let builder = HierarchyBuilder::new(kg.clone(), llm.clone())
+            .with_embedding_client(Some(embedder))
+            .with_config(config);
+
+        println!("\n========================================");
+        println!("  H-3 HIERARCHY BUILDER — DEMO RUN");
+        println!("========================================");
+        println!("Seeded 48 entities across 4 tight blobs at layer 0.");
+        println!("Target cluster size: 12 → expect k=4 clusters.\n");
+
+        let stats = builder.run_for_agent(agent).await;
+
+        println!("--- HierarchyStats ---");
+        println!("  layers_built:                     {}", stats.layers_built);
+        println!(
+            "  aggregates_created (multi-member): {}",
+            stats.aggregates_created
+        );
+        println!(
+            "  singletons_promoted:              {}",
+            stats.singletons_promoted
+        );
+        println!(
+            "  inter_cluster_relations_created:  {}",
+            stats.inter_cluster_relations_created
+        );
+        println!("  llm_calls:                        {}", stats.llm_calls);
+        println!(
+            "  stopped_reason:                   {:?}",
+            stats.stopped_reason
+        );
+        println!("  errors:                           {}\n", stats.errors);
+
+        // Print entity counts per layer.
+        println!("--- Entity counts per layer ---");
+        for layer in 0..=(stats.layers_built as i64) {
+            let rows = kg
+                .list_entities_with_embeddings_at_layer(agent, layer, 0)
+                .await
+                .unwrap();
+            println!("  layer {layer}: {} entities", rows.len());
+            for (i, e) in rows.iter().take(4).enumerate() {
+                println!("      [{}] {}", i, e.id.0);
+            }
+            if rows.len() > 4 {
+                println!("      ... and {} more", rows.len() - 4);
+            }
+        }
+
+        println!("\nDemo run complete. Stats reflect what got written to");
+        println!("kg_entities (layer + parent_cluster_id) and kg_relationships");
+        println!("(layer + is_inter_cluster=1). All in a tempfile DB —");
+        println!("nothing persisted outside the test run.\n");
+    }
 }
