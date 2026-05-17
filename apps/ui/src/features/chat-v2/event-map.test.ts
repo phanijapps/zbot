@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { mapGatewayEventToQuickChatAction, mapGatewayEventToPillEvent } from "./event-map";
+import {
+  mapGatewayEventToQuickChatAction,
+  mapGatewayEventToPillEvent,
+  mapTurnCompleteFinalMessage,
+} from "./event-map";
 
 describe("mapGatewayEventToQuickChatAction", () => {
   it("maps Token (wire field: delta) to TOKEN action", () => {
@@ -126,5 +130,44 @@ describe("mapGatewayEventToPillEvent", () => {
   });
   it("returns null for unmapped pill events", () => {
     expect(mapGatewayEventToPillEvent({ type: "heartbeat" } as any)).toBeNull();
+  });
+});
+
+describe("mapTurnCompleteFinalMessage", () => {
+  it("returns a RESPOND action when turn_complete carries final_message (respond-tool path)", () => {
+    expect(
+      mapTurnCompleteFinalMessage({
+        type: "turn_complete",
+        final_message: "Here's your life snapshot…",
+      } as any),
+    ).toEqual({ type: "RESPOND", text: "Here's your life snapshot…" });
+  });
+
+  it("returns null when turn_complete has no final_message (token-streaming path)", () => {
+    expect(mapTurnCompleteFinalMessage({ type: "turn_complete" } as any)).toBeNull();
+  });
+
+  it("returns null when final_message is an empty string (avoid clobbering streamed content)", () => {
+    expect(
+      mapTurnCompleteFinalMessage({ type: "turn_complete", final_message: "" } as any),
+    ).toBeNull();
+  });
+
+  it("returns null for non-turn_complete events", () => {
+    expect(
+      mapTurnCompleteFinalMessage({ type: "respond", final_message: "x" } as any),
+    ).toBeNull();
+    expect(
+      mapTurnCompleteFinalMessage({ type: "token", final_message: "x" } as any),
+    ).toBeNull();
+  });
+
+  it("returns null when final_message is not a string", () => {
+    expect(
+      mapTurnCompleteFinalMessage({ type: "turn_complete", final_message: 42 } as any),
+    ).toBeNull();
+    expect(
+      mapTurnCompleteFinalMessage({ type: "turn_complete", final_message: null } as any),
+    ).toBeNull();
   });
 });
