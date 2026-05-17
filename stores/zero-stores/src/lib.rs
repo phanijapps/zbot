@@ -21,8 +21,8 @@ pub use error::{StoreError, StoreResult};
 pub use extracted::ExtractedKnowledge;
 pub use knowledge_graph::{
     AggregateSummary, DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit,
-    EntityWithEmbedding, GraphView, HierarchySummary, InterClusterRelationHit, KnowledgeGraphStore,
-    LcaPath, RelationshipContext, StrategyCandidate,
+    EntityWithEmbedding, GraphView, HierarchySummary, InterClusterRelationHit, KgNodesForEpisodes,
+    KnowledgeGraphStore, LcaPath, RelationshipContext, StrategyCandidate,
 };
 pub use memory_facts::{
     MemoryAggregateStats, MemoryFactStore, MemoryHealthMetrics, SkillIndexRow, StrategyFactInsert,

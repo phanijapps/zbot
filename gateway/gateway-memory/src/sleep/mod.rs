@@ -42,7 +42,10 @@ pub use conflict_resolver::{
 pub use corrections_abstractor::{
     AbstractionLlm, AbstractionStats, CorrectionsAbstractor, LlmCorrectionsAbstractor,
 };
-pub use decay::{DecayConfig, DecayEngine, PruneCandidate};
+pub use decay::{
+    ContradictionPropagationConfig, ContradictionPropagationStats, DecayConfig, DecayEngine,
+    PruneCandidate,
+};
 pub use orphan_archiver::{OrphanArchiver, OrphanArchiverStats};
 pub use pattern_extractor::{
     LlmPatternExtractor, PatternExtractLlm, PatternExtractor, PatternResponse, PatternStats,

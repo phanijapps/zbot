@@ -168,7 +168,9 @@ A **relationship** in `kg_relationships` carries `source_entity_id`, `target_ent
 
 **Confidence decays.** Background pass applies exponential decay based on `last_seen_at` with a configurable half-life (default `entity_half_life_days = 90`, `relationship_half_life_days = 90`). Floored at `min_confidence = 0.01`. Rows touched within `skip_recent_hours = 24` are skipped. Orphan entities (no relationships, old `last_seen_at`) are flagged and archived. Archived rows are never deleted — they're just hidden from recall.
 
-**Graph traversal** expands recall results. For each top fragment, follow `source_episode_ids` to the entities it referenced, then walk outward along relationships capped at `max_hops = 2`. Each hop applies `hop_decay = 0.6` to the relevance score. Cap at `max_graph_facts = 5` additions per recall. Today traversal doesn't weight edges by their `confidence`; that's an obvious extension point.
+**Contradiction propagation (MEM-001 Part A).** Time-decay isn't the only confidence dial. When a `memory_facts.contradicted_by` is set, the entities and relationships extracted from the same source episode become suspect too. Each sleep cycle lists distinct `source_episode_id` values from contradicted facts within the lookback window (`lookback_hours = 24` by default), finds the kg_entities and kg_relationships whose `source_episode_ids` blob contains any of those episode ids (comma-flanked token match — no substring false positives), and applies `confidence = MAX(min_floor, confidence × decay_factor)`. Defaults: `decay_factor = 0.9`, `min_floor = 0.05`. The graph reacts to fact-level corrections immediately rather than waiting for the 90-day half-life to do the work.
+
+**Graph traversal** expands recall results. For each top fragment, follow `source_episode_ids` to the entities it referenced, then walk outward along relationships capped at `max_hops = 2`. Each hop applies `hop_decay = 0.6` to the relevance score. Cap at `max_graph_facts = 5` additions per recall. Today traversal doesn't weight edges by their `confidence`; that's an obvious extension point (re-filed as MEM-001 Part B in the backlog).
 
 ### Bi-temporal model
 
@@ -419,7 +421,7 @@ The sleep cycle runs every `cycle_interval_hours = 1` by default. Each worker is
 | `PatternExtractor` | Recurring tool-call sequences → procedural `pattern` fragments | per-cycle |
 | `CorrectionsAbstractor` | 3+ thematically similar corrections → `schema` fragment | `corrections_abstractor_interval_hours = 24` |
 | `ConflictResolver` | LLM-judge contradicting `schema` pairs (cosine ≥ 0.85); set `superseded_by` + `valid_until` on loser | `conflict_resolver_interval_hours = 24` |
-| `DecayEngine` | Exponential decay of entity/relationship `confidence` based on `last_seen_at` | hourly |
+| `DecayEngine` | Exponential decay of entity/relationship `confidence` based on `last_seen_at`; plus **contradiction propagation** (MEM-001 Part A) — multiplicative `× decay_factor` on kg_entities and kg_relationships sharing episodes with newly-contradicted facts | hourly |
 | `OrphanArchiver` | Entities with no relationships + old `last_seen_at` → `epistemic_class = 'archival'` | hourly |
 | `Pruner` | Soft-delete entities flagged by decay below threshold | hourly |
 | `BeliefSynthesizer` | Group facts by subject → belief rows (single-fact short-circuit, else LLM) | `beliefNetwork.intervalHours = 24` |

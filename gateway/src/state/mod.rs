@@ -994,6 +994,12 @@ impl AppState {
                             .get_execution_settings()
                             .map(|s| s.memory.hierarchy.llm_budget_per_cycle)
                             .unwrap_or(50),
+                        // MEM-001 Part A — defaults today. The struct
+                        // lives in `gateway-memory::sleep` and can be
+                        // overridden once `settings.memory.contradiction`
+                        // is added to the public settings surface.
+                        contradiction_propagation_config:
+                            gateway_memory::sleep::ContradictionPropagationConfig::default(),
                     });
                 (
                     Some(memory_services.sleep_time_worker.clone()),

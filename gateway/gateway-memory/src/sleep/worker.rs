@@ -155,6 +155,13 @@ pub struct CycleStats {
     pub orphans_failed: u64,
     pub kg_entities_decayed: u64,
     pub kg_relationships_decayed: u64,
+    /// MEM-001 Part A — contradicted-fact episodes processed this cycle.
+    pub contradiction_episodes_processed: u64,
+    /// MEM-001 Part A — KG entities whose confidence was multiplicatively
+    /// decayed because they were extracted from contradicted-fact episodes.
+    pub contradiction_entities_decayed: u64,
+    /// MEM-001 Part A — KG relationships decayed the same way.
+    pub contradiction_relationships_decayed: u64,
     /// Belief Network — Phase B-1.
     pub beliefs_synthesized: u64,
     /// Belief Network — Phase B-2: contradictions inserted (logical + tension).
@@ -247,6 +254,28 @@ async fn run_cycle(
         .await;
     stats.kg_entities_decayed = kg_decay_stats.entities_decayed;
     stats.kg_relationships_decayed = kg_decay_stats.relationships_decayed;
+
+    // MEM-001 Part A — propagate fact-level contradictions down to the
+    // KG entities and relationships sharing the same source episodes.
+    // No-op when the engine wasn't wired with a fact store. Lookback
+    // is `now - lookback_hours`; pre-bi-temporal databases will simply
+    // process more rows on first run, which is fine because the SQL
+    // is bounded by `contradicted_by IS NOT NULL`.
+    let prop_lookback =
+        chrono::Utc::now() - chrono::Duration::hours(decay_engine.contradiction_lookback_hours());
+    let prop_stats = decay_engine
+        .propagate_fact_contradictions(agent_id, prop_lookback)
+        .await;
+    stats.contradiction_episodes_processed = prop_stats.episodes_processed;
+    stats.contradiction_entities_decayed = prop_stats.entities_decayed;
+    stats.contradiction_relationships_decayed = prop_stats.relationships_decayed;
+    if prop_stats.errors > 0 {
+        tracing::warn!(
+            %run_id,
+            errors = prop_stats.errors,
+            "contradiction propagation had non-fatal errors"
+        );
+    }
 
     let candidates = decay_engine.list_prune_candidates(agent_id).await;
     stats.prune_candidates = candidates.len() as u64;

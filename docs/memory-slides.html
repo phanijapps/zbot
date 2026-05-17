@@ -1044,10 +1044,12 @@
         <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:28px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.15">Entities and edges,<br>each with their own life.</h3>
         <p class="caption">Both ends of an edge and the edge itself carry independent <strong>confidence</strong> and <strong>last_seen_at</strong>. None is renewed on recall — only when the entity actually shows up in a new conversation.</p>
         <p class="caption"><strong>Confidence decays</strong> exponentially against last_seen_at, with a default half-life of <span class="mono">90 days</span> for both entities and relationships. Floored at <span class="mono">min_confidence = 0.01</span>; rows touched within <span class="mono">24h</span> are skipped.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px"><strong>Contradiction propagation</strong> (MEM-001 Part A): when a <span class="mono">memory_facts.contradicted_by</span> is set, the entities and relationships that came from the same source episode get a multiplicative confidence hit (<span class="mono">× 0.9</span> by default, floored at <span class="mono">0.05</span>). The graph reacts to fact-level corrections without waiting for the time-decay half-life.</p>
         <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px">Orphan entities (no relationships, old last_seen_at) are flagged and archived. Archived rows are never deleted — just hidden from recall.</p>
         <div class="config-note">
           <span class="k">recall_config.json</span> &rarr; <span class="k">kg_decay</span><br>
-          <span class="k">entity_half_life_days: 90</span> &middot; <span class="k">relationship_half_life_days: 90</span> &middot; <span class="k">min_confidence: 0.01</span>
+          <span class="k">entity_half_life_days: 90</span> &middot; <span class="k">relationship_half_life_days: 90</span> &middot; <span class="k">min_confidence: 0.01</span><br>
+          <span class="k">decay_factor: 0.9</span> &middot; <span class="k">min_floor: 0.05</span> &middot; <span class="k">lookback_hours: 24</span> &nbsp;<span style="color:var(--ink-dim)">// contradiction propagation</span>
         </div>
       </div>
     </div>
