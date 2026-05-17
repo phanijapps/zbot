@@ -518,6 +518,24 @@ impl KnowledgeGraphStore for SqliteKgStore {
         block(move || storage.list_all_relationships(limit).map_err(map_graph_err)).await
     }
 
+    async fn connectivity_strength(
+        &self,
+        agent_id: &str,
+        cluster_a: &[zero_stores::types::EntityId],
+        cluster_b: &[zero_stores::types::EntityId],
+    ) -> StoreResult<usize> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        let cluster_a: Vec<String> = cluster_a.iter().map(|e| e.0.clone()).collect();
+        let cluster_b: Vec<String> = cluster_b.iter().map(|e| e.0.clone()).collect();
+        block(move || {
+            storage
+                .connectivity_strength(&agent_id, &cluster_a, &cluster_b)
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
     async fn vec_index_health(&self) -> StoreResult<VecIndexHealth> {
         // SQLite-vec maintains an aux `<table>_rowids` table per index;
         // counting its rows is the faithful "indexed row count" used by

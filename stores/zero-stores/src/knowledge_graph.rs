@@ -339,4 +339,38 @@ pub trait KnowledgeGraphStore: Send + Sync {
     ) -> StoreResult<Vec<String>> {
         Ok(Vec::new())
     }
+
+    // ---- Hierarchical memory (Phase H-3) ---------------------------------
+    //
+    // Reads needed by the `HierarchyBuilder` sleep worker to decide
+    // whether two clusters of entities are "connected enough" to
+    // synthesise an aggregate inter-cluster relation at the next
+    // hierarchy layer (LeanRAG's λ > τ gate).
+
+    /// Count the relationships that bridge two clusters of entities at
+    /// the *current* (non-archival) layer of the graph.
+    ///
+    /// Both directions count: an edge from `cluster_a` to `cluster_b`
+    /// and an edge from `cluster_b` to `cluster_a` each contribute 1.
+    /// The two clusters are assumed disjoint by the caller (K-means
+    /// produces disjoint partitions); when they overlap the SQL still
+    /// runs, it just counts edges within the overlap twice (once per
+    /// direction) — same as it does for non-overlapping clusters.
+    ///
+    /// `agent_id` scopes the query so cross-agent edges don't leak.
+    /// Only `epistemic_class = 'current'` relationships are counted —
+    /// archived/superseded edges don't contribute to "current
+    /// connectivity strength" at any layer.
+    ///
+    /// Empty clusters trivially yield `0`. Default: `0` so backends
+    /// that haven't implemented yet just disable inter-cluster
+    /// relation synthesis (the hierarchy still builds without it).
+    async fn connectivity_strength(
+        &self,
+        _agent_id: &str,
+        _cluster_a: &[EntityId],
+        _cluster_b: &[EntityId],
+    ) -> StoreResult<usize> {
+        Ok(0)
+    }
 }
