@@ -10,8 +10,8 @@ use knowledge_graph::types::{
 // `zero_stores::{DuplicateCandidate, DecayCandidate, StrategyCandidate,
 // RelationshipContext, GraphView}` keep compiling.
 pub use zero_stores_domain::{
-    DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit, GraphView, InterClusterRelationHit,
-    RelationshipContext, StrategyCandidate,
+    AggregateSummary, DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit, GraphView,
+    HierarchySummary, InterClusterRelationHit, RelationshipContext, StrategyCandidate,
 };
 
 /// Backend-agnostic persistence for the knowledge graph subsystem.
@@ -514,6 +514,26 @@ pub trait KnowledgeGraphStore: Send + Sync {
         _entity_ids: &[EntityId],
     ) -> StoreResult<Vec<InterClusterRelationHit>> {
         Ok(Vec::new())
+    }
+
+    /// Hierarchical-memory health snapshot used by the Observatory
+    /// pill + slideover (`GET /api/hierarchy/stats`).
+    ///
+    /// Returns layer-by-layer entity counts, total inter-cluster edge
+    /// count, and the top-N aggregates by member count (with their
+    /// LLM-synthesised names + descriptions) — enough to render
+    /// "Hierarchy: 2 layers / 693 / 30 entities" and a drill-in panel
+    /// without a second round-trip.
+    ///
+    /// `top_n = 0` is treated as "no aggregates" by impls (counts
+    /// alone). Default: empty summary so backends without hierarchy
+    /// data report cleanly as "no hierarchy built yet".
+    async fn hierarchy_summary(
+        &self,
+        _agent_id: &str,
+        _top_n: usize,
+    ) -> StoreResult<HierarchySummary> {
+        Ok(HierarchySummary::default())
     }
 }
 

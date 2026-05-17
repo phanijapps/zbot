@@ -16,6 +16,16 @@ use std::sync::Arc;
 /// `type_complexity` budget.
 type InterClusterRelationRow = (String, String, String, String, i64);
 
+/// Row tuple from `hierarchy_summary`'s top-aggregates query:
+/// `(id, name, layer, member_count, description)`. Same aliasing
+/// rationale as `InterClusterRelationRow`.
+type AggregateSummaryRow = (String, String, i64, usize, String);
+
+/// Return tuple from `hierarchy_summary`:
+/// `(layer_counts, inter_cluster_total, top_aggregates)`. Trait
+/// wrapper maps it into the public `HierarchySummary`.
+type HierarchySummaryRow = (Vec<(i64, usize)>, usize, Vec<AggregateSummaryRow>);
+
 /// Build a comma-separated list of positional placeholders for SQL
 /// `IN ()` clauses: `placeholder_list(2, 3)` → `"?2,?3,?4"`. Callers
 /// are responsible for binding the exact same number of parameters in
@@ -1417,6 +1427,108 @@ impl GraphStorage {
             .collect::<Result<Vec<Relationship>, _>>()?;
 
         Ok(relationships)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Hierarchical-memory health snapshot — layer counts + total
+    /// inter-cluster edge count + top-N aggregates by member size.
+    /// Used by `GET /api/hierarchy/stats` (Observatory pill + slideover).
+    ///
+    /// One DB session, three queries: count-by-layer, total
+    /// inter-cluster relations, top-N aggregates ordered by
+    /// `member_count` parsed from `properties` JSON. Dual-matches
+    /// `agent_id` against `__global__` (same idiom as the other
+    /// hierarchy reads — base entities live under that sentinel).
+    ///
+    /// Returns a triple to keep the trait-wrapper signature simple;
+    /// the caller maps it to the public `HierarchySummary` shape.
+    pub fn hierarchy_summary(
+        &self,
+        agent_id: &str,
+        top_n: usize,
+    ) -> GraphResult<HierarchySummaryRow> {
+        let agent_id_for_db = agent_id.to_string();
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<HierarchySummaryRow> {
+                    let mut layer_stmt = conn
+                        .prepare(
+                            "SELECT layer, COUNT(*) FROM kg_entities \
+                             WHERE (agent_id = ?1 OR agent_id = '__global__') \
+                               AND epistemic_class = 'current' \
+                             GROUP BY layer ORDER BY layer ASC",
+                        )
+                        .map_err(GraphError::Database)?;
+                    let layer_counts: Vec<(i64, usize)> = layer_stmt
+                        .query_map(params![agent_id_for_db], |row| {
+                            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)? as usize))
+                        })
+                        .map_err(GraphError::Database)?
+                        .filter_map(Result::ok)
+                        .collect();
+
+                    let inter_cluster: i64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM kg_relationships \
+                             WHERE (agent_id = ?1 OR agent_id = '__global__') \
+                               AND is_inter_cluster = 1 \
+                               AND epistemic_class = 'current'",
+                            params![agent_id_for_db],
+                            |row| row.get(0),
+                        )
+                        .map_err(GraphError::Database)?;
+
+                    let top_aggregates: Vec<AggregateSummaryRow> = if top_n == 0 {
+                        Vec::new()
+                    } else {
+                        let mut agg_stmt = conn
+                            .prepare(
+                                "SELECT id, name, layer, properties \
+                                 FROM kg_entities \
+                                 WHERE (agent_id = ?1 OR agent_id = '__global__') \
+                                   AND layer > 0 \
+                                   AND epistemic_class = 'current' \
+                                 ORDER BY CAST(json_extract(properties, '$.member_count') AS INTEGER) DESC \
+                                 LIMIT ?2",
+                            )
+                            .map_err(GraphError::Database)?;
+                        let mapped = agg_stmt
+                            .query_map(params![agent_id_for_db, top_n as i64], |row| {
+                                let id: String = row.get(0)?;
+                                let name: String = row.get(1)?;
+                                let layer: i64 = row.get(2)?;
+                                let props_json: Option<String> = row.get(3)?;
+                                let (member_count, description) = match props_json {
+                                    Some(s) => {
+                                        let v: serde_json::Value = serde_json::from_str(&s)
+                                            .unwrap_or(serde_json::json!({}));
+                                        let mc = v
+                                            .get("member_count")
+                                            .and_then(|n| n.as_u64())
+                                            .unwrap_or(1)
+                                            as usize;
+                                        let desc = v
+                                            .get("description")
+                                            .and_then(|d| d.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        (mc, desc)
+                                    }
+                                    None => (1, String::new()),
+                                };
+                                Ok((id, name, layer, member_count, description))
+                            })
+                            .map_err(GraphError::Database)?;
+                        let collected: Vec<AggregateSummaryRow> =
+                            mapped.filter_map(Result::ok).collect();
+                        drop(agg_stmt);
+                        collected
+                    };
+
+                    Ok((layer_counts, inter_cluster as usize, top_aggregates))
                 })()
                 .map_err(graph_to_rusqlite)
             })

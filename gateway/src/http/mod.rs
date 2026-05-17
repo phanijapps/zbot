@@ -18,6 +18,7 @@ mod events;
 mod gateway_bus;
 mod graph;
 mod health;
+mod hierarchy;
 mod ingest;
 mod mcps;
 mod memory;
@@ -338,6 +339,8 @@ pub fn create_http_router(
             "/api/belief-network/activity",
             get(belief_network::get_activity),
         )
+        // Hierarchical-memory observability (Phase H-3/H-4 follow-up)
+        .route("/api/hierarchy/stats", get(hierarchy::get_stats))
         // Distillation endpoints
         .route("/api/distillation/status", get(graph::distillation_status))
         .route(

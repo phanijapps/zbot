@@ -613,6 +613,39 @@ impl KnowledgeGraphStore for SqliteKgStore {
         .await
     }
 
+    async fn hierarchy_summary(
+        &self,
+        agent_id: &str,
+        top_n: usize,
+    ) -> StoreResult<zero_stores::HierarchySummary> {
+        let storage = self.storage.clone();
+        let agent_id = agent_id.to_string();
+        block(move || {
+            storage
+                .hierarchy_summary(&agent_id, top_n)
+                .map(|(layer_counts, inter_cluster_relations, aggs)| {
+                    zero_stores::HierarchySummary {
+                        layer_counts,
+                        inter_cluster_relations,
+                        top_aggregates: aggs
+                            .into_iter()
+                            .map(|(id, name, layer, member_count, description)| {
+                                zero_stores::AggregateSummary {
+                                    id,
+                                    name,
+                                    layer,
+                                    member_count,
+                                    description,
+                                }
+                            })
+                            .collect(),
+                    }
+                })
+                .map_err(map_graph_err)
+        })
+        .await
+    }
+
     async fn list_inter_cluster_relations(
         &self,
         agent_id: &str,

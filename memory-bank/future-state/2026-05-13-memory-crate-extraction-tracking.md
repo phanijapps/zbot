@@ -71,6 +71,30 @@ These are the *new* memory components built across the three phases. All live in
 | `evidence` TEXT column | `stores/zero-stores-sqlite/src/knowledge_schema.rs` | Schema-only — preparatory for future contradiction-propagation work. No code populates it yet. |
 | `KgDecayConfig` | `gateway/gateway-services/src/recall_config.rs` | Configurable half-lives + floor + skip-recent guard |
 
+### Phase 6 — Hierarchical Memory (HiRAG + LeanRAG)
+
+Multi-layer aggregation on top of `kg_entities`. Sleep cycle K-means-clusters layer-N entities, LLM-synthesises a layer-N+1 aggregate per cluster, writes LeanRAG-style inter-cluster relations when connectivity λ > τ. Recall walks `parent_cluster_id` from top seed entities to their lowest common ancestor and emits each path entity (and the inter-cluster edges between path entities) as new `ItemKind::HierEntity` / `ItemKind::HierRelation` ScoredItems. Disabled by default behind `execution.memory.hierarchy.enabled`. Design at `memory-bank/future-state/` and the saved-memory entry `project_hierarchical_memory_plan.md`.
+
+| Component | File | Responsibility |
+|-----------|------|----------------|
+| Schema v31 — `kg_entities.layer` + `parent_cluster_id`; `kg_relationships.layer` + `is_inter_cluster` | `stores/zero-stores-sqlite/src/knowledge_schema.rs` + `migrations/v31_kg_hierarchy_columns.sql` | Columns + 4 supporting indexes. PRAGMA-guarded ALTER mirrors v29/v30. |
+| `kmeans_cosine` + `cluster_sparsity` + `should_stop_layering` | `gateway/gateway-memory/src/sleep/clustering.rs` | Pure-Rust K-means with K-means++ init, cosine distance, HiRAG cluster-sparsity stop rule. Seeded LCG, no `rand` dep. |
+| `KnowledgeGraphStore::list_entities_with_embeddings_at_layer` | trait + SQLite impl | Builder's candidate-pool fetch. Joins `kg_entities × kg_name_index`, dual-matches agent_id against `__global__`. |
+| `KnowledgeGraphStore::connectivity_strength` | trait + SQLite impl | Counts cross-cluster edges in both directions. Gates inter-cluster relation synthesis at λ > τ. |
+| `KnowledgeGraphStore::promote_cluster_to_aggregate` | trait + SQLite impl | Atomic INSERT aggregate + UPDATE member `parent_cluster_id` + optional `kg_name_index` row. |
+| `KnowledgeGraphStore::write_inter_cluster_relation` | trait + SQLite impl | INSERT into `kg_relationships` with `is_inter_cluster = 1`, layer-tagged. |
+| `KnowledgeGraphStore::compute_lca_path` | trait + SQLite impl | Walks `parent_cluster_id` from seed entities up to LCA. `MAX_LCA_WALK = 16` cap protects against corrupt cycles. |
+| `KnowledgeGraphStore::list_inter_cluster_relations` | trait + SQLite impl | Returns edges where both endpoints are in a given id set. Used by H-4 recall step 5c to surface the "lean" edges along the LCA path. |
+| `HierarchyBuilder` + `AggregateEntityLlm` trait | `gateway-memory/src/sleep/hierarchy_builder.rs` | Sleep-cycle orchestrator: cluster → synthesise → write aggregates + inter-cluster relations. Singleton short-circuit (no LLM). Internal throttle mirrors `BeliefSynthesizer`. |
+| `LlmAggregateEntity` | `gateway-memory/src/sleep/llm_aggregate_entity.rs` | Production trait impl via `MemoryLlmFactory`. Two methods: `synthesize_aggregate(members)` and `synthesize_relation(agg_a, agg_b, λ)`. JSON-strict prompts. |
+| `HierarchySettings` | `gateway-memory/src/lib.rs` (inside `MemorySettings`) | `enabled`, `intervalHours`, `maxLayers`, `clusterTargetSize`, `interClusterRelationThreshold`, `llmBudgetPerCycle`. Disabled by default. |
+| `ItemKind::HierEntity` + `ItemKind::HierRelation` + adapters | `gateway-memory/src/recall/scored_item.rs` + `recall/adapters.rs` | LCA path entities + inter-cluster edges as ScoredItems. Render under `## Topical Map` heading in the consumer formatter (`gateway-execution::recall::format_scored_items`). |
+| Recall step 5c | `gateway-memory/src/recall/mod.rs` | After graph-ANN, walks LCA, fetches inter-cluster relations among path entities, emits both with `pattern`-slot category weight (`0.9`, conservative). |
+
+**Dual-match agent_id pattern.** Real-data smoke surfaced that base entities live under `agent_id = '__global__'` (cross-agent dedup convention) while the daemon's HierarchyBuilder is configured for `agent_id = 'root'`. All H-3/H-4 SQL filters now do `(agent_id = ?1 OR agent_id = '__global__')`, matching the idiom in `search_entities_by_name_embedding`.
+
+**Singleton aggregate naming.** First production run showed singletons surfacing as `[topic L1] entity_root_<uuid>` — useless. Fixed by looking up the member's `name` via `get_entity` before promoting, plus embedding the description so singletons participate in higher-layer clustering.
+
 ---
 
 ## 3. Recall Pipeline Changes
@@ -165,6 +189,18 @@ Today's memory code reaches into:
 ## 8. Complete Commit Inventory (Phase 1–3)
 
 Listed in reverse-chronological order. All on branch `feat/parallel-delegation-aggregation`.
+
+### Phase 6 — Hierarchical Memory (HiRAG + LeanRAG, 2026-05-16 → 17)
+
+- `654db462` feat(memory): schema v31 — hierarchical-memory columns on kg_entities + kg_relationships (PR #170)
+- `26c351f9..58069947` H-3 builder, 7 commits squash-merged into `8949af1a` (PR #172, *which was orphan-history merged then retargeted as #172/develop*) — K-means clustering + stop rule, connectivity λ query, aggregate writer, LayerN fetch, orchestrator + LLM trait, sleep-cycle wiring + `HierarchySettings`, demo test
+- `d4e90b66` feat(memory): `LlmAggregateEntity` + wire `HierarchyBuilder` into sleep cycle (PR #173) — production LLM adapter + `services.rs` reads `hierarchy.enabled` + `state/mod.rs` plumbs settings
+- `95df5461` feat(memory): LCA-bounded recall integration (PR #174) — `compute_lca_path` trait + `ItemKind::HierEntity` + recall step 5c
+- `5f1cd723` feat(memory): inter-cluster relations in recall + doc update (PR #175) — `list_inter_cluster_relations` + `ItemKind::HierRelation` + dual-match agent_id fix + singleton display-name fix + observatory-side info log on every cycle
+
+**Behaviour change:** with `execution.memory.hierarchy.enabled = true`, the sleep cycle clusters layer-N entities, LLM-synthesises aggregates at layer N+1, writes inter-cluster relations gated by λ > τ. Recall walks the LCA path from top-N seed entities and emits `HierEntity` + `HierRelation` ScoredItems under a `## Topical Map` heading. Flag-off (default) is byte-for-byte unchanged from pre-H-3.
+
+**First production run** (2026-05-17, ward = `__global__`, 693 layer-0 entities, `clusterTargetSize=20`, `intervalHours=0`): 30 layer-1 aggregates created, 11 inter-cluster relations. LLM-synthesised names like `agentic-system-components`, `multi-agent system cluster`, `agent-orchestration-cluster`. Relation types like `strongly-correlates-with`, `shares-context-with`.
 
 ### Phase E + F — Worker move, MemoryServices factory, gateway wiring collapse (2026-05-13)
 - `20d59f9b` refactor(gateway): collapse memory construction into MemoryServices::new — Phase F
