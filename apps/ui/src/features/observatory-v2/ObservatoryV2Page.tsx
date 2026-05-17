@@ -21,7 +21,7 @@
 // ============================================================================
 
 import { useState } from "react";
-import { ArrowUpRight, Layers, Network, Activity, Brain } from "lucide-react";
+import { ArrowUpRight, Layers, Network, Activity, Brain, X } from "lucide-react";
 import { Slideover } from "@/components/Slideover";
 import { useGraphStats, useDistillationStatus } from "../observatory/graph-hooks";
 import { useBeliefNetworkStats } from "../observatory/belief-network/hooks";
@@ -29,6 +29,7 @@ import { useHierarchyStats } from "../observatory/hierarchy/hooks";
 import { HierarchyPanel } from "../observatory/hierarchy/HierarchyPanel";
 import { BeliefNetworkPanel } from "../observatory/belief-network/BeliefNetworkPanel";
 import { HierarchyShells } from "./HierarchyShells";
+import type { AggregateSummary } from "../observatory/hierarchy/types";
 import "./observatory-v2.css";
 
 export function ObservatoryV2Page() {
@@ -39,6 +40,7 @@ export function ObservatoryV2Page() {
 
   const [hierOpen, setHierOpen] = useState(false);
   const [beliefOpen, setBeliefOpen] = useState(false);
+  const [pickedAgg, setPickedAgg] = useState<AggregateSummary | null>(null);
 
   const hierarchyEnabled = hierStats?.enabled ?? false;
   const layerCounts = hierStats?.summary?.layer_counts ?? [];
@@ -60,6 +62,7 @@ export function ObservatoryV2Page() {
           aggregates={aggregates}
           interClusterCount={interCluster}
           enabled={hierarchyEnabled && !hierLoading}
+          onAggregateClick={setPickedAgg}
         />
         {!hierarchyEnabled && !hierLoading && (
           <div className="obs2__empty">
@@ -166,6 +169,33 @@ export function ObservatoryV2Page() {
       >
         <BeliefNetworkPanel />
       </Slideover>
+
+      {/* Picked-aggregate floating card — appears when the user clicks
+          an L1 sphere. Frosted glass, anchored bottom-right, dismissible. */}
+      {pickedAgg && (
+        <div className="obs2__pick-card">
+          <button
+            type="button"
+            className="obs2__pick-close"
+            onClick={() => setPickedAgg(null)}
+            aria-label="Close aggregate detail"
+          >
+            <X size={14} aria-hidden />
+          </button>
+          <div className="obs2__pick-head">
+            <span className="obs2__pick-eyebrow">aggregate · L{pickedAgg.layer}</span>
+            <span className="obs2__pick-name">{pickedAgg.name}</span>
+          </div>
+          <div className="obs2__pick-meta">
+            <span className="obs2__pick-meta-chip">
+              {pickedAgg.member_count} member{pickedAgg.member_count === 1 ? "" : "s"}
+            </span>
+          </div>
+          {pickedAgg.description && (
+            <p className="obs2__pick-desc">{pickedAgg.description}</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

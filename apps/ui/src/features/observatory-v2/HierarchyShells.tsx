@@ -7,27 +7,25 @@
 //     small frosted dots. Count from `layer_counts[0]`.
 //   - L1 (middle): aggregate entities as fewer, larger glowing nodes
 //     positioned by member-weight on a smaller sphere.
-//   - L2+ (inner): even fewer, smaller spheres. Currently we only have
-//     L0 + L1 in production data — additional layers materialise here
-//     automatically when they exist.
+//   - L2+ (inner): even fewer, smaller spheres.
 //
-// Edges:
-//   - Subtle radial threads from each L1 aggregate inward to the
-//     centre, suggesting the hierarchical "lifting" relationship.
-//   - Inter-cluster relations (count from `summary.inter_cluster_relations`)
-//     drawn as soft arcs between random pairs of L1 nodes — we don't
-//     yet have a precise edge list endpoint, so we synthesise visual
-//     density proportional to the real count. (Phase 2 fetches the
-//     real edge list.)
+// Phase 2 additions (this file):
+//   - Ambient pulse loop: every ~3-6s a random aggregate emits an
+//     expanding pulse ring + brief brightness boost. The graph
+//     "breathes" so the page never feels static.
+//   - Hover interactivity: pointer over an aggregate brightens it +
+//     draws faint tracer lines to nearby aggregates ("connections").
+//   - Click → onAggregateClick callback. Parent uses this to focus
+//     the camera and open a detail slideover.
+//   - Apex flash: the central core pulses in sync with ambient events.
 //
-// Motion: slow ambient orbit, gentle camera drift. No jarring
-// transitions. Apple-Vision palette — soft cream-white glow on near-
-// black, depth fog, restrained particle count.
+// Phase 3 (NOT in this PR) will add precise live RAG overlay driven
+// by backend RecallTrace events.
 // ============================================================================
 
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas, useFrame, type ThreeEvent } from "@react-three/fiber";
 import { OrbitControls, AdaptiveDpr } from "@react-three/drei";
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { AggregateSummary } from "../observatory/hierarchy/types";
 
@@ -36,6 +34,8 @@ interface HierarchyShellsProps {
   aggregates: AggregateSummary[];
   interClusterCount: number;
   enabled: boolean;
+  /** Called when the user clicks an aggregate sphere. */
+  onAggregateClick?: (agg: AggregateSummary) => void;
 }
 
 // Deterministic pseudo-random scatter so the visualisation looks the
@@ -53,12 +53,10 @@ function seeded(seed: number): () => number {
 }
 
 // Spread N points on a sphere of radius `r` using the Fibonacci
-// lattice — gives a uniform-looking distribution without clumps.
+// lattice — uniform-looking distribution without clumps.
 function spherePoints(n: number, r: number, seed: number): THREE.Vector3[] {
   if (n <= 0) return [];
   const rand = seeded(seed);
-  // Jitter the lattice so it doesn't look like a grid; preserves
-  // uniformity but breaks regularity.
   const jitter = rand() * 0.4;
   const offset = 2 / n;
   const increment = Math.PI * (3 - Math.sqrt(5));
@@ -74,9 +72,10 @@ function spherePoints(n: number, r: number, seed: number): THREE.Vector3[] {
   return out;
 }
 
-// Build a small radial-gradient texture so points render as soft
-// disks (Apple-Vision feel) instead of square pixels. Created once
-// per page lifetime via a module-level cache.
+// ============================================================================
+// Soft-disk dot texture for L0 points (no square pixels)
+// ============================================================================
+
 let dotTextureCache: THREE.Texture | null = null;
 function getDotTexture(): THREE.Texture {
   if (dotTextureCache) return dotTextureCache;
@@ -105,11 +104,11 @@ function getDotTexture(): THREE.Texture {
   return tex;
 }
 
-// L0 base-entity cloud — many small frosted dots on the outer shell.
+// ============================================================================
+// L0 base-entity cloud
+// ============================================================================
+
 function BaseShell({ count, radius }: { count: number; radius: number }) {
-  // Cap rendered count so very large graphs don't tank the GPU. We're
-  // showing a *visualisation*, not the full dataset — 800 points is
-  // enough to read as "many" while staying buttery on integrated GPUs.
   const renderCount = Math.min(count, 800);
   const positions = useMemo(
     () => spherePoints(renderCount, radius, 1701),
@@ -151,70 +150,230 @@ function BaseShell({ count, radius }: { count: number; radius: number }) {
   );
 }
 
-// L1 aggregate ring — larger glowing spheres sized by member_count.
-function AggregateShell({
-  aggregates,
-  radius,
-}: {
-  aggregates: AggregateSummary[];
+// ============================================================================
+// L1 aggregate node — single sphere with hover + pulse + click state
+// ============================================================================
+
+interface AggregateNodeProps {
+  aggregate: AggregateSummary;
+  position: THREE.Vector3;
   radius: number;
-}) {
-  const ref = useRef<THREE.Group>(null);
+  /** True when the ambient pulse is currently lit on this node. */
+  pulseT: number; // 0..1, where 0=quiet, 1=peak brightness
+  onPointerOver?: () => void;
+  onPointerOut?: () => void;
+  onClick?: () => void;
+}
+
+function AggregateNode({
+  aggregate: _aggregate,
+  position,
+  radius,
+  pulseT,
+  onPointerOver,
+  onPointerOut,
+  onClick,
+}: AggregateNodeProps) {
+  const [hovered, setHovered] = useState(false);
+  const matRef = useRef<THREE.MeshStandardMaterial>(null);
+  const haloRef = useRef<THREE.MeshBasicMaterial>(null);
+
+  // Soft easing on hover boost + pulse so transitions don't snap.
   useFrame((_, delta) => {
-    if (ref.current) ref.current.rotation.y -= delta * 0.025;
+    if (!matRef.current || !haloRef.current) return;
+    const baseEmissive = 0.65;
+    const hoverBoost = hovered ? 0.5 : 0;
+    const pulseBoost = pulseT * 0.6;
+    const target = baseEmissive + hoverBoost + pulseBoost;
+    matRef.current.emissiveIntensity = THREE.MathUtils.lerp(
+      matRef.current.emissiveIntensity,
+      target,
+      Math.min(1, delta * 6),
+    );
+    const haloTarget = 0.05 + (hovered ? 0.10 : 0) + pulseT * 0.18;
+    haloRef.current.opacity = THREE.MathUtils.lerp(
+      haloRef.current.opacity,
+      haloTarget,
+      Math.min(1, delta * 5),
+    );
   });
-  const positions = useMemo(
-    () => spherePoints(aggregates.length, radius, 9173),
-    [aggregates.length, radius],
-  );
-  // Size by member_count, normalised against the largest aggregate.
-  const maxMembers = aggregates.reduce(
-    (m, a) => Math.max(m, a.member_count),
-    1,
-  );
+
+  const handleOver = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    setHovered(true);
+    onPointerOver?.();
+    document.body.style.cursor = "pointer";
+  };
+  const handleOut = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    setHovered(false);
+    onPointerOut?.();
+    document.body.style.cursor = "default";
+  };
+  const handleClick = (e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation();
+    onClick?.();
+  };
+
   return (
-    <group ref={ref}>
-      {aggregates.map((agg, i) => {
-        const p = positions[i];
-        if (!p) return null;
-        const radiusPx = 0.08 + 0.18 * (agg.member_count / maxMembers);
-        return (
-          <group key={agg.id} position={[p.x, p.y, p.z]}>
-            {/* Core */}
-            <mesh>
-              <sphereGeometry args={[radiusPx, 24, 24]} />
-              <meshStandardMaterial
-                color="#f8efdc"
-                emissive="#f8efdc"
-                emissiveIntensity={0.65}
-                roughness={0.4}
-              />
-            </mesh>
-            {/* Halo — additive sprite for the soft glow */}
-            <mesh>
-              <sphereGeometry args={[radiusPx * 1.8, 16, 16]} />
-              <meshBasicMaterial
-                color="#f8efdc"
-                transparent
-                opacity={0.05}
-                blending={THREE.AdditiveBlending}
-                depthWrite={false}
-              />
-            </mesh>
-          </group>
-        );
-      })}
+    <group position={[position.x, position.y, position.z]}>
+      <mesh
+        onPointerOver={handleOver}
+        onPointerOut={handleOut}
+        onClick={handleClick}
+      >
+        <sphereGeometry args={[radius, 24, 24]} />
+        <meshStandardMaterial
+          ref={matRef}
+          color="#f8efdc"
+          emissive="#f8efdc"
+          emissiveIntensity={0.65}
+          roughness={0.4}
+        />
+      </mesh>
+      <mesh>
+        <sphereGeometry args={[radius * 1.85, 16, 16]} />
+        <meshBasicMaterial
+          ref={haloRef}
+          color="#f8efdc"
+          transparent
+          opacity={0.05}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
+      </mesh>
     </group>
   );
 }
 
-// Faint radial threads from each L1 aggregate to the centre — gives
-// the "lifting toward an apex" sense without drawing every edge.
-function RadialThreads({
-  positions,
-}: {
-  positions: THREE.Vector3[];
-}) {
+// ============================================================================
+// Expanding pulse ring — emits from a position, grows, fades, dies
+// ============================================================================
+
+interface PulseRingProps {
+  position: THREE.Vector3;
+  /** Seconds since the pulse was triggered. */
+  age: number;
+  /** Lifetime in seconds. */
+  life: number;
+  baseRadius: number;
+}
+
+function PulseRing({ position, age, life, baseRadius }: PulseRingProps) {
+  const ref = useRef<THREE.Mesh>(null);
+  const t = Math.min(age / life, 1);
+  const scale = baseRadius * (1 + t * 4);
+  const opacity = (1 - t) * 0.4;
+
+  useFrame(() => {
+    if (ref.current) {
+      ref.current.scale.setScalar(scale);
+      const mat = ref.current.material as THREE.MeshBasicMaterial;
+      mat.opacity = opacity;
+    }
+  });
+
+  // Orient the ring so its flat face points toward the camera-ish (we
+  // use the position vector from origin as a stand-in for the normal —
+  // looks correct enough at any orbit angle).
+  const quaternion = useMemo(() => {
+    const normal = position.clone().normalize();
+    const q = new THREE.Quaternion();
+    q.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+    return q;
+  }, [position]);
+
+  return (
+    <mesh
+      ref={ref}
+      position={[position.x, position.y, position.z]}
+      quaternion={quaternion}
+    >
+      <ringGeometry args={[0.95, 1, 48]} />
+      <meshBasicMaterial
+        color="#f8efdc"
+        transparent
+        opacity={opacity}
+        side={THREE.DoubleSide}
+        blending={THREE.AdditiveBlending}
+        depthWrite={false}
+      />
+    </mesh>
+  );
+}
+
+// ============================================================================
+// Tracer arc — pre-computed bezier, drawn over time (progressive reveal)
+// ============================================================================
+
+interface TracerArcProps {
+  from: THREE.Vector3;
+  to: THREE.Vector3;
+  /** 0..1 — how far along the path we've drawn. */
+  progress: number;
+  opacity: number;
+}
+
+function TracerArc({ from, to, progress, opacity }: TracerArcProps) {
+  // Quadratic bezier through a control point pushed outward from origin.
+  const path = useMemo(() => {
+    const mid = from.clone().add(to).multiplyScalar(0.5);
+    mid.normalize().multiplyScalar(Math.max(from.length(), to.length()) * 1.35);
+    const segments = 32;
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments;
+      const oneMinus = 1 - t;
+      pts.push(
+        new THREE.Vector3(
+          oneMinus * oneMinus * from.x + 2 * oneMinus * t * mid.x + t * t * to.x,
+          oneMinus * oneMinus * from.y + 2 * oneMinus * t * mid.y + t * t * to.y,
+          oneMinus * oneMinus * from.z + 2 * oneMinus * t * mid.z + t * t * to.z,
+        ),
+      );
+    }
+    return pts;
+  }, [from, to]);
+
+  // Slice the path according to progress so it draws in over time.
+  const visiblePts = useMemo(() => {
+    if (progress >= 1) return path;
+    const count = Math.max(2, Math.floor(path.length * progress));
+    return path.slice(0, count);
+  }, [path, progress]);
+
+  const geom = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    const arr = new Float32Array(visiblePts.length * 3);
+    visiblePts.forEach((p, i) => {
+      arr[i * 3 + 0] = p.x;
+      arr[i * 3 + 1] = p.y;
+      arr[i * 3 + 2] = p.z;
+    });
+    g.setAttribute("position", new THREE.BufferAttribute(arr, 3));
+    return g;
+  }, [visiblePts]);
+
+  if (visiblePts.length < 2) return null;
+  return (
+    <line>
+      <primitive object={geom} attach="geometry" />
+      <lineBasicMaterial
+        color="#f8efdc"
+        transparent
+        opacity={opacity}
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+      />
+    </line>
+  );
+}
+
+// ============================================================================
+// RadialThreads — faint static threads from L1 nodes to centre
+// ============================================================================
+
+function RadialThreads({ positions }: { positions: THREE.Vector3[] }) {
   const geom = useMemo(() => {
     const g = new THREE.BufferGeometry();
     const arr = new Float32Array(positions.length * 6);
@@ -241,8 +400,10 @@ function RadialThreads({
   );
 }
 
-// Soft arcs between random pairs of L1 nodes — a visual stand-in for
-// the inter-cluster relation count until we have an edge-list endpoint.
+// ============================================================================
+// InterClusterArcs — static visual stand-in for the inter-cluster count
+// ============================================================================
+
 function InterClusterArcs({
   positions,
   arcCount,
@@ -255,8 +416,6 @@ function InterClusterArcs({
     const rand = seeded(4242);
     const segmentsPerArc = 14;
     const out: number[] = [];
-    // Cap visible arc density — past ~12 the screen reads as tangled
-    // rather than connected. Real edge density is still on the HUD.
     const max = Math.min(arcCount, 12);
     const usedPairs = new Set<string>();
     let attempts = 0;
@@ -271,7 +430,6 @@ function InterClusterArcs({
       usedPairs.add(key);
       const a = positions[i];
       const b = positions[j];
-      // Quadratic bezier with control point pushed outward from origin
       const mid = a.clone().add(b).multiplyScalar(0.5);
       mid.normalize().multiplyScalar(a.length() * 1.35);
       for (let s = 0; s < segmentsPerArc; s++) {
@@ -303,7 +461,7 @@ function InterClusterArcs({
       <lineBasicMaterial
         color="#f5ecd9"
         transparent
-        opacity={0.28}
+        opacity={0.22}
         depthWrite={false}
         blending={THREE.AdditiveBlending}
       />
@@ -325,15 +483,43 @@ function quadBezier(
   );
 }
 
-// Ambient camera drift — adds subtle parallax so the scene feels alive
-// even when the user is idle. Combined with OrbitControls, the user
-// can still grab + rotate; drift resumes when they let go.
+// ============================================================================
+// Apex — luminous central core that pulses with ambient activity
+// ============================================================================
+
+function Apex({ pulseT }: { pulseT: number }) {
+  const matRef = useRef<THREE.MeshStandardMaterial>(null);
+  useFrame((_, delta) => {
+    if (!matRef.current) return;
+    const target = 1.1 + pulseT * 1.4;
+    matRef.current.emissiveIntensity = THREE.MathUtils.lerp(
+      matRef.current.emissiveIntensity,
+      target,
+      Math.min(1, delta * 4),
+    );
+  });
+  return (
+    <mesh>
+      <sphereGeometry args={[0.12, 32, 32]} />
+      <meshStandardMaterial
+        ref={matRef}
+        color="#fffaef"
+        emissive="#fffaef"
+        emissiveIntensity={1.1}
+      />
+    </mesh>
+  );
+}
+
+// ============================================================================
+// CameraDrift — subtle ambient parallax
+// ============================================================================
+
 function CameraDrift() {
   const t = useRef(0);
   useFrame((state, delta) => {
     t.current += delta;
     const cam = state.camera;
-    // Tiny lissajous so it doesn't feel mechanical
     cam.position.x += Math.sin(t.current * 0.21) * 0.0015;
     cam.position.y += Math.cos(t.current * 0.17) * 0.0011;
     cam.lookAt(0, 0, 0);
@@ -341,22 +527,195 @@ function CameraDrift() {
   return null;
 }
 
+// ============================================================================
+// SceneContent — owns the live state (pulses, tracers, hover)
+// ============================================================================
+
+interface SceneContentProps {
+  l0Count: number;
+  aggregates: AggregateSummary[];
+  interClusterCount: number;
+  onAggregateClick?: (agg: AggregateSummary) => void;
+}
+
+interface ActivePulse {
+  /** Index into the aggregates array. */
+  aggIndex: number;
+  /** Wallclock ms when the pulse was emitted. */
+  startedAt: number;
+}
+
+const PULSE_LIFE_S = 1.6;
+
+function SceneContent({
+  l0Count,
+  aggregates,
+  interClusterCount,
+  onAggregateClick,
+}: SceneContentProps) {
+  const L1_RADIUS = 1.4;
+  const positions = useMemo(
+    () => spherePoints(aggregates.length, L1_RADIUS, 9173),
+    [aggregates.length],
+  );
+  const maxMembers = aggregates.reduce(
+    (m, a) => Math.max(m, a.member_count),
+    1,
+  );
+  const radii = useMemo(
+    () => aggregates.map((a) => 0.08 + 0.18 * (a.member_count / maxMembers)),
+    [aggregates, maxMembers],
+  );
+
+  // ----- Ambient pulse loop ------------------------------------------------
+  const [pulses, setPulses] = useState<ActivePulse[]>([]);
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+
+  // Spawn a pulse on a random aggregate every 3-6s. Also expire old
+  // pulses so the array doesn't grow unbounded.
+  useEffect(() => {
+    if (aggregates.length === 0) return;
+    let cancelled = false;
+    function schedule() {
+      const ms = 3000 + Math.random() * 3000;
+      setTimeout(() => {
+        if (cancelled) return;
+        setPulses((prev) => {
+          const cutoff = performance.now() - PULSE_LIFE_S * 1000;
+          const filtered = prev.filter((p) => p.startedAt >= cutoff);
+          return [
+            ...filtered,
+            {
+              aggIndex: Math.floor(Math.random() * aggregates.length),
+              startedAt: performance.now(),
+            },
+          ];
+        });
+        schedule();
+      }, ms);
+    }
+    schedule();
+    return () => {
+      cancelled = true;
+    };
+  }, [aggregates.length]);
+
+  // Tracer arcs from hovered aggregate to its 3 nearest neighbours.
+  const hoverNeighbours = useMemo(() => {
+    if (hoveredIdx == null || aggregates.length < 2) return [];
+    const a = positions[hoveredIdx];
+    if (!a) return [];
+    const dists = positions
+      .map((p, i) => ({ i, d: i === hoveredIdx ? Infinity : p.distanceTo(a) }))
+      .sort((x, y) => x.d - y.d)
+      .slice(0, 3);
+    return dists.map((d) => d.i);
+  }, [hoveredIdx, positions, aggregates.length]);
+
+  // ----- pulseT per aggregate -----
+  // Compute on every frame in the parent's useFrame would be nicest but
+  // we'd need a ref into each child; instead we run a 60fps update via
+  // RAF and recompute the array. R3F batches re-renders, so this is fine.
+  const [tick, setTick] = useState(0);
+  useFrame(() => setTick((t) => (t + 1) % 1000000));
+
+  const pulseTByAgg = useMemo(() => {
+    const arr = new Array(aggregates.length).fill(0);
+    const now = performance.now();
+    for (const p of pulses) {
+      const age = (now - p.startedAt) / 1000;
+      if (age < 0 || age > PULSE_LIFE_S) continue;
+      // Triangle envelope: ramp up first 20%, ramp down rest
+      const t = age / PULSE_LIFE_S;
+      const env = t < 0.2 ? t / 0.2 : 1 - (t - 0.2) / 0.8;
+      arr[p.aggIndex] = Math.max(arr[p.aggIndex], env);
+    }
+    return arr;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pulses, tick, aggregates.length]);
+
+  // Apex pulses = mean of all current aggregate pulses
+  const apexPulse =
+    pulseTByAgg.reduce((s, v) => s + v, 0) / Math.max(1, pulseTByAgg.length);
+
+  return (
+    <>
+      <BaseShell count={l0Count} radius={2.7} />
+      <RadialThreads positions={positions} />
+      <InterClusterArcs positions={positions} arcCount={interClusterCount} />
+      {aggregates.map((agg, i) => {
+        const p = positions[i];
+        if (!p) return null;
+        return (
+          <AggregateNode
+            key={agg.id}
+            aggregate={agg}
+            position={p}
+            radius={radii[i]}
+            pulseT={pulseTByAgg[i] ?? 0}
+            onPointerOver={() => setHoveredIdx(i)}
+            onPointerOut={() => setHoveredIdx((h) => (h === i ? null : h))}
+            onClick={() => onAggregateClick?.(agg)}
+          />
+        );
+      })}
+      {/* Pulse rings */}
+      {pulses.map((p) => {
+        const pos = positions[p.aggIndex];
+        if (!pos) return null;
+        const age = (performance.now() - p.startedAt) / 1000;
+        if (age > PULSE_LIFE_S) return null;
+        return (
+          <PulseRing
+            key={`${p.aggIndex}-${p.startedAt}`}
+            position={pos}
+            age={age}
+            life={PULSE_LIFE_S}
+            baseRadius={radii[p.aggIndex] ?? 0.1}
+          />
+        );
+      })}
+      {/* Hover tracer arcs */}
+      {hoveredIdx !== null &&
+        hoverNeighbours.map((j) => {
+          const a = positions[hoveredIdx];
+          const b = positions[j];
+          if (!a || !b) return null;
+          // Hover tracers draw in quickly. Use a constant progress so
+          // the arc fully renders on hover (we're not animating draw-in
+          // for hovers — only for ambient pulses, which would be too
+          // much motion on top of the auto-rotate).
+          const ageMs = tick % 1000; // dummy use of `tick` to keep this
+          // ↑ keeps the lint-as-used path; the value isn't read
+          void ageMs;
+          return (
+            <TracerArc
+              key={`hover-${hoveredIdx}-${j}`}
+              from={a}
+              to={b}
+              progress={1}
+              opacity={0.45}
+            />
+          );
+        })}
+      {aggregates.length > 0 && <Apex pulseT={apexPulse} />}
+      <CameraDrift />
+    </>
+  );
+}
+
+// ============================================================================
+// HierarchyShells — Canvas root
+// ============================================================================
+
 export function HierarchyShells({
   layerCounts,
   aggregates,
   interClusterCount,
   enabled,
+  onAggregateClick,
 }: HierarchyShellsProps) {
-  // Pull the L0 count out of layer_counts. If layers aren't built yet
-  // (or the feature is off), don't render any geometry — the empty
-  // state owns the canvas instead.
   const l0 = layerCounts.find(([layer]) => layer === 0)?.[1] ?? 0;
-  const L1_RADIUS = 1.4;
-
-  const l1Positions = useMemo(
-    () => spherePoints(aggregates.length, L1_RADIUS, 9173),
-    [aggregates.length],
-  );
 
   return (
     <Canvas
@@ -372,30 +731,14 @@ export function HierarchyShells({
       <pointLight position={[-3, -2, -1]} intensity={0.25} color="#dbd3bf" />
 
       {enabled && (
-        <>
-          <BaseShell count={l0} radius={2.7} />
-          <AggregateShell aggregates={aggregates} radius={L1_RADIUS} />
-          <RadialThreads positions={l1Positions} />
-          <InterClusterArcs
-            positions={l1Positions}
-            arcCount={interClusterCount}
-          />
-        </>
+        <SceneContent
+          l0Count={l0}
+          aggregates={aggregates}
+          interClusterCount={interClusterCount}
+          onAggregateClick={onAggregateClick}
+        />
       )}
 
-      {/* Centre apex — a small luminous core suggesting the LCA / root */}
-      {enabled && aggregates.length > 0 && (
-        <mesh>
-          <sphereGeometry args={[0.12, 32, 32]} />
-          <meshStandardMaterial
-            color="#fffaef"
-            emissive="#fffaef"
-            emissiveIntensity={1.1}
-          />
-        </mesh>
-      )}
-
-      <CameraDrift />
       <OrbitControls
         enablePan={false}
         enableZoom

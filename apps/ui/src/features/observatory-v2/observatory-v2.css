@@ -290,6 +290,109 @@
   border-color: var(--obs2-border-hover);
 }
 
+/* ----- Picked-aggregate floating card ----------------------------------- */
+.obs2__pick-card {
+  position: absolute;
+  bottom: 88px;
+  right: 22px;
+  width: 320px;
+  background: var(--obs2-glass);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid var(--obs2-border-hover);
+  border-radius: 14px;
+  padding: 16px 18px 18px;
+  box-shadow:
+    0 1px 0 rgba(245, 236, 217, 0.05) inset,
+    0 20px 48px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+  animation: obs2-pick-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes obs2-pick-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.obs2__pick-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: transparent;
+  border: 1px solid var(--obs2-border);
+  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--obs2-cream-dim);
+  cursor: pointer;
+  transition: background 200ms ease, color 200ms ease, border-color 200ms ease;
+}
+
+.obs2__pick-close:hover {
+  background: rgba(245, 236, 217, 0.06);
+  color: var(--obs2-cream);
+  border-color: var(--obs2-border-hover);
+}
+
+.obs2__pick-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 28px;
+  margin-bottom: 10px;
+}
+
+.obs2__pick-eyebrow {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--obs2-cream-dim);
+}
+
+.obs2__pick-name {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 14px;
+  color: var(--obs2-cream);
+  letter-spacing: 0.01em;
+  word-break: break-word;
+}
+
+.obs2__pick-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.obs2__pick-meta-chip {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(245, 236, 217, 0.06);
+  border: 1px solid var(--obs2-border);
+  color: var(--obs2-cream);
+}
+
+.obs2__pick-desc {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--obs2-cream-dim);
+  margin: 0;
+  letter-spacing: 0.01em;
+}
+
 /* ----- responsive: stack the bottom pills on narrow viewports ---------- */
 @media (max-width: 900px) {
   .obs2__hud--tl,
