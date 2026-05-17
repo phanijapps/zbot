@@ -130,7 +130,8 @@
 }
 
 .obs2__hud--bottom {
-  bottom: 22px;
+  /* Sit just above the comprehensive footer strip. */
+  bottom: 56px;
   left: 22px;
   right: 22px;
   display: flex;
@@ -391,6 +392,92 @@
   color: var(--obs2-cream-dim);
   margin: 0;
   letter-spacing: 0.01em;
+}
+
+/* ----- Comprehensive footer strip (mirrors legacy /observatory) ------- */
+.obs2__footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 22px;
+  background: rgba(10, 14, 21, 0.7);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border-top: 1px solid var(--obs2-border);
+  overflow-x: auto;
+  /* Hide scrollbar but keep scroll behavior for very wide content. */
+  scrollbar-width: none;
+}
+
+.obs2__footer::-webkit-scrollbar {
+  display: none;
+}
+
+.obs2__footer-stat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+}
+
+.obs2__footer-stat-label {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--obs2-cream-dim);
+}
+
+.obs2__footer-stat-value {
+  font-size: 12px;
+  color: var(--obs2-cream);
+  letter-spacing: 0.02em;
+}
+
+.obs2__footer-stat--warning .obs2__footer-stat-value {
+  color: var(--obs2-warning);
+}
+
+.obs2__footer-stat--error .obs2__footer-stat-value {
+  color: #e07a5f;
+}
+
+/* ----- 3D node labels (drei <Html> billboards over L1 aggregates) ------ */
+.obs2__node-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  user-select: none;
+  /* Subtle text shadow keeps the label readable against the cream
+     glow of the sphere behind it. */
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.85),
+    0 0 8px rgba(10, 14, 21, 0.7);
+}
+
+.obs2__node-label-text {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: #f5ecd9;
+  /* Cap absurdly long aggregate names so they don't blow out the
+     layout on dense graphs. */
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.obs2__node-label-meta {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: rgba(245, 236, 217, 0.7);
 }
 
 /* ----- responsive: stack the bottom pills on narrow viewports ---------- */

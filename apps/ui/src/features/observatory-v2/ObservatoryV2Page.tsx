@@ -51,9 +51,14 @@ export function ObservatoryV2Page() {
 
   const distilled = distillStatus?.success_count ?? 0;
   const failed = distillStatus?.failed_count ?? 0;
+  const skipped = distillStatus?.skipped_count ?? 0;
   const totalDistill =
-    distilled + failed + (distillStatus?.skipped_count ?? 0) +
+    distilled + failed + skipped +
     (distillStatus?.permanently_failed_count ?? 0);
+  const aggCount = aggregates.length;
+  const totalAggCount = layerCounts
+    .filter(([layer]) => layer > 0)
+    .reduce((sum, [, n]) => sum + n, 0);
 
   return (
     <div className="obs2">
@@ -122,13 +127,16 @@ export function ObservatoryV2Page() {
         )}
       </div>
 
-      {/* Bottom — detail pills (open existing panels in slideover) */}
+      {/* Bottom — comprehensive stats strip + detail pills.
+          The strip below the pills mirrors the legacy /observatory
+          footer so v2 doesn't lose any information when the legacy
+          page gets retired. */}
       <div className="obs2__hud obs2__hud--bottom">
         {hierarchyEnabled && (
           <HudPill
             icon={<Layers size={14} aria-hidden />}
-            label={`${layerCounts.length} layer${layerCounts.length === 1 ? "" : "s"}`}
-            sub={`${aggregates.length} top aggregates · ${interCluster} inter-cluster`}
+            label={`${layerCounts.length} layer${layerCounts.length === 1 ? "" : "s"} · ${totalAggCount} agg`}
+            sub={`${aggCount} shown · ${interCluster} inter-cluster`}
             onOpen={() => setHierOpen(true)}
             openLabel="Open hierarchy"
           />
@@ -165,6 +173,45 @@ export function ObservatoryV2Page() {
           }
           dim={hierLoading}
         />
+      </div>
+
+      {/* Comprehensive footer strip — mirrors the legacy /observatory
+          status bar so this page is information-equivalent. Frosted
+          single-row card, dense typography, all the counters live. */}
+      <div className="obs2__footer">
+        <FooterStat label="Distilled" value={`${distilled} / ${totalDistill}`} />
+        <FooterStat label="Facts" value={graphStats?.facts ?? 0} />
+        <FooterStat label="Entities" value={graphStats?.entities ?? 0} />
+        <FooterStat label="Edges" value={graphStats?.relationships ?? 0} />
+        <FooterStat label="Episodes" value={graphStats?.episodes ?? 0} />
+        {beliefStats?.enabled ? (
+          <>
+            <FooterStat label="Beliefs" value={beliefStats.totals.total_beliefs} />
+            {beliefStats.totals.total_unresolved_contradictions > 0 ? (
+              <FooterStat
+                label="Contradictions"
+                value={`${beliefStats.totals.total_unresolved_contradictions} unresolved`}
+                tone="warning"
+              />
+            ) : beliefStats.totals.total_contradictions > 0 ? (
+              <FooterStat
+                label="Contradictions"
+                value={beliefStats.totals.total_contradictions}
+              />
+            ) : null}
+          </>
+        ) : null}
+        {hierarchyEnabled && (
+          <>
+            <FooterStat
+              label="Hierarchy"
+              value={`${layerCounts.length} layer${layerCounts.length === 1 ? "" : "s"} · ${totalAggCount} agg`}
+            />
+            <FooterStat label="Inter-cluster" value={interCluster} />
+          </>
+        )}
+        {failed > 0 ? <FooterStat label="Failed" value={failed} tone="error" /> : null}
+        {skipped > 0 ? <FooterStat label="Skipped" value={skipped} tone="warning" /> : null}
       </div>
 
       <Slideover
@@ -225,6 +272,22 @@ function Stat({ label, value, tone }: StatProps) {
     <div className={`obs2__stat${tone ? ` obs2__stat--${tone}` : ""}`}>
       <span className="obs2__stat-value">{value.toLocaleString()}</span>
       <span className="obs2__stat-label">{label}</span>
+    </div>
+  );
+}
+
+interface FooterStatProps {
+  label: string;
+  value: number | string;
+  tone?: "warning" | "error";
+}
+function FooterStat({ label, value, tone }: FooterStatProps) {
+  return (
+    <div className={`obs2__footer-stat${tone ? ` obs2__footer-stat--${tone}` : ""}`}>
+      <span className="obs2__footer-stat-label">{label}</span>
+      <span className="obs2__footer-stat-value">
+        {typeof value === "number" ? value.toLocaleString() : value}
+      </span>
     </div>
   );
 }

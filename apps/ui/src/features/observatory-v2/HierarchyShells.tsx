@@ -24,7 +24,7 @@
 // ============================================================================
 
 import { Canvas, useFrame, type ThreeEvent } from "@react-three/fiber";
-import { OrbitControls, AdaptiveDpr } from "@react-three/drei";
+import { OrbitControls, AdaptiveDpr, Billboard, Html } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { AggregateSummary } from "../observatory/hierarchy/types";
@@ -258,6 +258,35 @@ function AggregateNode({
           depthWrite={false}
         />
       </mesh>
+      {/* Billboard-style name label — always faces camera. Always
+          rendered at low opacity so the graph is legible; brightens
+          on hover. Uses drei <Html> in occlude mode so labels behind
+          other nodes fade. */}
+      <Billboard position={[0, radius * 1.6, 0]}>
+        <Html
+          center
+          distanceFactor={6}
+          zIndexRange={[40, 0]}
+          style={{
+            pointerEvents: "none",
+            opacity: hovered ? 1 : 0.55,
+            transition: "opacity 200ms ease",
+          }}
+        >
+          <div className="obs2__node-label">
+            <span className="obs2__node-label-text">
+              {_aggregate.name}
+            </span>
+            {hovered && (
+              <span className="obs2__node-label-meta">
+                {_aggregate.member_count}
+                {_aggregate.member_count === 1 ? " member" : " members"} ·
+                L{_aggregate.layer}
+              </span>
+            )}
+          </div>
+        </Html>
+      </Billboard>
     </group>
   );
 }
