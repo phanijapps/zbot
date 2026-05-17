@@ -5,6 +5,7 @@ pub mod belief_contradiction_detector;
 pub mod belief_network_activity;
 pub mod belief_propagator;
 pub mod belief_synthesizer;
+pub mod clustering;
 pub mod compactor;
 pub mod conflict_resolver;
 pub mod corrections_abstractor;
