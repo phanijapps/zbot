@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
+use crate::sleep::hierarchy_builder::HierarchyBuilder;
 use crate::sleep::{
     BeliefContradictionDetector, BeliefSynthesizer, Compactor, ConflictResolver,
     CorrectionsAbstractor, DecayEngine, OrphanArchiver, PatternExtractor, Pruner,
@@ -41,6 +42,12 @@ pub struct SleepOps {
     /// timestamped snapshot here for the Observatory UI to read. `None`
     /// is the legacy code path — recording is skipped entirely.
     pub belief_network_activity: Option<Arc<RecentBeliefNetworkActivity>>,
+    /// Hierarchical-memory builder (Phase H-3). When `Some`, runs after
+    /// the Compactor each cycle: clusters layer-N entities, synthesises
+    /// layer-N+1 aggregates, and writes inter-cluster relations gated
+    /// by connectivity strength λ. When `None`, the cycle is unchanged
+    /// — hierarchy is opt-in via `MemorySettings.hierarchy.enabled`.
+    pub hierarchy_builder: Option<Arc<HierarchyBuilder>>,
 }
 
 /// Background worker that orchestrates the full sleep-time pipeline.
@@ -152,6 +159,10 @@ pub struct CycleStats {
     pub beliefs_synthesized: u64,
     /// Belief Network — Phase B-2: contradictions inserted (logical + tension).
     pub belief_contradictions_detected: u64,
+    /// Hierarchy — Phase H-3: total aggregate entities written across layers.
+    pub hierarchy_aggregates_created: u64,
+    /// Hierarchy — Phase H-3: inter-cluster relations written (LeanRAG λ>τ).
+    pub hierarchy_inter_cluster_relations: u64,
 }
 
 async fn run_cycle(
@@ -170,6 +181,22 @@ async fn run_cycle(
     let compaction_stats = compactor.run(&run_id, agent_id).await;
     stats.candidates_considered = compaction_stats.candidates_considered;
     stats.merges_performed = compaction_stats.merges_performed;
+
+    // Hierarchical memory (Phase H-3) — runs immediately after the
+    // Compactor so it doesn't cluster near-duplicate noise. Opt-in;
+    // a `None` field leaves the cycle byte-for-byte unchanged.
+    if let Some(hb) = ops.hierarchy_builder.as_ref() {
+        let h_stats = hb.run_for_agent(agent_id).await;
+        stats.hierarchy_aggregates_created = h_stats.aggregates_created;
+        stats.hierarchy_inter_cluster_relations = h_stats.inter_cluster_relations_created;
+        if h_stats.errors > 0 {
+            tracing::warn!(
+                %run_id,
+                errors = h_stats.errors,
+                "hierarchy builder cycle had non-fatal errors"
+            );
+        }
+    }
 
     // Synthesis — operates on post-compaction state. Conservative: failure is
     // logged and the cycle continues.
@@ -514,6 +541,7 @@ mod tests {
             belief_synthesizer: None,
             belief_contradiction_detector: None,
             belief_network_activity: None,
+            hierarchy_builder: None,
         };
         let stats = run_cycle(
             "test",
@@ -620,6 +648,7 @@ mod tests {
             belief_synthesizer: None,
             belief_contradiction_detector: None,
             belief_network_activity: None,
+            hierarchy_builder: None,
         };
         let stats = run_cycle(
             "test",
