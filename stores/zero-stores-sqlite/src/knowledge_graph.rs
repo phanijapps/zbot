@@ -270,12 +270,13 @@ impl KnowledgeGraphStore for SqliteKgStore {
                 .search_entities_by_name_embedding(&query_embedding, top_k, &agent_id)
                 .map(|rows| {
                     rows.into_iter()
-                        .map(|(id, name, entity_type, distance)| {
+                        .map(|(id, name, entity_type, distance, confidence)| {
                             zero_stores::EntityNameEmbeddingHit {
                                 id,
                                 name,
                                 entity_type,
                                 distance,
+                                confidence,
                             }
                         })
                         .collect()

@@ -1550,9 +1550,10 @@ belief B: "User works at OpenAI"
         <p class="caption">For each top fragment, follow <span class="mono">source_episode_ids</span> to the entities it referenced. From those, walk outward along <span class="mono">kg_relationships</span>.</p>
         <p class="caption">Each hop multiplies relevance by <span class="mono">hop_decay = 0.6</span>. Direct neighbors weigh 0.6×; two hops out weigh 0.36×. Capped at <span class="mono">max_graph_facts = 5</span>.</p>
         <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px">A query about commit hygiene matches one correction; the traversal pulls in <em>git workflow</em>, <em>code review</em>, <em>release process</em> — even though none of those words appeared in the query.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px"><strong>Hit weighting (MEM-001 Part B-1):</strong> graph-ANN hits below <span class="mono">min_kg_confidence = 0.1</span> are dropped, and surviving hits get their score multiplied by <span class="mono">kg_entities.confidence</span>. So when contradiction propagation (Part A) decays a contradicted entity, recall actually downweights it — high-confidence entities at the same cosine outrank low-confidence ones.</p>
         <div class="config-note">
           <span class="k">recall_config.json</span> &rarr; <span class="k">graph_traversal</span><br>
-          <span class="k">max_hops: 2</span> &middot; <span class="k">hop_decay: 0.6</span> &middot; <span class="k">max_graph_facts: 5</span>
+          <span class="k">max_hops: 2</span> &middot; <span class="k">hop_decay: 0.6</span> &middot; <span class="k">max_graph_facts: 5</span> &middot; <span class="k">min_kg_confidence: 0.1</span>
         </div>
       </div>
     </div>
