@@ -54,3 +54,60 @@ impl Tool for KillAgentTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handle::ExecutionHandle;
+
+    fn dummy_ctx() -> Arc<dyn zero_core::ToolContext> {
+        Arc::new(agent_runtime::ToolContext::full_with_state(
+            "test-agent".to_string(),
+            None,
+            vec![],
+            std::collections::HashMap::new(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn kill_agent_stops_registered_execution() {
+        let bus = Arc::new(AgentResultBus::new());
+        let handle = ExecutionHandle::new(10);
+        bus.register_handle("exec-1", handle.clone());
+
+        let tool = KillAgentTool::new(bus.clone());
+        let result = tool
+            .execute(dummy_ctx(), json!({ "execution_id": "exec-1" }))
+            .await
+            .unwrap();
+
+        assert_eq!(result["status"], "stopped");
+        assert_eq!(result["execution_id"], "exec-1");
+        assert!(
+            handle.is_stop_requested(),
+            "kill must trigger handle.stop()"
+        );
+    }
+
+    #[tokio::test]
+    async fn kill_agent_returns_not_running_for_unknown_execution() {
+        let bus = Arc::new(AgentResultBus::new());
+        let tool = KillAgentTool::new(bus);
+
+        let result = tool
+            .execute(dummy_ctx(), json!({ "execution_id": "exec-ghost" }))
+            .await
+            .unwrap();
+
+        assert_eq!(result["status"], "not_running");
+    }
+
+    #[tokio::test]
+    async fn kill_agent_requires_execution_id_arg() {
+        let bus = Arc::new(AgentResultBus::new());
+        let tool = KillAgentTool::new(bus);
+
+        let err = tool.execute(dummy_ctx(), json!({})).await.unwrap_err();
+        assert!(format!("{err}").contains("execution_id"));
+    }
+}
