@@ -115,3 +115,31 @@ pub struct InterClusterRelationHit {
     pub relationship_type: String,
     pub layer: i64,
 }
+
+/// Hierarchical-memory summary returned by
+/// `KnowledgeGraphStore::hierarchy_summary`. Powers the Observatory
+/// pill + slideover; structured so the consumer can render layer
+/// counts, total inter-cluster edges, and a handful of representative
+/// aggregates without a second round-trip.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HierarchySummary {
+    /// `(layer, count)` pairs sorted ascending by layer.
+    pub layer_counts: Vec<(i64, usize)>,
+    /// Total `is_inter_cluster = 1` edges across all layers.
+    pub inter_cluster_relations: usize,
+    /// Top-N aggregates by `member_count`, descending. Capped by the
+    /// caller's `top_n` argument.
+    pub top_aggregates: Vec<AggregateSummary>,
+}
+
+/// One row in `HierarchySummary.top_aggregates`. Description comes
+/// from `kg_entities.properties` JSON (the aggregate's LLM-synthesised
+/// or singleton fallback description).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregateSummary {
+    pub id: String,
+    pub name: String,
+    pub layer: i64,
+    pub member_count: usize,
+    pub description: String,
+}

@@ -6,8 +6,10 @@ import { useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import { useGraphStats, useDistillationStatus, useBackfill } from "./graph-hooks";
 import { useBeliefNetworkStats } from "./belief-network/hooks";
+import { useHierarchyStats } from "./hierarchy/hooks";
 import { Slideover } from "@/components/Slideover";
 import { BeliefNetworkPanel } from "./belief-network/BeliefNetworkPanel";
+import { HierarchyPanel } from "./hierarchy/HierarchyPanel";
 
 export function LearningHealthBar() {
   const { stats, loading: statsLoading } = useGraphStats();
@@ -16,7 +18,10 @@ export function LearningHealthBar() {
   // a separate 3-card panel. The detail surface (3 cards + activity feed
   // + propagation chain) lives in a slideover opened from the strip.
   const { stats: beliefStats } = useBeliefNetworkStats();
+  // Hierarchy totals — same folding pattern as Belief Network.
+  const { stats: hierStats } = useHierarchyStats(10);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [hierDetailsOpen, setHierDetailsOpen] = useState(false);
 
   const { run, isRunning, isDone, progress, error: backfillError } = useBackfill(
     refetchStatus
@@ -90,6 +95,37 @@ export function LearningHealthBar() {
         </>
       ) : null}
 
+      {/* Hierarchy totals — folded into the strip the same way Belief
+          Network is. Renders only when `hierarchy.enabled = true`. The
+          aggregate count is the sum of layer-1+ entities (i.e. excludes
+          layer 0 base entities). */}
+      {hierStats?.enabled ? (() => {
+        const counts = hierStats.summary.layer_counts;
+        const aggregateCount = counts
+          .filter(([layer]) => layer > 0)
+          .reduce((sum, [, n]) => sum + n, 0);
+        const interCluster = hierStats.summary.inter_cluster_relations;
+        return (
+          <>
+            <div className="observatory__health-item">
+              Hierarchy:{" "}
+              <span className="observatory__health-value">
+                {counts.length} layer{counts.length === 1 ? "" : "s"} ·{" "}
+                {aggregateCount} agg
+              </span>
+            </div>
+            {interCluster > 0 ? (
+              <div className="observatory__health-item">
+                Inter-cluster:{" "}
+                <span className="observatory__health-value">
+                  {interCluster}
+                </span>
+              </div>
+            ) : null}
+          </>
+        );
+      })() : null}
+
       {/* Distillation counts from /api/distillation/status */}
       {status && (
         <>
@@ -153,7 +189,21 @@ export function LearningHealthBar() {
             style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
           >
             <ArrowUpRight style={{ width: 14, height: 14 }} aria-hidden />
-            details
+            Belief Network
+          </button>
+        ) : null}
+
+        {hierStats?.enabled ? (
+          <button
+            type="button"
+            className="btn btn--sm btn--secondary"
+            onClick={() => setHierDetailsOpen(true)}
+            aria-label="Open hierarchy details"
+            title="Hierarchy layer breakdown, inter-cluster edge count, top aggregates"
+            style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+          >
+            <ArrowUpRight style={{ width: 14, height: 14 }} aria-hidden />
+            Hierarchy
           </button>
         ) : null}
       </div>
@@ -165,6 +215,15 @@ export function LearningHealthBar() {
         subtitle="Worker stats · activity feed · propagation chain"
       >
         <BeliefNetworkPanel />
+      </Slideover>
+
+      <Slideover
+        open={hierDetailsOpen}
+        onClose={() => setHierDetailsOpen(false)}
+        title="Hierarchy details"
+        subtitle="Layer breakdown · inter-cluster edges · top aggregates"
+      >
+        <HierarchyPanel />
       </Slideover>
     </div>
   );

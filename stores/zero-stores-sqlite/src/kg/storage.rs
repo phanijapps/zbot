@@ -16,6 +16,16 @@ use std::sync::Arc;
 /// `type_complexity` budget.
 type InterClusterRelationRow = (String, String, String, String, i64);
 
+/// Row tuple from `hierarchy_summary`'s top-aggregates query:
+/// `(id, name, layer, member_count, description)`. Same aliasing
+/// rationale as `InterClusterRelationRow`.
+type AggregateSummaryRow = (String, String, i64, usize, String);
+
+/// Return tuple from `hierarchy_summary`:
+/// `(layer_counts, inter_cluster_total, top_aggregates)`. Trait
+/// wrapper maps it into the public `HierarchySummary`.
+type HierarchySummaryRow = (Vec<(i64, usize)>, usize, Vec<AggregateSummaryRow>);
+
 /// Build a comma-separated list of positional placeholders for SQL
 /// `IN ()` clauses: `placeholder_list(2, 3)` → `"?2,?3,?4"`. Callers
 /// are responsible for binding the exact same number of parameters in
@@ -1417,6 +1427,108 @@ impl GraphStorage {
             .collect::<Result<Vec<Relationship>, _>>()?;
 
         Ok(relationships)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Hierarchical-memory health snapshot — layer counts + total
+    /// inter-cluster edge count + top-N aggregates by member size.
+    /// Used by `GET /api/hierarchy/stats` (Observatory pill + slideover).
+    ///
+    /// One DB session, three queries: count-by-layer, total
+    /// inter-cluster relations, top-N aggregates ordered by
+    /// `member_count` parsed from `properties` JSON. Dual-matches
+    /// `agent_id` against `__global__` (same idiom as the other
+    /// hierarchy reads — base entities live under that sentinel).
+    ///
+    /// Returns a triple to keep the trait-wrapper signature simple;
+    /// the caller maps it to the public `HierarchySummary` shape.
+    pub fn hierarchy_summary(
+        &self,
+        agent_id: &str,
+        top_n: usize,
+    ) -> GraphResult<HierarchySummaryRow> {
+        let agent_id_for_db = agent_id.to_string();
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<HierarchySummaryRow> {
+                    let mut layer_stmt = conn
+                        .prepare(
+                            "SELECT layer, COUNT(*) FROM kg_entities \
+                             WHERE (agent_id = ?1 OR agent_id = '__global__') \
+                               AND epistemic_class = 'current' \
+                             GROUP BY layer ORDER BY layer ASC",
+                        )
+                        .map_err(GraphError::Database)?;
+                    let layer_counts: Vec<(i64, usize)> = layer_stmt
+                        .query_map(params![agent_id_for_db], |row| {
+                            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)? as usize))
+                        })
+                        .map_err(GraphError::Database)?
+                        .filter_map(Result::ok)
+                        .collect();
+
+                    let inter_cluster: i64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM kg_relationships \
+                             WHERE (agent_id = ?1 OR agent_id = '__global__') \
+                               AND is_inter_cluster = 1 \
+                               AND epistemic_class = 'current'",
+                            params![agent_id_for_db],
+                            |row| row.get(0),
+                        )
+                        .map_err(GraphError::Database)?;
+
+                    let top_aggregates: Vec<AggregateSummaryRow> = if top_n == 0 {
+                        Vec::new()
+                    } else {
+                        let mut agg_stmt = conn
+                            .prepare(
+                                "SELECT id, name, layer, properties \
+                                 FROM kg_entities \
+                                 WHERE (agent_id = ?1 OR agent_id = '__global__') \
+                                   AND layer > 0 \
+                                   AND epistemic_class = 'current' \
+                                 ORDER BY CAST(json_extract(properties, '$.member_count') AS INTEGER) DESC \
+                                 LIMIT ?2",
+                            )
+                            .map_err(GraphError::Database)?;
+                        let mapped = agg_stmt
+                            .query_map(params![agent_id_for_db, top_n as i64], |row| {
+                                let id: String = row.get(0)?;
+                                let name: String = row.get(1)?;
+                                let layer: i64 = row.get(2)?;
+                                let props_json: Option<String> = row.get(3)?;
+                                let (member_count, description) = match props_json {
+                                    Some(s) => {
+                                        let v: serde_json::Value = serde_json::from_str(&s)
+                                            .unwrap_or(serde_json::json!({}));
+                                        let mc = v
+                                            .get("member_count")
+                                            .and_then(|n| n.as_u64())
+                                            .unwrap_or(1)
+                                            as usize;
+                                        let desc = v
+                                            .get("description")
+                                            .and_then(|d| d.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        (mc, desc)
+                                    }
+                                    None => (1, String::new()),
+                                };
+                                Ok((id, name, layer, member_count, description))
+                            })
+                            .map_err(GraphError::Database)?;
+                        let collected: Vec<AggregateSummaryRow> =
+                            mapped.filter_map(Result::ok).collect();
+                        drop(agg_stmt);
+                        collected
+                    };
+
+                    Ok((layer_counts, inter_cluster as usize, top_aggregates))
                 })()
                 .map_err(graph_to_rusqlite)
             })
@@ -4366,6 +4478,162 @@ mod tests {
         assert_eq!(lca.as_deref(), Some("agg-top"));
         assert_eq!(path, vec!["agg-top".to_string()]);
         assert_eq!(max_layer, 1);
+    }
+
+    // -----------------------------------------------------------------
+    // hierarchy_summary (Observatory stats endpoint)
+    // -----------------------------------------------------------------
+
+    /// Seed an aggregate entity at a given layer with a JSON
+    /// `properties` blob carrying `member_count` + `description`.
+    /// Used by the summary tests below to control the top-N ordering.
+    fn seed_aggregate(
+        storage: &GraphStorage,
+        id: &str,
+        agent_id: &str,
+        name: &str,
+        layer: i64,
+        member_count: usize,
+        description: &str,
+    ) {
+        let id = id.to_string();
+        let agent_id = agent_id.to_string();
+        let name = name.to_string();
+        let description = description.to_string();
+        let props = serde_json::json!({
+            "aggregate": true,
+            "member_count": member_count,
+            "description": description,
+        })
+        .to_string();
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         properties, first_seen_at, last_seen_at, layer)
+                     VALUES (?1, ?2, 'Concept', ?3, ?3, ?3,
+                             ?4, datetime('now'), datetime('now'), ?5)",
+                    rusqlite::params![id, agent_id, name, props, layer],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn hierarchy_summary_groups_by_layer_and_orders_aggregates_by_member_count() {
+        let storage = create_test_storage();
+        // Layer 0 base entities (dual-match: stored under __global__).
+        for i in 0..5 {
+            seed_entity_raw(&storage, &format!("e{i}"), "__global__");
+        }
+        // Three aggregates at layer 1, two at layer 2.
+        seed_aggregate(&storage, "a1", "root", "small-cluster", 1, 5, "small");
+        seed_aggregate(
+            &storage,
+            "a2",
+            "root",
+            "huge-cluster",
+            1,
+            50,
+            "huge — should be ranked first",
+        );
+        seed_aggregate(&storage, "a3", "root", "medium-cluster", 1, 20, "medium");
+        seed_aggregate(&storage, "a4", "root", "top-l2-a", 2, 30, "top layer");
+        seed_aggregate(&storage, "a5", "root", "top-l2-b", 2, 25, "top layer");
+
+        // One inter-cluster edge between two layer-1 aggregates.
+        seed_relationship_raw(&storage, "ic1", "root", "a1", "a2", "current");
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "UPDATE kg_relationships SET is_inter_cluster = 1, layer = 1 \
+                     WHERE id = ?1",
+                    rusqlite::params!["ic1"],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let (layer_counts, inter_cluster, top_aggs) =
+            storage.hierarchy_summary("root", 10).unwrap();
+
+        // Layer counts: layer 0 = 5 (under __global__, dual-matched);
+        // layer 1 = 3; layer 2 = 2.
+        assert_eq!(
+            layer_counts,
+            vec![(0, 5), (1, 3), (2, 2)],
+            "layer_counts must group correctly + include __global__ rows"
+        );
+
+        // Total inter-cluster edges = 1.
+        assert_eq!(inter_cluster, 1);
+
+        // Top aggregates ordered by member_count DESC. Layer 0
+        // entities are excluded (layer > 0 filter).
+        let names: Vec<&str> = top_aggs.iter().map(|t| t.1.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "huge-cluster",
+                "top-l2-a",
+                "top-l2-b",
+                "medium-cluster",
+                "small-cluster",
+            ],
+            "aggregates must order by member_count DESC across layers"
+        );
+
+        // First entry has the right shape end-to-end.
+        let huge = &top_aggs[0];
+        assert_eq!(huge.0, "a2");
+        assert_eq!(huge.1, "huge-cluster");
+        assert_eq!(huge.2, 1, "layer");
+        assert_eq!(huge.3, 50, "member_count");
+        assert!(huge.4.contains("ranked first"), "description preserved");
+    }
+
+    #[test]
+    fn hierarchy_summary_top_n_zero_skips_aggregate_query() {
+        let storage = create_test_storage();
+        seed_aggregate(&storage, "a1", "root", "agg-1", 1, 10, "");
+        seed_aggregate(&storage, "a2", "root", "agg-2", 1, 20, "");
+
+        let (_layers, _ic, top) = storage.hierarchy_summary("root", 0).unwrap();
+        assert!(top.is_empty(), "top_n=0 must return zero aggregate rows");
+    }
+
+    #[test]
+    fn hierarchy_summary_top_n_caps_results() {
+        let storage = create_test_storage();
+        for i in 0..5 {
+            seed_aggregate(
+                &storage,
+                &format!("a{i}"),
+                "root",
+                &format!("agg-{i}"),
+                1,
+                (5 - i) * 10,
+                "",
+            );
+        }
+        let (_layers, _ic, top) = storage.hierarchy_summary("root", 2).unwrap();
+        assert_eq!(top.len(), 2, "top_n must cap the result set");
+        // Highest member_count first.
+        assert_eq!(top[0].1, "agg-0");
+        assert_eq!(top[1].1, "agg-1");
+    }
+
+    #[test]
+    fn hierarchy_summary_empty_db_returns_empty_layer_list() {
+        let storage = create_test_storage();
+        let (layers, inter_cluster, top) = storage.hierarchy_summary("root", 10).unwrap();
+        assert!(layers.is_empty());
+        assert_eq!(inter_cluster, 0);
+        assert!(top.is_empty());
     }
 
     #[test]
