@@ -640,6 +640,12 @@ impl AppState {
             tracing::debug!("Memory MMR rerank: disabled (default)");
         }
 
+        // Observatory v2 Phase 3 — wire the EventBus so recall_unified
+        // can emit RecallTrace telemetry for the live canvas overlay.
+        if let Some(recall) = memory_recall_inner.as_mut() {
+            recall.set_event_bus(event_bus.clone());
+        }
+
         let memory_recall: Option<Arc<MemoryRecall>> = memory_recall_inner.map(Arc::new);
 
         // Clone embedding client before it's moved into distiller — the runner

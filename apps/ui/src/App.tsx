@@ -16,6 +16,7 @@ import {
   Plug,
   Brain,
   Network,
+  Layers,
   MessageSquare,
   Menu,
   Search,
@@ -27,6 +28,7 @@ import { WebSettingsPanel } from "./features/settings/WebSettingsPanel";
 import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPanel";
 import { MemoryTab as MemoryPanel } from "./features/memory";
 import { ObservatoryPage } from "./features/observatory";
+import { ObservatoryV2Page } from "./features/observatory-v2";
 import { QuickChat } from "./features/chat-v2";
 import { ResearchPage } from "./features/research-v2";
 import { MissionControlPage } from "./features/mission-control";
@@ -207,6 +209,7 @@ function App() {
                   <Route path="/logs" element={<Navigate to="/mission-control" replace />} />
                   <Route path="/memory" element={<MemoryPanel agentId="root" />} />
                   <Route path="/observatory" element={<ObservatoryPage />} />
+                  <Route path="/observatory-v2" element={<ObservatoryV2Page />} />
                   <Route path="/agents" element={<WebAgentsPanel />} />
                   <Route path="/integrations" element={<WebIntegrationsPanel />} />
                   <Route path="/settings" element={<WebSettingsPanel />} />
@@ -258,6 +261,7 @@ export const navItems: NavItem[] = [
   { to: "/agents", label: "Agents", icon: Bot },
   { to: "/memory", label: "Memory", icon: Brain },
   { to: "/observatory", label: "Observatory", icon: Network },
+  { to: "/observatory-v2", label: "Graph", icon: Layers },
   { to: "/integrations", label: "Integrations", icon: Plug },
   { to: "/settings", label: "Settings", icon: Settings },
 ];

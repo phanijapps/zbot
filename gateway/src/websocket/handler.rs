@@ -1173,6 +1173,25 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
         // Customization file change events are UI-only (delivered via the
         // /api/customization SSE stream, not the session WebSocket).
         GatewayEvent::CustomizationFileChanged { .. } => None,
+
+        // RecallTrace — broadcast globally so /observatory-v2 can light
+        // up the clusters the agent just consulted.
+        GatewayEvent::RecallTrace {
+            agent_id,
+            conversation_id,
+            seed_entity_ids,
+            seed_aggregate_ids,
+            lca_aggregate_id,
+            surfaced_item_count,
+        } => Some(ServerMessage::RecallTrace {
+            agent_id,
+            conversation_id,
+            seed_entity_ids,
+            seed_aggregate_ids,
+            lca_aggregate_id,
+            surfaced_item_count,
+            seq: None,
+        }),
     }
 }
 

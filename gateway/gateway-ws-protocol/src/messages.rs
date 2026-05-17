@@ -445,6 +445,22 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         seq: Option<u64>,
     },
+
+    /// Recall pipeline executed — broadcast globally so the Observatory v2
+    /// canvas can light up the hierarchy clusters the agent just consulted.
+    /// See `GatewayEvent::RecallTrace` for field semantics.
+    RecallTrace {
+        agent_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation_id: Option<String>,
+        seed_entity_ids: Vec<String>,
+        seed_aggregate_ids: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lca_aggregate_id: Option<String>,
+        surfaced_item_count: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
 }
 
 /// Error codes for subscription errors.
@@ -590,6 +606,9 @@ impl ServerMessage {
             Self::IntentAnalysisStarted { .. } => None,
             Self::IntentAnalysisComplete { .. } => None,
             Self::IntentAnalysisSkipped { .. } => None,
+            Self::RecallTrace {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
             Self::Pong
             | Self::Connected { .. }
             | Self::SessionPaused { .. }

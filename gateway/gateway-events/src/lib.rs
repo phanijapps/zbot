@@ -302,6 +302,35 @@ pub enum GatewayEvent {
         /// New mtime as RFC3339, or empty string if the file was deleted.
         modified_at: String,
     },
+
+    /// Recall pipeline executed — global telemetry for the Observatory v2
+    /// canvas to light up the hierarchy clusters the agent just consulted.
+    ///
+    /// Emitted from `recall_unified` after step 4 (graph-ANN seeds) +
+    /// step 5c (LCA walk). All ID lists are pre-resolved on the server
+    /// so the frontend doesn't need to look anything up.
+    ///
+    /// Broadcast globally (no `session_id` field) because the observatory
+    /// surface watches across all conversations. When no agent is doing
+    /// anything, no events fire — the canvas falls back to ambient pulses.
+    RecallTrace {
+        /// Agent that ran the recall.
+        agent_id: String,
+        /// Conversation that triggered the recall, if any.
+        conversation_id: Option<String>,
+        /// L0 entity ids (the raw graph-ANN seeds).
+        seed_entity_ids: Vec<String>,
+        /// L1 (or higher) `parent_cluster_id`s of the seeds — pre-resolved
+        /// so the canvas can directly pulse the corresponding aggregates.
+        seed_aggregate_ids: Vec<String>,
+        /// LCA of the seed entities, if the hierarchy step found one.
+        /// May be a layer-1 aggregate or higher.
+        lca_aggregate_id: Option<String>,
+        /// Number of ScoredItems that survived ranking + made it into the
+        /// final recall output. Surfaces a "this recall was meaningful"
+        /// signal — large = many results, zero = nothing recalled.
+        surfaced_item_count: u32,
+    },
 }
 
 impl GatewayEvent {
@@ -338,6 +367,7 @@ impl GatewayEvent {
             Self::IntentAnalysisComplete { .. } => None,
             Self::IntentAnalysisSkipped { .. } => None,
             Self::CustomizationFileChanged { .. } => None,
+            Self::RecallTrace { agent_id, .. } => Some(agent_id),
         }
     }
 
@@ -374,6 +404,8 @@ impl GatewayEvent {
             Self::IntentAnalysisComplete { session_id, .. } => Some(session_id),
             Self::IntentAnalysisSkipped { session_id, .. } => Some(session_id),
             Self::CustomizationFileChanged { .. } => None,
+            // Global telemetry — no session routing.
+            Self::RecallTrace { .. } => None,
         }
     }
 
@@ -417,6 +449,8 @@ impl GatewayEvent {
             Self::IntentAnalysisComplete { execution_id, .. } => Some(execution_id),
             Self::IntentAnalysisSkipped { execution_id, .. } => Some(execution_id),
             Self::CustomizationFileChanged { .. } => None,
+            // Global telemetry — no execution routing.
+            Self::RecallTrace { .. } => None,
         }
     }
 
@@ -491,6 +525,9 @@ impl GatewayEvent {
             Self::IntentAnalysisComplete { .. } => None,
             Self::IntentAnalysisSkipped { .. } => None,
             Self::CustomizationFileChanged { .. } => None,
+            Self::RecallTrace {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
         }
     }
 }

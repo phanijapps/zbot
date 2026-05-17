@@ -57,6 +57,11 @@ pub struct MemoryRecall {
     /// MMR diversity reranking. When `None` or `enabled = false`,
     /// `recall_unified` is byte-for-byte identical to pre-MMR behavior.
     mmr_config: Option<MmrConfig>,
+    /// Observatory v2 (Phase 3) — optional EventBus for emitting
+    /// `RecallTrace` telemetry. When `None` (tests, headless invocations),
+    /// recall stays silent. Production wiring attaches this in
+    /// `MemoryServices::new()`.
+    event_bus: Option<Arc<gateway_events::EventBus>>,
     config: Arc<RecallConfig>,
 }
 
@@ -78,8 +83,16 @@ impl MemoryRecall {
             belief_store: None,
             query_gate: None,
             mmr_config: None,
+            event_bus: None,
             config,
         }
+    }
+
+    /// Wire the EventBus so `recall_unified` can emit `RecallTrace`
+    /// telemetry for the Observatory v2 canvas. When unset, recall is
+    /// byte-for-byte identical to its pre-Phase-3 behavior.
+    pub fn set_event_bus(&mut self, bus: Arc<gateway_events::EventBus>) {
+        self.event_bus = Some(bus);
     }
 
     /// Wire the belief store so `recall_unified` surfaces beliefs
@@ -671,6 +684,48 @@ impl MemoryRecall {
                 }
                 _ => (Vec::new(), Vec::new()),
             };
+
+        // Observatory v2 Phase 3 — broadcast a RecallTrace telemetry
+        // event so the dashboard can light up the consulted clusters in
+        // real time. Best-effort: bus may not be wired (tests, headless
+        // bootstrap), and `publish_sync` is non-blocking.
+        if let Some(bus) = self.event_bus.as_ref() {
+            let seed_entity_ids: Vec<String> = graph_seed_ids.iter().map(|e| e.0.clone()).collect();
+            // The LCA path's `path_entities` is the union of every
+            // seed's ancestry chain up to (and including) the LCA.
+            // For the visualisation we treat them all as
+            // "aggregates the agent touched" — close enough to give
+            // the live walk a target without an extra trait round-trip.
+            let (seed_aggregate_ids, lca_aggregate_id): (Vec<String>, Option<String>) =
+                match (self.kg_store.as_ref(), graph_seed_ids.is_empty()) {
+                    (Some(store), false) => {
+                        match store.compute_lca_path(agent_id, &graph_seed_ids).await {
+                            Ok(lca) => (
+                                lca.path_entities.iter().map(|e| e.0.clone()).collect(),
+                                lca.lca.map(|e| e.0),
+                            ),
+                            Err(_) => (Vec::new(), None),
+                        }
+                    }
+                    _ => (Vec::new(), None),
+                };
+            let surfaced_item_count = (fact_items.len()
+                + wiki_items.len()
+                + procedure_items.len()
+                + graph_items.len()
+                + traversal_items.len()
+                + belief_items.len()
+                + hier_items.len()
+                + hier_relation_items.len()) as u32;
+            bus.publish_sync(gateway_events::GatewayEvent::RecallTrace {
+                agent_id: agent_id.to_string(),
+                conversation_id: None,
+                seed_entity_ids,
+                seed_aggregate_ids,
+                lca_aggregate_id,
+                surfaced_item_count,
+            });
+        }
 
         // Intent boost on non-goal lists.
         let mut all_lists = vec![
