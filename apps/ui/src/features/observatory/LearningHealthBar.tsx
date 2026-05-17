@@ -189,7 +189,7 @@ export function LearningHealthBar() {
             style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
           >
             <ArrowUpRight style={{ width: 14, height: 14 }} aria-hidden />
-            beliefs
+            Belief Network
           </button>
         ) : null}
 
@@ -203,7 +203,7 @@ export function LearningHealthBar() {
             style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
           >
             <ArrowUpRight style={{ width: 14, height: 14 }} aria-hidden />
-            hierarchy
+            Hierarchy
           </button>
         ) : null}
       </div>
