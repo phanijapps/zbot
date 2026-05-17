@@ -23,14 +23,20 @@
 import { useState } from "react";
 import { ArrowUpRight, Layers, Network, Activity, Brain, X } from "lucide-react";
 import { Slideover } from "@/components/Slideover";
-import { useGraphStats, useDistillationStatus } from "../observatory/graph-hooks";
+import {
+  useGraphStats,
+  useGraphData,
+  useDistillationStatus,
+} from "../observatory/graph-hooks";
 import { useBeliefNetworkStats } from "../observatory/belief-network/hooks";
 import { useHierarchyStats } from "../observatory/hierarchy/hooks";
 import { HierarchyPanel } from "../observatory/hierarchy/HierarchyPanel";
 import { BeliefNetworkPanel } from "../observatory/belief-network/BeliefNetworkPanel";
 import { HierarchyShells } from "./HierarchyShells";
 import { useRecallTrace } from "./useRecallTrace";
+import { ENTITY_TYPE_COLORS_3D } from "./EntityGraph";
 import type { AggregateSummary } from "../observatory/hierarchy/types";
+import type { GraphEntity } from "@/services/transport/types";
 import "./observatory-v2.css";
 
 export function ObservatoryV2Page() {
@@ -39,10 +45,14 @@ export function ObservatoryV2Page() {
   const { stats: beliefStats } = useBeliefNetworkStats();
   const { stats: hierStats, loading: hierLoading } = useHierarchyStats(20);
   const { traces, latest: latestTrace } = useRecallTrace();
+  // Phase 4 — real entity-level graph. Cross-agent (undefined agentId)
+  // so we get the whole graph the agent's memory operates on.
+  const { entities, relationships } = useGraphData();
 
   const [hierOpen, setHierOpen] = useState(false);
   const [beliefOpen, setBeliefOpen] = useState(false);
   const [pickedAgg, setPickedAgg] = useState<AggregateSummary | null>(null);
+  const [pickedEntity, setPickedEntity] = useState<GraphEntity | null>(null);
 
   const hierarchyEnabled = hierStats?.enabled ?? false;
   const layerCounts = hierStats?.summary?.layer_counts ?? [];
@@ -71,6 +81,9 @@ export function ObservatoryV2Page() {
           enabled={hierarchyEnabled && !hierLoading}
           onAggregateClick={setPickedAgg}
           traces={traces}
+          entities={entities}
+          relationships={relationships}
+          onEntityClick={setPickedEntity}
         />
         {!hierarchyEnabled && !hierLoading && (
           <div className="obs2__empty">
@@ -123,6 +136,24 @@ export function ObservatoryV2Page() {
           <div className="obs2__hud-row obs2__hud-row--warn">
             <span className="obs2__hud-eyebrow">failed</span>
             <span className="obs2__hud-value">{failed}</span>
+          </div>
+        )}
+        {entities && entities.length > 0 && (
+          <div className="obs2__hud-legend">
+            <span className="obs2__hud-eyebrow">entity types</span>
+            <div className="obs2__hud-legend-row">
+              {(["person", "concept", "agent", "project", "strategy"] as const).map(
+                (t) => (
+                  <span key={t} className="obs2__legend-item">
+                    <span
+                      className="obs2__legend-dot"
+                      style={{ background: ENTITY_TYPE_COLORS_3D[t] }}
+                    />
+                    <span className="obs2__legend-label">{t}</span>
+                  </span>
+                ),
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -231,6 +262,41 @@ export function ObservatoryV2Page() {
       >
         <BeliefNetworkPanel />
       </Slideover>
+
+      {/* Picked-entity floating card — appears when the user clicks
+          an L0 entity dot (Phase 4). */}
+      {pickedEntity && (
+        <div className="obs2__pick-card obs2__pick-card--entity">
+          <button
+            type="button"
+            className="obs2__pick-close"
+            onClick={() => setPickedEntity(null)}
+            aria-label="Close entity detail"
+          >
+            <X size={14} aria-hidden />
+          </button>
+          <div className="obs2__pick-head">
+            <span
+              className="obs2__pick-eyebrow"
+              style={{
+                color: ENTITY_TYPE_COLORS_3D[pickedEntity.entity_type.toLowerCase()] ?? "#dccba5",
+              }}
+            >
+              entity · {pickedEntity.entity_type}
+            </span>
+            <span className="obs2__pick-name">{pickedEntity.name}</span>
+          </div>
+          <div className="obs2__pick-meta">
+            <span className="obs2__pick-meta-chip">
+              {pickedEntity.mention_count} mention
+              {pickedEntity.mention_count === 1 ? "" : "s"}
+            </span>
+            <span className="obs2__pick-meta-chip">
+              {new Date(pickedEntity.last_seen_at).toLocaleDateString()}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Picked-aggregate floating card — appears when the user clicks
           an L1 sphere. Frosted glass, anchored bottom-right, dismissible. */}

@@ -447,6 +447,83 @@
   color: #e07a5f;
 }
 
+/* ----- Entity hover label (Phase 4 — smaller than aggregate label) ----- */
+.obs2__entity-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.92),
+    0 0 6px rgba(10, 14, 21, 0.85);
+}
+
+.obs2__entity-label-name {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 11px;
+  color: #f5ecd9;
+  letter-spacing: 0.02em;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.obs2__entity-label-meta {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: rgba(245, 236, 217, 0.7);
+}
+
+/* ----- Entity-type legend in the top-right HUD ----- */
+.obs2__hud-legend {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--obs2-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.obs2__hud-legend-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 4px;
+}
+
+.obs2__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+}
+
+.obs2__legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.obs2__legend-label {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--obs2-cream-dim);
+  text-transform: lowercase;
+}
+
+/* ----- Pick card variant for entities ----- */
+.obs2__pick-card--entity {
+  /* Stack the entity card just above the aggregate card if both are
+     open simultaneously. Position is calculated relative to bottom. */
+  bottom: 308px;
+}
+
 /* ----- 3D node labels (drei <Html> billboards over L1 aggregates) ------ */
 .obs2__node-label {
   display: flex;

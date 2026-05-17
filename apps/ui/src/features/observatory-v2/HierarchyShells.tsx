@@ -28,6 +28,11 @@ import { OrbitControls, AdaptiveDpr, Billboard, Html } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { AggregateSummary } from "../observatory/hierarchy/types";
+import type {
+  GraphEntity,
+  GraphRelationship,
+} from "@/services/transport/types";
+import { EntityGraph } from "./EntityGraph";
 
 interface HierarchyShellsProps {
   layerCounts: Array<[number, number]>;
@@ -38,6 +43,11 @@ interface HierarchyShellsProps {
   onAggregateClick?: (agg: AggregateSummary) => void;
   /** Phase 3 — live RAG telemetry: most-recent-first. */
   traces?: RecallTraceLike[];
+  /** Phase 4 — real entity-level graph data. */
+  entities?: GraphEntity[];
+  relationships?: GraphRelationship[];
+  /** Called when the user clicks an entity dot. */
+  onEntityClick?: (entity: GraphEntity) => void;
 }
 
 /**
@@ -582,6 +592,9 @@ interface SceneContentProps {
   interClusterCount: number;
   onAggregateClick?: (agg: AggregateSummary) => void;
   traces?: RecallTraceLike[];
+  entities?: GraphEntity[];
+  relationships?: GraphRelationship[];
+  onEntityClick?: (entity: GraphEntity) => void;
 }
 
 interface ActivePulse {
@@ -603,6 +616,9 @@ function SceneContent({
   interClusterCount,
   onAggregateClick,
   traces = [],
+  entities,
+  relationships,
+  onEntityClick,
 }: SceneContentProps) {
   const L1_RADIUS = 1.4;
   const positions = useMemo(
@@ -773,7 +789,21 @@ function SceneContent({
 
   return (
     <>
-      <BaseShell count={l0Count} radius={2.7} />
+      {/* L0 ambient dust — outermost atmosphere. We keep it ONLY when
+          no real entity data is available; once we have entities the
+          dust collides visually with the actual nodes, so EntityGraph
+          replaces it at the same radius. */}
+      {(entities ?? []).length === 0 && (
+        <BaseShell count={l0Count} radius={2.7} />
+      )}
+      {entities && entities.length > 0 && (
+        <EntityGraph
+          entities={entities}
+          relationships={relationships ?? []}
+          radius={2.7}
+          onEntityClick={onEntityClick}
+        />
+      )}
       <RadialThreads positions={positions} />
       <InterClusterArcs positions={positions} arcCount={interClusterCount} />
       {aggregates.map((agg, i) => {
@@ -851,6 +881,9 @@ export function HierarchyShells({
   enabled,
   onAggregateClick,
   traces,
+  entities,
+  relationships,
+  onEntityClick,
 }: HierarchyShellsProps) {
   const l0 = layerCounts.find(([layer]) => layer === 0)?.[1] ?? 0;
 
@@ -874,6 +907,9 @@ export function HierarchyShells({
           interClusterCount={interClusterCount}
           onAggregateClick={onAggregateClick}
           traces={traces}
+          entities={entities}
+          relationships={relationships}
+          onEntityClick={onEntityClick}
         />
       )}
 
