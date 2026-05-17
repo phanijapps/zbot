@@ -1,9 +1,20 @@
 # Pattern 3 — Agent Pool Design
 
-**Date:** 2026-05-11  
-**Status:** Research-reviewed — northstar, not for implementation yet  
-**Context:** philschmid.de/subagent-patterns-2026, Pattern 3: "Agent Pool — Persistent Agents with Messaging"  
+**Date:** 2026-05-11
+**Status:** ✅ **Shipped** — implementation live on `develop`. See file map below for the as-built layout (final landing differs slightly from the original sketch: `delegation/spawn.rs` owns the resolve/reject calls rather than `delegation/callback.rs`; `AgentResultBus::kill` consolidates the `kill_agent` path on the bus rather than a separate `handles` map). Test coverage added 2026-05-17: 11 bus tests + 8 tool tests.
+**Context:** philschmid.de/subagent-patterns-2026, Pattern 3: "Agent Pool — Persistent Agents with Messaging"
 **Reviewed by:** 2-agent parallel codebase analysis (delegation/callback.rs, spawn.rs, executor.rs, StateService)
+
+## As-Built Locations
+
+| Component | File | Notes |
+|-----------|------|-------|
+| `AgentResultBus` + `AgentResult` + `AgentWaitError` | `gateway/gateway-execution/src/agent_pool/result_bus.rs` | One bus owns both `waiting: HashMap<execution_id, oneshot::Sender>` AND `execution_handles: HashMap<execution_id, ExecutionHandle>` — no separate handles map needed. |
+| `WaitAgentTool` | `gateway/gateway-execution/src/tools/wait_agent.rs` | Fast-path via `StateService::get_execution` + `conversation_repo.get_session_conversation` returns the last assistant message immediately. Slow-path registers a waiter and times out. |
+| `KillAgentTool` | `gateway/gateway-execution/src/tools/kill_agent.rs` | Calls `bus.kill(execution_id)` which both `handle.stop()`s the running execution AND rejects any pending waiter with `Crashed { error: "killed by orchestrator" }`. |
+| Resolve/reject hook | `gateway/gateway-execution/src/delegation/spawn.rs:750/771/795` | NOT `callback.rs` (the original design pointed there). Resolve fires after the subagent's `respond` call; reject on failure paths. |
+| Runner construction | `gateway/gateway-execution/src/runner/core.rs:408,591,894` | `ExecutionRunner::with_config()` builds the bus; `ContinuationArgs` carries it; `invoke_continuation` threads it into the executor. |
+| Tool registration | `gateway/gateway-execution/src/invoke/executor.rs:621-633` | Registered only when `agent_result_bus + state_service + conversation_repo` are all wired — i.e. the root path. Subagents don't get these tools. |
 
 ---
 

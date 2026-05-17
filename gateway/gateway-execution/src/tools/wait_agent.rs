@@ -137,3 +137,166 @@ impl Tool for WaitAgentTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handle::ExecutionHandle;
+    use gateway_services::VaultPaths;
+    use serde_json::json;
+    use tempfile::TempDir;
+    use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+
+    struct Harness {
+        _tmp: TempDir,
+        bus: Arc<AgentResultBus>,
+        state_service: Arc<StateService<DatabaseManager>>,
+        conversation_repo: Arc<ConversationRepository>,
+    }
+
+    fn setup() -> Harness {
+        let tmp = TempDir::new().expect("tempdir");
+        let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        paths.ensure_dirs_exist().expect("ensure vault dirs");
+        let db = Arc::new(DatabaseManager::new(paths).expect("db init"));
+        let state_service = Arc::new(StateService::new(db.clone()));
+        let conversation_repo = Arc::new(ConversationRepository::new(db));
+        let bus = Arc::new(AgentResultBus::new());
+        Harness {
+            _tmp: tmp,
+            bus,
+            state_service,
+            conversation_repo,
+        }
+    }
+
+    fn dummy_ctx() -> Arc<dyn zero_core::ToolContext> {
+        Arc::new(agent_runtime::ToolContext::full_with_state(
+            "test-root".to_string(),
+            None,
+            vec![],
+            std::collections::HashMap::new(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn wait_agent_requires_execution_id_arg() {
+        let h = setup();
+        let tool = WaitAgentTool::new(h.bus, h.state_service, h.conversation_repo);
+        let err = tool.execute(dummy_ctx(), json!({})).await.unwrap_err();
+        assert!(format!("{err}").contains("execution_id"));
+    }
+
+    /// Slow path: agent finishes AFTER wait_agent registered. The tool
+    /// blocks on the bus, then resolve unblocks it. Bypasses the
+    /// state-service fast-path by using an execution_id the service
+    /// doesn't know about (its lookup returns None).
+    #[tokio::test]
+    async fn wait_agent_blocks_then_unblocks_on_resolve() {
+        let h = setup();
+        let bus_for_resolver = h.bus.clone();
+        let tool = WaitAgentTool::new(h.bus, h.state_service, h.conversation_repo);
+
+        // Resolve after a short delay (long enough that the tool has
+        // definitely entered timeout.await but well under the 300s
+        // default).
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            bus_for_resolver.resolve("exec-not-in-state", "researcher", "found stuff");
+        });
+
+        let result = tool
+            .execute(
+                dummy_ctx(),
+                json!({ "execution_id": "exec-not-in-state", "timeout_secs": 5 }),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result["execution_id"], "exec-not-in-state");
+        assert_eq!(result["agent_id"], "researcher");
+        assert_eq!(result["result"], "found stuff");
+        assert!(result.get("error").is_none());
+    }
+
+    /// Reject path: bus.reject delivers a Crashed error which the tool
+    /// surfaces as `{"error": "crashed", ...}`.
+    #[tokio::test]
+    async fn wait_agent_surfaces_crash_from_reject() {
+        let h = setup();
+        let bus_for_rejecter = h.bus.clone();
+        let tool = WaitAgentTool::new(h.bus, h.state_service, h.conversation_repo);
+
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            bus_for_rejecter.reject(
+                "exec-crash",
+                AgentWaitError::Crashed {
+                    error: "shell command died".to_string(),
+                },
+            );
+        });
+
+        let result = tool
+            .execute(
+                dummy_ctx(),
+                json!({ "execution_id": "exec-crash", "timeout_secs": 5 }),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result["error"], "crashed");
+        assert_eq!(result["execution_id"], "exec-crash");
+        assert_eq!(result["details"], "shell command died");
+    }
+
+    /// Timeout path: no resolver fires, tokio::time::timeout returns
+    /// Elapsed, tool surfaces it as `{"error": "timeout", ...}`.
+    #[tokio::test]
+    async fn wait_agent_returns_timeout_when_no_resolver() {
+        let h = setup();
+        let tool = WaitAgentTool::new(h.bus, h.state_service, h.conversation_repo);
+
+        let result = tool
+            .execute(
+                dummy_ctx(),
+                json!({ "execution_id": "exec-stalled", "timeout_secs": 1 }),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result["error"], "timeout");
+        assert_eq!(result["execution_id"], "exec-stalled");
+    }
+
+    /// Kill path: bus.kill rejects any registered waiter with the
+    /// "killed by orchestrator" Crashed variant. The tool surfaces it
+    /// as `{"error": "crashed", "details": "...killed by orchestrator"}`.
+    #[tokio::test]
+    async fn wait_agent_surfaces_kill_as_crashed() {
+        let h = setup();
+        h.bus
+            .register_handle("exec-killed", ExecutionHandle::new(10));
+        let bus_for_killer = h.bus.clone();
+        let tool = WaitAgentTool::new(h.bus, h.state_service, h.conversation_repo);
+
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            bus_for_killer.kill("exec-killed");
+        });
+
+        let result = tool
+            .execute(
+                dummy_ctx(),
+                json!({ "execution_id": "exec-killed", "timeout_secs": 5 }),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result["error"], "crashed");
+        assert!(result["details"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("killed by orchestrator"));
+    }
+}
