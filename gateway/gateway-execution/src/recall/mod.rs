@@ -85,6 +85,9 @@ fn non_belief_tag(kind: &ItemKind) -> &'static str {
         // Hierarchy entities also have their own heading; fall back
         // to a `topic` tag for forward compatibility.
         ItemKind::HierEntity => "topic",
+        // Inter-cluster edges between aggregates — same topical
+        // heading as `HierEntity`, distinguished by the `edge` tag.
+        ItemKind::HierRelation => "edge",
     }
 }
 

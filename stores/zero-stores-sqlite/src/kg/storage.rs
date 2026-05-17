@@ -10,6 +10,12 @@ use knowledge_graph::types::{
 use rusqlite::{params, Connection};
 use std::sync::Arc;
 
+/// Row tuple from `list_inter_cluster_relations`:
+/// `(id, source_entity_id, target_entity_id, relationship_type, layer)`.
+/// Aliased to keep the trait wrapper signature within clippy's
+/// `type_complexity` budget.
+type InterClusterRelationRow = (String, String, String, String, i64);
+
 /// Build a comma-separated list of positional placeholders for SQL
 /// `IN ()` clauses: `placeholder_list(2, 3)` → `"?2,?3,?4"`. Callers
 /// are responsible for binding the exact same number of parameters in
@@ -1417,6 +1423,77 @@ impl GraphStorage {
             .map_err(GraphError::Other)
     }
 
+    /// List inter-cluster relations whose BOTH endpoints sit in
+    /// `entity_ids` (Phase H-4 follow-up).
+    ///
+    /// Used by recall step 5c after `compute_lca_path` to surface the
+    /// synthesised edges along the LCA path. Filters
+    /// `is_inter_cluster = 1` AND `epistemic_class = 'current'` AND
+    /// `agent_id` match. Empty input short-circuits to an empty
+    /// result (`IN ()` would be a SQL syntax error).
+    pub fn list_inter_cluster_relations(
+        &self,
+        agent_id: &str,
+        entity_ids: &[String],
+    ) -> GraphResult<Vec<InterClusterRelationRow>> {
+        if entity_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let n = entity_ids.len();
+        let src_in = placeholder_list(2, n);
+        let tgt_in = placeholder_list(2 + n, n);
+        // Dual-match `agent_id` against the queried agent OR `__global__`
+        // because base entities (and the relationships among them) are
+        // stored under `agent_id = '__global__'` by the cross-agent
+        // dedup convention. Without this, a daemon configured for
+        // `agent_id = 'root'` sees zero hierarchy data even when the
+        // graph is full. Same idiom as `search_entities_by_name_embedding`.
+        let sql = format!(
+            "SELECT id, source_entity_id, target_entity_id, relationship_type, layer \
+             FROM kg_relationships \
+             WHERE (agent_id = ?1 OR agent_id = '__global__') \
+               AND is_inter_cluster = 1 \
+               AND epistemic_class = 'current' \
+               AND source_entity_id IN ({src_in}) \
+               AND target_entity_id IN ({tgt_in})"
+        );
+
+        // Bind: agent_id, then the id list twice (once per IN).
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(1 + 2 * n);
+        params.push(Box::new(agent_id.to_string()));
+        for id in entity_ids {
+            params.push(Box::new(id.clone()));
+        }
+        for id in entity_ids {
+            params.push(Box::new(id.clone()));
+        }
+
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<InterClusterRelationRow>> {
+                    let mut stmt = conn.prepare(&sql).map_err(GraphError::Database)?;
+                    let rows = stmt
+                        .query_map(
+                            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                            |row| {
+                                Ok((
+                                    row.get::<_, String>(0)?,
+                                    row.get::<_, String>(1)?,
+                                    row.get::<_, String>(2)?,
+                                    row.get::<_, String>(3)?,
+                                    row.get::<_, i64>(4)?,
+                                ))
+                            },
+                        )
+                        .map_err(GraphError::Database)?;
+                    Ok(rows.filter_map(|r| r.ok()).collect())
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
     /// Count relationships bridging two entity clusters (Phase H-3c).
     ///
     /// Used by the future `HierarchyBuilder` sleep worker to decide
@@ -1456,9 +1533,12 @@ impl GraphStorage {
         let b2 = placeholder_list(b2_start, b_len);
         let a2 = placeholder_list(a2_start, a_len);
 
+        // Dual-match `agent_id`: same reason as
+        // `list_inter_cluster_relations` above. Base entities use
+        // `'__global__'` as their effective agent_id.
         let sql = format!(
             "SELECT COUNT(*) FROM kg_relationships \
-             WHERE agent_id = ?1 \
+             WHERE (agent_id = ?1 OR agent_id = '__global__') \
                AND epistemic_class = 'current' \
                AND ( \
                  (source_entity_id IN ({a1}) AND target_entity_id IN ({b1})) \
@@ -1663,10 +1743,16 @@ impl GraphStorage {
                     let mut layer_of: std::collections::HashMap<String, i64> =
                         std::collections::HashMap::new();
 
+                    // Dual-match `agent_id` against the queried agent or
+                    // `__global__` so the parent walk can cross the
+                    // cross-agent-dedup boundary. Without this the walk
+                    // terminates at the first `__global__` entity even
+                    // when its parent_cluster_id is set, breaking the LCA.
                     let mut parent_stmt = conn
                         .prepare(
                             "SELECT parent_cluster_id, layer FROM kg_entities \
-                             WHERE id = ?1 AND agent_id = ?2",
+                             WHERE id = ?1 \
+                               AND (agent_id = ?2 OR agent_id = '__global__')",
                         )
                         .map_err(GraphError::Database)?;
 
@@ -1739,7 +1825,9 @@ impl GraphStorage {
         self.db
             .with_connection(|conn| {
                 let result: rusqlite::Result<i64> = conn.query_row(
-                    "SELECT layer FROM kg_entities WHERE id = ?1 AND agent_id = ?2",
+                    "SELECT layer FROM kg_entities \
+                     WHERE id = ?1 \
+                       AND (agent_id = ?2 OR agent_id = '__global__')",
                     params![id, agent_id],
                     |row| row.get(0),
                 );
@@ -1767,11 +1855,17 @@ impl GraphStorage {
         self.db
             .with_connection(|conn| {
                 (|| -> GraphResult<Vec<(String, Vec<f32>)>> {
+                    // Dual-match: base entities live under
+                    // `agent_id = '__global__'` by the cross-agent
+                    // dedup convention. Without `OR agent_id = '__global__'`
+                    // a daemon configured for `agent_id = 'root'` sees
+                    // zero entities and the HierarchyBuilder cycles
+                    // exit with PoolTooSmall every time.
                     let sql = if limit == 0 {
                         "SELECT e.id, k.name_embedding
                          FROM kg_entities e
                          JOIN kg_name_index k ON k.entity_id = e.id
-                         WHERE e.agent_id = ?1
+                         WHERE (e.agent_id = ?1 OR e.agent_id = '__global__')
                            AND e.layer = ?2
                            AND e.epistemic_class = 'current'"
                             .to_string()
@@ -1779,7 +1873,7 @@ impl GraphStorage {
                         "SELECT e.id, k.name_embedding
                          FROM kg_entities e
                          JOIN kg_name_index k ON k.entity_id = e.id
-                         WHERE e.agent_id = ?1
+                         WHERE (e.agent_id = ?1 OR e.agent_id = '__global__')
                            AND e.layer = ?2
                            AND e.epistemic_class = 'current'
                          LIMIT ?3"
@@ -4206,6 +4300,74 @@ mod tests {
         assert_eq!(rows[0].0, "agA-e1");
     }
 
+    /// Regression: base entities live under `agent_id = '__global__'` by
+    /// the cross-agent dedup convention in this codebase. The hierarchy
+    /// reads must dual-match so a daemon configured for `agent_id = 'root'`
+    /// can see them — without this, the builder hits PoolTooSmall on
+    /// every cycle even when the graph is full.
+    #[test]
+    fn list_entities_with_embeddings_at_layer_picks_up_global_rows() {
+        let storage = create_test_storage();
+        // Seed under __global__ (the prod convention).
+        seed_entity_at_layer(&storage, "g-e1", "__global__", 0, padded_embedding(1.0));
+        seed_entity_at_layer(&storage, "g-e2", "__global__", 0, padded_embedding(2.0));
+        // And one under a different agent_id to be sure cross-agent
+        // leak doesn't happen (the dual-match is `?1 OR '__global__'`,
+        // not "everything").
+        seed_entity_at_layer(
+            &storage,
+            "other-e1",
+            "agent-other",
+            0,
+            padded_embedding(3.0),
+        );
+
+        let rows = storage
+            .list_entities_with_embeddings_at_layer("root", 0, 0)
+            .unwrap();
+        let mut ids: Vec<_> = rows.iter().map(|(id, _)| id.clone()).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec!["g-e1".to_string(), "g-e2".to_string()],
+            "dual-match must pull __global__ rows but not other agents'"
+        );
+    }
+
+    /// Same regression for `connectivity_strength`: cross-cluster edges
+    /// stored under `__global__` must be counted when the queried agent
+    /// is `root`.
+    #[test]
+    fn connectivity_strength_picks_up_global_relationships() {
+        let storage = create_test_storage();
+        seed_entity_raw(&storage, "g-a", "__global__");
+        seed_entity_raw(&storage, "g-b", "__global__");
+        seed_relationship_raw(&storage, "r-global", "__global__", "g-a", "g-b", "current");
+
+        let result = storage
+            .connectivity_strength("root", &["g-a".to_string()], &["g-b".to_string()])
+            .unwrap();
+        assert_eq!(result, 1, "edge under __global__ must count for root");
+    }
+
+    /// Same regression for `compute_lca_path`: the parent-pointer walk
+    /// must cross the __global__ boundary so a layer-0 entity under
+    /// __global__ can reach a layer-1 aggregate.
+    #[test]
+    fn lca_walk_traverses_global_parent_pointers() {
+        let storage = create_test_storage();
+        seed_hier_entity(&storage, "agg-top", "__global__", 1, None);
+        seed_hier_entity(&storage, "g-a", "__global__", 0, Some("agg-top"));
+        seed_hier_entity(&storage, "g-b", "__global__", 0, Some("agg-top"));
+
+        let (lca, path, max_layer) = storage
+            .compute_lca_path("root", &["g-a".to_string(), "g-b".to_string()])
+            .unwrap();
+        assert_eq!(lca.as_deref(), Some("agg-top"));
+        assert_eq!(path, vec!["agg-top".to_string()]);
+        assert_eq!(max_layer, 1);
+    }
+
     #[test]
     fn list_entities_with_embeddings_at_layer_skips_entities_without_embedding() {
         let storage = create_test_storage();
@@ -4465,6 +4627,89 @@ mod tests {
             lca_cross.is_none(),
             "cross-agent seeds must not share an LCA"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // list_inter_cluster_relations (Phase H-4 follow-up)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn list_inter_cluster_relations_empty_input_yields_empty() {
+        let storage = create_test_storage();
+        let out = storage
+            .list_inter_cluster_relations("agent-h", &[])
+            .unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn list_inter_cluster_relations_returns_only_marked_rows_in_set() {
+        let storage = create_test_storage();
+        for id in ["agg-a", "agg-b", "agg-c"] {
+            seed_entity_raw(&storage, id, "agent-h");
+        }
+        // One inter-cluster edge (the kind we want).
+        storage
+            .write_inter_cluster_relation("agent-h", 2, "agg-a", "agg-b", "encompasses")
+            .unwrap();
+        // One ordinary base edge — must NOT come back.
+        seed_relationship_raw(&storage, "r-base", "agent-h", "agg-a", "agg-c", "current");
+
+        let ids = vec![
+            "agg-a".to_string(),
+            "agg-b".to_string(),
+            "agg-c".to_string(),
+        ];
+        let out = storage
+            .list_inter_cluster_relations("agent-h", &ids)
+            .unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].1, "agg-a"); // source
+        assert_eq!(out[0].2, "agg-b"); // target
+        assert_eq!(out[0].3, "encompasses");
+        assert_eq!(out[0].4, 2); // layer
+    }
+
+    #[test]
+    fn list_inter_cluster_relations_excludes_edges_outside_id_set() {
+        let storage = create_test_storage();
+        for id in ["agg-a", "agg-b", "agg-c"] {
+            seed_entity_raw(&storage, id, "agent-h");
+        }
+        // Edge between agg-a and agg-c — but agg-c is not in our query set.
+        storage
+            .write_inter_cluster_relation("agent-h", 2, "agg-a", "agg-c", "encompasses")
+            .unwrap();
+
+        let ids = vec!["agg-a".to_string(), "agg-b".to_string()];
+        let out = storage
+            .list_inter_cluster_relations("agent-h", &ids)
+            .unwrap();
+        assert!(
+            out.is_empty(),
+            "edge whose target is outside the queried set must not surface"
+        );
+    }
+
+    #[test]
+    fn list_inter_cluster_relations_scopes_by_agent_id() {
+        let storage = create_test_storage();
+        for id in ["agg-a", "agg-b"] {
+            seed_entity_raw(&storage, id, "agent-a");
+            seed_entity_raw(&storage, &format!("{id}-b"), "agent-b");
+        }
+        storage
+            .write_inter_cluster_relation("agent-a", 2, "agg-a", "agg-b", "shares")
+            .unwrap();
+        storage
+            .write_inter_cluster_relation("agent-b", 2, "agg-a-b", "agg-b-b", "shares")
+            .unwrap();
+
+        let ids = vec!["agg-a".to_string(), "agg-b".to_string()];
+        let out = storage
+            .list_inter_cluster_relations("agent-a", &ids)
+            .unwrap();
+        assert_eq!(out.len(), 1, "agent-b's edge must not leak into agent-a");
     }
 
     #[test]

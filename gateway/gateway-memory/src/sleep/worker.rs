@@ -189,6 +189,22 @@ async fn run_cycle(
         let h_stats = hb.run_for_agent(agent_id).await;
         stats.hierarchy_aggregates_created = h_stats.aggregates_created;
         stats.hierarchy_inter_cluster_relations = h_stats.inter_cluster_relations_created;
+        // Always emit an info-level summary so operators can confirm
+        // the builder actually ran and see why it stopped — without
+        // this line, a PoolTooSmall exit was indistinguishable from
+        // "the builder was never constructed" in the logs.
+        tracing::info!(
+            %run_id,
+            agent_id,
+            stopped_reason = ?h_stats.stopped_reason,
+            layers_built = h_stats.layers_built,
+            aggregates_created = h_stats.aggregates_created,
+            singletons_promoted = h_stats.singletons_promoted,
+            inter_cluster_relations = h_stats.inter_cluster_relations_created,
+            llm_calls = h_stats.llm_calls,
+            errors = h_stats.errors,
+            "hierarchy builder cycle complete"
+        );
         if h_stats.errors > 0 {
             tracing::warn!(
                 %run_id,

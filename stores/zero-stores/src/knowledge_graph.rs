@@ -10,8 +10,8 @@ use knowledge_graph::types::{
 // `zero_stores::{DuplicateCandidate, DecayCandidate, StrategyCandidate,
 // RelationshipContext, GraphView}` keep compiling.
 pub use zero_stores_domain::{
-    DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit, GraphView, RelationshipContext,
-    StrategyCandidate,
+    DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit, GraphView, InterClusterRelationHit,
+    RelationshipContext, StrategyCandidate,
 };
 
 /// Backend-agnostic persistence for the knowledge graph subsystem.
@@ -491,6 +491,29 @@ pub trait KnowledgeGraphStore: Send + Sync {
         _seed_entity_ids: &[EntityId],
     ) -> StoreResult<LcaPath> {
         Ok(LcaPath::default())
+    }
+
+    /// List inter-cluster relations whose BOTH endpoints sit in a
+    /// given set of entity ids (Phase H-4 follow-up).
+    ///
+    /// Used by recall step 5c: after `compute_lca_path` returns the
+    /// `path_entities`, this lookup surfaces the synthesised edges
+    /// between aggregates ALONG that path so the agent sees not just
+    /// the abstraction chain but also how its siblings relate.
+    ///
+    /// Filters: `is_inter_cluster = 1` AND `epistemic_class = 'current'`
+    /// AND agent_id matches AND both endpoints in `entity_ids`. An
+    /// empty input list short-circuits to an empty result without
+    /// running SQL.
+    ///
+    /// Default: empty. Backends without hierarchy data degrade
+    /// gracefully — recall just won't surface the edges.
+    async fn list_inter_cluster_relations(
+        &self,
+        _agent_id: &str,
+        _entity_ids: &[EntityId],
+    ) -> StoreResult<Vec<InterClusterRelationHit>> {
+        Ok(Vec::new())
     }
 }
 

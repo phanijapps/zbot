@@ -92,6 +92,32 @@ pub fn hier_entity_to_item(id: &EntityId, layer: i64, score: f64) -> ScoredItem 
     }
 }
 
+/// Project an inter-cluster relation (Phase H-4 follow-up) into a
+/// [`ScoredItem`]. Rendered next to `HierEntity` items under the
+/// topical map heading so the agent sees not only the abstraction
+/// chain but the edges connecting sibling abstractions.
+pub fn hier_relation_to_item(
+    id: &str,
+    source: &str,
+    target: &str,
+    relationship_type: &str,
+    layer: i64,
+    score: f64,
+) -> ScoredItem {
+    ScoredItem {
+        kind: ItemKind::HierRelation,
+        id: id.to_string(),
+        content: format!("[edge L{layer}] {source} —[{relationship_type}]→ {target}"),
+        score,
+        provenance: Provenance {
+            source: "kg_relationships.inter_cluster".to_string(),
+            source_id: id.to_string(),
+            session_id: None,
+            ward_id: None,
+        },
+    }
+}
+
 /// Project a [`Procedure`] into a [`ScoredItem`].
 ///
 /// Combines name, description, and steps so the agent receives the full

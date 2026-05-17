@@ -30,6 +30,13 @@ pub enum ItemKind {
     /// agent can see the abstraction chain without confusing it with
     /// the base entities.
     HierEntity,
+    /// Inter-cluster edge between two aggregate entities at the same
+    /// hierarchy layer (Phase H-4 follow-up). Built by the
+    /// HierarchyBuilder when λ > τ; surfaced by recall when both
+    /// endpoints sit on the LCA path of the active query. The "lean"
+    /// part of LeanRAG — the edges that name how abstract concepts
+    /// relate. Rendered next to `HierEntity` under the topical map.
+    HierRelation,
 }
 
 #[derive(Debug, Clone)]

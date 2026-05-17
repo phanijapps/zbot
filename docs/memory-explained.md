@@ -10,17 +10,18 @@ The metaphor that holds together across the whole subsystem is **daily log vs. r
 
 ### What ships today
 
-The reference book is split across three layers, each implemented and live:
+The reference book is split across four layers, each implemented and live:
 
 - **Fragments** — flat notes (`memory_facts`) tagged with a category, content, confidence, embedding, and a lifecycle status (`active`, `contradicted`, `superseded`, `archived`).
 - **Knowledge graph** — entities (`kg_entities`) and typed relationships (`kg_relationships`), each with their own confidence and bi-temporal interval. Provenance links fragments to the conversations they came from, and to the entities those conversations produced.
 - **Belief Network** — synthesized stances (`kg_beliefs`) built from one or more facts about the same subject, plus first-class contradiction records (`kg_belief_contradictions`) when two beliefs disagree.
+- **Hierarchical memory** *(opt-in via `execution.memory.hierarchy.enabled`)* — a multi-layer hierarchy built on top of `kg_entities`. The sleep cycle clusters layer-N entities, synthesises an aggregate entity for each cluster at layer N+1, and writes inter-cluster relations between aggregates whose underlying connectivity is high enough. Recall walks `parent_cluster_id` from the top seed entities up to their lowest common ancestor and surfaces the path as a *topical map* alongside the raw facts. HiRAG/LeanRAG-inspired.
 
-A **bi-temporal model** runs through all three: every row records when a fact became true *in the world* (`valid_from`) and when it stopped being true (`valid_until`), separately from when it was written to the database. Point-in-time recall ("what did I believe in February?") falls out of that for free.
+A **bi-temporal model** runs through all four: every row records when a fact became true *in the world* (`valid_from`) and when it stopped being true (`valid_until`), separately from when it was written to the database. Point-in-time recall ("what did I believe in February?") falls out of that for free.
 
 A **hybrid recall pipeline** decides what the agent reads next: FTS5 keyword search + sqlite-vec cosine similarity, blended via reciprocal rank fusion, optionally pre-filtered by a Self-RAG retrieval gate, optionally diversity-reranked by MMR, optionally cross-encoder-reranked by `fastembed-rs`, then category-weighted and ward-boosted.
 
-An **hourly sleep cycle** runs maintenance: compaction, synthesis, pattern extraction, corrections abstraction, conflict resolution, confidence decay, orphan archival, pruning, belief synthesis, contradiction detection, and event-driven belief propagation.
+An **hourly sleep cycle** runs maintenance: compaction, synthesis, pattern extraction, corrections abstraction, conflict resolution, confidence decay, orphan archival, pruning, belief synthesis, contradiction detection, event-driven belief propagation, and (opt-in) hierarchical aggregation.
 
 ### The four moves the agent makes
 
@@ -126,6 +127,7 @@ Two SQLite databases live under the agent's data directory (`$XDG_DATA_HOME/agen
 | v28 | `kg_belief_contradictions` table |
 | v29 | `kg_beliefs.stale` flag (for B-3 propagation) |
 | v30 | `kg_beliefs.embedding` (for B-4 recall integration) |
+| v31 | `kg_entities.layer` + `parent_cluster_id`; `kg_relationships.layer` + `is_inter_cluster` (for hierarchical memory H-3/H-4) |
 
 Missing migrations are applied on startup, in order. Failures abort startup loudly rather than half-migrating.
 
@@ -253,6 +255,97 @@ The `/observatory` tab gained:
 
 The cards collapse into the status strip by default so the page stays clean. The detail surface stays available for power users.
 
+### Hierarchical memory — opt-in topical layering
+
+The Belief Network distills facts along the **subject** axis. Hierarchical memory does the same for entities along the **abstraction** axis: clusters of layer-N entities get summarised into a single layer-N+1 aggregate entity, recursively, until the cluster-sparsity score stops growing. Inspired by HiRAG's recursive aggregation and LeanRAG's "lean" inter-cluster relations.
+
+Disabled by default. Flip `execution.memory.hierarchy.enabled = true` to turn it on. With the flag off, the rest of memory behaves byte-for-byte the same as before — no aggregates get written, no recall surface changes, no LLM is called.
+
+#### Storage shape
+
+The hierarchical layer lives **inside** `kg_entities` and `kg_relationships`, not in separate tables. Four schema-v31 columns carry the hierarchy:
+
+| Column | Table | Meaning |
+|---|---|---|
+| `layer` | `kg_entities` | `0` for base entities. `>0` for aggregates synthesised by the builder. |
+| `parent_cluster_id` | `kg_entities` | Soft FK back into `kg_entities`. Points at the layer-N+1 aggregate this entity was clustered into. `NULL` for top-of-hierarchy rows. |
+| `layer` | `kg_relationships` | `0` for base-extracted edges. `>0` for inter-cluster edges synthesised between aggregates. |
+| `is_inter_cluster` | `kg_relationships` | `1` when the edge was synthesised by the builder between two aggregates whose underlying connectivity exceeded the λ threshold. `0` for ordinary edges. |
+
+Aggregate entities are full `kg_entities` rows — they have a `name` + `properties` JSON (with `{"aggregate": true, "description": "...", "member_count": N}`) + an embedding in `kg_name_index`. They obey the same decay, supersession, and bi-temporal lifecycle as every other entity, so a stale aggregate fades out like a stale base entity.
+
+#### The builder — `HierarchyBuilder` sleep worker
+
+A new sleep-cycle worker runs after the Compactor (so it doesn't cluster near-duplicate noise). Per agent, it loops:
+
+```
+layer = 0
+loop while layer < max_layers (default 4):
+    pool = entities with embeddings at this layer
+    if pool < cluster_target_size (default 20): stop (PoolTooSmall)
+    k = max(2, pool.len() / target_size)
+    labels = kmeans_cosine(embeddings, k, seed) [K-means++ init, cosine metric]
+    if labels collapse to one cluster: stop (SingleCluster)
+    sparsity = cluster_sparsity(labels)
+    if |sparsity - prev_sparsity| <= 0.05: stop (Converged)
+    for each cluster:
+        if single-member: promote without LLM (singleton short-circuit)
+        else: LLM → {name, description}; embed description; write aggregate
+              update each member's parent_cluster_id
+    for each (cluster_i, cluster_j) pair:
+        λ = connectivity_strength(i, j)  -- count of cross-cluster edges
+        if λ > inter_cluster_relation_threshold (default 3):
+            LLM → relation_type ("encompasses" / "differs-from" / ...)
+            write kg_relationships row with is_inter_cluster=1
+    layer += 1
+```
+
+Cost is bounded three ways:
+
+1. **Singleton short-circuit.** Most clusters in real graphs are single-member because cluster sizes vary. Those promote directly with `name = member.name`, no LLM call. The optimisation is load-bearing — without it, a 1k-entity ward would burn ~50 LLM calls per layer.
+2. **Per-cycle budget cap** (`llm_budget_per_cycle = 50`). Once exhausted, the cycle exits with `BudgetExhausted` and resumes next time.
+3. **24-hour throttle** (`intervalHours = 24`). The cycle is idempotent — re-running before the throttle elapses is a no-op.
+
+The LLM trait (`AggregateEntityLlm`) has two methods, mirroring `BeliefSynthesisLlm`:
+
+- `synthesize_aggregate(members) → {name, description}`
+- `synthesize_relation(agg_a, agg_b, λ) → relation_type`
+
+Production wiring goes through `LlmAggregateEntity` (the gateway's `MemoryLlmFactory` thin wrapper). Both calls use temperature 0 so re-runs over the same clusters produce the same names.
+
+#### The recall side — LCA-bounded topical map
+
+At recall time, after the existing graph-ANN step returns its top-N seed entities (matched to the user's query via `kg_name_index` cosine), a new step 5c walks `parent_cluster_id` from each seed upward to find the **lowest common ancestor**:
+
+```
+seeds = top-N entities from graph ANN (already in the pipeline)
+LCA = deepest entity present in every seed's ancestry chain
+path = union of (seed → LCA) chains, deduplicated, seeds excluded
+inter_cluster_edges = relationships(is_inter_cluster=1, layer ∈ path layers,
+                                    both endpoints ∈ path)
+```
+
+Path entities surface as `ItemKind::HierEntity` items with content `[topic L{N}] {id}`. Inter-cluster relations surface as `ItemKind::HierRelation` items with content `[edge L{N}] {src} —[type]→ {tgt}`. Both go through the same RRF fusion + MMR rerank + min-score path as everything else, with `pattern`-slot category weight (`0.9` — conservative until empirical validation).
+
+Three ways the LCA walk can degenerate, each handled cleanly:
+
+- **No hierarchy built yet** — `parent_cluster_id` is `NULL` everywhere, no LCA, recall gets zero `HierEntity` items. The pipeline is byte-for-byte unchanged from pre-H-4.
+- **Seeds share no common ancestor** — they belong to different parts of the hierarchy. `LcaPath { lca: None, path_entities: [], max_layer: 0 }`. Same behaviour as "no hierarchy".
+- **Corrupt parent-pointer cycle** — `MAX_LCA_WALK = 16` cap bails out rather than looping.
+
+The consumer formatter in `gateway-execution::recall::format_scored_items` renders the hierarchical items under their own headings (`## Topical Map` for `HierEntity`, etc.), separate from `## Recalled Context` and `## Active Beliefs`. The agent sees the abstraction chain distinct from the raw facts.
+
+#### Settings — `execution.memory.hierarchy.*`
+
+| Knob | Default | What it does |
+|---|---|---|
+| `enabled` | `false` | Master switch. When off, no sleep-cycle work, no recall surface change. |
+| `intervalHours` | `24` | Builder cycle cadence. |
+| `maxLayers` | `4` | Hard cap on layers built per cycle. |
+| `clusterTargetSize` | `20` | K-means target — `k ≈ n / target`. |
+| `interClusterRelationThreshold` | `3` | LeanRAG's λ > τ gate. Cluster pairs with fewer than this many underlying edges don't get an inter-cluster relation. |
+| `llmBudgetPerCycle` | `50` | Per-cycle ceiling on aggregate + relation LLM calls. |
+
 ### Recall pipeline — end to end
 
 ```
@@ -267,6 +360,8 @@ The cards collapse into the status strip by default so the page stays clean. The
 5. Procedural pattern search
 5a. Graph traversal expansion (max_hops=2, hop_decay=0.6, cap=5)
 5b. (If Belief Network enabled) belief_store.search_beliefs()
+5c. (If Hierarchical memory enabled) compute_lca_path over top seed entities,
+    plus inter-cluster relations along the LCA path
 6. Merge candidates into unified result set
 7. Rescore with category weights, contradiction penalty, supersession penalty,
    ward affinity boost
@@ -330,6 +425,7 @@ The sleep cycle runs every `cycle_interval_hours = 1` by default. Each worker is
 | `BeliefSynthesizer` | Group facts by subject → belief rows (single-fact short-circuit, else LLM) | `beliefNetwork.intervalHours = 24` |
 | `BeliefContradictionDetector` | LLM-judge belief pairs within topical neighborhoods | `intervalHours = 24`, `contradictionBudgetPerCycle = 20` |
 | `BeliefPropagator` | Retract or mark-stale beliefs when source facts lose confidence | **event-driven** (not on cycle) |
+| `HierarchyBuilder` | K-means-cluster entities, LLM-synthesise layer-N+1 aggregates, write inter-cluster relations gated by λ > τ | `hierarchy.intervalHours = 24`, opt-in |
 | `Verifier` | Sanity-check fragment/entity links; flag orphan provenance | hourly |
 | `BeliefNetworkActivity` | Persist per-cycle metrics for the /observatory activity feed | every belief cycle |
 
@@ -401,6 +497,15 @@ Two files own every knob. Both are optional — missing keys, missing files, and
         "confidence_threshold": 0.55
       },
 
+      "hierarchy": {
+        "enabled": false,
+        "intervalHours": 24,
+        "maxLayers": 4,
+        "clusterTargetSize": 20,
+        "interClusterRelationThreshold": 3,
+        "llmBudgetPerCycle": 50
+      },
+
       "kgDecay": null
     }
   }
@@ -416,6 +521,7 @@ Two files own every knob. Both are optional — missing keys, missing files, and
 | `mmr` | **enabled** | Diversity rerank. `lambda=0.6` balances relevance vs diversity. |
 | `rerank` | disabled | Cross-encoder rerank via `fastembed-rs`. ~280MB model download on first enable. |
 | `intentRouter` | disabled | kNN intent classifier picking per-intent category-weight profiles. |
+| `hierarchy` | disabled | H-3 builder + H-4 LCA recall. K-means clusters entities, LLM synthesises aggregate entities at higher layers, inter-cluster relations gated by λ > τ. Recall surfaces the LCA topical map alongside facts. |
 | `kgDecay` | `null` | KG decay tuning override; `null` = compiled defaults. |
 
 **`config/recall_config.json`** controls the recall and rescore pipeline. Headline knobs:

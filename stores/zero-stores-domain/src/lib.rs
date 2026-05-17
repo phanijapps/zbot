@@ -35,8 +35,8 @@ pub use distillation_ops::{DistillationStats, UndistilledSession};
 pub use goal::Goal;
 pub use kg_episode::{EpisodeSource, KgEpisode};
 pub use kg_ops::{
-    DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit, GraphView, RelationshipContext,
-    StrategyCandidate,
+    DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit, GraphView, InterClusterRelationHit,
+    RelationshipContext, StrategyCandidate,
 };
 pub use memory_fact::{MemoryFact, ScoredFact, StrategyFactInsert, StrategyFactMatch};
 pub use message::Message;
