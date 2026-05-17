@@ -51,9 +51,16 @@ pub trait AggregateEntityLlm: Send + Sync {
     /// Summarise a multi-member cluster into an aggregate entity.
     /// Singleton clusters short-circuit BEFORE this is called — they
     /// just promote the single member with no LLM cost.
+    ///
+    /// `prior_names` is the list of aggregate names already produced
+    /// in this cycle. The LLM is expected to avoid them so two
+    /// thematically-adjacent clusters don't collide on a label. Empty
+    /// when this is the first cluster of the cycle (or the orchestrator
+    /// chooses not to track collisions).
     async fn synthesize_aggregate(
         &self,
         members: &[AggregateMemberContext],
+        prior_names: &[String],
     ) -> Result<AggregateResponse, String>;
 
     /// Pick a relationship type for an inter-cluster edge. `lambda` is
@@ -290,18 +297,31 @@ impl HierarchyBuilder {
             }
 
             // Materialise each cluster as a layer+1 aggregate.
+            // Accumulate names produced this cycle so subsequent LLM
+            // calls can avoid colliding on the same label — two
+            // thematically-adjacent clusters (e.g. both "agent"-heavy)
+            // otherwise round-trip to the same `agentic-system-components`
+            // string. See the explainer in the H-3 design doc.
             let mut aggregate_ids: Vec<Option<EntityId>> = vec![None; clusters.len()];
+            let mut cycle_names: Vec<String> = Vec::with_capacity(clusters.len());
             for (cluster_idx, members) in clusters.iter().enumerate() {
                 if members.is_empty() {
                     continue;
                 }
-                let agg_id = match self
-                    .promote_one_cluster(agent_id, (layer as i64) + 1, members, &mut stats)
+                let (agg_id, agg_name) = match self
+                    .promote_one_cluster(
+                        agent_id,
+                        (layer as i64) + 1,
+                        members,
+                        &cycle_names,
+                        &mut stats,
+                    )
                     .await
                 {
-                    Ok(id) => id,
+                    Ok(pair) => pair,
                     Err(()) => continue,
                 };
+                cycle_names.push(agg_name);
                 aggregate_ids[cluster_idx] = Some(agg_id);
             }
 
@@ -376,13 +396,20 @@ impl HierarchyBuilder {
     /// Promote one cluster's members up to `layer`. Returns the new
     /// aggregate's id, or `Err(())` when a downstream call failed
     /// (already logged + counted in `stats.errors`).
+    /// Promote a single cluster. `prior_names` carries the labels
+    /// already produced in this cycle so the LLM can be told to avoid
+    /// them (prevents two clusters about "agents" both being named
+    /// `agentic-system-components`). Returns both the new entity id
+    /// and the chosen display name so the caller can append it to
+    /// `prior_names` for subsequent clusters.
     async fn promote_one_cluster(
         &self,
         agent_id: &str,
         layer: i64,
         members: &[EntityId],
+        prior_names: &[String],
         stats: &mut HierarchyStats,
-    ) -> Result<EntityId, ()> {
+    ) -> Result<(EntityId, String), ()> {
         // Singleton short-circuit — no LLM call, but still produce a
         // readable name + description so the agent's recall surface
         // shows e.g. `[topic L1] research agent` instead of the raw
@@ -430,7 +457,7 @@ impl HierarchyBuilder {
             match result {
                 Ok(id) => {
                     stats.singletons_promoted += 1;
-                    return Ok(id);
+                    return Ok((id, display_name));
                 }
                 Err(e) => {
                     warn!(agent_id, layer, error = ?e, "hierarchy: singleton promote failed");
@@ -462,7 +489,7 @@ impl HierarchyBuilder {
             })
             .collect();
         stats.llm_calls += 1;
-        let resp = match self.llm.synthesize_aggregate(&contexts).await {
+        let resp = match self.llm.synthesize_aggregate(&contexts, prior_names).await {
             Ok(r) => r,
             Err(e) => {
                 warn!(agent_id, layer, error = %e, "hierarchy: aggregate LLM failed");
@@ -498,7 +525,7 @@ impl HierarchyBuilder {
         {
             Ok(id) => {
                 stats.aggregates_created += 1;
-                Ok(id)
+                Ok((id, resp.name))
             }
             Err(e) => {
                 warn!(agent_id, layer, error = ?e, "hierarchy: aggregate write failed");
@@ -567,6 +594,9 @@ mod tests {
         relation_calls: Mutex<u64>,
         relation_response: String,
         synth_should_fail: bool,
+        /// Records each call's `prior_names` argument so tests can
+        /// verify the orchestrator's avoid-list accumulator works.
+        synth_prior_history: Mutex<Vec<Vec<String>>>,
     }
 
     impl MockLlm {
@@ -576,11 +606,16 @@ mod tests {
                 relation_calls: Mutex::new(0),
                 relation_response: "encompasses".to_string(),
                 synth_should_fail: false,
+                synth_prior_history: Mutex::new(Vec::new()),
             })
         }
 
         fn synth_call_count(&self) -> u64 {
             *self.synth_calls.lock().unwrap()
+        }
+
+        fn synth_prior_history(&self) -> Vec<Vec<String>> {
+            self.synth_prior_history.lock().unwrap().clone()
         }
     }
 
@@ -589,13 +624,23 @@ mod tests {
         async fn synthesize_aggregate(
             &self,
             members: &[AggregateMemberContext],
+            prior_names: &[String],
         ) -> Result<AggregateResponse, String> {
             *self.synth_calls.lock().unwrap() += 1;
+            self.synth_prior_history
+                .lock()
+                .unwrap()
+                .push(prior_names.to_vec());
             if self.synth_should_fail {
                 return Err("mock fail".into());
             }
+            // Vary the name by call index so cluster collisions never
+            // happen in tests (mirroring the real LLM's role) and the
+            // orchestrator's accumulator gets meaningful values to
+            // record across iterations.
+            let call_index = *self.synth_calls.lock().unwrap();
             Ok(AggregateResponse {
-                name: format!("agg-of-{}-members", members.len()),
+                name: format!("agg-{call_index}-of-{}-members", members.len()),
                 description: format!("Aggregate over {} entities.", members.len()),
             })
         }
@@ -846,6 +891,56 @@ mod tests {
         );
     }
 
+    /// Pins the "Option B" avoid-list behaviour: the orchestrator
+    /// accumulates the names produced this cycle and passes the
+    /// growing list to each subsequent `synthesize_aggregate` call.
+    /// Regression for the real-data dupe-name bug where two clusters
+    /// both ended up labelled `agentic-system-components`.
+    #[tokio::test]
+    async fn orchestrator_accumulates_prior_names_across_clusters() {
+        // 3 well-separated blobs × 10 members = 30 entities, target=10
+        // → 3 multi-member clusters → 3 LLM calls. Singletons would
+        // bypass the LLM, so the blob layout guarantees we hit the
+        // multi-member path on every cluster.
+        let (kg, _dir) = build_store_with_layer_zero("agent-accum", 10, 3);
+        let llm = MockLlm::new();
+        let config = HierarchyConfig {
+            cluster_target_size: 10,
+            // Keep things at one layer so we can assert exactly 3 calls.
+            max_layers: 1,
+            ..Default::default()
+        };
+        let builder = HierarchyBuilder::new(kg, llm.clone()).with_config(config);
+        let stats = builder.run_for_agent("agent-accum").await;
+
+        assert_eq!(stats.aggregates_created, 3, "3 multi-member clusters");
+        let history = llm.synth_prior_history();
+        assert_eq!(history.len(), 3, "one prior_names snapshot per LLM call");
+
+        // Invariant: history[i].len() == i. The first call sees an
+        // empty list; each subsequent call sees one more entry than
+        // the previous. The exact strings depend on the MockLlm's
+        // `agg-{call_index}-of-N-members` naming but the size shape
+        // is the load-bearing thing.
+        for (i, snap) in history.iter().enumerate() {
+            assert_eq!(
+                snap.len(),
+                i,
+                "call #{i} should see {i} prior names; got {snap:?}"
+            );
+        }
+
+        // The first call's name must appear in the second call's
+        // avoid list (and so on) — proves names are *accumulated*,
+        // not reset between calls.
+        let first_name = format!("agg-1-of-{}-members", 10);
+        assert!(
+            history[1].contains(&first_name) || history[2].contains(&first_name),
+            "first call's name {first_name:?} must show up in a later avoid-list; \
+             got history={history:?}"
+        );
+    }
+
     #[tokio::test]
     async fn llm_failure_increments_error_count_but_continues() {
         let (kg, _dir) = build_store_with_layer_zero("agent-fail", 10, 3);
@@ -854,6 +949,7 @@ mod tests {
             relation_calls: Mutex::new(0),
             relation_response: "x".into(),
             synth_should_fail: true,
+            synth_prior_history: Mutex::new(Vec::new()),
         });
         let config = HierarchyConfig {
             cluster_target_size: 10,

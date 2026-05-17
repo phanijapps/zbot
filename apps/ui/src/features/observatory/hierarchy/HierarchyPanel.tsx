@@ -7,6 +7,10 @@
 //   2. Total inter-cluster relations
 //   3. Top-N aggregates (name + member_count + description) sorted by size
 //
+// Uses the app's standard `belief-card` + `meta-chip` idioms so the
+// surface visually matches the Memory tab's belief cards instead of
+// inventing one-off inline styles.
+//
 // Loads via useHierarchyStats. Empty / disabled / error states are
 // rendered inline rather than at the slideover's seam so the user always
 // sees the surface (matches BeliefNetworkPanel's idiom).
@@ -64,7 +68,7 @@ export function HierarchyPanel() {
 
   return (
     <div className="belief-network-panel">
-      {/* Section 1: layer breakdown */}
+      {/* Section 1: layer breakdown — one chip per layer */}
       <div className="belief-network-card">
         <div className="belief-network-card__head">
           <span className="belief-network-card__kind">Layers</span>
@@ -79,27 +83,24 @@ export function HierarchyPanel() {
             No entities yet — nothing to cluster.
           </p>
         ) : (
-          <ul className="hierarchy-layer-list">
+          <div
+            className="belief-card__meta"
+            style={{ flexWrap: "wrap", rowGap: 6 }}
+          >
             {summary.layer_counts.map(([layer, count]) => (
-              <li
+              <span
                 key={layer}
-                className="hierarchy-layer-list__row"
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  padding: "4px 0",
-                  borderBottom: "1px solid var(--border, #1c2535)",
-                }}
+                className="meta-chip meta-chip--model"
+                title={
+                  layer === 0
+                    ? "Layer 0 — base entities (facts + distillation)"
+                    : `Layer ${layer} — aggregate entities`
+                }
               >
-                <span className="mono">
-                  {layer === 0 ? "layer 0 (base)" : `layer ${layer}`}
-                </span>
-                <span className="mono" style={{ fontWeight: 500 }}>
-                  {count}
-                </span>
-              </li>
+                L{layer} · {count}
+              </span>
             ))}
-          </ul>
+          </div>
         )}
       </div>
 
@@ -111,15 +112,15 @@ export function HierarchyPanel() {
             LeanRAG λ-gated edges between aggregates
           </span>
         </div>
-        <p
-          className="mono"
-          style={{ fontSize: 22, fontWeight: 500, margin: "4px 0" }}
-        >
-          {summary.inter_cluster_relations}
-        </p>
+        <div className="belief-card__meta">
+          <span className="meta-chip meta-chip--mcps">
+            {summary.inter_cluster_relations} edge
+            {summary.inter_cluster_relations === 1 ? "" : "s"}
+          </span>
+        </div>
       </div>
 
-      {/* Section 3: top aggregates */}
+      {/* Section 3: top aggregates — one belief-card per row */}
       <div className="belief-network-card">
         <div className="belief-network-card__head">
           <span className="belief-network-card__kind">Top aggregates</span>
@@ -134,43 +135,40 @@ export function HierarchyPanel() {
             sleep cycle.
           </p>
         ) : (
-          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+          <div
+            style={{ display: "flex", flexDirection: "column", gap: 8 }}
+            data-testid="hierarchy-aggregate-list"
+          >
             {summary.top_aggregates.map((agg) => (
-              <li
+              <div
                 key={agg.id}
-                style={{
-                  padding: "8px 0",
-                  borderBottom: "1px solid var(--border, #1c2535)",
-                }}
+                className="belief-card"
+                style={{ cursor: "default" }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 8,
-                  }}
-                >
-                  <span className="mono" style={{ fontWeight: 500 }}>
-                    {agg.name}
-                  </span>
-                  <span
-                    className="mono"
-                    style={{ color: "var(--muted-foreground)" }}
-                  >
-                    L{agg.layer} · {agg.member_count} members
-                  </span>
+                <div className="belief-card__head">
+                  <span className="belief-card__subject">{agg.name}</span>
                 </div>
                 {agg.description ? (
-                  <p
-                    className="belief-network-card__caption"
-                    style={{ marginTop: 4 }}
-                  >
-                    {agg.description}
-                  </p>
+                  <p className="belief-card__content">{agg.description}</p>
                 ) : null}
-              </li>
+                <div className="belief-card__meta">
+                  <span
+                    className="meta-chip meta-chip--model"
+                    title="Hierarchy layer"
+                  >
+                    L{agg.layer}
+                  </span>
+                  <span
+                    className="meta-chip meta-chip--skills"
+                    title="Member count — entities folded into this aggregate"
+                  >
+                    {agg.member_count} member
+                    {agg.member_count === 1 ? "" : "s"}
+                  </span>
+                </div>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
       </div>
     </div>

@@ -4480,6 +4480,162 @@ mod tests {
         assert_eq!(max_layer, 1);
     }
 
+    // -----------------------------------------------------------------
+    // hierarchy_summary (Observatory stats endpoint)
+    // -----------------------------------------------------------------
+
+    /// Seed an aggregate entity at a given layer with a JSON
+    /// `properties` blob carrying `member_count` + `description`.
+    /// Used by the summary tests below to control the top-N ordering.
+    fn seed_aggregate(
+        storage: &GraphStorage,
+        id: &str,
+        agent_id: &str,
+        name: &str,
+        layer: i64,
+        member_count: usize,
+        description: &str,
+    ) {
+        let id = id.to_string();
+        let agent_id = agent_id.to_string();
+        let name = name.to_string();
+        let description = description.to_string();
+        let props = serde_json::json!({
+            "aggregate": true,
+            "member_count": member_count,
+            "description": description,
+        })
+        .to_string();
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         properties, first_seen_at, last_seen_at, layer)
+                     VALUES (?1, ?2, 'Concept', ?3, ?3, ?3,
+                             ?4, datetime('now'), datetime('now'), ?5)",
+                    rusqlite::params![id, agent_id, name, props, layer],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn hierarchy_summary_groups_by_layer_and_orders_aggregates_by_member_count() {
+        let storage = create_test_storage();
+        // Layer 0 base entities (dual-match: stored under __global__).
+        for i in 0..5 {
+            seed_entity_raw(&storage, &format!("e{i}"), "__global__");
+        }
+        // Three aggregates at layer 1, two at layer 2.
+        seed_aggregate(&storage, "a1", "root", "small-cluster", 1, 5, "small");
+        seed_aggregate(
+            &storage,
+            "a2",
+            "root",
+            "huge-cluster",
+            1,
+            50,
+            "huge — should be ranked first",
+        );
+        seed_aggregate(&storage, "a3", "root", "medium-cluster", 1, 20, "medium");
+        seed_aggregate(&storage, "a4", "root", "top-l2-a", 2, 30, "top layer");
+        seed_aggregate(&storage, "a5", "root", "top-l2-b", 2, 25, "top layer");
+
+        // One inter-cluster edge between two layer-1 aggregates.
+        seed_relationship_raw(&storage, "ic1", "root", "a1", "a2", "current");
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "UPDATE kg_relationships SET is_inter_cluster = 1, layer = 1 \
+                     WHERE id = ?1",
+                    rusqlite::params!["ic1"],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let (layer_counts, inter_cluster, top_aggs) =
+            storage.hierarchy_summary("root", 10).unwrap();
+
+        // Layer counts: layer 0 = 5 (under __global__, dual-matched);
+        // layer 1 = 3; layer 2 = 2.
+        assert_eq!(
+            layer_counts,
+            vec![(0, 5), (1, 3), (2, 2)],
+            "layer_counts must group correctly + include __global__ rows"
+        );
+
+        // Total inter-cluster edges = 1.
+        assert_eq!(inter_cluster, 1);
+
+        // Top aggregates ordered by member_count DESC. Layer 0
+        // entities are excluded (layer > 0 filter).
+        let names: Vec<&str> = top_aggs.iter().map(|t| t.1.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "huge-cluster",
+                "top-l2-a",
+                "top-l2-b",
+                "medium-cluster",
+                "small-cluster",
+            ],
+            "aggregates must order by member_count DESC across layers"
+        );
+
+        // First entry has the right shape end-to-end.
+        let huge = &top_aggs[0];
+        assert_eq!(huge.0, "a2");
+        assert_eq!(huge.1, "huge-cluster");
+        assert_eq!(huge.2, 1, "layer");
+        assert_eq!(huge.3, 50, "member_count");
+        assert!(huge.4.contains("ranked first"), "description preserved");
+    }
+
+    #[test]
+    fn hierarchy_summary_top_n_zero_skips_aggregate_query() {
+        let storage = create_test_storage();
+        seed_aggregate(&storage, "a1", "root", "agg-1", 1, 10, "");
+        seed_aggregate(&storage, "a2", "root", "agg-2", 1, 20, "");
+
+        let (_layers, _ic, top) = storage.hierarchy_summary("root", 0).unwrap();
+        assert!(top.is_empty(), "top_n=0 must return zero aggregate rows");
+    }
+
+    #[test]
+    fn hierarchy_summary_top_n_caps_results() {
+        let storage = create_test_storage();
+        for i in 0..5 {
+            seed_aggregate(
+                &storage,
+                &format!("a{i}"),
+                "root",
+                &format!("agg-{i}"),
+                1,
+                (5 - i) * 10,
+                "",
+            );
+        }
+        let (_layers, _ic, top) = storage.hierarchy_summary("root", 2).unwrap();
+        assert_eq!(top.len(), 2, "top_n must cap the result set");
+        // Highest member_count first.
+        assert_eq!(top[0].1, "agg-0");
+        assert_eq!(top[1].1, "agg-1");
+    }
+
+    #[test]
+    fn hierarchy_summary_empty_db_returns_empty_layer_list() {
+        let storage = create_test_storage();
+        let (layers, inter_cluster, top) = storage.hierarchy_summary("root", 10).unwrap();
+        assert!(layers.is_empty());
+        assert_eq!(inter_cluster, 0);
+        assert!(top.is_empty());
+    }
+
     #[test]
     fn list_entities_with_embeddings_at_layer_skips_entities_without_embedding() {
         let storage = create_test_storage();

@@ -79,7 +79,10 @@ impl LlmAggregateEntity {
     /// so tests can assert it without spinning up a real LLM. The
     /// shape is "you receive a list, return JSON" — same idiom as
     /// `LlmBeliefSynthesizer::build_prompt`.
-    fn build_aggregate_prompt(members: &[AggregateMemberContext]) -> String {
+    fn build_aggregate_prompt(
+        members: &[AggregateMemberContext],
+        prior_names: &[String],
+    ) -> String {
         let formatted = members
             .iter()
             .map(|m| match m.description.as_deref() {
@@ -88,13 +91,36 @@ impl LlmAggregateEntity {
             })
             .collect::<Vec<_>>()
             .join("\n");
+        // Only inject the avoid-list when there's something to avoid.
+        // Empty list means "first cluster of the cycle" — keep the
+        // prompt byte-for-byte identical to pre-avoid behaviour so
+        // the first call doesn't pay for an empty section.
+        let avoid_block = if prior_names.is_empty() {
+            String::new()
+        } else {
+            let list = prior_names
+                .iter()
+                .map(|n| format!("  - {n}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "\n\
+                 \n\
+                 IMPORTANT — these aggregate names are already in use \
+                 this cycle. Pick a DIFFERENT name (the underlying \
+                 entities may be thematically similar, but the agent \
+                 needs distinct labels to disambiguate at recall time):\n\
+                 {list}"
+            )
+        };
         format!(
             "You are summarising a cluster of related entities from a \
              knowledge graph. Produce a single aggregate entity that \
              represents the whole cluster.\n\
              \n\
              Cluster members ({} entities):\n\
-             {formatted}\n\
+             {formatted}\
+             {avoid_block}\n\
              \n\
              Output JSON only, no prose:\n\
              {{\"name\": \"<2-5 word concept name>\", \
@@ -137,12 +163,13 @@ impl AggregateEntityLlm for LlmAggregateEntity {
     async fn synthesize_aggregate(
         &self,
         members: &[AggregateMemberContext],
+        prior_names: &[String],
     ) -> Result<AggregateResponse, String> {
         let client = self
             .factory
             .build_client(LlmClientConfig::new(TEMPERATURE, MAX_TOKENS_AGGREGATE))
             .await?;
-        let prompt = Self::build_aggregate_prompt(members);
+        let prompt = Self::build_aggregate_prompt(members, prior_names);
         let messages = vec![
             ChatMessage::system("You return only valid JSON.".to_string()),
             ChatMessage::user(prompt),
@@ -208,7 +235,7 @@ mod tests {
             member("dotfiles", None),
             member("tmux-config", None),
         ];
-        let prompt = LlmAggregateEntity::build_aggregate_prompt(&members);
+        let prompt = LlmAggregateEntity::build_aggregate_prompt(&members, &[]);
         assert!(prompt.contains("(3 entities)"));
         assert!(prompt.contains("home-server"));
         assert!(prompt.contains("personal infra"));
@@ -219,11 +246,45 @@ mod tests {
     #[test]
     fn aggregate_prompt_omits_em_dash_when_description_missing() {
         let members = vec![member("only-name", None)];
-        let prompt = LlmAggregateEntity::build_aggregate_prompt(&members);
+        let prompt = LlmAggregateEntity::build_aggregate_prompt(&members, &[]);
         // The "- only-name" line must not have a trailing " — " or
         // empty description suffix.
         assert!(prompt.contains("- only-name\n") || prompt.contains("- only-name\n\n"));
         assert!(!prompt.contains("only-name — "));
+    }
+
+    #[test]
+    fn aggregate_prompt_omits_avoid_block_when_prior_names_empty() {
+        // First cluster of a cycle — no avoid list. The prompt must
+        // not have the IMPORTANT/avoid section at all so it's
+        // byte-for-byte the same as the pre-Option-B prompt and the
+        // LLM provider's cache key stays stable.
+        let prompt = LlmAggregateEntity::build_aggregate_prompt(&[member("x", None)], &[]);
+        assert!(!prompt.contains("IMPORTANT"));
+        assert!(!prompt.contains("already in use"));
+    }
+
+    #[test]
+    fn aggregate_prompt_includes_avoid_list_when_prior_names_present() {
+        // Subsequent clusters must see the names already chosen in
+        // this cycle so the LLM avoids them. This is the regression
+        // pin for the "two clusters labelled `agentic-system-components`"
+        // bug surfaced in real-data smoke.
+        let prompt = LlmAggregateEntity::build_aggregate_prompt(
+            &[member("entity-x", None)],
+            &[
+                "agentic-system-components".to_string(),
+                "multi-agent system cluster".to_string(),
+            ],
+        );
+        assert!(prompt.contains("IMPORTANT"));
+        assert!(prompt.contains("already in use"));
+        assert!(prompt.contains("agentic-system-components"));
+        assert!(prompt.contains("multi-agent system cluster"));
+        // The instruction must explicitly tell the LLM to pick a
+        // DIFFERENT name — otherwise it could surface the list as
+        // examples rather than as a constraint.
+        assert!(prompt.contains("DIFFERENT name"));
     }
 
     #[test]
