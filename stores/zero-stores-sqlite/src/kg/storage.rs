@@ -10,6 +10,17 @@ use knowledge_graph::types::{
 use rusqlite::{params, Connection};
 use std::sync::Arc;
 
+/// Build a comma-separated list of positional placeholders for SQL
+/// `IN ()` clauses: `placeholder_list(2, 3)` → `"?2,?3,?4"`. Callers
+/// are responsible for binding the exact same number of parameters in
+/// the same positions.
+fn placeholder_list(start: usize, count: usize) -> String {
+    (start..start + count)
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// Convert a `GraphError` into a `rusqlite::Error` so that closures passed to
 /// `KnowledgeDatabase::with_connection` (which require `rusqlite::Result`) can
 /// propagate our higher-level errors. `with_connection` stringifies the result
@@ -1400,6 +1411,90 @@ impl GraphStorage {
             .collect::<Result<Vec<Relationship>, _>>()?;
 
         Ok(relationships)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Count relationships bridging two entity clusters (Phase H-3c).
+    ///
+    /// Used by the future `HierarchyBuilder` sleep worker to decide
+    /// whether a cluster pair is "connected enough" to justify
+    /// synthesising an aggregate inter-cluster relation at the next
+    /// hierarchy layer (LeanRAG's λ > τ gate).
+    ///
+    /// Counts both directions (A→B and B→A). Only `epistemic_class =
+    /// 'current'` rows contribute. Empty clusters yield `0` without
+    /// running SQL (an empty `IN ()` list is a SQL syntax error). The
+    /// agent_id scope prevents cross-agent leakage.
+    pub fn connectivity_strength(
+        &self,
+        agent_id: &str,
+        cluster_a: &[String],
+        cluster_b: &[String],
+    ) -> GraphResult<usize> {
+        if cluster_a.is_empty() || cluster_b.is_empty() {
+            return Ok(0);
+        }
+
+        // Build two IN-list placeholder strings. Positions start at 2
+        // because position 1 is the agent_id; we then use each cluster
+        // twice (once per direction) to keep parameter binding linear.
+        let a_len = cluster_a.len();
+        let b_len = cluster_b.len();
+        // Positions: agent_id @ 1; cluster_a #1 @ 2..(2+a); cluster_b #1
+        // @ (2+a)..(2+a+b); cluster_b #2 @ (2+a+b)..(2+a+2b); cluster_a
+        // #2 @ (2+a+2b)..(2+2a+2b).
+        let a1_start = 2;
+        let b1_start = a1_start + a_len;
+        let b2_start = b1_start + b_len;
+        let a2_start = b2_start + b_len;
+
+        let a1 = placeholder_list(a1_start, a_len);
+        let b1 = placeholder_list(b1_start, b_len);
+        let b2 = placeholder_list(b2_start, b_len);
+        let a2 = placeholder_list(a2_start, a_len);
+
+        let sql = format!(
+            "SELECT COUNT(*) FROM kg_relationships \
+             WHERE agent_id = ?1 \
+               AND epistemic_class = 'current' \
+               AND ( \
+                 (source_entity_id IN ({a1}) AND target_entity_id IN ({b1})) \
+                 OR \
+                 (source_entity_id IN ({b2}) AND target_entity_id IN ({a2})) \
+               )"
+        );
+
+        // Bind: agent_id, then a once, b twice, a again.
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+            Vec::with_capacity(1 + 2 * (a_len + b_len));
+        params.push(Box::new(agent_id.to_string()));
+        for id in cluster_a {
+            params.push(Box::new(id.clone()));
+        }
+        for id in cluster_b {
+            params.push(Box::new(id.clone()));
+        }
+        for id in cluster_b {
+            params.push(Box::new(id.clone()));
+        }
+        for id in cluster_a {
+            params.push(Box::new(id.clone()));
+        }
+
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<usize> {
+                    let count: i64 = conn
+                        .query_row(
+                            &sql,
+                            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                            |row| row.get(0),
+                        )
+                        .map_err(GraphError::Database)?;
+                    Ok(count as usize)
                 })()
                 .map_err(graph_to_rusqlite)
             })
@@ -3219,5 +3314,188 @@ mod tests {
             "exactly one winner → target edge should remain"
         );
         assert_eq!(surviving[0].source_entity_id, "winner-c");
+    }
+
+    // -----------------------------------------------------------------
+    // connectivity_strength (Phase H-3c)
+    // -----------------------------------------------------------------
+
+    /// Seed entities + relationships directly via raw SQL so the test
+    /// controls entity IDs and edge classes precisely. The storage's
+    /// `store_knowledge` path normalises and assigns IDs, which makes
+    /// it awkward for tests that need stable cross-cluster references.
+    fn seed_entity_raw(storage: &GraphStorage, id: &str, agent_id: &str) {
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         first_seen_at, last_seen_at)
+                     VALUES (?1, ?2, 'Concept', ?1, ?1, ?1, datetime('now'), datetime('now'))",
+                    rusqlite::params![id, agent_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    fn seed_relationship_raw(
+        storage: &GraphStorage,
+        id: &str,
+        agent_id: &str,
+        src: &str,
+        tgt: &str,
+        epistemic_class: &str,
+    ) {
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_relationships
+                        (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                         epistemic_class, first_seen_at, last_seen_at)
+                     VALUES (?1, ?2, ?3, ?4, 'relates_to', ?5,
+                             datetime('now'), datetime('now'))",
+                    rusqlite::params![id, agent_id, src, tgt, epistemic_class],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn connectivity_strength_returns_zero_for_empty_clusters() {
+        let storage = create_test_storage();
+        let result = storage
+            .connectivity_strength("agent-cs", &[], &["a".into()])
+            .unwrap();
+        assert_eq!(result, 0, "empty cluster A → 0");
+        let result = storage
+            .connectivity_strength("agent-cs", &["a".into()], &[])
+            .unwrap();
+        assert_eq!(result, 0, "empty cluster B → 0");
+        let result = storage.connectivity_strength("agent-cs", &[], &[]).unwrap();
+        assert_eq!(result, 0, "both empty → 0");
+    }
+
+    #[test]
+    fn connectivity_strength_counts_both_directions() {
+        let storage = create_test_storage();
+        // Cluster A: e1, e2. Cluster B: e3, e4.
+        for id in ["e1", "e2", "e3", "e4"] {
+            seed_entity_raw(&storage, id, "agent-cs");
+        }
+        // Two A→B edges and one B→A edge.
+        seed_relationship_raw(&storage, "r1", "agent-cs", "e1", "e3", "current");
+        seed_relationship_raw(&storage, "r2", "agent-cs", "e2", "e4", "current");
+        seed_relationship_raw(&storage, "r3", "agent-cs", "e4", "e1", "current");
+
+        let cluster_a = vec!["e1".to_string(), "e2".to_string()];
+        let cluster_b = vec!["e3".to_string(), "e4".to_string()];
+
+        let result = storage
+            .connectivity_strength("agent-cs", &cluster_a, &cluster_b)
+            .unwrap();
+        assert_eq!(result, 3, "two A→B + one B→A must sum to 3, got {result}");
+    }
+
+    #[test]
+    fn connectivity_strength_ignores_intra_cluster_edges() {
+        let storage = create_test_storage();
+        for id in ["e1", "e2", "e3", "e4"] {
+            seed_entity_raw(&storage, id, "agent-cs");
+        }
+        // Within-cluster edges (e1 → e2, e3 → e4) must NOT count.
+        seed_relationship_raw(&storage, "r1", "agent-cs", "e1", "e2", "current");
+        seed_relationship_raw(&storage, "r2", "agent-cs", "e3", "e4", "current");
+        // One legitimate cross-cluster edge.
+        seed_relationship_raw(&storage, "r3", "agent-cs", "e1", "e3", "current");
+
+        let cluster_a = vec!["e1".to_string(), "e2".to_string()];
+        let cluster_b = vec!["e3".to_string(), "e4".to_string()];
+
+        let result = storage
+            .connectivity_strength("agent-cs", &cluster_a, &cluster_b)
+            .unwrap();
+        assert_eq!(result, 1, "only the cross-cluster edge counts");
+    }
+
+    #[test]
+    fn connectivity_strength_excludes_archival_edges() {
+        let storage = create_test_storage();
+        for id in ["e1", "e2", "e3"] {
+            seed_entity_raw(&storage, id, "agent-cs");
+        }
+        // Two cross-cluster edges with distinct endpoints (the UNIQUE
+        // constraint on (src, tgt, type) means we can't have two
+        // edges on the same triplet — use different endpoints for the
+        // current vs archived edge).
+        seed_relationship_raw(&storage, "r-current", "agent-cs", "e1", "e2", "current");
+        seed_relationship_raw(&storage, "r-archived", "agent-cs", "e1", "e3", "archival");
+
+        let cluster_a = vec!["e1".to_string()];
+        let cluster_b = vec!["e2".to_string(), "e3".to_string()];
+
+        let result = storage
+            .connectivity_strength("agent-cs", &cluster_a, &cluster_b)
+            .unwrap();
+        assert_eq!(
+            result, 1,
+            "only the current-class edge contributes; archival is filtered"
+        );
+    }
+
+    #[test]
+    fn connectivity_strength_scopes_by_agent_id() {
+        let storage = create_test_storage();
+        // Same logical entity IDs under two agents; relationships under
+        // a different agent must not leak into the queried agent's count.
+        for id in ["e1", "e2"] {
+            seed_entity_raw(&storage, id, "agent-a");
+            seed_entity_raw(&storage, &format!("{id}b"), "agent-b");
+        }
+        // agent-a has one cross-cluster edge.
+        seed_relationship_raw(&storage, "ra", "agent-a", "e1", "e2", "current");
+        // agent-b has two edges that would match if the agent filter
+        // weren't applied. Both endpoints share names with cluster A/B,
+        // but live under a different agent.
+        seed_relationship_raw(&storage, "rb1", "agent-b", "e1b", "e2b", "current");
+        seed_relationship_raw(&storage, "rb2", "agent-b", "e2b", "e1b", "current");
+
+        let cluster_a = vec!["e1".to_string()];
+        let cluster_b = vec!["e2".to_string()];
+
+        let result = storage
+            .connectivity_strength("agent-a", &cluster_a, &cluster_b)
+            .unwrap();
+        assert_eq!(result, 1, "agent-b edges must not leak into agent-a count");
+
+        // And the reverse — agent-b's count is independent of agent-a's.
+        let cluster_a_b = vec!["e1b".to_string()];
+        let cluster_b_b = vec!["e2b".to_string()];
+        let result = storage
+            .connectivity_strength("agent-b", &cluster_a_b, &cluster_b_b)
+            .unwrap();
+        assert_eq!(result, 2, "agent-b sees its own edges in both directions");
+    }
+
+    #[test]
+    fn connectivity_strength_zero_when_clusters_unconnected() {
+        let storage = create_test_storage();
+        for id in ["e1", "e2", "e3", "e4"] {
+            seed_entity_raw(&storage, id, "agent-cs");
+        }
+        // Edges only within each cluster.
+        seed_relationship_raw(&storage, "r1", "agent-cs", "e1", "e2", "current");
+        seed_relationship_raw(&storage, "r2", "agent-cs", "e3", "e4", "current");
+
+        let cluster_a = vec!["e1".to_string(), "e2".to_string()];
+        let cluster_b = vec!["e3".to_string(), "e4".to_string()];
+
+        let result = storage
+            .connectivity_strength("agent-cs", &cluster_a, &cluster_b)
+            .unwrap();
+        assert_eq!(result, 0, "disconnected clusters → 0");
     }
 }
