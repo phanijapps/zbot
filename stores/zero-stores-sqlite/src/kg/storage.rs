@@ -16,6 +16,21 @@ use std::sync::Arc;
 /// budget. `confidence` was added in MEM-001 Part B-1.
 type EntityNameAnnHit = (String, String, String, f32, f64);
 
+/// Row returned by `traverse_weighted_sync` (MEM-001 Part B-2). The
+/// caller dedupes to one entry per `entity_id` — multiple paths from
+/// the seed produce multiple rows, the trait wrapper picks the
+/// shortest hop and ties on the highest edge-confidence product.
+#[derive(Debug, Clone)]
+pub struct TraverseWeightedRow {
+    pub entity_id: String,
+    pub name: String,
+    pub entity_type: String,
+    pub hop: usize,
+    pub path: String,
+    pub entity_confidence: f64,
+    pub edge_confidence_product: f64,
+}
+
 /// Row tuple from `list_inter_cluster_relations`:
 /// `(id, source_entity_id, target_entity_id, relationship_type, layer)`.
 /// Aliased to keep the trait wrapper signature within clippy's
@@ -1291,6 +1306,126 @@ impl GraphStorage {
                         });
                     }
                     Ok(nodes)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// MEM-001 Part B-2 — confidence-aware BFS traversal for recall.
+    ///
+    /// Mirrors `traverse_sync`'s recursive CTE but:
+    /// 1. Filters edges where `confidence < min_edge_confidence` at the CTE
+    ///    level — contradicted / decayed relationships don't pollute recall.
+    /// 2. Carries an `edge_confidence_product` accumulator along each path
+    ///    (multiplicative across edges).
+    /// 3. Joins `kg_entities.confidence` so recall can weight the final
+    ///    score by the target entity's confidence too.
+    /// 4. Agent-scopes both relationships and entities (`__global__` is
+    ///    treated as cross-agent and included).
+    ///
+    /// Returns one row per path; the caller dedupes to one entry per
+    /// `entity_id` (shortest hop wins; tie-break by highest edge product).
+    /// The seed itself is excluded.
+    pub fn traverse_weighted_sync(
+        &self,
+        entity_id: &str,
+        agent_id: &str,
+        max_hops: u8,
+        min_edge_confidence: f64,
+        limit: usize,
+    ) -> GraphResult<Vec<TraverseWeightedRow>> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<TraverseWeightedRow>> {
+                    let sql = r#"
+                        WITH RECURSIVE graph_walk(entity_id, hop, path, visited, edge_conf_product) AS (
+                            SELECT ?1, 0, '', ?1, 1.0
+                            UNION ALL
+                            SELECT
+                                CASE WHEN r.source_entity_id = gw.entity_id
+                                     THEN r.target_entity_id
+                                     ELSE r.source_entity_id
+                                END,
+                                gw.hop + 1,
+                                CASE WHEN gw.path = '' THEN r.relationship_type
+                                     ELSE gw.path || ',' || r.relationship_type
+                                END,
+                                gw.visited || ',' ||
+                                    CASE WHEN r.source_entity_id = gw.entity_id
+                                         THEN r.target_entity_id
+                                         ELSE r.source_entity_id
+                                    END,
+                                gw.edge_conf_product * r.confidence
+                            FROM graph_walk gw
+                            JOIN kg_relationships r
+                                ON (r.source_entity_id = gw.entity_id
+                                    OR r.target_entity_id = gw.entity_id)
+                            WHERE gw.hop < ?2
+                              AND r.confidence >= ?3
+                              AND (r.agent_id = ?4 OR r.agent_id = '__global__')
+                              AND r.epistemic_class != 'archival'
+                              AND gw.visited NOT LIKE
+                                  '%' ||
+                                  CASE WHEN r.source_entity_id = gw.entity_id
+                                       THEN r.target_entity_id
+                                       ELSE r.source_entity_id
+                                  END || '%'
+                        )
+                        SELECT
+                            gw.entity_id,
+                            e.name,
+                            e.entity_type,
+                            gw.hop,
+                            gw.path,
+                            e.confidence,
+                            gw.edge_conf_product
+                        FROM graph_walk gw
+                        JOIN kg_entities e ON e.id = gw.entity_id
+                        WHERE gw.entity_id != ?1
+                          AND (e.agent_id = ?4 OR e.agent_id = '__global__')
+                          AND e.epistemic_class != 'archival'
+                        ORDER BY gw.hop ASC, gw.edge_conf_product DESC
+                        LIMIT ?5
+                    "#;
+                    let mut stmt = conn.prepare(sql).map_err(GraphError::Database)?;
+                    let rows = stmt
+                        .query_map(
+                            rusqlite::params![
+                                entity_id,
+                                max_hops as i64,
+                                min_edge_confidence,
+                                agent_id,
+                                limit as i64
+                            ],
+                            |row| {
+                                Ok((
+                                    row.get::<_, String>(0)?,
+                                    row.get::<_, String>(1)?,
+                                    row.get::<_, String>(2)?,
+                                    row.get::<_, i64>(3)?,
+                                    row.get::<_, String>(4)?,
+                                    row.get::<_, f64>(5)?,
+                                    row.get::<_, f64>(6)?,
+                                ))
+                            },
+                        )
+                        .map_err(GraphError::Database)?;
+                    let mut out = Vec::new();
+                    for row in rows {
+                        let (id, name, etype, hop, path, entity_conf, edge_conf_prod) =
+                            row.map_err(GraphError::Database)?;
+                        out.push(TraverseWeightedRow {
+                            entity_id: id,
+                            name,
+                            entity_type: etype,
+                            hop: hop as usize,
+                            path,
+                            entity_confidence: entity_conf,
+                            edge_confidence_product: edge_conf_prod,
+                        });
+                    }
+                    Ok(out)
                 })()
                 .map_err(graph_to_rusqlite)
             })
@@ -5066,5 +5201,247 @@ mod tests {
             (confidence - 0.42).abs() < 1e-6,
             "expected confidence 0.42, got {confidence}"
         );
+    }
+
+    // ========================================================================
+    // MEM-001 Part B-2 — traverse_weighted_sync tests
+    // ========================================================================
+
+    fn insert_b2_entity(
+        storage: &GraphStorage,
+        id: &str,
+        agent: &str,
+        confidence: f64,
+        epistemic_class: &str,
+    ) {
+        let now = chrono::Utc::now().to_rfc3339();
+        storage
+            .knowledge_db()
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         epistemic_class, confidence, mention_count, access_count,
+                         first_seen_at, last_seen_at)
+                     VALUES (?1, ?2, 'Concept', ?1, ?1, ?1, ?3, ?4, 1, 0, ?5, ?5)",
+                    rusqlite::params![id, agent, epistemic_class, confidence, now],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)] // 8 args in a test helper is fine.
+    fn insert_b2_relationship(
+        storage: &GraphStorage,
+        id: &str,
+        agent: &str,
+        src: &str,
+        tgt: &str,
+        rel_type: &str,
+        confidence: f64,
+        epistemic_class: &str,
+    ) {
+        let now = chrono::Utc::now().to_rfc3339();
+        storage
+            .knowledge_db()
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_relationships
+                        (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                         epistemic_class, confidence, mention_count, access_count,
+                         first_seen_at, last_seen_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 0, ?8, ?8)",
+                    rusqlite::params![
+                        id,
+                        agent,
+                        src,
+                        tgt,
+                        rel_type,
+                        epistemic_class,
+                        confidence,
+                        now
+                    ],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn traverse_weighted_returns_direct_neighbor() {
+        let storage = create_test_storage();
+        let agent = "agent-b2";
+
+        insert_b2_entity(&storage, "seed", agent, 1.0, "current");
+        insert_b2_entity(&storage, "neighbor", agent, 0.7, "current");
+        insert_b2_relationship(
+            &storage,
+            "r1",
+            agent,
+            "seed",
+            "neighbor",
+            "RelatedTo",
+            0.9,
+            "current",
+        );
+
+        let rows = storage
+            .traverse_weighted_sync("seed", agent, 2, 0.0, 10)
+            .expect("ok");
+        assert_eq!(rows.len(), 1, "expected one neighbor, got {rows:?}");
+        let r = &rows[0];
+        assert_eq!(r.entity_id, "neighbor");
+        assert_eq!(r.hop, 1);
+        assert!((r.entity_confidence - 0.7).abs() < 1e-6);
+        assert!((r.edge_confidence_product - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn traverse_weighted_filters_low_confidence_edges() {
+        let storage = create_test_storage();
+        let agent = "agent-b2";
+
+        insert_b2_entity(&storage, "seed", agent, 1.0, "current");
+        insert_b2_entity(&storage, "near", agent, 0.8, "current");
+        insert_b2_entity(&storage, "far", agent, 0.8, "current");
+        // High-confidence edge to "near"; low-confidence edge to "far".
+        insert_b2_relationship(
+            &storage,
+            "r-near",
+            agent,
+            "seed",
+            "near",
+            "RelatedTo",
+            0.9,
+            "current",
+        );
+        insert_b2_relationship(
+            &storage, "r-far", agent, "seed", "far", "WorksFor", 0.05, "current",
+        );
+
+        let rows = storage
+            .traverse_weighted_sync("seed", agent, 1, 0.5, 10)
+            .expect("ok");
+        let ids: Vec<&str> = rows.iter().map(|r| r.entity_id.as_str()).collect();
+        assert_eq!(ids, vec!["near"], "low-confidence edge should be dropped");
+    }
+
+    #[test]
+    fn traverse_weighted_two_hops_accumulates_edge_product() {
+        let storage = create_test_storage();
+        let agent = "agent-b2";
+
+        insert_b2_entity(&storage, "seed", agent, 1.0, "current");
+        insert_b2_entity(&storage, "mid", agent, 0.9, "current");
+        insert_b2_entity(&storage, "leaf", agent, 0.6, "current");
+        insert_b2_relationship(
+            &storage,
+            "r1",
+            agent,
+            "seed",
+            "mid",
+            "RelatedTo",
+            0.8,
+            "current",
+        );
+        insert_b2_relationship(
+            &storage, "r2", agent, "mid", "leaf", "Contains", 0.5, "current",
+        );
+
+        let rows = storage
+            .traverse_weighted_sync("seed", agent, 2, 0.0, 10)
+            .expect("ok");
+        let leaf = rows
+            .iter()
+            .find(|r| r.entity_id == "leaf")
+            .expect("leaf should be reachable at hop 2");
+        assert_eq!(leaf.hop, 2);
+        assert!(
+            (leaf.edge_confidence_product - (0.8 * 0.5)).abs() < 1e-6,
+            "edge product should be 0.8 * 0.5 = 0.4, got {}",
+            leaf.edge_confidence_product
+        );
+    }
+
+    #[test]
+    fn traverse_weighted_excludes_archival_entities_and_edges() {
+        let storage = create_test_storage();
+        let agent = "agent-b2";
+
+        insert_b2_entity(&storage, "seed", agent, 1.0, "current");
+        insert_b2_entity(&storage, "archived-target", agent, 0.7, "archival");
+        insert_b2_entity(&storage, "current-target", agent, 0.7, "current");
+        insert_b2_relationship(
+            &storage,
+            "r-arch",
+            agent,
+            "seed",
+            "archived-target",
+            "X",
+            0.9,
+            "current",
+        );
+        insert_b2_relationship(
+            &storage,
+            "r-archedge",
+            agent,
+            "seed",
+            "current-target",
+            "Y",
+            0.9,
+            "archival",
+        );
+
+        let rows = storage
+            .traverse_weighted_sync("seed", agent, 1, 0.0, 10)
+            .expect("ok");
+        assert!(
+            rows.is_empty(),
+            "archival rows + archival edges both excluded: got {rows:?}"
+        );
+    }
+
+    #[test]
+    fn traverse_weighted_agent_scope_blocks_cross_agent() {
+        let storage = create_test_storage();
+
+        insert_b2_entity(&storage, "seed", "agent-a", 1.0, "current");
+        insert_b2_entity(&storage, "other", "agent-b", 0.8, "current");
+        insert_b2_relationship(
+            &storage, "r-x", "agent-b", "seed", "other", "X", 0.9, "current",
+        );
+
+        let rows = storage
+            .traverse_weighted_sync("seed", "agent-a", 1, 0.0, 10)
+            .expect("ok");
+        assert!(
+            rows.is_empty(),
+            "agent-b's edge shouldn't be visible from agent-a: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn traverse_weighted_global_agent_visible_to_any_agent() {
+        let storage = create_test_storage();
+
+        insert_b2_entity(&storage, "seed", "agent-a", 1.0, "current");
+        insert_b2_entity(&storage, "shared", "__global__", 0.8, "current");
+        insert_b2_relationship(
+            &storage,
+            "r-g",
+            "__global__",
+            "seed",
+            "shared",
+            "Z",
+            0.9,
+            "current",
+        );
+
+        let rows = storage
+            .traverse_weighted_sync("seed", "agent-a", 1, 0.0, 10)
+            .expect("ok");
+        let ids: Vec<&str> = rows.iter().map(|r| r.entity_id.as_str()).collect();
+        assert_eq!(ids, vec!["shared"], "__global__ rows must be reachable");
     }
 }

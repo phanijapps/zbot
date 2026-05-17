@@ -8,34 +8,17 @@
 
 ## MEM-001 — Phase 4b: Contradiction propagation + recall traversal weighting
 
-**Status:**
-- **Part A — Contradiction propagation from facts to KG nodes:** ✅ Done — shipped on `feat/mem-001-contradiction-propagation` (PR pending). See tracking doc Phase 5 row for the trait methods + engine wiring.
-- **Part B — Recall traversal weighting by confidence:** Re-filed as new scope (see below). Original premise no longer holds.
+**Status:** ✅ **Fully closed** — all three parts shipped on develop.
+- **Part A — Contradiction propagation from facts to KG nodes:** ✅ Done (PR #177).
+- **Part B-1 — Step-4 graph-ANN weighting by entity confidence:** ✅ Done (PR #178).
+- **Part B-2 — Confidence-aware hop-walking traversal:** ✅ Done (this PR).
 
-**Severity:** Medium (only when symptom appears)
-**Trigger:** Either (a) you observe the agent acting on schemas that have been contradicted in newer memory facts, OR (b) recall starts returning entities/relationships whose confidence has decayed to near-zero. Symptom: agent uses stale knowledge despite explicit corrections; or low-confidence noise pollutes recall results.
+**What's live now:**
+1. **Part A.** When the sleep cycle runs, the DecayEngine lists distinct `source_episode_id` values from `memory_facts` rows where `contradicted_by IS NOT NULL`, finds kg_entities + kg_relationships sharing those episodes, and applies `confidence = MAX(min_floor, confidence * decay_factor)`. Defaults: `decay_factor=0.9`, `min_floor=0.05`, `lookback_hours=24`. Cycle stats expose the propagation counts.
+2. **Part B-1.** Recall step-4 (graph-ANN over `kg_name_index`) joins `kg_entities.confidence`, drops hits below `min_kg_confidence` (default 0.1), and multiplies surviving scores by entity confidence. Filter applies to the seed-id set fed to the hierarchy LCA surface too.
+3. **Part B-2.** New recall step 4b: confidence-aware BFS traversal from the top-3 graph-ANN seeds. Recursive CTE filters edges below `min_kg_confidence`, accumulates an `edge_confidence_product`, and recall scores each hit as `hop_decay^hop × edge_confidence_product × entity_confidence`. Shortest-hop-wins dedup; ties go to higher edge-confidence product. Capped at `max_graph_facts` (default 5), agent-scoped, archival rows + edges excluded. `provenance.source = "kg_traversal"` distinguishes traversal hits from seed ANN hits.
 
-### What shipped (Part A)
-
-When the sleep cycle runs, the DecayEngine now:
-1. Lists distinct `source_episode_id` values from `memory_facts` rows where `contradicted_by IS NOT NULL` and `updated_at > now - lookback_hours`.
-2. Finds kg_entities + kg_relationships whose `source_episode_ids` blob contains any of those episode ids (comma-flanked token match, agent-scoped, archival excluded).
-3. Applies `confidence = MAX(min_floor, confidence * decay_factor)` to those rows.
-
-Defaults: `enabled=true`, `decay_factor=0.9`, `min_floor=0.05`, `lookback_hours=24`. Wired in `gateway-memory/src/sleep/worker.rs` immediately after `decay_kg_confidence`. Cycle stats expose `contradiction_episodes_processed` / `contradiction_entities_decayed` / `contradiction_relationships_decayed`.
-
-### Part B — Recall weighting (re-filed, NOT scheduled)
-
-**Original premise was wrong.** The 2026-05-13 backlog assumed `gateway/gateway-execution/src/recall/mod.rs` had a graph-traversal block that multiplied `hop_decay^depth` × `kg_relationships.confidence`. That block never existed. `GraphTraversalConfig` is defined in `gateway-memory/src/lib.rs` but consumed by zero call sites. Recall today surfaces KG entities only via step 4's `search_entities_by_name_embedding` (cosine + rank, no hops) and step 5c's LCA walk over `parent_cluster_id` (hierarchy ancestry, not relationship traversal).
-
-**Two ways forward, both deferred:**
-
-- **B-1 (small):** Weight the existing step-4 graph-ANN hits by `kg_entities.confidence`. Skip hits below a `min_confidence` threshold. Requires adding `confidence` to `EntityNameEmbeddingHit` carrier + the trait method. Doesn't add traversal — just makes the existing ScoredItem score honest about per-entity confidence.
-- **B-2 (large):** Actually build the hop-walking graph traversal the original backlog assumed exists. New trait method `walk_relationships(start: &[EntityId], max_hops, hop_decay, min_confidence) -> Vec<TraversalHit>`. Wire into recall as a new step. Multi-day scope; effectively a new recall feature.
-
-**Effort:** B-1 ~half day. B-2 ~3-4 days.
-
-**Dependencies:** None for B-1. None for B-2.
+**Effect.** A contradicted fact decays the entities + edges from its source episode (Part A); recall then drops those entities below threshold (B-1) and stops walking through their edges (B-2). The graph reacts to corrections without waiting on the 90-day half-life.
 
 ---
 

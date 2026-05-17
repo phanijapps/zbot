@@ -213,6 +213,62 @@ impl KnowledgeGraphStore for SqliteKgStore {
         .await
     }
 
+    async fn traverse_weighted(
+        &self,
+        seed: &EntityId,
+        agent_id: &str,
+        max_hops: usize,
+        min_edge_confidence: f64,
+        limit: usize,
+    ) -> StoreResult<Vec<zero_stores::WeightedTraversalHit>> {
+        let storage = self.storage.clone();
+        let seed = seed.0.clone();
+        let agent_id = agent_id.to_string();
+        block(move || {
+            // Pull more rows than the cap so the shortest-hop / max-product
+            // dedup has room to work — without slack the SQL `LIMIT` could
+            // cut off a shorter-hop path in favor of a longer one with
+            // higher edge product (since ORDER BY hop ASC kicks in first
+            // anyway). 4× cap is plenty: BFS to 2 hops on a sparse graph
+            // doesn't yield many alternate paths per node.
+            let raw_limit = limit.saturating_mul(4).max(limit);
+            let rows = storage
+                .traverse_weighted_sync(
+                    &seed,
+                    &agent_id,
+                    max_hops.min(255) as u8,
+                    min_edge_confidence,
+                    raw_limit,
+                )
+                .map_err(map_graph_err)?;
+
+            // Dedup by entity_id: keep shortest hop; tie-break by highest
+            // edge_confidence_product. Rows arrive already sorted by
+            // (hop ASC, edge_conf_product DESC) so the first occurrence
+            // of each entity_id is the winner.
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut deduped: Vec<zero_stores::WeightedTraversalHit> = Vec::new();
+            for r in rows {
+                if seen.insert(r.entity_id.clone()) {
+                    deduped.push(zero_stores::WeightedTraversalHit {
+                        entity_id: EntityId(r.entity_id),
+                        name: r.name,
+                        entity_type: r.entity_type,
+                        hop: r.hop,
+                        path: r.path,
+                        entity_confidence: r.entity_confidence,
+                        edge_confidence_product: r.edge_confidence_product,
+                    });
+                    if deduped.len() >= limit {
+                        break;
+                    }
+                }
+            }
+            Ok(deduped)
+        })
+        .await
+    }
+
     async fn search_entities_by_name(
         &self,
         agent_id: &str,
@@ -1686,5 +1742,117 @@ mod tests {
             })
             .unwrap();
         assert!((new_conf - 0.3).abs() < 1e-6, "0.6 * 0.5 = 0.3");
+    }
+
+    // ============================================================================
+    // MEM-001 Part B-2 — traverse_weighted trait wrapper (dedup + cap)
+    // ============================================================================
+
+    #[tokio::test]
+    async fn traverse_weighted_trait_dedupes_by_entity_id_shortest_hop_wins() {
+        let (_tmp, graph, store) = setup_store();
+        let agent = "agent-b2-wrap";
+
+        // Build a tiny graph where `target` is reachable in two ways:
+        //   seed --(direct, conf 0.5)--> target            [hop 1, prod 0.5]
+        //   seed --(conf 0.9)--> mid --(conf 0.9)--> target [hop 2, prod 0.81]
+        // Despite the 2-hop path having a higher edge_confidence_product,
+        // the trait wrapper must pick the hop-1 entry (shortest-hop wins).
+        let now = chrono::Utc::now().to_rfc3339();
+        graph
+            .knowledge_db()
+            .with_connection(|conn| {
+                for id in ["seed", "mid", "target"] {
+                    conn.execute(
+                        "INSERT INTO kg_entities
+                            (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                             epistemic_class, confidence, mention_count, access_count,
+                             first_seen_at, last_seen_at)
+                         VALUES (?1, ?2, 'Concept', ?1, ?1, ?1, 'current', 0.8, 1, 0, ?3, ?3)",
+                        rusqlite::params![id, agent, now],
+                    )?;
+                }
+                conn.execute(
+                    "INSERT INTO kg_relationships
+                        (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                         epistemic_class, confidence, mention_count, access_count,
+                         first_seen_at, last_seen_at)
+                     VALUES ('r-direct', ?1, 'seed', 'target', 'A', 'current', 0.5, 1, 0, ?2, ?2)",
+                    rusqlite::params![agent, now],
+                )?;
+                conn.execute(
+                    "INSERT INTO kg_relationships
+                        (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                         epistemic_class, confidence, mention_count, access_count,
+                         first_seen_at, last_seen_at)
+                     VALUES ('r-via-mid-a', ?1, 'seed', 'mid', 'B', 'current', 0.9, 1, 0, ?2, ?2)",
+                    rusqlite::params![agent, now],
+                )?;
+                conn.execute(
+                    "INSERT INTO kg_relationships
+                        (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                         epistemic_class, confidence, mention_count, access_count,
+                         first_seen_at, last_seen_at)
+                     VALUES ('r-via-mid-b', ?1, 'mid', 'target', 'C', 'current', 0.9, 1, 0, ?2, ?2)",
+                    rusqlite::params![agent, now],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let hits = store
+            .traverse_weighted(&EntityId("seed".into()), agent, 2, 0.0, 10)
+            .await
+            .expect("ok");
+
+        let target = hits
+            .iter()
+            .find(|h| h.entity_id.0 == "target")
+            .expect("target should be reachable");
+        assert_eq!(target.hop, 1, "shortest hop wins (direct edge)");
+        assert!(
+            (target.edge_confidence_product - 0.5).abs() < 1e-6,
+            "edge product should be 0.5 (direct), got {}",
+            target.edge_confidence_product
+        );
+    }
+
+    #[tokio::test]
+    async fn traverse_weighted_trait_respects_limit_after_dedup() {
+        let (_tmp, graph, store) = setup_store();
+        let agent = "agent-b2-wrap";
+        let now = chrono::Utc::now().to_rfc3339();
+        graph
+            .knowledge_db()
+            .with_connection(|conn| {
+                for id in ["seed", "n1", "n2", "n3"] {
+                    conn.execute(
+                        "INSERT INTO kg_entities
+                            (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                             epistemic_class, confidence, mention_count, access_count,
+                             first_seen_at, last_seen_at)
+                         VALUES (?1, ?2, 'Concept', ?1, ?1, ?1, 'current', 0.8, 1, 0, ?3, ?3)",
+                        rusqlite::params![id, agent, now],
+                    )?;
+                }
+                for (rid, tgt) in [("r1", "n1"), ("r2", "n2"), ("r3", "n3")] {
+                    conn.execute(
+                        "INSERT INTO kg_relationships
+                            (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                             epistemic_class, confidence, mention_count, access_count,
+                             first_seen_at, last_seen_at)
+                         VALUES (?1, ?2, 'seed', ?3, 'A', 'current', 0.9, 1, 0, ?4, ?4)",
+                        rusqlite::params![rid, agent, tgt, now],
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+
+        let hits = store
+            .traverse_weighted(&EntityId("seed".into()), agent, 1, 0.0, 2)
+            .await
+            .expect("ok");
+        assert_eq!(hits.len(), 2, "limit must cap deduped output to 2");
     }
 }
