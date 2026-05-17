@@ -981,6 +981,37 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         self.memory_repo.upsert_memory_fact(&fact)?;
         Ok(id)
     }
+
+    async fn list_contradicted_fact_episode_ids(
+        &self,
+        agent_id: &str,
+        since: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<String>, String> {
+        let agent_id = agent_id.to_string();
+        let since_str = since.to_rfc3339();
+        let db = self.memory_repo.db().clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<String>, String> {
+            db.with_connection(|conn| -> Result<Vec<String>, rusqlite::Error> {
+                let mut stmt = conn.prepare(
+                    "SELECT DISTINCT source_episode_id
+                     FROM memory_facts
+                     WHERE agent_id = ?1
+                       AND contradicted_by IS NOT NULL
+                       AND source_episode_id IS NOT NULL
+                       AND updated_at > ?2",
+                )?;
+                let rows: Vec<String> = stmt
+                    .query_map(rusqlite::params![agent_id, since_str], |row| {
+                        row.get::<_, String>(0)
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
 }
 
 // ---- Helpers --------------------------------------------------------------

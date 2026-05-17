@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use zero_stores::KnowledgeGraphStore;
+use zero_stores_traits::MemoryFactStore;
 
 use crate::sleep::belief_propagator::{BeliefPropagationStats, BeliefPropagator};
 
@@ -35,6 +36,51 @@ impl Default for DecayConfig {
 pub struct KgDecayStats {
     pub entities_decayed: u64,
     pub relationships_decayed: u64,
+}
+
+/// Counts returned by [`DecayEngine::propagate_fact_contradictions`] —
+/// MEM-001 Part A. `episodes_processed` is the number of distinct
+/// contradicted-fact episode ids the call walked; `entities_decayed` /
+/// `relationships_decayed` count the KG rows whose confidence was
+/// multiplicatively reduced. `errors` covers store-level failures
+/// (logged-and-continued, not bubbled).
+#[derive(Debug, Default, Clone)]
+pub struct ContradictionPropagationStats {
+    pub episodes_processed: u64,
+    pub entities_decayed: u64,
+    pub relationships_decayed: u64,
+    pub errors: u64,
+}
+
+/// Tuning knobs for [`DecayEngine::propagate_fact_contradictions`].
+///
+/// `enabled = false` makes the call a no-op without touching the
+/// store. `decay_factor` is the multiplicative coefficient applied to
+/// `confidence` (e.g. `0.9` = 10% indirect-contradiction decay). The
+/// `min_floor` is enforced by the SQL UPDATE so confidence never drops
+/// below it.
+///
+/// `lookback_hours` bounds the `memory_facts.updated_at` window — the
+/// caller picks "facts contradicted since the last cycle ran" by
+/// passing `last_propagation_at` as `since` to the trait method;
+/// this struct just carries the default lookback used at first run.
+#[derive(Debug, Clone)]
+pub struct ContradictionPropagationConfig {
+    pub enabled: bool,
+    pub decay_factor: f64,
+    pub min_floor: f64,
+    pub lookback_hours: i64,
+}
+
+impl Default for ContradictionPropagationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            decay_factor: 0.9,
+            min_floor: 0.05,
+            lookback_hours: 24,
+        }
+    }
 }
 
 /// A decayed entity slated for soft-deletion by the Pruner.
@@ -71,6 +117,14 @@ pub struct DecayEngine {
     /// `old - new > threshold` (dropped by more than the threshold in
     /// one cycle).
     fact_confidence_drop_threshold: f64,
+    /// MEM-001 Part A: optional fact store, used to list contradicted
+    /// facts and read their `source_episode_id` values. `None` skips
+    /// contradiction propagation entirely.
+    fact_store: Option<Arc<dyn MemoryFactStore>>,
+    /// MEM-001 Part A: contradiction propagation knobs (enabled flag,
+    /// decay factor, floor, lookback). Defaults are safe — see
+    /// [`ContradictionPropagationConfig::default`].
+    contradiction_config: ContradictionPropagationConfig,
 }
 
 impl DecayEngine {
@@ -80,6 +134,8 @@ impl DecayEngine {
             config,
             belief_propagator: None,
             fact_confidence_drop_threshold: 0.3,
+            fact_store: None,
+            contradiction_config: ContradictionPropagationConfig::default(),
         }
     }
 
@@ -95,6 +151,28 @@ impl DecayEngine {
         self.belief_propagator = propagator;
         self.fact_confidence_drop_threshold = threshold;
         self
+    }
+
+    /// Builder-style: attach a fact store + config so the engine can
+    /// run MEM-001 Part A contradiction propagation. Without this,
+    /// [`Self::propagate_fact_contradictions`] is a no-op.
+    #[must_use]
+    pub fn with_contradiction_propagation(
+        mut self,
+        fact_store: Option<Arc<dyn MemoryFactStore>>,
+        config: ContradictionPropagationConfig,
+    ) -> Self {
+        self.fact_store = fact_store;
+        self.contradiction_config = config;
+        self
+    }
+
+    /// MEM-001 Part A — lookback used by the sleep cycle to bound the
+    /// `memory_facts.updated_at > since` filter. Hours rather than a
+    /// timestamp so callers can compute `now - lookback` once per
+    /// cycle without leaking config out of the engine.
+    pub fn contradiction_lookback_hours(&self) -> i64 {
+        self.contradiction_config.lookback_hours
     }
 
     /// Should a fact-confidence transition trigger propagation? Either
@@ -139,6 +217,97 @@ impl DecayEngine {
             agg.max_propagation_depth = agg.max_propagation_depth.max(stats.max_propagation_depth);
         }
         agg
+    }
+
+    /// MEM-001 Part A — propagate fact-level contradictions down to
+    /// the KG entities and relationships that share the contradicted
+    /// fact's `source_episode_id`.
+    ///
+    /// Steps per cycle:
+    ///   1. List distinct `source_episode_id`s of `memory_facts` rows
+    ///      where `contradicted_by IS NOT NULL` and `updated_at > since`.
+    ///   2. Find KG entities + relationships whose `source_episode_ids`
+    ///      blob contains any of those episode ids.
+    ///   3. Apply `confidence = MAX(min_floor, confidence * decay_factor)`
+    ///      to those rows.
+    ///
+    /// No-op when disabled, when `fact_store` is unwired, or when no
+    /// facts have been contradicted in the window. Errors are logged
+    /// and absorbed into the returned `errors` counter — the sleep
+    /// cycle never aborts on this step.
+    pub async fn propagate_fact_contradictions(
+        &self,
+        agent_id: &str,
+        since: DateTime<Utc>,
+    ) -> ContradictionPropagationStats {
+        let mut stats = ContradictionPropagationStats::default();
+        if !self.contradiction_config.enabled {
+            return stats;
+        }
+        let Some(fact_store) = self.fact_store.as_ref() else {
+            return stats;
+        };
+
+        let episode_ids = match fact_store
+            .list_contradicted_fact_episode_ids(agent_id, since)
+            .await
+        {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!(error = %e, "list_contradicted_fact_episode_ids failed");
+                stats.errors += 1;
+                return stats;
+            }
+        };
+        if episode_ids.is_empty() {
+            return stats;
+        }
+        stats.episodes_processed = episode_ids.len() as u64;
+
+        let nodes = match self
+            .kg_store
+            .find_kg_nodes_by_episode_ids(agent_id, &episode_ids)
+            .await
+        {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(error = %e, "find_kg_nodes_by_episode_ids failed");
+                stats.errors += 1;
+                return stats;
+            }
+        };
+
+        let factor = self.contradiction_config.decay_factor;
+        let floor = self.contradiction_config.min_floor;
+
+        match self
+            .kg_store
+            .apply_entity_confidence_multiplier(agent_id, &nodes.entity_ids, factor, floor)
+            .await
+        {
+            Ok(n) => stats.entities_decayed = n,
+            Err(e) => {
+                tracing::warn!(error = %e, "apply_entity_confidence_multiplier failed");
+                stats.errors += 1;
+            }
+        }
+        match self
+            .kg_store
+            .apply_relationship_confidence_multiplier(
+                agent_id,
+                &nodes.relationship_ids,
+                factor,
+                floor,
+            )
+            .await
+        {
+            Ok(n) => stats.relationships_decayed = n,
+            Err(e) => {
+                tracing::warn!(error = %e, "apply_relationship_confidence_multiplier failed");
+                stats.errors += 1;
+            }
+        }
+        stats
     }
 
     /// Apply temporal confidence decay to KG entities and relationships.
@@ -503,6 +672,160 @@ mod tests {
             .propagate_fact_confidence_drops(&drops, chrono::Utc::now())
             .await;
         assert_eq!(stats.beliefs_invalidated, 0);
+        assert_eq!(stats.errors, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // MEM-001 Part A: contradiction propagation
+    // ------------------------------------------------------------------
+
+    /// Seed a `memory_facts` row marked as contradicted. Uses the
+    /// minimal columns the SQL path reads.
+    fn insert_contradicted_fact(
+        graph: &zero_stores_sqlite::kg::storage::GraphStorage,
+        fact_id: &str,
+        agent_id: &str,
+        source_episode_id: &str,
+        contradicted_by: &str,
+    ) {
+        let now = chrono::Utc::now().to_rfc3339();
+        graph
+            .knowledge_db()
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO memory_facts
+                        (id, agent_id, scope, category, key, content, confidence,
+                         mention_count, contradicted_by, created_at, updated_at,
+                         source_episode_id)
+                     VALUES (?1, ?2, 'global', 'cat', ?1, 'c', 0.8, 1, ?3, ?4, ?4, ?5)",
+                    rusqlite::params![fact_id, agent_id, contradicted_by, now, source_episode_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    fn insert_kg_entity_with_episode(
+        graph: &zero_stores_sqlite::kg::storage::GraphStorage,
+        id: &str,
+        agent_id: &str,
+        confidence: f64,
+        source_episode_ids: &str,
+    ) {
+        let now = chrono::Utc::now().to_rfc3339();
+        graph
+            .knowledge_db()
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         epistemic_class, confidence, mention_count, access_count,
+                         first_seen_at, last_seen_at, source_episode_ids)
+                     VALUES (?1, ?2, 'Concept', ?1, ?1, ?1, 'current', ?3, 1, 0, ?4, ?4, ?5)",
+                    rusqlite::params![id, agent_id, confidence, now, source_episode_ids],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn propagate_fact_contradictions_decays_kg_nodes_for_contradicted_episodes() {
+        use zero_stores_sqlite::GatewayMemoryFactStore;
+        use zero_stores_traits::MemoryFactStore;
+
+        let (_tmp, graph) = setup();
+        let agent = "a";
+
+        // Two contradicted facts pointing to ep-1 and ep-2.
+        insert_contradicted_fact(&graph, "F1", agent, "ep-1", "F-newer");
+        insert_contradicted_fact(&graph, "F2", agent, "ep-2", "F-newer");
+
+        // KG entities: e1 came from ep-1 (should decay), e2 from ep-99
+        // (untouched), e3 from a multi-token blob including ep-2 (should
+        // decay).
+        insert_kg_entity_with_episode(&graph, "e1", agent, 0.8, "ep-1");
+        insert_kg_entity_with_episode(&graph, "e2", agent, 0.8, "ep-99");
+        insert_kg_entity_with_episode(&graph, "e3", agent, 0.8, "ep-2,ep-foo");
+
+        let kg_store: Arc<dyn KnowledgeGraphStore> =
+            Arc::new(zero_stores_sqlite::SqliteKgStore::new(graph.clone()));
+        let db = graph.knowledge_db().clone();
+        let vec_index: Arc<dyn zero_stores_sqlite::VectorIndex> = Arc::new(
+            zero_stores_sqlite::SqliteVecIndex::new(db.clone(), "memory_facts_index", "fact_id")
+                .expect("vec index init"),
+        );
+        let memory_repo =
+            Arc::new(zero_stores_sqlite::memory_repository::MemoryRepository::new(db, vec_index));
+        let fact_store: Arc<dyn MemoryFactStore> =
+            Arc::new(GatewayMemoryFactStore::new(memory_repo, None));
+
+        let engine = DecayEngine::new(kg_store, DecayConfig::default())
+            .with_contradiction_propagation(
+                Some(fact_store),
+                ContradictionPropagationConfig {
+                    enabled: true,
+                    decay_factor: 0.5,
+                    min_floor: 0.05,
+                    lookback_hours: 24,
+                },
+            );
+
+        let stats = engine
+            .propagate_fact_contradictions(agent, chrono::Utc::now() - chrono::Duration::days(7))
+            .await;
+        assert_eq!(stats.episodes_processed, 2);
+        assert_eq!(stats.entities_decayed, 2);
+        assert_eq!(stats.relationships_decayed, 0);
+        assert_eq!(stats.errors, 0);
+
+        let read = |id: &str| -> f64 {
+            graph
+                .knowledge_db()
+                .with_connection(|conn| {
+                    conn.query_row(
+                        "SELECT confidence FROM kg_entities WHERE id = ?1",
+                        rusqlite::params![id],
+                        |row| row.get(0),
+                    )
+                })
+                .unwrap()
+        };
+        assert!((read("e1") - 0.4).abs() < 1e-6, "e1: 0.8 * 0.5 = 0.4");
+        assert!((read("e2") - 0.8).abs() < 1e-6, "e2 untouched");
+        assert!((read("e3") - 0.4).abs() < 1e-6, "e3 decayed");
+    }
+
+    #[tokio::test]
+    async fn propagate_fact_contradictions_disabled_is_noop() {
+        let (_tmp, graph) = setup();
+        let kg_store: Arc<dyn KnowledgeGraphStore> =
+            Arc::new(zero_stores_sqlite::SqliteKgStore::new(graph));
+        let engine = DecayEngine::new(kg_store, DecayConfig::default())
+            .with_contradiction_propagation(
+                None,
+                ContradictionPropagationConfig {
+                    enabled: false,
+                    ..ContradictionPropagationConfig::default()
+                },
+            );
+        let stats = engine
+            .propagate_fact_contradictions("any", chrono::Utc::now())
+            .await;
+        assert_eq!(stats.episodes_processed, 0);
+        assert_eq!(stats.entities_decayed, 0);
+    }
+
+    #[tokio::test]
+    async fn propagate_fact_contradictions_no_factstore_is_noop() {
+        let (_tmp, graph) = setup();
+        let kg_store: Arc<dyn KnowledgeGraphStore> =
+            Arc::new(zero_stores_sqlite::SqliteKgStore::new(graph));
+        let engine = DecayEngine::new(kg_store, DecayConfig::default());
+        let stats = engine
+            .propagate_fact_contradictions("any", chrono::Utc::now())
+            .await;
+        assert_eq!(stats.episodes_processed, 0);
         assert_eq!(stats.errors, 0);
     }
 }

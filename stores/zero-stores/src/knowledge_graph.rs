@@ -340,6 +340,58 @@ pub trait KnowledgeGraphStore: Send + Sync {
         Ok(Vec::new())
     }
 
+    // ---- Contradiction propagation (MEM-001 Part A) ----------------------
+    //
+    // When a `memory_facts.contradicted_by` is set, the KG entities and
+    // relationships that were created from the same episode become
+    // suspect. This method locates those KG rows so the caller can decay
+    // their confidence multiplicatively.
+
+    /// Locate kg_entities + kg_relationships whose `source_episode_ids`
+    /// overlaps the supplied episode-id set. Comma-delimited token match
+    /// (mirrors the storage format used by `episode_ids_for_entity` and
+    /// `relationship_context_for_entity`).
+    ///
+    /// `agent_id` scopes the query so cross-agent rows don't leak. Only
+    /// non-archival rows are returned — archived rows are already out of
+    /// recall and don't need further decay.
+    ///
+    /// Empty `episode_ids` yields an empty result without issuing the
+    /// query. Default: empty so backends that haven't implemented yet
+    /// disable propagation without breaking the sleep cycle.
+    async fn find_kg_nodes_by_episode_ids(
+        &self,
+        _agent_id: &str,
+        _episode_ids: &[String],
+    ) -> StoreResult<KgNodesForEpisodes> {
+        Ok(KgNodesForEpisodes::default())
+    }
+
+    /// Multiplicatively decay `confidence` for the given kg_entities
+    /// (and floor at `min_floor`). Returns the number of rows updated.
+    /// Default: 0 so backends that haven't implemented yet are no-ops.
+    async fn apply_entity_confidence_multiplier(
+        &self,
+        _agent_id: &str,
+        _entity_ids: &[EntityId],
+        _factor: f64,
+        _min_floor: f64,
+    ) -> StoreResult<u64> {
+        Ok(0)
+    }
+
+    /// Multiplicatively decay `confidence` for the given kg_relationships
+    /// (and floor at `min_floor`). Returns the number of rows updated.
+    async fn apply_relationship_confidence_multiplier(
+        &self,
+        _agent_id: &str,
+        _relationship_ids: &[RelationshipId],
+        _factor: f64,
+        _min_floor: f64,
+    ) -> StoreResult<u64> {
+        Ok(0)
+    }
+
     // ---- Hierarchical memory (Phase H-3) ---------------------------------
     //
     // Reads needed by the `HierarchyBuilder` sleep worker to decide
@@ -561,4 +613,14 @@ pub struct LcaPath {
 pub struct EntityWithEmbedding {
     pub id: EntityId,
     pub embedding: Vec<f32>,
+}
+
+/// Carrier for `find_kg_nodes_by_episode_ids` — the KG entities and
+/// relationships whose `source_episode_ids` overlap an episode-id set.
+/// Used by the DecayEngine to apply multiplicative confidence decay
+/// when a contributing fact has been contradicted (MEM-001 Part A).
+#[derive(Debug, Clone, Default)]
+pub struct KgNodesForEpisodes {
+    pub entity_ids: Vec<EntityId>,
+    pub relationship_ids: Vec<RelationshipId>,
 }
