@@ -23,6 +23,28 @@ function mapRespondEvent(ev: Record<string, unknown>): QuickChatAction | null {
   return { type: "RESPOND", text };
 }
 
+/**
+ * Extract the assistant's final answer from a `turn_complete` event.
+ *
+ * When the agent uses the **`respond` tool** instead of streaming
+ * tokens, the gateway maps that to `ServerMessage::TurnComplete` with
+ * `final_message: Some(text)` (see `gateway/src/websocket/handler.rs`).
+ * Without this helper, the assistant's final text is dropped on the
+ * floor — `mapTurnCompleteEvent` only sets status to idle, the
+ * streaming-token branch never fires (there were no tokens), and the
+ * chat bubble stays empty. Returns null when no final_message is
+ * present (the streaming-token path; the bubble is already populated).
+ */
+export function mapTurnCompleteFinalMessage(
+  ev: ConversationEvent
+): QuickChatAction | null {
+  const raw = ev as unknown as Record<string, unknown>;
+  if (raw["type"] !== "turn_complete") return null;
+  const text = raw["final_message"];
+  if (typeof text !== "string" || text.length === 0) return null;
+  return { type: "RESPOND", text };
+}
+
 function mapWardChangedEvent(ev: Record<string, unknown>): QuickChatAction | null {
   // Gateway emits `ward_id: string` on the wire. Accept either the flat
   // `ward_id` (current wire format) or a nested `ward.name` (reserved for a
