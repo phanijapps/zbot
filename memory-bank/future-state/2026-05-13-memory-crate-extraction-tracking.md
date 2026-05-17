@@ -70,6 +70,7 @@ These are the *new* memory components built across the three phases. All live in
 | `DecayEngine::decay_kg_confidence` | `gateway/gateway-execution/src/sleep/decay.rs` | Orchestrates both store calls, enabled-guard, returns `KgDecayStats` |
 | `evidence` TEXT column | `stores/zero-stores-sqlite/src/knowledge_schema.rs` | Schema-only — preparatory for future contradiction-propagation work. No code populates it yet. |
 | `KgDecayConfig` | `gateway/gateway-services/src/recall_config.rs` | Configurable half-lives + floor + skip-recent guard |
+| `EntityNameEmbeddingHit.confidence` + `GraphTraversalConfig.min_kg_confidence` + recall step-4 weighting | `stores/zero-stores-domain/src/kg_ops.rs` + `stores/zero-stores-sqlite/src/kg/storage.rs` + `gateway/gateway-memory/src/lib.rs` + `gateway/gateway-memory/src/recall/mod.rs` | MEM-001 Part B-1 — recall step-4 (graph-ANN over entity name index) now joins `kg_entities.confidence` and (a) filters hits below `min_kg_confidence` (default 0.1) and (b) multiplies the final score by entity confidence. Closes the loop with Part A: when the sleep cycle decays a contradicted entity's confidence, recall actually downweights it. Filter applies to seed_ids too, so the hierarchy LCA surface (step 5c) stays consistent with what recall shows. |
 
 ### Phase 6 — Hierarchical Memory (HiRAG + LeanRAG)
 

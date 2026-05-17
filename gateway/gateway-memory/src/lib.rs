@@ -89,6 +89,18 @@ pub struct GraphTraversalConfig {
     pub max_hops: u8,
     pub hop_decay: f64,
     pub max_graph_facts: usize,
+    /// MEM-001 Part B-1 — minimum `kg_entities.confidence` for a hit to
+    /// survive the recall step-4 graph-ANN filter. Hits below this
+    /// threshold are dropped before scoring (low-confidence noise that
+    /// would clutter recall without contributing). `0.0` disables the
+    /// filter entirely — useful when migrating from older databases
+    /// where confidence values haven't decayed yet.
+    #[serde(default = "default_min_kg_confidence")]
+    pub min_kg_confidence: f64,
+}
+
+fn default_min_kg_confidence() -> f64 {
+    0.1
 }
 
 impl Default for GraphTraversalConfig {
@@ -98,6 +110,7 @@ impl Default for GraphTraversalConfig {
             max_hops: 2,
             hop_decay: 0.6,
             max_graph_facts: 5,
+            min_kg_confidence: default_min_kg_confidence(),
         }
     }
 }
@@ -841,6 +854,58 @@ mod tests {
         assert_eq!(config.graph_traversal.max_hops, 3); // overridden
         assert_eq!(config.graph_traversal.hop_decay, 0.6); // default preserved
         assert!(config.temporal_decay.enabled); // entirely default
+    }
+
+    // ------------------------------------------------------------------
+    // MEM-001 Part B-1 — min_kg_confidence default + serde round-trip
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn min_kg_confidence_default_is_zero_point_one() {
+        let c = RecallConfig::default();
+        assert!(
+            (c.graph_traversal.min_kg_confidence - 0.1).abs() < 1e-9,
+            "min_kg_confidence default must be 0.1"
+        );
+    }
+
+    #[test]
+    fn min_kg_confidence_can_be_overridden_via_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(
+            path.join("recall_config.json"),
+            r#"{"graph_traversal": {"min_kg_confidence": 0.5}}"#,
+        )
+        .unwrap();
+        let config = RecallConfig::load_from_path(dir.path());
+        assert!(
+            (config.graph_traversal.min_kg_confidence - 0.5).abs() < 1e-9,
+            "min_kg_confidence override should take effect"
+        );
+        // Other fields stay at their compiled defaults.
+        assert_eq!(config.graph_traversal.max_hops, 2);
+    }
+
+    #[test]
+    fn min_kg_confidence_missing_key_falls_back_to_default() {
+        // Older recall_config.json files won't have the field — verify
+        // serde's `default = "..."` attribute fills in the compiled value
+        // rather than failing to deserialize.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(
+            path.join("recall_config.json"),
+            r#"{"graph_traversal": {"max_hops": 3}}"#,
+        )
+        .unwrap();
+        let config = RecallConfig::load_from_path(dir.path());
+        assert!(
+            (config.graph_traversal.min_kg_confidence - 0.1).abs() < 1e-9,
+            "missing key should fall back to 0.1 default"
+        );
     }
 
     #[test]

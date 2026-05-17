@@ -168,7 +168,9 @@ A **relationship** in `kg_relationships` carries `source_entity_id`, `target_ent
 
 **Confidence decays.** Background pass applies exponential decay based on `last_seen_at` with a configurable half-life (default `entity_half_life_days = 90`, `relationship_half_life_days = 90`). Floored at `min_confidence = 0.01`. Rows touched within `skip_recent_hours = 24` are skipped. Orphan entities (no relationships, old `last_seen_at`) are flagged and archived. Archived rows are never deleted — they're just hidden from recall.
 
-**Graph traversal** expands recall results. For each top fragment, follow `source_episode_ids` to the entities it referenced, then walk outward along relationships capped at `max_hops = 2`. Each hop applies `hop_decay = 0.6` to the relevance score. Cap at `max_graph_facts = 5` additions per recall. Today traversal doesn't weight edges by their `confidence`; that's an obvious extension point.
+**Graph-ANN recall surface.** The recall pipeline runs an ANN query over `kg_name_index` against the user-query embedding and surfaces the top entities as `ItemKind::GraphNode` ScoredItems. Hits below `min_kg_confidence = 0.1` are dropped (low-confidence noise — including entities decayed by contradiction propagation), and the score of surviving hits is multiplied by `kg_entities.confidence` so a 0.9-confidence entity at cosine 0.8 outranks a 0.4-confidence entity at the same cosine. The filter applies to the seed-id set fed to the hierarchy LCA surface too, so the topical map stays consistent with what recall shows.
+
+**Relationship-hop traversal** is *not* live today. `GraphTraversalConfig.max_hops` and `hop_decay` are defined but not consumed — implementing the hop-walking traversal block is the larger half of the MEM-001 follow-up (Part B-2 in the backlog). For now, KG-side recall is graph-ANN + LCA only.
 
 ### Bi-temporal model
 

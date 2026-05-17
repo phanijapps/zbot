@@ -93,6 +93,12 @@ pub struct DecayCandidate {
 /// `compute_lca_path` directly; backends that pre-date this field
 /// should default it to `String::new()` and the LCA step skips empty
 /// ids automatically.
+///
+/// `confidence` was added in MEM-001 Part B-1 so recall step-4 can
+/// weight hits by the entity's current confidence (which now reacts
+/// to fact-level contradictions via Part A propagation). Backends
+/// that pre-date this field should default it to `1.0` so the
+/// weighting is a no-op until they populate it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityNameEmbeddingHit {
     #[serde(default)]
@@ -100,6 +106,12 @@ pub struct EntityNameEmbeddingHit {
     pub name: String,
     pub entity_type: String,
     pub distance: f32,
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
+}
+
+fn default_confidence() -> f64 {
+    1.0
 }
 
 /// One hit returned by `KnowledgeGraphStore::list_inter_cluster_relations`

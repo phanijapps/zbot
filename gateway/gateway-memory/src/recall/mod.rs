@@ -401,13 +401,27 @@ impl MemoryRecall {
         // 4. Graph ANN over the entity name embedding index. We share
         // the raw hit set with step 5c (hierarchy LCA) so both surfaces
         // use the same seed entities without a second ANN query.
+        //
+        // MEM-001 Part B-1: hits below `min_kg_confidence` are dropped
+        // before scoring (low-confidence noise that would clutter
+        // recall — including entities decayed by Part A contradiction
+        // propagation). The score of surviving hits is multiplied by
+        // entity confidence so a 0.9-confidence hit at cosine 0.8 wins
+        // over a 0.4-confidence hit at the same cosine. Filter applies
+        // to seed_ids too, so the hierarchy LCA surface (step 5c) is
+        // consistent with what recall actually shows.
+        let min_kg_conf = self.config.graph_traversal.min_kg_confidence;
         let (graph_items, graph_seed_ids): (Vec<ScoredItem>, Vec<zero_stores::types::EntityId>) =
             match (self.kg_store.as_ref(), query_emb.as_ref()) {
                 (Some(store), Some(emb)) => match store
                     .search_entities_by_name_embedding(agent_id, emb, 10)
                     .await
                 {
-                    Ok(hits) => {
+                    Ok(raw_hits) => {
+                        let hits: Vec<_> = raw_hits
+                            .into_iter()
+                            .filter(|h| h.confidence >= min_kg_conf)
+                            .collect();
                         let seed_ids: Vec<zero_stores::types::EntityId> = hits
                             .iter()
                             .filter(|h| !h.id.is_empty())
@@ -417,16 +431,17 @@ impl MemoryRecall {
                             .into_iter()
                             .enumerate()
                             .map(|(idx, hit)| {
-                                // Mirror graph_ann_to_items scoring exactly.
+                                // Mirror graph_ann_to_items scoring exactly,
+                                // plus the B-1 entity-confidence multiplier.
                                 let cosine = 1.0 - (hit.distance as f64) / 2.0;
                                 let rank_one = (idx as f64) + 1.0;
-                                let score = (1.0 / rank_one) * cosine;
+                                let score = (1.0 / rank_one) * cosine * hit.confidence;
                                 ScoredItem {
                                     kind: ItemKind::GraphNode,
                                     id: format!("graph:{}", hit.name),
                                     content: format!(
-                                        "Entity: {} [{}] (cosine ~ {cosine:.2})",
-                                        hit.name, hit.entity_type
+                                        "Entity: {} [{}] (cosine ~ {cosine:.2}, conf ~ {:.2})",
+                                        hit.name, hit.entity_type, hit.confidence
                                     ),
                                     score,
                                     provenance: Provenance {

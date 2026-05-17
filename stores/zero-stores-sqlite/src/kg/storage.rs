@@ -10,6 +10,12 @@ use knowledge_graph::types::{
 use rusqlite::{params, Connection};
 use std::sync::Arc;
 
+/// Row tuple from `search_entities_by_name_embedding`:
+/// `(entity_id, name, entity_type, distance, confidence)`. Aliased to
+/// keep the trait wrapper signature within clippy's `type_complexity`
+/// budget. `confidence` was added in MEM-001 Part B-1.
+type EntityNameAnnHit = (String, String, String, f32, f64);
+
 /// Row tuple from `list_inter_cluster_relations`:
 /// `(id, source_entity_id, target_entity_id, relationship_type, layer)`.
 /// Aliased to keep the trait wrapper signature within clippy's
@@ -517,17 +523,19 @@ impl GraphStorage {
     /// ANN search over `kg_name_index` (sqlite-vec virtual table) for the
     /// nearest entity names to `query_embedding`.
     ///
-    /// Returns tuples of `(name, entity_type, distance)` where `distance` is
-    /// the L2-squared distance from the vec0 index. For L2-normalized vectors,
-    /// cosine similarity ≈ `1 - distance / 2`. The query embedding MUST be
-    /// L2-normalized by the caller. Results are filtered to the caller's
-    /// agent plus `__global__` and ordered by ascending distance.
+    /// Returns rows of `(entity_id, name, entity_type, distance, confidence)`.
+    /// `distance` is the L2-squared distance from the vec0 index — for
+    /// L2-normalized vectors, cosine similarity ≈ `1 - distance / 2`. The
+    /// query embedding MUST be L2-normalized by the caller. Results are
+    /// filtered to the caller's agent plus `__global__` and ordered by
+    /// ascending distance. `confidence` is the current `kg_entities.confidence`
+    /// for downstream weighting (MEM-001 Part B-1).
     pub fn search_entities_by_name_embedding(
         &self,
         query_embedding: &[f32],
         top_k: usize,
         agent_id: &str,
-    ) -> GraphResult<Vec<(String, String, String, f32)>> {
+    ) -> GraphResult<Vec<EntityNameAnnHit>> {
         if query_embedding.is_empty() || top_k == 0 {
             return Ok(Vec::new());
         }
@@ -539,7 +547,7 @@ impl GraphStorage {
         // time. Pull top-K by distance, then filter against `kg_entities`.
         self.db
             .with_connection(|conn| {
-                (|| -> GraphResult<Vec<(String, String, String, f32)>> {
+                (|| -> GraphResult<Vec<EntityNameAnnHit>> {
                     let mut ann_stmt = conn
                         .prepare(
                             "SELECT entity_id, distance \
@@ -555,9 +563,12 @@ impl GraphStorage {
                         })
                         .map_err(GraphError::Database)?;
 
+                    // MEM-001 Part B-1: pull `confidence` alongside the
+                    // existing name + entity_type so recall can weight
+                    // hits by entity confidence and skip below threshold.
                     let mut lookup_stmt = conn
                         .prepare(
-                            "SELECT name, entity_type FROM kg_entities \
+                            "SELECT name, entity_type, confidence FROM kg_entities \
                              WHERE id = ?1 \
                                AND (agent_id = ?2 OR agent_id = '__global__')",
                         )
@@ -572,7 +583,8 @@ impl GraphStorage {
                         if let Some(r) = rows.next().map_err(GraphError::Database)? {
                             let name: String = r.get(0).map_err(GraphError::Database)?;
                             let etype: String = r.get(1).map_err(GraphError::Database)?;
-                            out.push((entity_id, name, etype, dist));
+                            let confidence: f64 = r.get(2).map_err(GraphError::Database)?;
+                            out.push((entity_id, name, etype, dist, confidence));
                         }
                     }
                     Ok(out)
@@ -5002,5 +5014,57 @@ mod tests {
         let _other = storage
             .write_inter_cluster_relation("agent-h", 2, "agg-a", "agg-b", "differs-from")
             .unwrap();
+    }
+
+    // ============================================================================
+    // MEM-001 Part B-1 — search_entities_by_name_embedding returns confidence
+    // ============================================================================
+
+    #[test]
+    fn search_entities_by_name_embedding_returns_entity_confidence() {
+        let storage = create_test_storage();
+        let agent = "agent-b1";
+
+        // The default vec0 dimension in the test DB is 384 (see schema
+        // initialisation). Insert one entity with a non-default
+        // confidence (0.42) + its all-zero vec row at that dim. The
+        // vector doesn't need to be meaningful — KNN against the same
+        // all-zero query returns it as the closest (and only) hit.
+        const DIM: usize = 384;
+        let now = chrono::Utc::now().to_rfc3339();
+        storage
+            .knowledge_db()
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         epistemic_class, confidence, mention_count, access_count,
+                         first_seen_at, last_seen_at)
+                     VALUES ('e1', ?1, 'Concept', 'Alice', 'alice', 'h-alice',
+                             'current', 0.42, 1, 0, ?2, ?2)",
+                    rusqlite::params![agent, now],
+                )?;
+                let vec_json = serde_json::to_string(&vec![0.0_f32; DIM]).unwrap();
+                conn.execute(
+                    "INSERT INTO kg_name_index(entity_id, name_embedding) VALUES ('e1', ?1)",
+                    rusqlite::params![vec_json],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let query = vec![0.0_f32; DIM];
+
+        let hits = storage
+            .search_entities_by_name_embedding(&query, 5, agent)
+            .expect("search ok");
+
+        assert_eq!(hits.len(), 1, "expected one hit, got {hits:?}");
+        let (_id, name, _etype, _dist, confidence) = &hits[0];
+        assert_eq!(name, "Alice");
+        assert!(
+            (confidence - 0.42).abs() < 1e-6,
+            "expected confidence 0.42, got {confidence}"
+        );
     }
 }
