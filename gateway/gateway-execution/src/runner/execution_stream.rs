@@ -103,6 +103,37 @@ struct EventHandlerDeps<'a> {
     kg_store: Option<&'a Arc<dyn zero_stores::KnowledgeGraphStore>>,
 }
 
+/// Pull the `message` (or `text`) arg from a `respond` tool call in
+/// the current turn's tool-call list, when one is present.
+///
+/// The `respond` tool transports the agent's final answer in its
+/// args rather than via streamed assistant tokens. Without this
+/// helper, the assistant row persisted at tool-result time would be
+/// the `"[tool calls]"` placeholder and the answer would only live
+/// in the WS event stream — invisible after a page reload.
+///
+/// Accepts either `args.text` or `args.message` (both shapes appear
+/// across older / newer respond-tool callers; see
+/// `gateway/gateway-execution/src/session_state.rs` for the matching
+/// lookup that runs against execution_log metadata).
+fn extract_respond_message(tool_calls: &[serde_json::Value]) -> Option<String> {
+    for tc in tool_calls {
+        if tc.get("tool_name").and_then(|v| v.as_str()) != Some("respond") {
+            continue;
+        }
+        let args = tc.get("args")?;
+        let msg = args
+            .get("text")
+            .or_else(|| args.get("message"))
+            .and_then(|v| v.as_str())?;
+        if msg.is_empty() {
+            continue;
+        }
+        return Some(msg.to_string());
+    }
+    None
+}
+
 /// Handle a `StreamEvent::ToolCallStart` — record the call, update the
 /// current tool name, and append to the per-turn tool-call list.
 fn handle_tool_call_start(
@@ -134,13 +165,25 @@ fn handle_tool_result(
     acc.tool_acc
         .complete_call(tool_id, result.to_string(), error.map(String::from));
 
-    // Emit the assistant message for this turn (with accumulated tool_calls)
+    // Emit the assistant message for this turn (with accumulated tool_calls).
+    //
+    // Content priority:
+    //   1. Streamed assistant text in `turn_text` (the agent emitted text
+    //      before calling the tool — e.g. "Let me check the graph…")
+    //   2. The `respond` tool's `message`/`text` arg when one is present
+    //      in this turn's tool-call list. The agent encoded the final
+    //      answer as a tool-arg instead of streaming it; persisting the
+    //      arg here is what makes the answer survive a reload.
+    //   3. The `"[tool calls]"` placeholder for non-respond tools whose
+    //      turn had no streamed text (graph_query, memory, etc.).
     if !acc.turn_tool_calls.is_empty() {
         let tc_json = serde_json::to_string(&acc.turn_tool_calls).unwrap_or_default();
-        let content = if acc.turn_text.is_empty() {
-            "[tool calls]".to_string()
-        } else {
+        let content = if !acc.turn_text.is_empty() {
             std::mem::take(&mut acc.turn_text)
+        } else if let Some(msg) = extract_respond_message(&acc.turn_tool_calls) {
+            msg
+        } else {
+            "[tool calls]".to_string()
         };
         deps.batch_writer.session_message(
             deps.session_id,
@@ -765,5 +808,120 @@ mod tests {
             bridge_outbox: None,
             handoff_writer: None,
         };
+    }
+
+    // ----- extract_respond_message: persistence of the agent's final answer
+    //       when emitted via the `respond` tool. Regression coverage for the
+    //       Quick-Chat-reloads-blank bug.
+
+    #[test]
+    fn extract_respond_message_picks_message_arg() {
+        let calls = vec![serde_json::json!({
+            "tool_name": "respond",
+            "args": { "message": "Here is your answer." }
+        })];
+        assert_eq!(
+            extract_respond_message(&calls),
+            Some("Here is your answer.".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_respond_message_picks_text_arg_as_fallback() {
+        let calls = vec![serde_json::json!({
+            "tool_name": "respond",
+            "args": { "text": "Older-style payload." }
+        })];
+        assert_eq!(
+            extract_respond_message(&calls),
+            Some("Older-style payload.".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_respond_message_prefers_text_over_message_when_both_present() {
+        // The lookup in session_state.rs's `find_respond` checks `text`
+        // first, then `message`. Mirror that ordering here so both
+        // call sites behave consistently.
+        let calls = vec![serde_json::json!({
+            "tool_name": "respond",
+            "args": { "text": "from-text", "message": "from-message" }
+        })];
+        assert_eq!(
+            extract_respond_message(&calls),
+            Some("from-text".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_respond_message_skips_non_respond_tools() {
+        let calls = vec![
+            serde_json::json!({
+                "tool_name": "graph_query",
+                "args": { "action": "search", "query": "user" }
+            }),
+            serde_json::json!({
+                "tool_name": "memory",
+                "args": { "action": "recall" }
+            }),
+        ];
+        assert_eq!(extract_respond_message(&calls), None);
+    }
+
+    #[test]
+    fn extract_respond_message_returns_first_respond_when_multiple() {
+        // Unusual but possible — the model could emit two respond calls
+        // in one turn. The first is what flushes the assistant row.
+        let calls = vec![
+            serde_json::json!({
+                "tool_name": "respond",
+                "args": { "message": "first" }
+            }),
+            serde_json::json!({
+                "tool_name": "respond",
+                "args": { "message": "second" }
+            }),
+        ];
+        assert_eq!(extract_respond_message(&calls), Some("first".to_string()));
+    }
+
+    #[test]
+    fn extract_respond_message_returns_none_when_message_empty() {
+        // Empty string is treated as "no answer" so we don't persist a
+        // blank assistant row that hides the placeholder fallback.
+        let calls = vec![serde_json::json!({
+            "tool_name": "respond",
+            "args": { "message": "" }
+        })];
+        assert_eq!(extract_respond_message(&calls), None);
+    }
+
+    #[test]
+    fn extract_respond_message_returns_none_when_no_message_arg() {
+        let calls = vec![serde_json::json!({
+            "tool_name": "respond",
+            "args": { "format": "json" }
+        })];
+        assert_eq!(extract_respond_message(&calls), None);
+    }
+
+    #[test]
+    fn extract_respond_message_handles_mixed_tool_calls() {
+        // Realistic scenario: graph_query, then respond. The respond
+        // payload is what we want as the persisted assistant content.
+        let calls = vec![
+            serde_json::json!({
+                "tool_name": "graph_query",
+                "args": { "action": "search", "query": "user" }
+            }),
+            serde_json::json!({
+                "tool_name": "respond",
+                "args": { "message": "Here is what I found." }
+            }),
+        ];
+        assert_eq!(
+            extract_respond_message(&calls),
+            Some("Here is what I found.".to_string())
+        );
     }
 }
