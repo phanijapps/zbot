@@ -36,6 +36,22 @@ interface HierarchyShellsProps {
   enabled: boolean;
   /** Called when the user clicks an aggregate sphere. */
   onAggregateClick?: (agg: AggregateSummary) => void;
+  /** Phase 3 — live RAG telemetry: most-recent-first. */
+  traces?: RecallTraceLike[];
+}
+
+/**
+ * Minimal trace shape consumed by the canvas. Matches `RecallTraceRecord`
+ * from `useRecallTrace` but kept structural so callers can synthesise
+ * their own (e.g., for storybook / tests) without importing the hook.
+ */
+export interface RecallTraceLike {
+  /** Stable id for React keys + dedup. */
+  id: string;
+  /** Wall-clock ms when the trace arrived. */
+  at: number;
+  seedAggregateIds: string[];
+  lcaAggregateId?: string;
 }
 
 // Deterministic pseudo-random scatter so the visualisation looks the
@@ -536,6 +552,7 @@ interface SceneContentProps {
   aggregates: AggregateSummary[];
   interClusterCount: number;
   onAggregateClick?: (agg: AggregateSummary) => void;
+  traces?: RecallTraceLike[];
 }
 
 interface ActivePulse {
@@ -543,15 +560,20 @@ interface ActivePulse {
   aggIndex: number;
   /** Wallclock ms when the pulse was emitted. */
   startedAt: number;
+  /** Ambient = soft + random; trace = brighter + carries an apex flash. */
+  kind: "ambient" | "trace";
 }
 
 const PULSE_LIFE_S = 1.6;
+const TRACE_PULSE_LIFE_S = 2.4;
+const TRACE_FLASH_LIFE_S = 1.8;
 
 function SceneContent({
   l0Count,
   aggregates,
   interClusterCount,
   onAggregateClick,
+  traces = [],
 }: SceneContentProps) {
   const L1_RADIUS = 1.4;
   const positions = useMemo(
@@ -570,9 +592,15 @@ function SceneContent({
   // ----- Ambient pulse loop ------------------------------------------------
   const [pulses, setPulses] = useState<ActivePulse[]>([]);
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  // Apex flashes triggered by trace events — separate from per-aggregate
+  // pulses so the central core lights up even when none of the trace's
+  // aggregate ids matched the top-N we render.
+  const [apexFlashes, setApexFlashes] = useState<{ id: string; at: number }[]>(
+    [],
+  );
 
-  // Spawn a pulse on a random aggregate every 3-6s. Also expire old
-  // pulses so the array doesn't grow unbounded.
+  // Spawn an ambient pulse on a random aggregate every 3-6s. Also expire
+  // old pulses so the array doesn't grow unbounded.
   useEffect(() => {
     if (aggregates.length === 0) return;
     let cancelled = false;
@@ -581,13 +609,15 @@ function SceneContent({
       setTimeout(() => {
         if (cancelled) return;
         setPulses((prev) => {
-          const cutoff = performance.now() - PULSE_LIFE_S * 1000;
+          const longestLife = TRACE_PULSE_LIFE_S * 1000;
+          const cutoff = performance.now() - longestLife;
           const filtered = prev.filter((p) => p.startedAt >= cutoff);
           return [
             ...filtered,
             {
               aggIndex: Math.floor(Math.random() * aggregates.length),
               startedAt: performance.now(),
+              kind: "ambient",
             },
           ];
         });
@@ -599,6 +629,63 @@ function SceneContent({
       cancelled = true;
     };
   }, [aggregates.length]);
+
+  // ----- Phase 3: trace-driven pulses ------------------------------------
+  // When a new RecallTrace lands, convert it into one trace pulse per
+  // matching aggregate + one apex flash. Stable across re-renders via
+  // trace id — we only emit pulses for traces we haven't seen.
+  const seenTraceIds = useRef<Set<string>>(new Set());
+  // Index lookup: aggregate id → array index. Rebuilt when aggregates
+  // change (typically once per page load).
+  const aggIdToIndex = useMemo(() => {
+    const m = new Map<string, number>();
+    aggregates.forEach((a, i) => m.set(a.id, i));
+    return m;
+  }, [aggregates]);
+
+  useEffect(() => {
+    if (!traces || traces.length === 0) return;
+    const fresh = traces.filter((t) => !seenTraceIds.current.has(t.id));
+    if (fresh.length === 0) return;
+    fresh.forEach((t) => seenTraceIds.current.add(t.id));
+    const now = performance.now();
+    setPulses((prev) => {
+      const longestLife = TRACE_PULSE_LIFE_S * 1000;
+      const cutoff = now - longestLife;
+      const filtered = prev.filter((p) => p.startedAt >= cutoff);
+      const newPulses: ActivePulse[] = [];
+      for (const t of fresh) {
+        for (const aggId of t.seedAggregateIds) {
+          const idx = aggIdToIndex.get(aggId);
+          if (idx == null) continue;
+          newPulses.push({
+            aggIndex: idx,
+            startedAt: now,
+            kind: "trace",
+          });
+        }
+        // Always also pulse the LCA aggregate (often the same as a seed
+        // parent, but defensive against backends that emit only the LCA).
+        if (t.lcaAggregateId) {
+          const idx = aggIdToIndex.get(t.lcaAggregateId);
+          if (idx != null) {
+            newPulses.push({
+              aggIndex: idx,
+              startedAt: now,
+              kind: "trace",
+            });
+          }
+        }
+      }
+      return [...filtered, ...newPulses];
+    });
+    setApexFlashes((prev) => {
+      const cutoff = now - TRACE_FLASH_LIFE_S * 1000;
+      const filtered = prev.filter((f) => f.at >= cutoff);
+      const additions = fresh.map((t) => ({ id: t.id, at: now }));
+      return [...filtered, ...additions];
+    });
+  }, [traces, aggIdToIndex]);
 
   // Tracer arcs from hovered aggregate to its 3 nearest neighbours.
   const hoverNeighbours = useMemo(() => {
@@ -623,20 +710,37 @@ function SceneContent({
     const arr = new Array(aggregates.length).fill(0);
     const now = performance.now();
     for (const p of pulses) {
+      const life = p.kind === "trace" ? TRACE_PULSE_LIFE_S : PULSE_LIFE_S;
+      const intensityScale = p.kind === "trace" ? 1.8 : 1.0;
       const age = (now - p.startedAt) / 1000;
-      if (age < 0 || age > PULSE_LIFE_S) continue;
+      if (age < 0 || age > life) continue;
       // Triangle envelope: ramp up first 20%, ramp down rest
-      const t = age / PULSE_LIFE_S;
+      const t = age / life;
       const env = t < 0.2 ? t / 0.2 : 1 - (t - 0.2) / 0.8;
-      arr[p.aggIndex] = Math.max(arr[p.aggIndex], env);
+      arr[p.aggIndex] = Math.max(arr[p.aggIndex], env * intensityScale);
     }
     return arr;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pulses, tick, aggregates.length]);
 
-  // Apex pulses = mean of all current aggregate pulses
-  const apexPulse =
-    pulseTByAgg.reduce((s, v) => s + v, 0) / Math.max(1, pulseTByAgg.length);
+  // Apex pulses = mean of all current aggregate pulses PLUS the
+  // trace-driven apex flashes (which fire even when no aggregate
+  // matched). Each flash uses its own triangle envelope.
+  const apexPulse = useMemo(() => {
+    const meanAggPulse =
+      pulseTByAgg.reduce((s, v) => s + v, 0) / Math.max(1, pulseTByAgg.length);
+    const now = performance.now();
+    let flashEnv = 0;
+    for (const f of apexFlashes) {
+      const age = (now - f.at) / 1000;
+      if (age < 0 || age > TRACE_FLASH_LIFE_S) continue;
+      const t = age / TRACE_FLASH_LIFE_S;
+      const env = t < 0.15 ? t / 0.15 : 1 - (t - 0.15) / 0.85;
+      flashEnv = Math.max(flashEnv, env);
+    }
+    return Math.min(1.5, meanAggPulse + flashEnv * 1.2);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pulseTByAgg, apexFlashes, tick]);
 
   return (
     <>
@@ -659,19 +763,22 @@ function SceneContent({
           />
         );
       })}
-      {/* Pulse rings */}
+      {/* Pulse rings — ambient + trace-driven (longer life + bigger reach) */}
       {pulses.map((p) => {
         const pos = positions[p.aggIndex];
         if (!pos) return null;
+        const life = p.kind === "trace" ? TRACE_PULSE_LIFE_S : PULSE_LIFE_S;
         const age = (performance.now() - p.startedAt) / 1000;
-        if (age > PULSE_LIFE_S) return null;
+        if (age > life) return null;
         return (
           <PulseRing
-            key={`${p.aggIndex}-${p.startedAt}`}
+            key={`${p.aggIndex}-${p.startedAt}-${p.kind}`}
             position={pos}
             age={age}
-            life={PULSE_LIFE_S}
-            baseRadius={radii[p.aggIndex] ?? 0.1}
+            life={life}
+            baseRadius={
+              (radii[p.aggIndex] ?? 0.1) * (p.kind === "trace" ? 1.4 : 1.0)
+            }
           />
         );
       })}
@@ -714,6 +821,7 @@ export function HierarchyShells({
   interClusterCount,
   enabled,
   onAggregateClick,
+  traces,
 }: HierarchyShellsProps) {
   const l0 = layerCounts.find(([layer]) => layer === 0)?.[1] ?? 0;
 
@@ -736,6 +844,7 @@ export function HierarchyShells({
           aggregates={aggregates}
           interClusterCount={interClusterCount}
           onAggregateClick={onAggregateClick}
+          traces={traces}
         />
       )}
 

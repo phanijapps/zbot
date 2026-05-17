@@ -29,6 +29,7 @@ import { useHierarchyStats } from "../observatory/hierarchy/hooks";
 import { HierarchyPanel } from "../observatory/hierarchy/HierarchyPanel";
 import { BeliefNetworkPanel } from "../observatory/belief-network/BeliefNetworkPanel";
 import { HierarchyShells } from "./HierarchyShells";
+import { useRecallTrace } from "./useRecallTrace";
 import type { AggregateSummary } from "../observatory/hierarchy/types";
 import "./observatory-v2.css";
 
@@ -37,6 +38,7 @@ export function ObservatoryV2Page() {
   const { status: distillStatus } = useDistillationStatus();
   const { stats: beliefStats } = useBeliefNetworkStats();
   const { stats: hierStats, loading: hierLoading } = useHierarchyStats(20);
+  const { traces, latest: latestTrace } = useRecallTrace();
 
   const [hierOpen, setHierOpen] = useState(false);
   const [beliefOpen, setBeliefOpen] = useState(false);
@@ -63,6 +65,7 @@ export function ObservatoryV2Page() {
           interClusterCount={interCluster}
           enabled={hierarchyEnabled && !hierLoading}
           onAggregateClick={setPickedAgg}
+          traces={traces}
         />
         {!hierarchyEnabled && !hierLoading && (
           <div className="obs2__empty">
@@ -146,8 +149,20 @@ export function ObservatoryV2Page() {
         />
         <HudPill
           icon={<Activity size={14} aria-hidden />}
-          label={hierLoading ? "Syncing graph…" : "Live"}
-          sub={hierLoading ? "fetching layers" : "snapshot up to date"}
+          label={
+            hierLoading
+              ? "Syncing graph…"
+              : latestTrace
+                ? "Live recall"
+                : "Live"
+          }
+          sub={
+            hierLoading
+              ? "fetching layers"
+              : latestTrace
+                ? `${latestTrace.surfacedItemCount} items · ${formatAge(latestTrace.at)}`
+                : "snapshot up to date"
+          }
           dim={hierLoading}
         />
       </div>
@@ -212,6 +227,15 @@ function Stat({ label, value, tone }: StatProps) {
       <span className="obs2__stat-label">{label}</span>
     </div>
   );
+}
+
+/** Tiny relative-time formatter for "fired N seconds ago". */
+function formatAge(ts: number): string {
+  const delta = Math.max(0, Date.now() - ts);
+  if (delta < 1500) return "just now";
+  if (delta < 60_000) return `${Math.floor(delta / 1000)}s ago`;
+  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`;
+  return `${Math.floor(delta / 3_600_000)}h ago`;
 }
 
 interface HudPillProps {

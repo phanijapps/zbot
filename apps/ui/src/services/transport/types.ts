@@ -814,11 +814,26 @@ export interface ConversationEvent extends StreamEvent {
  * file list. `modified_at` is RFC3339 (or empty string for deletions).
  */
 export interface GlobalEvent extends StreamEvent {
-  type: "stats_update" | "session_notification" | "customization_file_changed";
+  type:
+    | "stats_update"
+    | "session_notification"
+    | "customization_file_changed"
+    | "recall_trace";
   /** Present when type is "customization_file_changed". */
   path?: string;
   /** Present when type is "customization_file_changed". RFC3339, or "" for deletions. */
   modified_at?: string;
+  // ---- recall_trace fields (Observatory v2 Phase 3) ----
+  /** Agent that ran the recall. */
+  agent_id?: string;
+  /** L0 entity ids the graph-ANN step seeded on. */
+  seed_entity_ids?: string[];
+  /** L1+ aggregate ids of the LCA walk (seed parents up to and including the LCA). */
+  seed_aggregate_ids?: string[];
+  /** LCA aggregate id when the seeds share a common ancestor. */
+  lca_aggregate_id?: string;
+  /** Number of ScoredItems that survived ranking. */
+  surfaced_item_count?: number;
 }
 
 /**

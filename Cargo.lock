@@ -1997,6 +1997,7 @@ dependencies = [
  "agent-runtime",
  "async-trait",
  "chrono",
+ "gateway-events",
  "gateway-services",
  "knowledge-graph",
  "rusqlite",
