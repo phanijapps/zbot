@@ -122,6 +122,8 @@ pub struct ExecutionRunner {
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     steering_registry: Arc<agent_runtime::SteeringRegistry>,
     agent_result_bus: Arc<AgentResultBus>,
+    /// Trait-routed procedure store for the `run_procedure` tool — wired by AppState.
+    procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
     /// Pre-session setup delegate. Holds the dependency set needed by
     /// `invoke_with_callback`'s bootstrap phase, extracted here so
     /// `setup()` can be tested and read independently of the full runner.
@@ -162,6 +164,11 @@ pub struct ExecutionRunnerConfig {
     pub bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
     pub bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
     pub embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+    /// Trait-routed procedure store for the `run_procedure` tool.
+    pub procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    /// Procedure recommendation tier thresholds (graduated promoted/advisory/tentative).
+    /// Wired from `settings.memory.procedureRecommendation` by AppState.
+    pub procedure_recommendation_cfg: gateway_memory::ProcedureRecommendationConfig,
 
     // --- Resource control ---
     pub max_parallel_agents: u32,
@@ -199,6 +206,7 @@ pub(super) struct ContinuationArgs<'a> {
     pub(super) kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+    pub(super) procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
 }
 
 /// Prepend recalled facts to `history` as a system message at position 0.
@@ -382,6 +390,8 @@ impl ExecutionRunner {
             bridge_registry,
             bridge_outbox,
             embedding_client,
+            procedure_store,
+            procedure_recommendation_cfg,
             max_parallel_agents,
         } = config;
 
@@ -428,6 +438,8 @@ impl ExecutionRunner {
             goal_adapter: None,
             steering_registry: Some(steering_registry.clone()),
             agent_result_bus: Some(agent_result_bus.clone()),
+            procedure_store: procedure_store.clone(),
+            procedure_recommendation_cfg,
             event_bus: event_bus.clone(),
             handles: handles.clone(),
         };
@@ -462,6 +474,7 @@ impl ExecutionRunner {
             goal_adapter: None,
             steering_registry,
             agent_result_bus,
+            procedure_store,
             bootstrap,
         };
 
@@ -556,6 +569,7 @@ impl ExecutionRunner {
             kg_episode_repo: self.kg_episode_repo.clone(),
             ingestion_adapter: self.ingestion_adapter.clone(),
             goal_adapter: self.goal_adapter.clone(),
+            procedure_store: self.procedure_store.clone(),
         }
     }
 
@@ -1072,6 +1086,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         kg_episode_repo,
         ingestion_adapter,
         goal_adapter,
+        procedure_store,
     } = args;
     // Generate a new conversation ID for this continuation turn
     let conversation_id = format!(
@@ -1189,6 +1204,9 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
     }
     if let Some(a) = goal_adapter {
         builder = builder.with_goal_adapter(a);
+    }
+    if let Some(ps) = procedure_store.clone() {
+        builder = builder.with_procedure_store(ps);
     }
 
     let mut executor = builder

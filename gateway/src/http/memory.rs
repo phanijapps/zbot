@@ -645,6 +645,41 @@ pub async fn consolidate(
     ))
 }
 
+/// Response for `POST /api/procedures/dedupe`.
+#[derive(Debug, Serialize)]
+pub struct DedupeProceduresResponse {
+    pub status: &'static str,
+    pub deleted: usize,
+}
+
+/// `POST /api/procedures/dedupe` — collapse procedure duplicates by name.
+///
+/// For each `(agent_id, name)` pair, keeps the row with the highest
+/// `success_count` (ties broken by most recent `created_at`) and deletes
+/// the rest. Vec-index rows are cleaned up alongside.
+///
+/// Idempotent. Returns `{ status, deleted }` with the row delete count.
+/// Returns `503` when the procedure store isn't wired into AppState.
+pub async fn dedupe_procedures(
+    State(state): State<AppState>,
+) -> Result<(StatusCode, Json<DedupeProceduresResponse>), (StatusCode, String)> {
+    let store = state.procedure_store.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "procedure store not initialized".to_string(),
+    ))?;
+    let deleted = store
+        .dedupe_procedures_by_name()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok((
+        StatusCode::OK,
+        Json(DedupeProceduresResponse {
+            status: "ok",
+            deleted,
+        }),
+    ))
+}
+
 /// Memory subsystem stats response.
 #[derive(Debug, Serialize, Default)]
 pub struct MemoryStats {

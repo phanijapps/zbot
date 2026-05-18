@@ -701,54 +701,12 @@ impl SessionDistiller {
 
         // 6b. Store extracted procedure (if any) through the trait surface.
         if let Some(ref procedure) = response.procedure {
-            if self.procedure_store.is_some() {
-                let ward_id = self
-                    .conversation_repo
-                    .get_session_ward_id(session_id)
-                    .unwrap_or(None);
-
-                let steps_json = serde_json::to_string(&procedure.steps).unwrap_or_default();
-                let params_json = procedure
-                    .parameters
-                    .as_ref()
-                    .map(|p| serde_json::to_string(p).unwrap_or_default());
-
-                let proc = zero_stores_sqlite::Procedure {
-                    id: format!("proc-{}", uuid::Uuid::new_v4()),
-                    agent_id: agent_id.to_string(),
-                    ward_id: ward_id.or_else(|| Some("__global__".to_string())),
-                    name: procedure.name.clone(),
-                    description: procedure.description.clone(),
-                    trigger_pattern: procedure.trigger_pattern.clone(),
-                    steps: steps_json,
-                    parameters: params_json,
-                    success_count: 1,
-                    failure_count: 0,
-                    avg_duration_ms: None,
-                    avg_token_cost: None,
-                    last_used: Some(chrono::Utc::now().to_rfc3339()),
-                    embedding: None,
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                    updated_at: chrono::Utc::now().to_rfc3339(),
-                };
-
-                let upsert_res = match &self.procedure_store {
-                    Some(store) => match serde_json::to_value(&proc) {
-                        Ok(v) => store.upsert_procedure(v, None).await,
-                        Err(e) => Err(format!("encode procedure: {e}")),
-                    },
-                    None => Err("no procedure store wired".to_string()),
-                };
-
-                match upsert_res {
-                    Ok(()) => tracing::info!(
-                        name = %procedure.name, "Stored procedure from session"
-                    ),
-                    Err(e) => tracing::warn!(
-                        name = %procedure.name, error = %e, "Failed to store procedure"
-                    ),
-                }
-            }
+            let ward_id = self
+                .conversation_repo
+                .get_session_ward_id(session_id)
+                .unwrap_or(None);
+            self.process_procedure_upsert(agent_id, ward_id, procedure)
+                .await;
         }
 
         let duration_ms = started.elapsed().as_millis() as i64;
@@ -1648,6 +1606,75 @@ impl SessionDistiller {
         }
         entity_map.insert(name.to_string(), stub_id.clone());
         stub_id
+    }
+
+    // =========================================================================
+    // Procedure upsert
+    // =========================================================================
+
+    /// Build the `Procedure` row and route it through the trait-routed
+    /// `procedure_store`. Embeds `{name}\n{description}` before upsert so
+    /// the SQLite `procedures_index` vec0 table is populated. Mirrors the
+    /// `PatternExtractor` embed shape for consistency across the two
+    /// write paths. Graceful: when `embed_text` returns `None` (no client
+    /// or embed failure) the upsert proceeds with `None` and only
+    /// vec-similarity recall is lost — identical to today's behavior.
+    /// No-op when `procedure_store` is unwired.
+    async fn process_procedure_upsert(
+        &self,
+        agent_id: &str,
+        ward_id: Option<String>,
+        procedure: &ExtractedProcedure,
+    ) {
+        let Some(store) = self.procedure_store.as_ref() else {
+            return;
+        };
+
+        let steps_json = serde_json::to_string(&procedure.steps).unwrap_or_default();
+        let params_json = procedure
+            .parameters
+            .as_ref()
+            .map(|p| serde_json::to_string(p).unwrap_or_default());
+
+        let proc = zero_stores_sqlite::Procedure {
+            id: format!("proc-{}", uuid::Uuid::new_v4()),
+            agent_id: agent_id.to_string(),
+            ward_id: ward_id.or_else(|| Some("__global__".to_string())),
+            name: procedure.name.clone(),
+            description: procedure.description.clone(),
+            trigger_pattern: procedure.trigger_pattern.clone(),
+            steps: steps_json,
+            parameters: params_json,
+            // Distillation synthesizes from a single completed session, so the
+            // evidence count is 1. PatternExtractor seeds at 2 because it
+            // requires a matched pair. Either way, see `default_initial_success_count`
+            // for why this is intentional rather than hardcoded.
+            success_count: 1,
+            failure_count: 0,
+            avg_duration_ms: None,
+            avg_token_cost: None,
+            last_used: Some(chrono::Utc::now().to_rfc3339()),
+            embedding: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let embed_input = format!("{}\n{}", procedure.name, procedure.description);
+        let embedding = self.embed_text(&embed_input).await;
+
+        let upsert_res = match serde_json::to_value(&proc) {
+            Ok(v) => store.upsert_procedure(v, embedding).await,
+            Err(e) => Err(format!("encode procedure: {e}")),
+        };
+
+        match upsert_res {
+            Ok(()) => tracing::info!(
+                name = %procedure.name, "Stored procedure from session"
+            ),
+            Err(e) => tracing::warn!(
+                name = %procedure.name, error = %e, "Failed to store procedure"
+            ),
+        }
     }
 
     // =========================================================================
@@ -2556,5 +2583,153 @@ mod tests {
         assert!(is_agent_name("Planner-Agent")); // case insensitive
         assert!(!is_agent_name("portfolio-analysis"));
         assert!(!is_agent_name("yfinance"));
+    }
+
+    // ------------------------------------------------------------------------
+    // Task 3: verify procedure upsert path populates the embedding.
+    //
+    // Regression for the latent gap where `distillation.rs` called
+    // `upsert_procedure(v, None)`. With Tasks 1+2 done on the
+    // PatternExtractor side, this is the second write path that needed
+    // the same fix — procedures from session distillation must arrive
+    // at the store with an embedding so the SQLite `procedures_index`
+    // vec0 table gets populated.
+    // ------------------------------------------------------------------------
+    mod procedure_upsert {
+        use super::*;
+
+        use agent_runtime::llm::embedding::{EmbeddingClient, EmbeddingError};
+        use async_trait::async_trait;
+        use gateway_services::{ProviderService, VaultPaths};
+        use serde_json::Value;
+        use std::sync::Arc;
+        use std::sync::Mutex;
+        use tempfile::tempdir;
+        use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+        use zero_stores_traits::ProcedureStore;
+
+        /// `ProcedureStore` that captures every `upsert_procedure` call so
+        /// the test can assert on the inserted shape + embedding.
+        #[derive(Default)]
+        struct CapturingProcedureStore {
+            upserts: Mutex<Vec<(Value, Option<Vec<f32>>)>>,
+        }
+
+        #[async_trait]
+        impl ProcedureStore for CapturingProcedureStore {
+            async fn upsert_procedure(
+                &self,
+                procedure: Value,
+                embedding: Option<Vec<f32>>,
+            ) -> Result<(), String> {
+                self.upserts.lock().unwrap().push((procedure, embedding));
+                Ok(())
+            }
+        }
+
+        /// Embedding client that always returns a fixed-length vector.
+        struct FixedEmbeddingClient {
+            vec: Vec<f32>,
+        }
+
+        #[async_trait]
+        impl EmbeddingClient for FixedEmbeddingClient {
+            async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+                Ok(texts.iter().map(|_| self.vec.clone()).collect())
+            }
+            fn dimensions(&self) -> usize {
+                self.vec.len()
+            }
+            fn model_name(&self) -> String {
+                "test-fixed".into()
+            }
+        }
+
+        fn setup_distiller(
+            store: Arc<CapturingProcedureStore>,
+            embed: Arc<FixedEmbeddingClient>,
+        ) -> SessionDistiller {
+            let dir = tempdir().unwrap();
+            let paths = Arc::new(VaultPaths::new(dir.keep()));
+            std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
+            let db = Arc::new(DatabaseManager::new(paths.clone()).unwrap());
+            let conversation_repo = Arc::new(ConversationRepository::new(db));
+            let provider_service = Arc::new(ProviderService::new(paths.clone()));
+
+            let mut distiller = SessionDistiller::new(
+                provider_service,
+                Some(embed as Arc<dyn EmbeddingClient>),
+                conversation_repo,
+                paths,
+                None,
+            );
+            distiller.set_procedure_store(store as Arc<dyn ProcedureStore>);
+            distiller
+        }
+
+        fn sample_procedure() -> ExtractedProcedure {
+            ExtractedProcedure {
+                name: "expected_name".to_string(),
+                description: "investigate the thing then summarise it".to_string(),
+                steps: vec![ProcedureStep {
+                    action: "do_something".to_string(),
+                    agent: None,
+                    task_template: None,
+                    note: None,
+                }],
+                parameters: None,
+                trigger_pattern: Some("when X happens".to_string()),
+            }
+        }
+
+        #[tokio::test]
+        async fn distillation_writes_procedure_with_embedding() {
+            let store = Arc::new(CapturingProcedureStore::default());
+            let embed = Arc::new(FixedEmbeddingClient {
+                vec: vec![0.25_f32; 384],
+            });
+            let distiller = setup_distiller(store.clone(), embed);
+
+            let procedure = sample_procedure();
+            distiller
+                .process_procedure_upsert("agent-x", Some("ward-y".to_string()), &procedure)
+                .await;
+
+            let upserts = store.upserts.lock().unwrap();
+            assert_eq!(upserts.len(), 1, "exactly one upsert expected");
+            let (value, embedding) = &upserts[0];
+            assert_eq!(value["name"].as_str(), Some("expected_name"));
+            assert!(
+                embedding.is_some(),
+                "procedure was upserted without embedding"
+            );
+            assert_eq!(embedding.as_ref().unwrap().len(), 384);
+        }
+
+        #[tokio::test]
+        async fn distillation_procedure_upsert_handles_missing_embedding_client() {
+            // Same path but no embedding client wired — confirms graceful
+            // degradation: the upsert still happens, embedding is None.
+            let store = Arc::new(CapturingProcedureStore::default());
+            let dir = tempdir().unwrap();
+            let paths = Arc::new(VaultPaths::new(dir.keep()));
+            std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
+            let db = Arc::new(DatabaseManager::new(paths.clone()).unwrap());
+            let conversation_repo = Arc::new(ConversationRepository::new(db));
+            let provider_service = Arc::new(ProviderService::new(paths.clone()));
+
+            let mut distiller =
+                SessionDistiller::new(provider_service, None, conversation_repo, paths, None);
+            distiller.set_procedure_store(store.clone() as Arc<dyn ProcedureStore>);
+
+            let procedure = sample_procedure();
+            distiller
+                .process_procedure_upsert("agent-x", None, &procedure)
+                .await;
+
+            let upserts = store.upserts.lock().unwrap();
+            assert_eq!(upserts.len(), 1);
+            assert!(upserts[0].1.is_none());
+        }
     }
 }

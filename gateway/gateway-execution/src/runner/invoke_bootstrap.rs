@@ -68,6 +68,12 @@ pub(super) struct InvokeBootstrap {
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     pub(super) steering_registry: Option<Arc<agent_runtime::SteeringRegistry>>,
     pub(super) agent_result_bus: Option<Arc<AgentResultBus>>,
+    /// Trait-routed procedure store used to build the executor's run_procedure tool.
+    pub(super) procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    /// Procedure recommendation tier thresholds. Threaded from settings.json
+    /// at AppState wiring time; default tiers if absent. See
+    /// `gateway_memory::ProcedureRecommendationConfig`.
+    pub(super) procedure_recommendation_cfg: gateway_memory::ProcedureRecommendationConfig,
     pub(super) event_bus: Arc<EventBus>,
     pub(super) handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
 }
@@ -136,6 +142,51 @@ struct IntentOutcome {
 // ============================================================================
 // FREE FUNCTIONS
 // ============================================================================
+
+/// Root-agent tool inventory snapshot for procedure dispatchability gating.
+///
+/// Mirrors the conditional logic in `invoke::executor::ExecutorBuilder::
+/// build_tool_registry` for the `is_delegated == false` branch. Used by
+/// `analyze_intent` to decide whether a recalled procedure can be promoted
+/// from advisory text to an actionable `run_procedure` recommendation.
+///
+/// Drift risk: any new root tool added to `build_tool_registry` should be
+/// reflected here. Drift is non-fatal — an absent name simply blocks
+/// promotion of procedures that reference that tool (legacy advisory text
+/// still fires), so correctness is preserved, just opportunity is lost.
+fn root_orchestrator_tool_names(bootstrap: &InvokeBootstrap) -> Vec<String> {
+    let mut names: Vec<String> = vec![
+        "shell".to_string(),
+        "memory".to_string(),
+        "ward".to_string(),
+        "update_plan".to_string(),
+        "set_session_title".to_string(),
+        "grep".to_string(),
+        "respond".to_string(),
+        "delegate_to_agent".to_string(),
+        "multimodal_analyze".to_string(),
+    ];
+    if bootstrap.procedure_store.is_some() {
+        names.push("run_procedure".to_string());
+    }
+    if bootstrap.steering_registry.is_some() {
+        names.push("steer_agent".to_string());
+    }
+    if bootstrap.agent_result_bus.is_some() {
+        names.push("wait_agent".to_string());
+        names.push("kill_agent".to_string());
+    }
+    if bootstrap.kg_store.is_some() {
+        names.push("graph_query".to_string());
+    }
+    if bootstrap.ingestion_adapter.is_some() {
+        names.push("ingest".to_string());
+    }
+    if bootstrap.goal_adapter.is_some() {
+        names.push("goal".to_string());
+    }
+    names
+}
 
 fn format_corrections_block(facts: &[zero_stores_traits::MemoryFact]) -> Option<String> {
     if facts.is_empty() {
@@ -613,6 +664,9 @@ impl InvokeBootstrap {
                 .with_state_service(self.state_service.clone())
                 .with_conversation_repo(self.conversation_repo.clone());
         }
+        if let Some(ref ps) = self.procedure_store {
+            builder = builder.with_procedure_store(ps.clone());
+        }
 
         // Intent analysis for root agent first turns only.
         // Note: execution_logs stores execution_id in the session_id column,
@@ -764,12 +818,15 @@ impl InvokeBootstrap {
         let system_prompt =
             crate::middleware::intent_analysis::load_intent_analysis_prompt(&self.paths);
 
+        let tool_inventory = root_orchestrator_tool_names(self);
         let analysis = match analyze_intent(
             &retrying,
             msg,
             fs.as_ref(),
             self.memory_recall.as_ref().map(|r| r.as_ref()),
             &system_prompt,
+            &tool_inventory,
+            Some(&self.procedure_recommendation_cfg),
         )
         .await
         {
@@ -984,6 +1041,8 @@ mod tests {
             goal_adapter: None,
             steering_registry: None,
             agent_result_bus: None,
+            procedure_store: None,
+            procedure_recommendation_cfg: gateway_memory::ProcedureRecommendationConfig::default(),
             event_bus: Arc::new(EventBus::new()),
             handles,
         };

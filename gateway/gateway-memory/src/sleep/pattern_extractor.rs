@@ -12,12 +12,13 @@
 
 use std::sync::Arc;
 
+use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::ChatMessage;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use zero_stores_traits::{
-    CompactionStore, ConversationStore, EpisodeStore, PatternProcedureInsert, ProcedureStore,
-    SuccessfulEpisode,
+    CompactionStore, ConversationStore, EpisodeStore, PatternProcedureInsert, PatternStep,
+    ProcedureStore, SuccessfulEpisode,
 };
 
 use crate::util::parse_llm_json;
@@ -64,18 +65,6 @@ pub struct PatternResponse {
     pub steps: Vec<PatternStep>,
 }
 
-/// Single step of a generalized pattern.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct PatternStep {
-    pub action: String,
-    #[serde(default)]
-    pub agent: Option<String>,
-    #[serde(default)]
-    pub note: Option<String>,
-    #[serde(default)]
-    pub task_template: Option<String>,
-}
-
 /// Context passed to the LLM for generalization.
 #[derive(Debug, Clone)]
 pub struct PatternInput {
@@ -84,6 +73,11 @@ pub struct PatternInput {
     pub tool_sequence_a: Vec<String>,
     pub tool_sequence_b: Vec<String>,
     pub matched_prefix: Vec<String>,
+    /// Comma-separated list of registered tool names — the LLM must pick
+    /// `action` values from this list. Populated by the composition site
+    /// from the live `ToolRegistry`. Empty string is allowed for tests /
+    /// boot-time degraded mode.
+    pub tool_whitelist: String,
 }
 
 /// Abstraction so tests can inject a mock LLM without touching the network.
@@ -103,6 +97,15 @@ pub struct PatternExtractor {
     procedure_store: Arc<dyn ProcedureStore>,
     compaction_store: Arc<dyn CompactionStore>,
     llm: Arc<dyn PatternExtractLlm>,
+    /// Optional embedding client used to populate `embedding` on the
+    /// synthesised `PatternProcedureInsert`. When `None` or when an
+    /// `embed()` call fails, the insert still proceeds — the embedding
+    /// is observability for vec-similarity recall, not correctness.
+    embedding_client: Option<Arc<dyn EmbeddingClient>>,
+    /// Registered tool names the LLM may pick from when emitting
+    /// procedure step `action` fields. Plumbed in from composition
+    /// (`services.rs`); empty for tests / degraded mode.
+    tool_whitelist: Vec<String>,
 }
 
 impl PatternExtractor {
@@ -112,6 +115,8 @@ impl PatternExtractor {
         procedure_store: Arc<dyn ProcedureStore>,
         compaction_store: Arc<dyn CompactionStore>,
         llm: Arc<dyn PatternExtractLlm>,
+        embedding_client: Option<Arc<dyn EmbeddingClient>>,
+        tool_whitelist: Vec<String>,
     ) -> Self {
         Self {
             episode_store,
@@ -119,6 +124,8 @@ impl PatternExtractor {
             procedure_store,
             compaction_store,
             llm,
+            embedding_client,
+            tool_whitelist,
         }
     }
 
@@ -188,6 +195,7 @@ impl PatternExtractor {
             tool_sequence_a: tools_a,
             tool_sequence_b: tools_b,
             matched_prefix: matched,
+            tool_whitelist: self.tool_whitelist.join(", "),
         };
 
         stats.llm_calls_made += 1;
@@ -233,7 +241,7 @@ impl PatternExtractor {
             }
         }
 
-        let req = match build_procedure_insert(agent_id, &name, resp) {
+        let mut req = match build_procedure_insert(agent_id, &name, resp) {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(error = %e, "pattern: build procedure failed");
@@ -241,6 +249,22 @@ impl PatternExtractor {
                 return;
             }
         };
+
+        // Embed the procedure description so the SQLite vec index can
+        // be populated. Graceful: warn + proceed without on failure —
+        // the insert still succeeds, only vec-similarity recall is lost.
+        if let Some(client) = self.embedding_client.as_ref() {
+            let embed_input = format!("{}\n{}", resp.name, resp.description);
+            match client.embed(&[embed_input.as_str()]).await {
+                Ok(mut vecs) if !vecs.is_empty() => req.embedding = Some(vecs.remove(0)),
+                Ok(_) => {
+                    tracing::warn!("pattern: embedding returned no vectors; proceeding without");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "pattern: embedding failed; proceeding without");
+                }
+            }
+        }
 
         let proc_id = match self.procedure_store.insert_pattern_procedure(req).await {
             Ok(id) => id,
@@ -337,6 +361,20 @@ fn build_procedure_insert(
         trigger_pattern: Some(resp.trigger_pattern.clone()),
         steps_json,
         parameters_json,
+        // The caller (`PatternExtractor::commit_pattern`) populates
+        // `embedding` after this function returns — keeping the embed
+        // call near the `procedure_store` write so failures degrade
+        // gracefully without rebuilding the row.
+        embedding: None,
+        // Mining requires a matched pair of successful episodes; the procedure
+        // is therefore evidenced by 2 successful sessions before it ever exists.
+        // Recording sc=1 would put it below the middleware's legacy-advisory
+        // floor (sc>=2) and below the promotion floor (sc>=3), making the
+        // procedure invisible until manually invoked twice — defeating organic
+        // discovery. Seeding at 2 lets the advisory surface fire immediately;
+        // the first real invocation bumps it to 3 and the promoted recommendation
+        // takes over.
+        success_count: 2,
     })
 }
 
@@ -411,24 +449,7 @@ impl LlmPatternExtractor {
 impl PatternExtractLlm for LlmPatternExtractor {
     async fn generalize(&self, input: &PatternInput) -> Result<PatternResponse, String> {
         let client = self.client.get().await?;
-        let prompt = format!(
-            "Two recent successful agent sessions shared a recurring tool-call \
-             sequence. Generalize it into a reusable procedure.\n\n\
-             Return ONLY JSON: {{\"name\": snake_case_string, \"description\": string, \
-             \"trigger_pattern\": string, \"parameters\": [string], \
-             \"steps\": [{{\"action\": string, \"agent\": string|null, \
-             \"note\": string|null, \"task_template\": string|null}}]}}.\n\n\
-             Session A task: {sa}\n\
-             Session A tool sequence: {ta:?}\n\n\
-             Session B task: {sb}\n\
-             Session B tool sequence: {tb:?}\n\n\
-             Matched prefix: {mp:?}",
-            sa = input.task_summary_a,
-            sb = input.task_summary_b,
-            ta = input.tool_sequence_a,
-            tb = input.tool_sequence_b,
-            mp = input.matched_prefix,
-        );
+        let prompt = build_pattern_prompt(input);
         let messages = vec![
             ChatMessage::system("You return only valid JSON.".to_string()),
             ChatMessage::user(prompt),
@@ -439,6 +460,50 @@ impl PatternExtractLlm for LlmPatternExtractor {
             .map_err(|e| format!("LLM call: {e}"))?;
         parse_llm_json::<PatternResponse>(&response.content)
     }
+}
+
+/// Build the LLM prompt for pattern generalization. Pulled out of
+/// `LlmPatternExtractor::generalize` so tests can inspect the exact
+/// prompt the production extractor builds.
+///
+/// The prompt enforces a dispatchable shape: `action` must come from
+/// the tool whitelist, `args` must be a JSON object, and `binds` lists
+/// which fields of a step's result are exposed for `{step_N.field}`
+/// interpolation in later steps.
+pub(crate) fn build_pattern_prompt(input: &PatternInput) -> String {
+    format!(
+        "Two recent successful agent sessions shared a recurring tool-call sequence. \
+         Generalize it into a reusable procedure that can be DISPATCHED by an automated executor.\n\n\
+         STRICT REQUIREMENTS:\n\
+         - Each step's `action` MUST be one of the following registered tool names: {whitelist}.\n\
+         - Each step's `args` MUST be a JSON object containing the tool's required arguments.\n\
+         - Use `{{step_N.field}}` (e.g., `{{step_0.stdout}}`) to reference previous step output.\n\
+         - `binds` lists field names to extract from a step's result for later interpolation. \
+           Omit (empty list) for steps whose output isn't referenced.\n\
+         - Procedures must be parameterizable: top-level `parameters` lists `{{parameter}}` names \
+           used in step args.\n\n\
+         Return ONLY JSON:\n\
+         {{\n\
+           \"name\": snake_case_string,\n\
+           \"description\": string,\n\
+           \"trigger_pattern\": string,\n\
+           \"parameters\": [string],\n\
+           \"steps\": [\n\
+             {{\"action\": string, \"args\": object, \"binds\": [string], \"note\": string|null}}\n\
+           ]\n\
+         }}\n\n\
+         Session A task: {sa}\n\
+         Session A tool sequence: {ta:?}\n\n\
+         Session B task: {sb}\n\
+         Session B tool sequence: {tb:?}\n\n\
+         Matched prefix: {mp:?}",
+        whitelist = input.tool_whitelist,
+        sa = input.task_summary_a,
+        ta = input.tool_sequence_a,
+        sb = input.task_summary_b,
+        tb = input.tool_sequence_b,
+        mp = input.matched_prefix,
+    )
 }
 
 // ============================================================================
@@ -623,24 +688,32 @@ mod tests {
             steps: vec![
                 PatternStep {
                     action: "search_docs".to_string(),
+                    args: Default::default(),
+                    binds: Vec::new(),
                     agent: None,
                     note: None,
                     task_template: None,
                 },
                 PatternStep {
                     action: "read_file".to_string(),
+                    args: Default::default(),
+                    binds: Vec::new(),
                     agent: None,
                     note: None,
                     task_template: None,
                 },
                 PatternStep {
                     action: "run_query".to_string(),
+                    args: Default::default(),
+                    binds: Vec::new(),
                     agent: None,
                     note: None,
                     task_template: None,
                 },
                 PatternStep {
                     action: "summarize".to_string(),
+                    args: Default::default(),
+                    binds: Vec::new(),
                     agent: None,
                     note: None,
                     task_template: None,
@@ -662,6 +735,8 @@ mod tests {
             h.procedure_store.clone(),
             h.compaction_store.clone(),
             mock.clone(),
+            None,
+            vec!["shell".into(), "read_file".into()],
         );
 
         let stats = ext.run_cycle("run-pe-1").await.expect("run_cycle");
@@ -722,6 +797,8 @@ mod tests {
             h.procedure_store.clone(),
             h.compaction_store.clone(),
             mock,
+            None,
+            Vec::new(),
         );
         let stats = ext.run_cycle("run-pe-2").await.expect("run_cycle");
         assert_eq!(stats.procedures_inserted, 0);
@@ -770,4 +847,155 @@ mod tests {
     // see the SQLite-side `tool_sequence_for_session` impl for the
     // current behaviour test (covered indirectly via this module's
     // `extracts_pattern_across_two_sessions`).
+
+    // ------------------------------------------------------------------
+    // Task 2: verify the extractor populates `embedding` before insert.
+    // ------------------------------------------------------------------
+
+    use agent_runtime::llm::embedding::{EmbeddingClient, EmbeddingError};
+    use zero_stores_traits::ProcedureSummary;
+
+    /// `ProcedureStore` that captures the last `insert_pattern_procedure`
+    /// request so the test can assert on the inserted shape.
+    #[derive(Default)]
+    struct CapturingProcedureStore {
+        captured: Mutex<Option<PatternProcedureInsert>>,
+    }
+
+    #[async_trait]
+    impl ProcedureStore for CapturingProcedureStore {
+        async fn get_procedure_summary_by_name(
+            &self,
+            _agent_id: &str,
+            _name: &str,
+        ) -> Result<Option<ProcedureSummary>, String> {
+            Ok(None)
+        }
+        async fn insert_pattern_procedure(
+            &self,
+            req: PatternProcedureInsert,
+        ) -> Result<String, String> {
+            *self.captured.lock().unwrap() = Some(req);
+            Ok("proc-test".into())
+        }
+    }
+
+    /// Embedding client that always returns the same fixed-length vector.
+    struct FixedEmbeddingClient {
+        vec: Vec<f32>,
+    }
+    #[async_trait]
+    impl EmbeddingClient for FixedEmbeddingClient {
+        async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            Ok(texts.iter().map(|_| self.vec.clone()).collect())
+        }
+        fn dimensions(&self) -> usize {
+            self.vec.len()
+        }
+        fn model_name(&self) -> String {
+            "test-fixed".into()
+        }
+    }
+
+    /// `CompactionStore` no-op so `commit_pattern` doesn't need a real DB.
+    /// Default impls of the trait cover every method — explicit empty body
+    /// here just to give us a concrete type to instantiate.
+    struct NoopCompactionStore;
+    #[async_trait]
+    impl CompactionStore for NoopCompactionStore {}
+
+    #[tokio::test]
+    async fn extractor_passes_embedding_to_store() {
+        // Drive `commit_pattern` directly — it's the helper that builds
+        // and submits the `PatternProcedureInsert`, which is the exact
+        // surface we want to verify carries an embedding.
+        let store = Arc::new(CapturingProcedureStore::default());
+        let embed = Arc::new(FixedEmbeddingClient {
+            vec: vec![0.5_f32; 384],
+        });
+
+        // Stub stores for the deps `commit_pattern` doesn't actually touch.
+        let h = setup();
+        let mock_llm = Arc::new(MockLlm::new(ok_response("placeholder")));
+
+        let ext = PatternExtractor::new(
+            h.episode_store.clone(),
+            h.conversation_store.clone(),
+            store.clone() as Arc<dyn ProcedureStore>,
+            Arc::new(NoopCompactionStore) as Arc<dyn CompactionStore>,
+            mock_llm,
+            Some(embed.clone() as Arc<dyn EmbeddingClient>),
+            Vec::new(),
+        );
+
+        let mut stats = PatternStats::default();
+        let resp = ok_response("investigate_postgres_issue");
+        ext.commit_pattern("run-emb", "agent-emb", &resp, &mut stats)
+            .await;
+
+        assert_eq!(stats.procedures_inserted, 1);
+        let captured = store.captured.lock().unwrap();
+        let inserted = captured.as_ref().expect("no insert captured");
+        assert_eq!(inserted.embedding.as_ref().map(Vec::len), Some(384));
+    }
+
+    #[test]
+    fn pattern_step_deserializes_old_format_without_args_or_binds() {
+        let old = r#"{"action": "read_file"}"#;
+        let step: PatternStep = serde_json::from_str(old).unwrap();
+        assert_eq!(step.action, "read_file");
+        assert!(step.args.is_empty());
+        assert!(step.binds.is_empty());
+    }
+
+    #[test]
+    fn pattern_step_deserializes_new_format() {
+        let new = r#"{
+            "action": "shell",
+            "args": {"cmd": "cargo test {test_name}"},
+            "binds": ["assertion"]
+        }"#;
+        let step: PatternStep = serde_json::from_str(new).unwrap();
+        assert_eq!(step.action, "shell");
+        assert_eq!(
+            step.args.get("cmd").and_then(|v| v.as_str()),
+            Some("cargo test {test_name}")
+        );
+        assert_eq!(step.binds, vec!["assertion".to_string()]);
+    }
+
+    #[test]
+    fn pattern_prompt_includes_tool_whitelist_and_strict_requirements() {
+        let input = PatternInput {
+            task_summary_a: "Investigate postgres timeout".into(),
+            task_summary_b: "Investigate postgres pool exhaustion".into(),
+            tool_sequence_a: vec!["shell".into(), "read".into()],
+            tool_sequence_b: vec!["shell".into(), "read".into()],
+            matched_prefix: vec!["shell".into(), "read".into()],
+            tool_whitelist: "shell, read, grep, edit_file".into(),
+        };
+
+        let prompt = build_pattern_prompt(&input);
+
+        // Anchor checks to the rendered CSV whitelist so they survive future
+        // prompt edits without matching incidental substrings (e.g. "read"
+        // inside a longer word).
+        assert!(
+            prompt.contains("shell, read, grep, edit_file"),
+            "prompt should render the tool whitelist verbatim"
+        );
+        assert!(
+            prompt.contains(", read,"),
+            "prompt should include the real 'read' tool name from the whitelist"
+        );
+        assert!(
+            prompt.contains("STRICT REQUIREMENTS"),
+            "prompt should declare strict requirements"
+        );
+        assert!(prompt.contains("args"), "prompt should mention args field");
+        assert!(
+            prompt.contains("binds"),
+            "prompt should mention binds field"
+        );
+    }
 }

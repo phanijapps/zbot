@@ -38,6 +38,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "zero-core",
+ "zero-stores-traits",
 ]
 
 [[package]]
@@ -6114,6 +6115,7 @@ version = "2026.5.3"
 dependencies = [
  "chrono",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

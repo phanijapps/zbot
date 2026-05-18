@@ -35,7 +35,8 @@ pub use memory_facts::{
 };
 pub use outbox::OutboxStore;
 pub use procedures::{
-    PatternProcedureInsert, Procedure, ProcedureStats, ProcedureStore, ProcedureSummary,
+    PatternProcedureInsert, PatternStep, Procedure, ProcedureStats, ProcedureStore,
+    ProcedureSummary,
 };
 pub use wiki::{WikiStats, WikiStore};
 pub use zero_stores_domain::{

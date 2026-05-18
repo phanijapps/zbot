@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 // Domain types live in `zero-stores-domain`; re-export here so the
 // trait surface keeps working for callers that import from this crate.
-pub use zero_stores_domain::{PatternProcedureInsert, Procedure, ProcedureSummary};
+pub use zero_stores_domain::{PatternProcedureInsert, PatternStep, Procedure, ProcedureSummary};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProcedureStats {
@@ -98,6 +98,33 @@ pub trait ProcedureStore: Send + Sync {
         _name: &str,
     ) -> Result<Option<ProcedureSummary>, String> {
         Ok(None)
+    }
+
+    /// Look up a full procedure row by `(agent_id, name)`. Returns the
+    /// complete `Procedure` so callers (e.g., `RunProcedureTool`) can access
+    /// `steps`, `parameters`, etc. Default: not implemented.
+    async fn get_procedure_by_name(
+        &self,
+        _agent_id: &str,
+        _name: &str,
+    ) -> Result<Option<Procedure>, String> {
+        Ok(None)
+    }
+
+    /// Dedupe procedures by `(agent_id, name)`. For each group with 2+
+    /// rows, keeps the highest-`success_count` row (ties broken by most
+    /// recent `created_at`) and deletes the rest. Returns the number of
+    /// rows deleted.
+    ///
+    /// Maintenance routine for cleaning up months of mining duplicates —
+    /// PatternExtractor without dedup floored every cycle to keep
+    /// generating new rows. The dedup floor (`success_count >= 2` in the
+    /// extractor) prevents new duplicates going forward; this method
+    /// retroactively collapses the existing pile. Vec-index rows are
+    /// cleaned up alongside the procedure rows so similarity search
+    /// stays consistent.
+    async fn dedupe_procedures_by_name(&self) -> Result<usize, String> {
+        Ok(0)
     }
 
     /// Insert a synthesised procedure pattern. Pre-built from the

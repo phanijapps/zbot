@@ -290,6 +290,7 @@ fn test_intent_injection_sdlc_for_graph() {
             explanation: "Complex analysis".to_string(),
         },
         rewritten_prompt: String::new(),
+        procedure_recommendation: None,
     };
 
     let injection = format_intent_injection(&analysis, None, None);
@@ -333,6 +334,7 @@ fn test_intent_injection_no_sdlc_for_simple() {
             explanation: "Quick question".to_string(),
         },
         rewritten_prompt: String::new(),
+        procedure_recommendation: None,
     };
 
     let injection = format_intent_injection(&analysis, None, None);
@@ -370,6 +372,7 @@ fn test_ward_rules_domain_agnostic() {
             explanation: "test".to_string(),
         },
         rewritten_prompt: String::new(),
+        procedure_recommendation: None,
     };
 
     let injection = format_intent_injection(&analysis, None, None);

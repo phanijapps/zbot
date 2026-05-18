@@ -37,6 +37,16 @@ impl ToolRegistry {
         &self.tools
     }
 
+    /// Snapshot the names of all registered tools as owned `String`s.
+    ///
+    /// Returned in registration order; useful when a downstream component
+    /// needs to validate procedure step actions against the live inventory
+    /// without taking an `Arc<ToolRegistry>` reference.
+    #[must_use]
+    pub fn tool_names(&self) -> Vec<String> {
+        self.tools.iter().map(|t| t.name().to_string()).collect()
+    }
+
     /// Find a tool by name
     #[must_use]
     pub fn find(&self, name: &str) -> Option<Arc<dyn Tool>> {
@@ -142,6 +152,21 @@ mod tests {
         assert!(r.contains("third"));
         assert_eq!(r.get_all()[0].name(), "first");
         assert_eq!(r.get_all()[2].name(), "third");
+    }
+
+    #[test]
+    fn tool_names_returns_registration_order() {
+        let mut r = ToolRegistry::new();
+        r.register(tool("first"));
+        r.register(tool("second"));
+        r.register(tool("third"));
+        assert_eq!(r.tool_names(), vec!["first", "second", "third"]);
+    }
+
+    #[test]
+    fn tool_names_empty_for_empty_registry() {
+        let r = ToolRegistry::new();
+        assert!(r.tool_names().is_empty());
     }
 
     #[test]
