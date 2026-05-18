@@ -413,18 +413,46 @@ fn simple_analysis(message: &str) -> IntentAnalysis {
     }
 }
 
+/// Return `true` when every step's `action` in `steps_json` resolves against
+/// `known_tool_names`. Used to gate promotion of recalled procedures to an
+/// actionable `run_procedure` recommendation: if the procedure references a
+/// tool that isn't currently registered, we cannot guarantee dispatch, so
+/// the procedure stays advisory-only.
+///
+/// Returns `false` for malformed JSON, empty step lists, or any unknown
+/// action name. The check is strict (`all`), not partial.
+fn procedure_is_dispatchable(steps_json: &str, known_tool_names: &[&str]) -> bool {
+    let parsed: Vec<zero_stores_domain::PatternStep> = match serde_json::from_str(steps_json) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    if parsed.is_empty() {
+        return false;
+    }
+    parsed
+        .iter()
+        .all(|s| known_tool_names.iter().any(|n| *n == s.action))
+}
+
 /// Analyze user intent: searches semantically for resources, calls LLM.
 ///
 /// Resource indexing must happen before this call (see `index_resources`).
 ///
 /// Short/trivial messages (greetings, 1-3 word phrases) skip the LLM call
 /// entirely and return a default "simple" analysis to avoid 5-30s latency.
+///
+/// `tool_inventory` is the live root-agent tool name list; used only to
+/// gate promotion of recalled procedures to an actionable `run_procedure`
+/// recommendation. Pass `&[]` from tests / call sites without a registry
+/// snapshot — the promotion gate stays off and the legacy advisory
+/// surfacing still fires for medium-confidence matches.
 pub async fn analyze_intent(
     llm_client: &dyn LlmClient,
     user_message: &str,
     fact_store: &dyn MemoryFactStore,
     memory_recall: Option<&crate::recall::MemoryRecall>,
     system_prompt: &str,
+    tool_inventory: &[String],
 ) -> Result<IntentAnalysis, String> {
     // Fast path: skip LLM for trivial messages
     if is_simple_message(user_message) {
@@ -463,23 +491,70 @@ pub async fn analyze_intent(
         String::new()
     };
 
-    // Step 0b: Recall proven procedures that match the user's request
+    // Step 0b: Recall proven procedures that match the user's request.
+    //
+    // Two-tier surfacing:
+    //   * Promoted recommendation — if the top match has all step actions
+    //     resolving against the live tool inventory AND meets the higher
+    //     confidence bar (score > 0.85, success_count >= 3), we surface
+    //     a concrete `run_procedure(...)` call the LLM can act on.
+    //   * Legacy advisory — otherwise, if it meets the lower bar
+    //     (score > 0.7, success_count >= 2), surface the prior
+    //     "## Proven Procedure Available" text as before.
+    //
+    // Only the top match is surfaced either way. An empty tool inventory
+    // (tests / no registry snapshot) disables the promotion path; the
+    // legacy fallback still fires so existing test surface stays intact.
     let mut procedure_context = String::new();
     if let Some(recall) = memory_recall {
         if let Ok(procedures) = recall
             .recall_procedures(user_message, "root", None, 3)
             .await
         {
+            let known_tools_owned: Vec<&str> = tool_inventory.iter().map(|s| s.as_str()).collect();
+
             for (proc, score) in &procedures {
-                if *score > 0.7 && proc.success_count >= 2 {
-                    let total = (proc.success_count + proc.failure_count).max(1) as f64;
-                    let success_rate = proc.success_count as f64 / total;
+                let total = (proc.success_count + proc.failure_count).max(1) as f64;
+                let success_rate = proc.success_count as f64 / total;
+                let score_floor = 0.85;
+                let success_floor = 3;
+
+                let dispatchable = !known_tools_owned.is_empty()
+                    && procedure_is_dispatchable(&proc.steps, &known_tools_owned);
+
+                if dispatchable && *score > score_floor && proc.success_count >= success_floor {
+                    // Promoted: actionable recommendation.
+                    procedure_context = format!(
+                        "\n## Recommended action: run_procedure\n\
+                         A learned procedure matches this request.\n\
+                         - Name: `{}`\n\
+                         - Description: {}\n\
+                         - Success rate: {:.0}% across {} uses\n\
+                         - Parameters: {}\n\n\
+                         Suggested call:\n\
+                         ```\n\
+                         run_procedure(name=\"{}\", args={{...fill from user request...}})\n\
+                         ```\n\
+                         If the procedure doesn't fit, ignore this recommendation and proceed normally.\n",
+                        proc.name,
+                        proc.description,
+                        success_rate * 100.0,
+                        proc.success_count,
+                        proc.parameters.as_deref().unwrap_or("[]"),
+                        proc.name,
+                    );
+                    break;
+                } else if *score > 0.7 && proc.success_count >= 2 {
+                    // Legacy advisory fallback.
                     procedure_context = format!(
                         "\n## Proven Procedure Available: {}\n{}\nSteps: {}\nSuccess rate: {:.0}% ({} uses)\n",
-                        proc.name, proc.description, proc.steps,
-                        success_rate * 100.0, proc.success_count,
+                        proc.name,
+                        proc.description,
+                        proc.steps,
+                        success_rate * 100.0,
+                        proc.success_count,
                     );
-                    break; // Only use the top match
+                    break;
                 }
             }
         }
@@ -1677,6 +1752,7 @@ mod tests {
             &fact_store,
             None,
             DEFAULT_INTENT_ANALYSIS_PROMPT,
+            &[],
         )
         .await;
         let analysis = result.expect("should parse simple intent");
@@ -1717,6 +1793,7 @@ mod tests {
             &fact_store,
             None,
             DEFAULT_INTENT_ANALYSIS_PROMPT,
+            &[],
         )
         .await;
         let analysis = result.expect("should parse graph intent");
@@ -1744,6 +1821,7 @@ mod tests {
             &fact_store,
             None,
             DEFAULT_INTENT_ANALYSIS_PROMPT,
+            &[],
         )
         .await;
         assert!(result.is_err());
@@ -1781,6 +1859,7 @@ mod tests {
             &fact_store,
             None,
             DEFAULT_INTENT_ANALYSIS_PROMPT,
+            &[],
         )
         .await;
         let analysis = result.expect("should strip fences and parse");
@@ -1873,6 +1952,44 @@ mod tests {
         // Should still produce valid injection without spec guidance section
         assert!(injection.contains("## Task Analysis"));
         assert!(injection.contains("test-ward"));
+    }
+
+    #[test]
+    fn procedure_is_dispatchable_accepts_known_tools() {
+        let steps = r#"[
+            {"action": "shell", "args": {}, "binds": []},
+            {"action": "read_file", "args": {}, "binds": []}
+        ]"#;
+        assert!(procedure_is_dispatchable(
+            steps,
+            &["shell", "read_file", "grep"]
+        ));
+    }
+
+    #[test]
+    fn procedure_is_dispatchable_rejects_unknown_tools() {
+        let steps = r#"[{"action": "frobnicate", "args": {}, "binds": []}]"#;
+        assert!(!procedure_is_dispatchable(steps, &["shell", "read_file"]));
+    }
+
+    #[test]
+    fn procedure_is_dispatchable_rejects_empty_steps() {
+        assert!(!procedure_is_dispatchable("[]", &["shell"]));
+    }
+
+    #[test]
+    fn procedure_is_dispatchable_rejects_malformed_json() {
+        assert!(!procedure_is_dispatchable("not json", &["shell"]));
+    }
+
+    #[test]
+    fn procedure_is_dispatchable_rejects_partial_unknown_tools() {
+        // Even ONE unknown action disqualifies the procedure
+        let steps = r#"[
+            {"action": "shell", "args": {}, "binds": []},
+            {"action": "frobnicate", "args": {}, "binds": []}
+        ]"#;
+        assert!(!procedure_is_dispatchable(steps, &["shell", "read_file"]));
     }
 
     #[test]
