@@ -927,7 +927,10 @@ mod tests {
         }"#;
         let step: PatternStep = serde_json::from_str(new).unwrap();
         assert_eq!(step.action, "shell");
-        assert_eq!(step.args.get("cmd").and_then(|v| v.as_str()), Some("cargo test {test_name}"));
+        assert_eq!(
+            step.args.get("cmd").and_then(|v| v.as_str()),
+            Some("cargo test {test_name}")
+        );
         assert_eq!(step.binds, vec!["assertion".to_string()]);
     }
 }
