@@ -179,7 +179,7 @@ impl ProcedureStore for GatewayProcedureStore {
             trigger_pattern: req.trigger_pattern,
             steps: req.steps_json,
             parameters: req.parameters_json,
-            success_count: 1,
+            success_count: req.success_count,
             failure_count: 0,
             avg_duration_ms: None,
             avg_token_cost: None,

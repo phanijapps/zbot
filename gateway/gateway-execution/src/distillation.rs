@@ -1645,6 +1645,10 @@ impl SessionDistiller {
             trigger_pattern: procedure.trigger_pattern.clone(),
             steps: steps_json,
             parameters: params_json,
+            // Distillation synthesizes from a single completed session, so the
+            // evidence count is 1. PatternExtractor seeds at 2 because it
+            // requires a matched pair. Either way, see `default_initial_success_count`
+            // for why this is intentional rather than hardcoded.
             success_count: 1,
             failure_count: 0,
             avg_duration_ms: None,

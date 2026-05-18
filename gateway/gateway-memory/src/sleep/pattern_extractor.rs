@@ -366,6 +366,15 @@ fn build_procedure_insert(
         // call near the `procedure_store` write so failures degrade
         // gracefully without rebuilding the row.
         embedding: None,
+        // Mining requires a matched pair of successful episodes; the procedure
+        // is therefore evidenced by 2 successful sessions before it ever exists.
+        // Recording sc=1 would put it below the middleware's legacy-advisory
+        // floor (sc>=2) and below the promotion floor (sc>=3), making the
+        // procedure invisible until manually invoked twice — defeating organic
+        // discovery. Seeding at 2 lets the advisory surface fire immediately;
+        // the first real invocation bumps it to 3 and the promoted recommendation
+        // takes over.
+        success_count: 2,
     })
 }
 

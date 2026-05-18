@@ -56,6 +56,18 @@ pub struct PatternProcedureInsert {
     /// SQLite store can upsert into `procedures_index`.
     #[serde(default)]
     pub embedding: Option<Vec<f32>>,
+    /// Initial `success_count` to record when inserting. The mining itself
+    /// is evidence of N successful sessions — recording sc=1 would throw
+    /// that away and leave the procedure below the middleware's promotion /
+    /// legacy-advisory floors. Writers pass the number of matching sessions
+    /// they saw (PatternExtractor: the pair, so 2). Defaults to 2 for
+    /// backward compat with callers that omit it.
+    #[serde(default = "default_initial_success_count")]
+    pub success_count: i32,
+}
+
+fn default_initial_success_count() -> i32 {
+    2
 }
 
 /// One step of a learned procedure. The `action` is a tool name validated

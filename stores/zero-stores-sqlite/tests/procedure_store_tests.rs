@@ -56,6 +56,7 @@ async fn insert_pattern_procedure_persists_embedding() {
         steps_json: "[]".into(),
         parameters_json: None,
         embedding: Some(emb.clone()),
+        success_count: 2,
     };
     let id = store.insert_pattern_procedure(req).await.unwrap();
 
@@ -81,6 +82,7 @@ async fn get_procedure_by_name_returns_full_row() {
         steps_json: r#"[{"action":"shell","args":{"cmd":"ls"},"binds":[]}]"#.into(),
         parameters_json: Some(r#"["dir"]"#.into()),
         embedding: None,
+        success_count: 2,
     };
     store.insert_pattern_procedure(req).await.unwrap();
     let found = store
@@ -103,4 +105,48 @@ async fn get_procedure_by_name_returns_none_when_missing() {
         .await
         .unwrap();
     assert!(found.is_none());
+}
+
+#[tokio::test]
+async fn insert_pattern_procedure_records_evidence_count() {
+    let (_tmp, store) = test_procedure_store();
+    // Mining produced 4 matching successful sessions — the writer should be
+    // able to record that, not hardcode 1.
+    let req = PatternProcedureInsert {
+        agent_id: "root".into(),
+        ward_id: Some("__global__".into()),
+        name: "well_evidenced".into(),
+        description: "Procedure mined from 4 sessions".into(),
+        trigger_pattern: None,
+        steps_json: r#"[{"action":"shell","args":{},"binds":[]}]"#.into(),
+        parameters_json: None,
+        embedding: None,
+        success_count: 4,
+    };
+    store.insert_pattern_procedure(req).await.unwrap();
+    let proc = store
+        .get_procedure_by_name("root", "well_evidenced")
+        .await
+        .unwrap()
+        .expect("not found");
+    assert_eq!(proc.success_count, 4);
+}
+
+#[test]
+fn pattern_procedure_insert_defaults_success_count_for_back_compat() {
+    // Older serialized payloads omit `success_count` — they should default to
+    // 2 (above the middleware's legacy-advisory floor) so existing callers
+    // don't silently land below visibility.
+    let json = r#"{
+        "agent_id": "root",
+        "ward_id": "__global__",
+        "name": "legacy",
+        "description": "no success_count in payload",
+        "trigger_pattern": null,
+        "steps_json": "[]",
+        "parameters_json": null
+    }"#;
+    let parsed: PatternProcedureInsert = serde_json::from_str(json).unwrap();
+    assert_eq!(parsed.success_count, 2);
+    assert_eq!(parsed.embedding, None);
 }
