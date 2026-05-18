@@ -20,6 +20,15 @@ pub struct IntentAnalysis {
     /// Kept for backward compat with existing logs; no longer requested from LLM.
     #[serde(default)]
     pub rewritten_prompt: String,
+    /// Pre-rendered "## Recommended action: run_procedure" or legacy
+    /// "## Proven Procedure Available" markdown block, computed in
+    /// `analyze_intent` after the classifier LLM returns. Carried on the
+    /// struct so `format_intent_injection` can render it into the root
+    /// agent's system prompt — the agent that actually decides whether to
+    /// call `run_procedure`. `#[serde(default, skip_serializing)]` because
+    /// it's populated post-deserialization and not requested from the LLM.
+    #[serde(default, skip_serializing)]
+    pub procedure_recommendation: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -295,6 +304,14 @@ pub fn format_intent_injection(
 **Ward Rule:** All file-producing work happens inside the ward. Enter it before delegating. Read AGENTS.md to know what exists — reuse before creating.
 "#);
 
+    // Surface the procedure recommendation last so it sits near the agent's
+    // first decision point in the prompt. The block already carries its own
+    // markdown heading ("## Recommended action: run_procedure" or "## Proven
+    // Procedure Available") and a leading newline.
+    if let Some(block) = analysis.procedure_recommendation.as_ref() {
+        out.push_str(block);
+    }
+
     out
 }
 
@@ -410,6 +427,7 @@ fn simple_analysis(message: &str) -> IntentAnalysis {
             explanation: "Short/simple message — skipped LLM analysis".to_string(),
         },
         rewritten_prompt: String::new(),
+        procedure_recommendation: None,
     }
 }
 
@@ -432,6 +450,101 @@ fn procedure_is_dispatchable(steps_json: &str, known_tool_names: &[&str]) -> boo
     parsed
         .iter()
         .all(|s| known_tool_names.iter().any(|n| *n == s.action))
+}
+
+/// Recall procedures matching the user's request and render the top hit as a
+/// markdown block destined for the root agent's system prompt.
+///
+/// Two-tier surfacing (matches the prior in-line logic verbatim, just routed
+/// to the correct LLM):
+///   * Promoted recommendation — dispatchable AND `score > 0.85` AND
+///     `success_count >= 3`. Emits "## Recommended action: run_procedure" with
+///     a concrete suggested call.
+///   * Legacy advisory — `score > 0.7` AND `success_count >= 2`. Emits
+///     "## Proven Procedure Available" with the procedure's steps as context.
+///
+/// Returns `None` when recall returns no hits, no procedure clears either
+/// gate, or `memory_recall` isn't wired. Empty `tool_inventory` disables the
+/// promotion path; the legacy fallback still fires so test surface stays
+/// intact.
+///
+/// Always emits an info-level log line so the recall + gate decision is
+/// observable without DEBUG-level tracing.
+async fn build_procedure_recommendation(
+    memory_recall: Option<&crate::recall::MemoryRecall>,
+    user_message: &str,
+    tool_inventory: &[String],
+) -> Option<String> {
+    let recall = memory_recall?;
+    let procedures = match recall
+        .recall_procedures(user_message, "root", None, 3)
+        .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "recall_procedures failed in intent_analysis");
+            return None;
+        }
+    };
+
+    let top_score = procedures.first().map(|(_, s)| *s).unwrap_or(0.0);
+    let known_tools_owned: Vec<&str> = tool_inventory.iter().map(|s| s.as_str()).collect();
+    let mut emitted_kind: &str = "none";
+    let mut out: Option<String> = None;
+
+    for (proc, score) in &procedures {
+        let total = (proc.success_count + proc.failure_count).max(1) as f64;
+        let success_rate = proc.success_count as f64 / total;
+        let score_floor = 0.85;
+        let success_floor = 3;
+
+        let dispatchable = !known_tools_owned.is_empty()
+            && procedure_is_dispatchable(&proc.steps, &known_tools_owned);
+
+        if dispatchable && *score > score_floor && proc.success_count >= success_floor {
+            out = Some(format!(
+                "\n## Recommended action: run_procedure\n\
+                 A learned procedure matches this request.\n\
+                 - Name: `{}`\n\
+                 - Description: {}\n\
+                 - Success rate: {:.0}% across {} uses\n\
+                 - Parameters: {}\n\n\
+                 Suggested call:\n\
+                 ```\n\
+                 run_procedure(name=\"{}\", args={{...fill from user request...}})\n\
+                 ```\n\
+                 If the procedure doesn't fit, ignore this recommendation and proceed normally.\n",
+                proc.name,
+                proc.description,
+                success_rate * 100.0,
+                proc.success_count,
+                proc.parameters.as_deref().unwrap_or("[]"),
+                proc.name,
+            ));
+            emitted_kind = "promoted";
+            break;
+        } else if *score > 0.7 && proc.success_count >= 2 {
+            out = Some(format!(
+                "\n## Proven Procedure Available: {}\n{}\nSteps: {}\nSuccess rate: {:.0}% ({} uses)\n",
+                proc.name,
+                proc.description,
+                proc.steps,
+                success_rate * 100.0,
+                proc.success_count,
+            ));
+            emitted_kind = "advisory";
+            break;
+        }
+    }
+
+    tracing::info!(
+        matched = procedures.len(),
+        top_score = top_score,
+        emitted = emitted_kind,
+        "Procedure recall and gate decision"
+    );
+
+    out
 }
 
 /// Analyze user intent: searches semantically for resources, calls LLM.
@@ -505,66 +618,13 @@ pub async fn analyze_intent(
     // Only the top match is surfaced either way. An empty tool inventory
     // (tests / no registry snapshot) disables the promotion path; the
     // legacy fallback still fires so existing test surface stays intact.
-    let mut procedure_context = String::new();
-    if let Some(recall) = memory_recall {
-        if let Ok(procedures) = recall
-            .recall_procedures(user_message, "root", None, 3)
-            .await
-        {
-            let known_tools_owned: Vec<&str> = tool_inventory.iter().map(|s| s.as_str()).collect();
-
-            for (proc, score) in &procedures {
-                let total = (proc.success_count + proc.failure_count).max(1) as f64;
-                let success_rate = proc.success_count as f64 / total;
-                let score_floor = 0.85;
-                let success_floor = 3;
-
-                let dispatchable = !known_tools_owned.is_empty()
-                    && procedure_is_dispatchable(&proc.steps, &known_tools_owned);
-
-                if dispatchable && *score > score_floor && proc.success_count >= success_floor {
-                    // Promoted: actionable recommendation.
-                    procedure_context = format!(
-                        "\n## Recommended action: run_procedure\n\
-                         A learned procedure matches this request.\n\
-                         - Name: `{}`\n\
-                         - Description: {}\n\
-                         - Success rate: {:.0}% across {} uses\n\
-                         - Parameters: {}\n\n\
-                         Suggested call:\n\
-                         ```\n\
-                         run_procedure(name=\"{}\", args={{...fill from user request...}})\n\
-                         ```\n\
-                         If the procedure doesn't fit, ignore this recommendation and proceed normally.\n",
-                        proc.name,
-                        proc.description,
-                        success_rate * 100.0,
-                        proc.success_count,
-                        proc.parameters.as_deref().unwrap_or("[]"),
-                        proc.name,
-                    );
-                    break;
-                } else if *score > 0.7 && proc.success_count >= 2 {
-                    // Legacy advisory fallback.
-                    procedure_context = format!(
-                        "\n## Proven Procedure Available: {}\n{}\nSteps: {}\nSuccess rate: {:.0}% ({} uses)\n",
-                        proc.name,
-                        proc.description,
-                        proc.steps,
-                        success_rate * 100.0,
-                        proc.success_count,
-                    );
-                    break;
-                }
-            }
-        }
-    }
-
-    // Combine memory context with procedure context
-    let mut memory_context = memory_context;
-    if !procedure_context.is_empty() {
-        memory_context = format!("{}\n{}", memory_context, procedure_context);
-    }
+    // Procedure surfacing is computed AFTER the classifier returns and attached
+    // to the result struct. It must not enter `memory_context` — that text is
+    // consumed by the intent-analysis classifier LLM, not the root agent. The
+    // root agent's system prompt is built downstream by `format_intent_injection`,
+    // which reads from the `IntentAnalysis` fields. Routing the recommendation
+    // through the struct ensures it reaches the agent that actually decides
+    // whether to call `run_procedure`.
 
     if !memory_context.is_empty() {
         tracing::info!(
@@ -625,14 +685,23 @@ pub async fn analyze_intent(
     let content = strip_markdown_fences(&response.content);
 
     // Step 5: Parse response
-    let analysis: IntentAnalysis = serde_json::from_str(&content)
+    let mut analysis: IntentAnalysis = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse intent analysis JSON: {}", e))?;
+
+    // Step 6: Compute procedure recommendation and attach to the analysis.
+    // This block is what `format_intent_injection` will render into the root
+    // agent's system prompt downstream — the LLM that actually decides
+    // whether to call `run_procedure`. Failures here log a warning and leave
+    // the field None (request still succeeds without the surfacing).
+    analysis.procedure_recommendation =
+        build_procedure_recommendation(memory_recall, user_message, tool_inventory).await;
 
     tracing::info!(
         primary_intent = %analysis.primary_intent,
         hidden_intents = analysis.hidden_intents.len(),
         ward = %analysis.ward_recommendation.ward_name,
         approach = %analysis.execution_strategy.approach,
+        procedure_attached = analysis.procedure_recommendation.is_some(),
         "Intent analysis complete"
     );
 
@@ -1886,6 +1955,7 @@ mod tests {
                 explanation: "Research then analyze".to_string(),
             },
             rewritten_prompt: String::new(),
+            procedure_recommendation: None,
         };
 
         let injection = format_intent_injection(&analysis, None, None);
@@ -1917,6 +1987,7 @@ mod tests {
                 explanation: "test".to_string(),
             },
             rewritten_prompt: String::new(),
+            procedure_recommendation: None,
         };
 
         let injection = format_intent_injection(&analysis, None, None);
@@ -1945,6 +2016,7 @@ mod tests {
                 explanation: "test".to_string(),
             },
             rewritten_prompt: String::new(),
+            procedure_recommendation: None,
         };
 
         let injection =
@@ -2012,9 +2084,72 @@ mod tests {
                 explanation: "test".to_string(),
             },
             rewritten_prompt: String::new(),
+            procedure_recommendation: None,
         };
 
         let injection = format_intent_injection(&analysis, None, None);
         assert!(!injection.contains("Domain Spec Guidance:"));
+    }
+
+    #[test]
+    fn procedure_recommendation_flows_into_injection() {
+        // Confirms the routing fix: a recommendation attached to IntentAnalysis
+        // shows up in the root-agent system prompt rendered by format_intent_injection.
+        let analysis = IntentAnalysis {
+            primary_intent: "peer valuation".to_string(),
+            hidden_intents: vec![],
+            recommended_skills: vec![],
+            recommended_agents: vec![],
+            ward_recommendation: WardRecommendation {
+                action: "use_existing".to_string(),
+                ward_name: "financial-analysis".to_string(),
+                subdirectory: None,
+                structure: Default::default(),
+                reason: "test".to_string(),
+            },
+            execution_strategy: ExecutionStrategy {
+                approach: "graph".to_string(),
+                graph: None,
+                explanation: "test".to_string(),
+            },
+            rewritten_prompt: String::new(),
+            procedure_recommendation: Some(
+                "\n## Recommended action: run_procedure\nrun_procedure(name=\"peer_valuation_analysis\", ...)\n"
+                    .to_string(),
+            ),
+        };
+        let injection = format_intent_injection(&analysis, None, None);
+        assert!(
+            injection.contains("## Recommended action: run_procedure"),
+            "injection missing procedure block; got:\n{injection}"
+        );
+        assert!(injection.contains("peer_valuation_analysis"));
+    }
+
+    #[test]
+    fn procedure_recommendation_absent_when_none() {
+        let analysis = IntentAnalysis {
+            primary_intent: "x".to_string(),
+            hidden_intents: vec![],
+            recommended_skills: vec![],
+            recommended_agents: vec![],
+            ward_recommendation: WardRecommendation {
+                action: "use_existing".to_string(),
+                ward_name: "x".to_string(),
+                subdirectory: None,
+                structure: Default::default(),
+                reason: "test".to_string(),
+            },
+            execution_strategy: ExecutionStrategy {
+                approach: "simple".to_string(),
+                graph: None,
+                explanation: "test".to_string(),
+            },
+            rewritten_prompt: String::new(),
+            procedure_recommendation: None,
+        };
+        let injection = format_intent_injection(&analysis, None, None);
+        assert!(!injection.contains("Recommended action: run_procedure"));
+        assert!(!injection.contains("Proven Procedure Available"));
     }
 }
