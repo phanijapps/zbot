@@ -333,7 +333,6 @@ fn default_pattern_tool_whitelist() -> Vec<String> {
         "read",
         "write",
         "edit",
-        "read_file",
         "write_file",
         "edit_file",
         "grep",

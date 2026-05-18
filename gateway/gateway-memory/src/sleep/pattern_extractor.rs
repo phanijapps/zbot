@@ -981,21 +981,24 @@ mod tests {
         let input = PatternInput {
             task_summary_a: "Investigate postgres timeout".into(),
             task_summary_b: "Investigate postgres pool exhaustion".into(),
-            tool_sequence_a: vec!["shell".into(), "read_file".into()],
-            tool_sequence_b: vec!["shell".into(), "read_file".into()],
-            matched_prefix: vec!["shell".into(), "read_file".into()],
-            tool_whitelist: "shell, read_file, grep, edit_file".into(),
+            tool_sequence_a: vec!["shell".into(), "read".into()],
+            tool_sequence_b: vec!["shell".into(), "read".into()],
+            matched_prefix: vec!["shell".into(), "read".into()],
+            tool_whitelist: "shell, read, grep, edit_file".into(),
         };
 
         let prompt = build_pattern_prompt(&input);
 
+        // Anchor checks to the rendered CSV whitelist so they survive future
+        // prompt edits without matching incidental substrings (e.g. "read"
+        // inside a longer word).
         assert!(
-            prompt.contains("shell"),
-            "prompt should include 'shell' from whitelist"
+            prompt.contains("shell, read, grep, edit_file"),
+            "prompt should render the tool whitelist verbatim"
         );
         assert!(
-            prompt.contains("read_file"),
-            "prompt should include 'read_file' from whitelist"
+            prompt.contains(", read,"),
+            "prompt should include the real 'read' tool name from the whitelist"
         );
         assert!(
             prompt.contains("STRICT REQUIREMENTS"),
