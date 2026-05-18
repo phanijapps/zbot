@@ -68,3 +68,39 @@ async fn insert_pattern_procedure_persists_embedding() {
         "expected inserted procedure {id} to be returned by similarity search; got {results:?}",
     );
 }
+
+#[tokio::test]
+async fn get_procedure_by_name_returns_full_row() {
+    let (_tmp, store) = test_procedure_store();
+    let req = PatternProcedureInsert {
+        agent_id: "root".into(),
+        ward_id: Some("__global__".into()),
+        name: "find_me".into(),
+        description: "a procedure".into(),
+        trigger_pattern: None,
+        steps_json: r#"[{"action":"shell","args":{"cmd":"ls"},"binds":[]}]"#.into(),
+        parameters_json: Some(r#"["dir"]"#.into()),
+        embedding: None,
+    };
+    store.insert_pattern_procedure(req).await.unwrap();
+    let found = store
+        .get_procedure_by_name("root", "find_me")
+        .await
+        .unwrap();
+    let proc = found.expect("not found");
+    assert_eq!(proc.name, "find_me");
+    assert_eq!(proc.description, "a procedure");
+    assert_eq!(proc.ward_id.as_deref(), Some("__global__"));
+    assert!(proc.steps.contains("shell"));
+    assert_eq!(proc.parameters.as_deref(), Some(r#"["dir"]"#));
+}
+
+#[tokio::test]
+async fn get_procedure_by_name_returns_none_when_missing() {
+    let (_tmp, store) = test_procedure_store();
+    let found = store
+        .get_procedure_by_name("root", "nonexistent")
+        .await
+        .unwrap();
+    assert!(found.is_none());
+}

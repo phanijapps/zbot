@@ -100,6 +100,17 @@ pub trait ProcedureStore: Send + Sync {
         Ok(None)
     }
 
+    /// Look up a full procedure row by `(agent_id, name)`. Returns the
+    /// complete `Procedure` so callers (e.g., `RunProcedureTool`) can access
+    /// `steps`, `parameters`, etc. Default: not implemented.
+    async fn get_procedure_by_name(
+        &self,
+        _agent_id: &str,
+        _name: &str,
+    ) -> Result<Option<Procedure>, String> {
+        Ok(None)
+    }
+
     /// Insert a synthesised procedure pattern. Pre-built from the
     /// LLM's structured response by `PatternExtractor`. Returns the
     /// procedure id used. Default: no-op error so misuse is loud.
