@@ -17,8 +17,8 @@ use agent_runtime::llm::ChatMessage;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use zero_stores_traits::{
-    CompactionStore, ConversationStore, EpisodeStore, PatternProcedureInsert, ProcedureStore,
-    SuccessfulEpisode,
+    CompactionStore, ConversationStore, EpisodeStore, PatternProcedureInsert, PatternStep,
+    ProcedureStore, SuccessfulEpisode,
 };
 
 use crate::util::parse_llm_json;
@@ -63,27 +63,6 @@ pub struct PatternResponse {
     #[serde(default)]
     pub parameters: Vec<String>,
     pub steps: Vec<PatternStep>,
-}
-
-/// Single step of a generalized pattern.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct PatternStep {
-    /// Tool name to dispatch (validated strict against ToolRegistry at run time).
-    pub action: String,
-    /// Structured arguments for the tool. May contain `{step_N.field}`
-    /// interpolation tokens that the sub-executor resolves.
-    #[serde(default)]
-    pub args: serde_json::Map<String, serde_json::Value>,
-    /// Field names to extract from this step's result and bind into
-    /// `vars[step_N]` for later interpolation. Empty = bind whole result.
-    #[serde(default)]
-    pub binds: Vec<String>,
-    #[serde(default)]
-    pub agent: Option<String>,
-    #[serde(default)]
-    pub note: Option<String>,
-    #[serde(default)]
-    pub task_template: Option<String>,
 }
 
 /// Context passed to the LLM for generalization.

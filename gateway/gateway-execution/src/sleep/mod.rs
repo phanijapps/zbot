@@ -35,7 +35,6 @@ pub use kg_backfill::{KgBackfillStats, KgBackfiller};
 pub use orphan_archiver::{OrphanArchiver, OrphanArchiverStats};
 pub use pattern_extractor::{
     LlmPatternExtractor, PatternExtractLlm, PatternExtractor, PatternResponse, PatternStats,
-    PatternStep,
 };
 pub use pruner::{PruneStats, Pruner};
 pub use synthesizer::{

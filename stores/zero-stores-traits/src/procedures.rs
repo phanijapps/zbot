@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 // Domain types live in `zero-stores-domain`; re-export here so the
 // trait surface keeps working for callers that import from this crate.
-pub use zero_stores_domain::{PatternProcedureInsert, Procedure, ProcedureSummary};
+pub use zero_stores_domain::{PatternProcedureInsert, PatternStep, Procedure, ProcedureSummary};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProcedureStats {

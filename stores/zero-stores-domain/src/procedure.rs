@@ -57,3 +57,23 @@ pub struct PatternProcedureInsert {
     #[serde(default)]
     pub embedding: Option<Vec<f32>>,
 }
+
+/// One step of a learned procedure. The `action` is a tool name validated
+/// strict against the live `ToolRegistry` at run time. `args` may carry
+/// `{step_N.field}` interpolation tokens (resolved by `RunProcedureTool`).
+/// `binds` lists fields to extract from this step's result for use in
+/// later interpolations.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PatternStep {
+    pub action: String,
+    #[serde(default)]
+    pub args: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub binds: Vec<String>,
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub task_template: Option<String>,
+}
