@@ -195,6 +195,7 @@ impl MemoryServices {
             compaction_store.clone(),
             pattern_llm,
             embedding_client.clone(),
+            default_pattern_tool_whitelist(),
         ));
 
         let orphan_archiver = Arc::new(OrphanArchiver::new(
@@ -317,4 +318,49 @@ impl MemoryServices {
             belief_network_activity,
         }
     }
+}
+
+/// Tool names the LLM pattern extractor may emit as procedure step
+/// `action` fields. Sourced statically from the executor's tool
+/// registry surface (`runtime/agent-tools/src/tools/*`) — kept in this
+/// crate so the memory composition site doesn't take an
+/// `agent-tools` dependency. When the registry becomes reachable from
+/// here (Task 10), this static list will be replaced by a live
+/// `tool_names()` query.
+fn default_pattern_tool_whitelist() -> Vec<String> {
+    [
+        "shell",
+        "read",
+        "write",
+        "edit",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "grep",
+        "glob",
+        "web_fetch",
+        "memory",
+        "graph_query",
+        "execution_graph",
+        "todos",
+        "update_plan",
+        "goal",
+        "ward",
+        "list_agents",
+        "create_agent",
+        "list_skills",
+        "list_tools",
+        "list_mcps",
+        "load_skill",
+        "ingest",
+        "multimodal_analyze",
+        "query_resource",
+        "request_input",
+        "show_content",
+        "set_session_title",
+        "python",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }

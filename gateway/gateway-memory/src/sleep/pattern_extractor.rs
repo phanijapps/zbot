@@ -94,6 +94,11 @@ pub struct PatternInput {
     pub tool_sequence_a: Vec<String>,
     pub tool_sequence_b: Vec<String>,
     pub matched_prefix: Vec<String>,
+    /// Comma-separated list of registered tool names — the LLM must pick
+    /// `action` values from this list. Populated by the composition site
+    /// from the live `ToolRegistry`. Empty string is allowed for tests /
+    /// boot-time degraded mode.
+    pub tool_whitelist: String,
 }
 
 /// Abstraction so tests can inject a mock LLM without touching the network.
@@ -118,6 +123,10 @@ pub struct PatternExtractor {
     /// `embed()` call fails, the insert still proceeds — the embedding
     /// is observability for vec-similarity recall, not correctness.
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
+    /// Registered tool names the LLM may pick from when emitting
+    /// procedure step `action` fields. Plumbed in from composition
+    /// (`services.rs`); empty for tests / degraded mode.
+    tool_whitelist: Vec<String>,
 }
 
 impl PatternExtractor {
@@ -128,6 +137,7 @@ impl PatternExtractor {
         compaction_store: Arc<dyn CompactionStore>,
         llm: Arc<dyn PatternExtractLlm>,
         embedding_client: Option<Arc<dyn EmbeddingClient>>,
+        tool_whitelist: Vec<String>,
     ) -> Self {
         Self {
             episode_store,
@@ -136,6 +146,7 @@ impl PatternExtractor {
             compaction_store,
             llm,
             embedding_client,
+            tool_whitelist,
         }
     }
 
@@ -205,6 +216,7 @@ impl PatternExtractor {
             tool_sequence_a: tools_a,
             tool_sequence_b: tools_b,
             matched_prefix: matched,
+            tool_whitelist: self.tool_whitelist.join(", "),
         };
 
         stats.llm_calls_made += 1;
@@ -449,24 +461,7 @@ impl LlmPatternExtractor {
 impl PatternExtractLlm for LlmPatternExtractor {
     async fn generalize(&self, input: &PatternInput) -> Result<PatternResponse, String> {
         let client = self.client.get().await?;
-        let prompt = format!(
-            "Two recent successful agent sessions shared a recurring tool-call \
-             sequence. Generalize it into a reusable procedure.\n\n\
-             Return ONLY JSON: {{\"name\": snake_case_string, \"description\": string, \
-             \"trigger_pattern\": string, \"parameters\": [string], \
-             \"steps\": [{{\"action\": string, \"agent\": string|null, \
-             \"note\": string|null, \"task_template\": string|null}}]}}.\n\n\
-             Session A task: {sa}\n\
-             Session A tool sequence: {ta:?}\n\n\
-             Session B task: {sb}\n\
-             Session B tool sequence: {tb:?}\n\n\
-             Matched prefix: {mp:?}",
-            sa = input.task_summary_a,
-            sb = input.task_summary_b,
-            ta = input.tool_sequence_a,
-            tb = input.tool_sequence_b,
-            mp = input.matched_prefix,
-        );
+        let prompt = build_pattern_prompt(input);
         let messages = vec![
             ChatMessage::system("You return only valid JSON.".to_string()),
             ChatMessage::user(prompt),
@@ -477,6 +472,50 @@ impl PatternExtractLlm for LlmPatternExtractor {
             .map_err(|e| format!("LLM call: {e}"))?;
         parse_llm_json::<PatternResponse>(&response.content)
     }
+}
+
+/// Build the LLM prompt for pattern generalization. Pulled out of
+/// `LlmPatternExtractor::generalize` so tests can inspect the exact
+/// prompt the production extractor builds.
+///
+/// The prompt enforces a dispatchable shape: `action` must come from
+/// the tool whitelist, `args` must be a JSON object, and `binds` lists
+/// which fields of a step's result are exposed for `{step_N.field}`
+/// interpolation in later steps.
+pub(crate) fn build_pattern_prompt(input: &PatternInput) -> String {
+    format!(
+        "Two recent successful agent sessions shared a recurring tool-call sequence. \
+         Generalize it into a reusable procedure that can be DISPATCHED by an automated executor.\n\n\
+         STRICT REQUIREMENTS:\n\
+         - Each step's `action` MUST be one of the following registered tool names: {whitelist}.\n\
+         - Each step's `args` MUST be a JSON object containing the tool's required arguments.\n\
+         - Use `{{step_N.field}}` (e.g., `{{step_0.stdout}}`) to reference previous step output.\n\
+         - `binds` lists field names to extract from a step's result for later interpolation. \
+           Omit (empty list) for steps whose output isn't referenced.\n\
+         - Procedures must be parameterizable: top-level `parameters` lists `{{parameter}}` names \
+           used in step args.\n\n\
+         Return ONLY JSON:\n\
+         {{\n\
+           \"name\": snake_case_string,\n\
+           \"description\": string,\n\
+           \"trigger_pattern\": string,\n\
+           \"parameters\": [string],\n\
+           \"steps\": [\n\
+             {{\"action\": string, \"args\": object, \"binds\": [string], \"note\": string|null}}\n\
+           ]\n\
+         }}\n\n\
+         Session A task: {sa}\n\
+         Session A tool sequence: {ta:?}\n\n\
+         Session B task: {sb}\n\
+         Session B tool sequence: {tb:?}\n\n\
+         Matched prefix: {mp:?}",
+        whitelist = input.tool_whitelist,
+        sa = input.task_summary_a,
+        ta = input.tool_sequence_a,
+        sb = input.task_summary_b,
+        tb = input.tool_sequence_b,
+        mp = input.matched_prefix,
+    )
 }
 
 // ============================================================================
@@ -709,6 +748,7 @@ mod tests {
             h.compaction_store.clone(),
             mock.clone(),
             None,
+            vec!["shell".into(), "read_file".into()],
         );
 
         let stats = ext.run_cycle("run-pe-1").await.expect("run_cycle");
@@ -770,6 +810,7 @@ mod tests {
             h.compaction_store.clone(),
             mock,
             None,
+            Vec::new(),
         );
         let stats = ext.run_cycle("run-pe-2").await.expect("run_cycle");
         assert_eq!(stats.procedures_inserted, 0);
@@ -896,6 +937,7 @@ mod tests {
             Arc::new(NoopCompactionStore) as Arc<dyn CompactionStore>,
             mock_llm,
             Some(embed.clone() as Arc<dyn EmbeddingClient>),
+            Vec::new(),
         );
 
         let mut stats = PatternStats::default();
@@ -932,5 +974,37 @@ mod tests {
             Some("cargo test {test_name}")
         );
         assert_eq!(step.binds, vec!["assertion".to_string()]);
+    }
+
+    #[test]
+    fn pattern_prompt_includes_tool_whitelist_and_strict_requirements() {
+        let input = PatternInput {
+            task_summary_a: "Investigate postgres timeout".into(),
+            task_summary_b: "Investigate postgres pool exhaustion".into(),
+            tool_sequence_a: vec!["shell".into(), "read_file".into()],
+            tool_sequence_b: vec!["shell".into(), "read_file".into()],
+            matched_prefix: vec!["shell".into(), "read_file".into()],
+            tool_whitelist: "shell, read_file, grep, edit_file".into(),
+        };
+
+        let prompt = build_pattern_prompt(&input);
+
+        assert!(
+            prompt.contains("shell"),
+            "prompt should include 'shell' from whitelist"
+        );
+        assert!(
+            prompt.contains("read_file"),
+            "prompt should include 'read_file' from whitelist"
+        );
+        assert!(
+            prompt.contains("STRICT REQUIREMENTS"),
+            "prompt should declare strict requirements"
+        );
+        assert!(prompt.contains("args"), "prompt should mention args field");
+        assert!(
+            prompt.contains("binds"),
+            "prompt should mention binds field"
+        );
     }
 }
