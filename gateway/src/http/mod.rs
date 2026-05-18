@@ -227,6 +227,7 @@ pub fn create_http_router(
             get(memory::search_all_memory_facts).post(memory_search::memory_search),
         )
         .route("/api/memory/consolidate", post(memory::consolidate))
+        .route("/api/procedures/dedupe", post(memory::dedupe_procedures))
         .route("/api/memory/stats", get(memory::stats))
         .route("/api/memory/health", get(memory::health))
         .route(

@@ -247,6 +247,65 @@ impl ProcedureRepository {
         })
     }
 
+    /// Collapse duplicates by `(agent_id, name)`. For each name group with
+    /// 2+ rows, keeps the row with the highest `success_count` (ties broken
+    /// by most recent `created_at`) and deletes the rest. Cleans up
+    /// `procedures_index` rows for deleted ids so similarity search stays
+    /// consistent with the canonical row.
+    ///
+    /// Returns the number of rows deleted. Idempotent — a second call on a
+    /// deduped table is a no-op.
+    pub fn dedupe_by_name(&self) -> Result<usize, String> {
+        let vec_index = &self.vec_index;
+        // Phase 1: identify the canonical id per (agent_id, name) group via
+        // a window function. Anything not in the keep-set is deleted.
+        let to_delete: Vec<String> = self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id FROM (
+                     SELECT id,
+                            ROW_NUMBER() OVER (
+                              PARTITION BY agent_id, name
+                              ORDER BY success_count DESC, created_at DESC, id ASC
+                            ) AS rn
+                     FROM procedures
+                 )
+                 WHERE rn > 1",
+            )?;
+            let ids = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .filter_map(|r| r.ok())
+                .collect::<Vec<_>>();
+            Ok(ids)
+        })?;
+        if to_delete.is_empty() {
+            return Ok(0);
+        }
+        // Phase 2: delete in batches (SQLite parameter limit ~999).
+        let mut deleted = 0usize;
+        for chunk in to_delete.chunks(500) {
+            let placeholders = (0..chunk.len())
+                .map(|i| format!("?{}", i + 1))
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!("DELETE FROM procedures WHERE id IN ({placeholders})");
+            let chunk_ids: Vec<String> = chunk.to_vec();
+            let n = self.db.with_connection(|conn| {
+                let mut stmt = conn.prepare(&sql)?;
+                let params_iter = rusqlite::params_from_iter(chunk_ids.iter());
+                let n = stmt.execute(params_iter)?;
+                Ok(n)
+            })?;
+            deleted += n;
+            // Phase 3: clean up the vec index so the deleted procedure_ids
+            // don't haunt similarity search. vec_index.delete is a no-op for
+            // missing ids, so safe to call unconditionally.
+            for id in chunk {
+                vec_index.delete(id).ok();
+            }
+        }
+        Ok(deleted)
+    }
+
     /// Increment failure count.
     pub fn increment_failure(&self, id: &str) -> Result<(), String> {
         self.db.with_connection(|conn| {

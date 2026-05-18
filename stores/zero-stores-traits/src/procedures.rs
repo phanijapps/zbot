@@ -111,6 +111,22 @@ pub trait ProcedureStore: Send + Sync {
         Ok(None)
     }
 
+    /// Dedupe procedures by `(agent_id, name)`. For each group with 2+
+    /// rows, keeps the highest-`success_count` row (ties broken by most
+    /// recent `created_at`) and deletes the rest. Returns the number of
+    /// rows deleted.
+    ///
+    /// Maintenance routine for cleaning up months of mining duplicates —
+    /// PatternExtractor without dedup floored every cycle to keep
+    /// generating new rows. The dedup floor (`success_count >= 2` in the
+    /// extractor) prevents new duplicates going forward; this method
+    /// retroactively collapses the existing pile. Vec-index rows are
+    /// cleaned up alongside the procedure rows so similarity search
+    /// stays consistent.
+    async fn dedupe_procedures_by_name(&self) -> Result<usize, String> {
+        Ok(0)
+    }
+
     /// Insert a synthesised procedure pattern. Pre-built from the
     /// LLM's structured response by `PatternExtractor`. Returns the
     /// procedure id used. Default: no-op error so misuse is loud.

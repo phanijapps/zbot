@@ -81,6 +81,10 @@ impl ProcedureStore for GatewayProcedureStore {
         self.repo.increment_failure(id)
     }
 
+    async fn dedupe_procedures_by_name(&self) -> Result<usize, String> {
+        self.repo.dedupe_by_name()
+    }
+
     async fn procedure_stats(&self) -> Result<ProcedureStats, String> {
         // ProcedureRepository doesn't expose a global count; defer to default.
         Ok(ProcedureStats::default())

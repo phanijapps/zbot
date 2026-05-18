@@ -132,6 +132,100 @@ async fn insert_pattern_procedure_records_evidence_count() {
     assert_eq!(proc.success_count, 4);
 }
 
+#[tokio::test]
+async fn dedupe_procedures_by_name_keeps_highest_sc_per_name() {
+    let (_tmp, store) = test_procedure_store();
+
+    // Insert 4 rows total under 2 names:
+    //   - "alpha"  3 copies (sc=1, sc=3, sc=2) → keep the sc=3 row
+    //   - "beta"   1 copy   (sc=5)             → unchanged
+    let rows = [
+        ("proc-a1", "alpha", 1),
+        ("proc-a2", "alpha", 3),
+        ("proc-a3", "alpha", 2),
+        ("proc-b1", "beta", 5),
+    ];
+    for (id, name, sc) in rows {
+        let proc = zero_stores_sqlite::Procedure {
+            id: id.into(),
+            agent_id: "root".into(),
+            ward_id: Some("__global__".into()),
+            name: name.into(),
+            description: format!("desc {id}"),
+            trigger_pattern: None,
+            steps: "[]".into(),
+            parameters: None,
+            success_count: sc,
+            failure_count: 0,
+            avg_duration_ms: None,
+            avg_token_cost: None,
+            last_used: None,
+            embedding: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let v = serde_json::to_value(&proc).unwrap();
+        store.upsert_procedure(v, None).await.unwrap();
+    }
+
+    let deleted = store.dedupe_procedures_by_name().await.unwrap();
+    assert_eq!(deleted, 2, "should delete the 2 lower-sc 'alpha' rows");
+
+    // The kept alpha row is proc-a2 (sc=3).
+    let alpha = store
+        .get_procedure_by_name("root", "alpha")
+        .await
+        .unwrap()
+        .expect("alpha survived");
+    assert_eq!(alpha.id, "proc-a2");
+    assert_eq!(alpha.success_count, 3);
+
+    // beta unchanged.
+    let beta = store
+        .get_procedure_by_name("root", "beta")
+        .await
+        .unwrap()
+        .expect("beta survived");
+    assert_eq!(beta.id, "proc-b1");
+    assert_eq!(beta.success_count, 5);
+
+    // Idempotent — second call deletes nothing.
+    let deleted2 = store.dedupe_procedures_by_name().await.unwrap();
+    assert_eq!(deleted2, 0);
+}
+
+#[tokio::test]
+async fn dedupe_procedures_by_name_noop_when_no_duplicates() {
+    let (_tmp, store) = test_procedure_store();
+    let proc = zero_stores_sqlite::Procedure {
+        id: "proc-solo".into(),
+        agent_id: "root".into(),
+        ward_id: Some("__global__".into()),
+        name: "solo".into(),
+        description: "only one".into(),
+        trigger_pattern: None,
+        steps: "[]".into(),
+        parameters: None,
+        success_count: 1,
+        failure_count: 0,
+        avg_duration_ms: None,
+        avg_token_cost: None,
+        last_used: None,
+        embedding: None,
+        created_at: "2026-01-01T00:00:00Z".into(),
+        updated_at: "2026-01-01T00:00:00Z".into(),
+    };
+    let v = serde_json::to_value(&proc).unwrap();
+    store.upsert_procedure(v, None).await.unwrap();
+    let deleted = store.dedupe_procedures_by_name().await.unwrap();
+    assert_eq!(deleted, 0);
+    assert!(store
+        .get_procedure_by_name("root", "solo")
+        .await
+        .unwrap()
+        .is_some());
+}
+
 #[test]
 fn pattern_procedure_insert_defaults_success_count_for_back_compat() {
     // Older serialized payloads omit `success_count` — they should default to
