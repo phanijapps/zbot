@@ -532,15 +532,6 @@ impl ExecutionRunner {
         self.goal_adapter = Some(adapter);
     }
 
-    /// Late-wired setter for the trait-routed procedure store. Mirrored to
-    /// the bootstrap so `InvokeBootstrap::finish_setup` reads its own clone
-    /// at session-setup time. Wired by AppState so the `run_procedure`
-    /// tool registers regardless of backend.
-    pub fn set_procedure_store(&mut self, store: Arc<dyn zero_stores_traits::ProcedureStore>) {
-        self.bootstrap.procedure_store = Some(store.clone());
-        self.procedure_store = Some(store);
-    }
-
     /// Build a [`RunnerContinuationInvoker`] from this runner's fields.
     ///
     /// Called from `with_config` to wire the `ContinuationWatcher` before
