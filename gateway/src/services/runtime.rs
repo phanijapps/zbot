@@ -88,6 +88,7 @@ impl RuntimeService {
             None, // kg_episode_repo
             None, // ingestion_adapter
             None, // goal_adapter
+            None, // procedure_store
             memory_llm_factory,
         )
     }
@@ -116,6 +117,7 @@ impl RuntimeService {
         kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
         ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
         goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+        procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
         memory_llm_factory: Arc<dyn gateway_memory::MemoryLlmFactory>,
     ) -> Self {
         let handoff_writer = memory_store.as_ref().map(|fs| {
@@ -149,6 +151,7 @@ impl RuntimeService {
             bridge_registry,
             bridge_outbox,
             embedding_client,
+            procedure_store,
             max_parallel_agents,
         });
 

@@ -87,6 +87,8 @@ pub struct ExecutorBuilder {
     agent_result_bus: Option<Arc<AgentResultBus>>,
     state_service: Option<Arc<StateService<DatabaseManager>>>,
     conversation_repo: Option<Arc<ConversationRepository>>,
+    /// Trait-routed procedure store for the `run_procedure` tool.
+    procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
     chat_mode: bool,
 }
@@ -110,6 +112,7 @@ impl ExecutorBuilder {
             agent_result_bus: None,
             state_service: None,
             conversation_repo: None,
+            procedure_store: None,
             extra_initial_state: None,
             chat_mode: false,
         }
@@ -118,6 +121,15 @@ impl ExecutorBuilder {
     /// Set the memory fact store for DB-backed save_fact/recall.
     pub fn with_fact_store(mut self, fact_store: Arc<dyn MemoryFactStore>) -> Self {
         self.fact_store = Some(fact_store);
+        self
+    }
+
+    /// Set the trait-routed procedure store for the `run_procedure` tool.
+    pub fn with_procedure_store(
+        mut self,
+        procedure_store: Arc<dyn zero_stores_traits::ProcedureStore>,
+    ) -> Self {
+        self.procedure_store = Some(procedure_store);
         self
     }
 
@@ -612,6 +624,23 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(RespondTool::new()));
             tool_registry.register(Arc::new(DelegateTool::new()));
             tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
+
+            // Run learned procedures (root-only for Phase 1; subagents can use
+            // a follow-up). RunProcedureTool holds an `Arc<ToolRegistry>` of
+            // the tools it can dispatch against — a snapshot of the registry
+            // as it stands here, so the tool cannot recursively call itself.
+            if let Some(procedure_store) = self.procedure_store.clone() {
+                let mut dispatch_registry = ToolRegistry::new();
+                for t in tool_registry.get_all() {
+                    dispatch_registry.register(t.clone());
+                }
+                let dispatch_arc = Arc::new(dispatch_registry);
+                let run_procedure = agent_runtime::tools::run_procedure::RunProcedureTool::new(
+                    dispatch_arc,
+                    procedure_store,
+                );
+                tool_registry.register(Arc::new(run_procedure));
+            }
 
             // Steer running subagent (if steering registry wired)
             if let Some(ref sr) = self.steering_registry {

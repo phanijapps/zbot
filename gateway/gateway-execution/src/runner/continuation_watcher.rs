@@ -76,6 +76,7 @@ pub(crate) struct RunnerContinuationInvoker {
     pub(crate) kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     pub(crate) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(crate) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+    pub(crate) procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
 }
 
 #[async_trait]
@@ -116,6 +117,7 @@ impl ContinuationSpawner for RunnerContinuationInvoker {
             kg_episode_repo: self.kg_episode_repo.clone(),
             ingestion_adapter: self.ingestion_adapter.clone(),
             goal_adapter: self.goal_adapter.clone(),
+            procedure_store: self.procedure_store.clone(),
         })
         .await
     }

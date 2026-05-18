@@ -818,6 +818,7 @@ impl AppState {
             kg_episode_repo.clone(),
             ingestion_adapter,
             goal_adapter,
+            procedure_store_for_state.clone(),
             memory_llm_factory.clone(),
         ));
 

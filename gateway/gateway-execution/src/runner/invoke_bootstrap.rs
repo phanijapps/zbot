@@ -68,6 +68,8 @@ pub(super) struct InvokeBootstrap {
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     pub(super) steering_registry: Option<Arc<agent_runtime::SteeringRegistry>>,
     pub(super) agent_result_bus: Option<Arc<AgentResultBus>>,
+    /// Trait-routed procedure store used to build the executor's run_procedure tool.
+    pub(super) procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
     pub(super) event_bus: Arc<EventBus>,
     pub(super) handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
 }
@@ -613,6 +615,9 @@ impl InvokeBootstrap {
                 .with_state_service(self.state_service.clone())
                 .with_conversation_repo(self.conversation_repo.clone());
         }
+        if let Some(ref ps) = self.procedure_store {
+            builder = builder.with_procedure_store(ps.clone());
+        }
 
         // Intent analysis for root agent first turns only.
         // Note: execution_logs stores execution_id in the session_id column,
@@ -984,6 +989,7 @@ mod tests {
             goal_adapter: None,
             steering_registry: None,
             agent_result_bus: None,
+            procedure_store: None,
             event_bus: Arc::new(EventBus::new()),
             handles,
         };
