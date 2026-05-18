@@ -17,6 +17,137 @@ use zero_stores_traits::{PatternStep, ProcedureStore};
 
 use crate::tools::registry::ToolRegistry;
 
+mod interp {
+    use serde_json::{Map, Value};
+
+    /// Resolve `{step_N.field.subfield}` and `{args.key.subkey}` tokens
+    /// in a JSON Value tree.
+    ///
+    /// Full-string tokens (the whole string is `{token}`) substitute with the
+    /// resolved Value preserving its type. Embedded tokens (mixed with other
+    /// text) substitute by stringifying. Unresolved tokens are left unchanged.
+    pub fn resolve(
+        v: &Value,
+        prev_steps: &[Value],
+        top_args: &Value,
+        binds_per_step: &[Vec<String>],
+    ) -> Value {
+        match v {
+            Value::String(s) => resolve_string_value(s, prev_steps, top_args, binds_per_step),
+            Value::Array(a) => Value::Array(
+                a.iter()
+                    .map(|x| resolve(x, prev_steps, top_args, binds_per_step))
+                    .collect(),
+            ),
+            Value::Object(m) => {
+                let mut out = Map::new();
+                for (k, val) in m {
+                    out.insert(
+                        k.clone(),
+                        resolve(val, prev_steps, top_args, binds_per_step),
+                    );
+                }
+                Value::Object(out)
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// Decide whether a string is a full-string token (entire string is `{x}`)
+    /// or contains embedded tokens. Full-string tokens preserve their resolved
+    /// Value's type; embedded tokens stringify.
+    fn resolve_string_value(
+        s: &str,
+        prev_steps: &[Value],
+        top_args: &Value,
+        binds_per_step: &[Vec<String>],
+    ) -> Value {
+        // Full-string token form: starts with '{', ends with '}', and contains
+        // no nested braces between them.
+        if let Some(stripped) = s.strip_prefix('{').and_then(|x| x.strip_suffix('}')) {
+            if !stripped.contains('{') && !stripped.contains('}') {
+                if let Some(resolved) = lookup(stripped, prev_steps, top_args, binds_per_step) {
+                    return resolved;
+                }
+                // Unresolved full-string token — fall through and return the
+                // original literal so the dispatched tool sees the token text.
+                return Value::String(s.into());
+            }
+        }
+        // Embedded form: substitute each {token} we find.
+        Value::String(substitute_embedded(s, prev_steps, top_args, binds_per_step))
+    }
+
+    fn substitute_embedded(
+        s: &str,
+        prev_steps: &[Value],
+        top_args: &Value,
+        binds_per_step: &[Vec<String>],
+    ) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut rest = s;
+        while let Some(open) = rest.find('{') {
+            out.push_str(&rest[..open]);
+            if let Some(close_rel) = rest[open + 1..].find('}') {
+                let close = open + 1 + close_rel;
+                let token = &rest[open + 1..close];
+                if let Some(v) = lookup(token, prev_steps, top_args, binds_per_step) {
+                    match v {
+                        Value::String(t) => out.push_str(&t),
+                        other => out.push_str(&serde_json::to_string(&other).unwrap_or_default()),
+                    }
+                } else {
+                    // Unresolved token: pass through verbatim including the braces
+                    out.push_str(&rest[open..=close]);
+                }
+                rest = &rest[close + 1..];
+            } else {
+                // No matching close — emit the rest verbatim
+                out.push_str(&rest[open..]);
+                rest = "";
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    fn lookup(
+        path: &str,
+        prev_steps: &[Value],
+        top_args: &Value,
+        binds_per_step: &[Vec<String>],
+    ) -> Option<Value> {
+        let mut parts = path.split('.');
+        let head = parts.next()?;
+        let rest: Vec<&str> = parts.collect();
+
+        let root = if let Some(idx_str) = head.strip_prefix("step_") {
+            let idx: usize = idx_str.parse().ok()?;
+            let step_val = prev_steps.get(idx)?.clone();
+            // If the step declared binds and `rest[0]` matches a bind, prefer
+            // descending under that bind key (already handled by walk since
+            // the step's result is the bind-source). The current shape is to
+            // walk the whole step result by the rest path.
+            let _ = binds_per_step; // reserved for future bind-aware resolution
+            step_val
+        } else if head == "args" {
+            top_args.clone()
+        } else {
+            return None;
+        };
+
+        walk(&root, &rest)
+    }
+
+    fn walk(root: &Value, path: &[&str]) -> Option<Value> {
+        let mut cur = root.clone();
+        for seg in path {
+            cur = cur.get(seg)?.clone();
+        }
+        Some(cur)
+    }
+}
+
 pub struct RunProcedureTool {
     registry: Arc<ToolRegistry>,
     procedure_store: Arc<dyn ProcedureStore>,
@@ -88,6 +219,12 @@ impl Tool for RunProcedureTool {
         let mut step_results: Vec<Value> = Vec::with_capacity(steps.len());
         let started = std::time::Instant::now();
 
+        let top_args = args
+            .get("args")
+            .cloned()
+            .unwrap_or(Value::Object(Default::default()));
+        let binds_per_step: Vec<Vec<String>> = steps.iter().map(|s| s.binds.clone()).collect();
+
         for (i, step) in steps.iter().enumerate() {
             let inner_tool = match self.registry.find(&step.action) {
                 Some(t) => t,
@@ -103,8 +240,8 @@ impl Tool for RunProcedureTool {
                 }
             };
 
-            // Task 9 will interpolate {step_N.field} here. For now, args pass through.
-            let step_args = Value::Object(step.args.clone());
+            let raw_args = Value::Object(step.args.clone());
+            let step_args = interp::resolve(&raw_args, &step_results, &top_args, &binds_per_step);
 
             let result = match inner_tool.execute(ctx.clone(), step_args).await {
                 Ok(v) => v,
@@ -391,5 +528,128 @@ mod tests {
         let err_msg = res.unwrap_err().to_string();
         assert!(err_msg.contains("not a registered tool"), "got: {err_msg}");
         assert!(store.failure_was_incremented("p3").await);
+    }
+
+    #[tokio::test]
+    async fn args_interpolate_step_references() {
+        // EchoTool returns { result: <input args> } so step_0 has a clear result shape.
+        struct EchoTool;
+        #[async_trait]
+        impl Tool for EchoTool {
+            fn name(&self) -> &'static str {
+                "echo"
+            }
+            fn description(&self) -> &'static str {
+                "echo"
+            }
+            async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+                Ok(json!({ "result": args }))
+            }
+        }
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(EchoTool));
+        let registry = Arc::new(registry);
+
+        // Step 1's args.prev references step_0.result.x
+        let steps_json = serde_json::to_string(&vec![
+            json!({"action": "echo", "args": {"x": "hello"}, "binds": ["result"]}),
+            json!({"action": "echo", "args": {"prev": "{step_0.result}"}, "binds": []}),
+        ])
+        .unwrap();
+        let store = Arc::new(InMemoryProcedureStore::with_one(test_procedure(
+            "p_interp",
+            "interp",
+            &steps_json,
+        )));
+        let tool = RunProcedureTool::new(registry, store);
+        let out = tool
+            .execute(test_ctx(), json!({"name": "interp"}))
+            .await
+            .unwrap();
+        // step_1's input "prev" was the JSON object echoed by step_0; the inner echo
+        // result is { result: <those args> }
+        let final_args = &out["final"]["result"];
+        assert_eq!(final_args["prev"]["x"], "hello");
+    }
+
+    #[tokio::test]
+    async fn interpolation_resolves_top_level_args() {
+        struct EchoTool;
+        #[async_trait]
+        impl Tool for EchoTool {
+            fn name(&self) -> &'static str {
+                "echo"
+            }
+            fn description(&self) -> &'static str {
+                "echo"
+            }
+            async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+                Ok(args)
+            }
+        }
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(EchoTool));
+        let registry = Arc::new(registry);
+
+        let steps_json = serde_json::to_string(&vec![
+            json!({"action": "echo", "args": {"got": "{args.test_name}"}, "binds": []}),
+        ])
+        .unwrap();
+        let store = Arc::new(InMemoryProcedureStore::with_one(test_procedure(
+            "p_args",
+            "args_demo",
+            &steps_json,
+        )));
+        let tool = RunProcedureTool::new(registry, store);
+        let out = tool
+            .execute(
+                test_ctx(),
+                json!({
+                    "name": "args_demo",
+                    "args": {"test_name": "test_belief"}
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out["final"]["got"], "test_belief");
+    }
+
+    #[tokio::test]
+    async fn interpolation_passes_through_unresolved_tokens() {
+        // If a token can't be resolved (e.g., references step_99), the text passes
+        // through verbatim — does not fail the procedure.
+        struct EchoTool;
+        #[async_trait]
+        impl Tool for EchoTool {
+            fn name(&self) -> &'static str {
+                "echo"
+            }
+            fn description(&self) -> &'static str {
+                "echo"
+            }
+            async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+                Ok(args)
+            }
+        }
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(EchoTool));
+        let registry = Arc::new(registry);
+
+        let steps_json = serde_json::to_string(&vec![
+            json!({"action": "echo", "args": {"x": "{step_99.missing}"}, "binds": []}),
+        ])
+        .unwrap();
+        let store = Arc::new(InMemoryProcedureStore::with_one(test_procedure(
+            "p_unresolved",
+            "unresolved",
+            &steps_json,
+        )));
+        let tool = RunProcedureTool::new(registry, store);
+        let out = tool
+            .execute(test_ctx(), json!({"name": "unresolved"}))
+            .await
+            .unwrap();
+        // The unresolved token is passed through as the literal string
+        assert_eq!(out["final"]["x"], "{step_99.missing}");
     }
 }
