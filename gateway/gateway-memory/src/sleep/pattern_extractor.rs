@@ -68,7 +68,16 @@ pub struct PatternResponse {
 /// Single step of a generalized pattern.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PatternStep {
+    /// Tool name to dispatch (validated strict against ToolRegistry at run time).
     pub action: String,
+    /// Structured arguments for the tool. May contain `{step_N.field}`
+    /// interpolation tokens that the sub-executor resolves.
+    #[serde(default)]
+    pub args: serde_json::Map<String, serde_json::Value>,
+    /// Field names to extract from this step's result and bind into
+    /// `vars[step_N]` for later interpolation. Empty = bind whole result.
+    #[serde(default)]
+    pub binds: Vec<String>,
     #[serde(default)]
     pub agent: Option<String>,
     #[serde(default)]
@@ -652,24 +661,32 @@ mod tests {
             steps: vec![
                 PatternStep {
                     action: "search_docs".to_string(),
+                    args: Default::default(),
+                    binds: Vec::new(),
                     agent: None,
                     note: None,
                     task_template: None,
                 },
                 PatternStep {
                     action: "read_file".to_string(),
+                    args: Default::default(),
+                    binds: Vec::new(),
                     agent: None,
                     note: None,
                     task_template: None,
                 },
                 PatternStep {
                     action: "run_query".to_string(),
+                    args: Default::default(),
+                    binds: Vec::new(),
                     agent: None,
                     note: None,
                     task_template: None,
                 },
                 PatternStep {
                     action: "summarize".to_string(),
+                    args: Default::default(),
+                    binds: Vec::new(),
                     agent: None,
                     note: None,
                     task_template: None,
@@ -890,5 +907,27 @@ mod tests {
         let captured = store.captured.lock().unwrap();
         let inserted = captured.as_ref().expect("no insert captured");
         assert_eq!(inserted.embedding.as_ref().map(Vec::len), Some(384));
+    }
+
+    #[test]
+    fn pattern_step_deserializes_old_format_without_args_or_binds() {
+        let old = r#"{"action": "read_file"}"#;
+        let step: PatternStep = serde_json::from_str(old).unwrap();
+        assert_eq!(step.action, "read_file");
+        assert!(step.args.is_empty());
+        assert!(step.binds.is_empty());
+    }
+
+    #[test]
+    fn pattern_step_deserializes_new_format() {
+        let new = r#"{
+            "action": "shell",
+            "args": {"cmd": "cargo test {test_name}"},
+            "binds": ["assertion"]
+        }"#;
+        let step: PatternStep = serde_json::from_str(new).unwrap();
+        assert_eq!(step.action, "shell");
+        assert_eq!(step.args.get("cmd").and_then(|v| v.as_str()), Some("cargo test {test_name}"));
+        assert_eq!(step.binds, vec!["assertion".to_string()]);
     }
 }
