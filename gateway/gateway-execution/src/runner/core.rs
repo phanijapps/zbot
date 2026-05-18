@@ -166,6 +166,9 @@ pub struct ExecutionRunnerConfig {
     pub embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     /// Trait-routed procedure store for the `run_procedure` tool.
     pub procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    /// Procedure recommendation tier thresholds (graduated promoted/advisory/tentative).
+    /// Wired from `settings.memory.procedureRecommendation` by AppState.
+    pub procedure_recommendation_cfg: gateway_memory::ProcedureRecommendationConfig,
 
     // --- Resource control ---
     pub max_parallel_agents: u32,
@@ -388,6 +391,7 @@ impl ExecutionRunner {
             bridge_outbox,
             embedding_client,
             procedure_store,
+            procedure_recommendation_cfg,
             max_parallel_agents,
         } = config;
 
@@ -435,6 +439,7 @@ impl ExecutionRunner {
             steering_registry: Some(steering_registry.clone()),
             agent_result_bus: Some(agent_result_bus.clone()),
             procedure_store: procedure_store.clone(),
+            procedure_recommendation_cfg,
             event_bus: event_bus.clone(),
             handles: handles.clone(),
         };

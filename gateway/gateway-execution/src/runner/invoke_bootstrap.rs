@@ -70,6 +70,10 @@ pub(super) struct InvokeBootstrap {
     pub(super) agent_result_bus: Option<Arc<AgentResultBus>>,
     /// Trait-routed procedure store used to build the executor's run_procedure tool.
     pub(super) procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    /// Procedure recommendation tier thresholds. Threaded from settings.json
+    /// at AppState wiring time; default tiers if absent. See
+    /// `gateway_memory::ProcedureRecommendationConfig`.
+    pub(super) procedure_recommendation_cfg: gateway_memory::ProcedureRecommendationConfig,
     pub(super) event_bus: Arc<EventBus>,
     pub(super) handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
 }
@@ -822,6 +826,7 @@ impl InvokeBootstrap {
             self.memory_recall.as_ref().map(|r| r.as_ref()),
             &system_prompt,
             &tool_inventory,
+            Some(&self.procedure_recommendation_cfg),
         )
         .await
         {
@@ -1037,6 +1042,7 @@ mod tests {
             steering_registry: None,
             agent_result_bus: None,
             procedure_store: None,
+            procedure_recommendation_cfg: gateway_memory::ProcedureRecommendationConfig::default(),
             event_bus: Arc::new(EventBus::new()),
             handles,
         };

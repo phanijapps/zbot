@@ -455,26 +455,28 @@ fn procedure_is_dispatchable(steps_json: &str, known_tool_names: &[&str]) -> boo
 /// Recall procedures matching the user's request and render the top hit as a
 /// markdown block destined for the root agent's system prompt.
 ///
-/// Two-tier surfacing (matches the prior in-line logic verbatim, just routed
-/// to the correct LLM):
-///   * Promoted recommendation — dispatchable AND `score > 0.85` AND
-///     `success_count >= 3`. Emits "## Recommended action: run_procedure" with
-///     a concrete suggested call.
-///   * Legacy advisory — `score > 0.7` AND `success_count >= 2`. Emits
-///     "## Proven Procedure Available" with the procedure's steps as context.
+/// Graduated three-tier surfacing — first tier whose floors are met wins:
+///   * `promoted` (dispatchable + score+sc clear `cfg.promoted` floors) —
+///     "## Recommended action: run_procedure" with a literal call template.
+///   * `advisory` (score+sc clear `cfg.advisory` floors) — "## Proven
+///     Procedure Available" with the procedure's steps as context.
+///   * `tentative` (score+sc clear `cfg.tentative` floors) — "## Possibly
+///     relevant procedure" gentle FYI for fresh / sc=1 procedures.
 ///
-/// Returns `None` when recall returns no hits, no procedure clears either
-/// gate, or `memory_recall` isn't wired. Empty `tool_inventory` disables the
-/// promotion path; the legacy fallback still fires so test surface stays
-/// intact.
-///
-/// Always emits an info-level log line so the recall + gate decision is
-/// observable without DEBUG-level tracing.
+/// Empty `tool_inventory` disables the promoted path only; advisory and
+/// tentative still fire so tests + boot-time degraded mode work. Returns
+/// `None` when recall is unavailable, returns nothing, or no tier matches.
+/// Always emits an info-level log line for observability.
 async fn build_procedure_recommendation(
     memory_recall: Option<&crate::recall::MemoryRecall>,
     user_message: &str,
     tool_inventory: &[String],
+    cfg: &gateway_memory::ProcedureRecommendationConfig,
 ) -> Option<String> {
+    if !cfg.enabled {
+        return None;
+    }
+
     let recall = memory_recall?;
     let procedures = match recall
         .recall_procedures(user_message, "root", None, 3)
@@ -495,13 +497,16 @@ async fn build_procedure_recommendation(
     for (proc, score) in &procedures {
         let total = (proc.success_count + proc.failure_count).max(1) as f64;
         let success_rate = proc.success_count as f64 / total;
-        let score_floor = 0.85;
-        let success_floor = 3;
 
         let dispatchable = !known_tools_owned.is_empty()
             && procedure_is_dispatchable(&proc.steps, &known_tools_owned);
 
-        if dispatchable && *score > score_floor && proc.success_count >= success_floor {
+        // Tier 1 — promoted (call-to-action). Requires dispatchability so the
+        // suggested run_procedure(...) call is guaranteed to resolve.
+        if dispatchable
+            && *score > cfg.promoted.score_floor
+            && proc.success_count >= cfg.promoted.success_floor
+        {
             out = Some(format!(
                 "\n## Recommended action: run_procedure\n\
                  A learned procedure matches this request.\n\
@@ -523,7 +528,11 @@ async fn build_procedure_recommendation(
             ));
             emitted_kind = "promoted";
             break;
-        } else if *score > 0.7 && proc.success_count >= 2 {
+        }
+
+        // Tier 2 — advisory ("Proven Procedure"). Doesn't require dispatch
+        // validity; the agent decides whether to invoke or read for context.
+        if *score > cfg.advisory.score_floor && proc.success_count >= cfg.advisory.success_floor {
             out = Some(format!(
                 "\n## Proven Procedure Available: {}\n{}\nSteps: {}\nSuccess rate: {:.0}% ({} uses)\n",
                 proc.name,
@@ -533,6 +542,24 @@ async fn build_procedure_recommendation(
                 proc.success_count,
             ));
             emitted_kind = "advisory";
+            break;
+        }
+
+        // Tier 3 — tentative (gentle FYI). Bootstraps sc=1 procedures into
+        // the recommendation surface; successful invocation auto-promotes
+        // them to advisory on the next similar request.
+        if *score > cfg.tentative.score_floor && proc.success_count >= cfg.tentative.success_floor {
+            out = Some(format!(
+                "\n## Possibly relevant procedure: {}\n\
+                 A previously-recorded procedure may apply here. Treat as a hint, not a directive.\n\
+                 - Description: {}\n\
+                 - Evidence: {} successful use(s), {} failure(s)\n",
+                proc.name,
+                proc.description,
+                proc.success_count,
+                proc.failure_count,
+            ));
+            emitted_kind = "tentative";
             break;
         }
     }
@@ -566,7 +593,13 @@ pub async fn analyze_intent(
     memory_recall: Option<&crate::recall::MemoryRecall>,
     system_prompt: &str,
     tool_inventory: &[String],
+    procedure_recommendation_cfg: Option<&gateway_memory::ProcedureRecommendationConfig>,
 ) -> Result<IntentAnalysis, String> {
+    // Use the supplied config or fall back to defaults. Callers that don't
+    // wire settings (tests, simple invocations) get the canonical tier
+    // thresholds without ceremony.
+    let cfg_owned = gateway_memory::ProcedureRecommendationConfig::default();
+    let cfg = procedure_recommendation_cfg.unwrap_or(&cfg_owned);
     // Fast path: skip LLM for trivial messages
     if is_simple_message(user_message) {
         tracing::info!(
@@ -694,7 +727,7 @@ pub async fn analyze_intent(
     // whether to call `run_procedure`. Failures here log a warning and leave
     // the field None (request still succeeds without the surfacing).
     analysis.procedure_recommendation =
-        build_procedure_recommendation(memory_recall, user_message, tool_inventory).await;
+        build_procedure_recommendation(memory_recall, user_message, tool_inventory, cfg).await;
 
     tracing::info!(
         primary_intent = %analysis.primary_intent,
@@ -1822,6 +1855,7 @@ mod tests {
             None,
             DEFAULT_INTENT_ANALYSIS_PROMPT,
             &[],
+            None,
         )
         .await;
         let analysis = result.expect("should parse simple intent");
@@ -1863,6 +1897,7 @@ mod tests {
             None,
             DEFAULT_INTENT_ANALYSIS_PROMPT,
             &[],
+            None,
         )
         .await;
         let analysis = result.expect("should parse graph intent");
@@ -1891,6 +1926,7 @@ mod tests {
             None,
             DEFAULT_INTENT_ANALYSIS_PROMPT,
             &[],
+            None,
         )
         .await;
         assert!(result.is_err());
@@ -1929,6 +1965,7 @@ mod tests {
             None,
             DEFAULT_INTENT_ANALYSIS_PROMPT,
             &[],
+            None,
         )
         .await;
         let analysis = result.expect("should strip fences and parse");

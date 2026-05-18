@@ -89,6 +89,7 @@ impl RuntimeService {
             None, // ingestion_adapter
             None, // goal_adapter
             None, // procedure_store
+            gateway_memory::ProcedureRecommendationConfig::default(),
             memory_llm_factory,
         )
     }
@@ -118,6 +119,7 @@ impl RuntimeService {
         ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
         goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
         procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+        procedure_recommendation_cfg: gateway_memory::ProcedureRecommendationConfig,
         memory_llm_factory: Arc<dyn gateway_memory::MemoryLlmFactory>,
     ) -> Self {
         let handoff_writer = memory_store.as_ref().map(|fs| {
@@ -152,6 +154,7 @@ impl RuntimeService {
             bridge_outbox,
             embedding_client,
             procedure_store,
+            procedure_recommendation_cfg,
             max_parallel_agents,
         });
 

@@ -404,6 +404,13 @@ pub struct MemorySettings {
     /// between them. See `project_hierarchical_memory_plan.md`.
     #[serde(default)]
     pub hierarchy: HierarchySettings,
+    /// Procedure recommendation gating. Controls when intent_analysis
+    /// surfaces a learned procedure to the root agent and how strongly.
+    /// Graduated tiers (promoted / advisory / tentative) trade off
+    /// recall-similarity against accumulated `success_count` evidence —
+    /// stronger framing for procedures that are both relevant AND proven.
+    #[serde(default)]
+    pub procedure_recommendation: ProcedureRecommendationConfig,
 }
 
 pub fn default_corrections_abstractor_interval_hours() -> u32 {
@@ -423,6 +430,96 @@ impl Default for MemorySettings {
             belief_network: BeliefNetworkConfig::default(),
             mmr: MmrConfig::default(),
             hierarchy: HierarchySettings::default(),
+            procedure_recommendation: ProcedureRecommendationConfig::default(),
+        }
+    }
+}
+
+// ============================================================================
+// PROCEDURE RECOMMENDATION CONFIG
+// Three-tier gating for surfacing learned procedures in the root agent's
+// system prompt. Higher tiers use stronger language; matches that don't
+// clear any tier are silent.
+// ============================================================================
+
+/// Per-tier threshold pair. Procedure must clear BOTH the score floor (vec
+/// similarity from `recall_procedures`) AND the success_count floor to
+/// trigger that tier's framing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcedureTierConfig {
+    /// Minimum vec-similarity score (strict >). Range typically 0.0-1.0.
+    pub score_floor: f64,
+    /// Minimum success_count (>=). Captures accumulated invocation evidence.
+    pub success_floor: i32,
+}
+
+/// Procedure recommendation gating with graduated tiers.
+///
+/// Three tiers, evaluated top-down. The first tier whose floors are met
+/// determines the framing in the root agent's system prompt:
+///   * `promoted` — actionable "Recommended action: run_procedure(...)" block
+///   * `advisory` — legacy "Proven Procedure Available" advisory text
+///   * `tentative` — gentle "Possibly relevant procedure" FYI
+///
+/// A procedure that clears none of the tiers is silent (no surfacing at all).
+/// Set `enabled: false` to disable surfacing entirely.
+///
+/// Tuning rationale:
+///   * `promoted` is the explicit call to action with a `run_procedure(...)`
+///     call template — reserved for high-confidence, well-evidenced matches.
+///   * `advisory` is the historical surface; preserves prior behavior for
+///     procedures with at least one corroborating session.
+///   * `tentative` exists to bootstrap fresh procedures (sc=1 from distillation)
+///     into the recommendation surface — the LLM sees the option but isn't
+///     pushed. Successful invocation bumps sc and auto-promotes to advisory
+///     on the next similar request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcedureRecommendationConfig {
+    /// Master switch. Default: `true`.
+    #[serde(default = "default_proc_rec_enabled")]
+    pub enabled: bool,
+    /// Strongest tier — call-to-action block with a literal `run_procedure(...)` template.
+    #[serde(default = "default_promoted_tier")]
+    pub promoted: ProcedureTierConfig,
+    /// Middle tier — advisory block describing a proven procedure.
+    #[serde(default = "default_advisory_tier")]
+    pub advisory: ProcedureTierConfig,
+    /// Lowest tier — gentle FYI for fresh procedures (sc=1) so they can mature.
+    #[serde(default = "default_tentative_tier")]
+    pub tentative: ProcedureTierConfig,
+}
+
+fn default_proc_rec_enabled() -> bool {
+    true
+}
+fn default_promoted_tier() -> ProcedureTierConfig {
+    ProcedureTierConfig {
+        score_floor: 0.85,
+        success_floor: 3,
+    }
+}
+fn default_advisory_tier() -> ProcedureTierConfig {
+    ProcedureTierConfig {
+        score_floor: 0.70,
+        success_floor: 2,
+    }
+}
+fn default_tentative_tier() -> ProcedureTierConfig {
+    ProcedureTierConfig {
+        score_floor: 0.70,
+        success_floor: 1,
+    }
+}
+
+impl Default for ProcedureRecommendationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_proc_rec_enabled(),
+            promoted: default_promoted_tier(),
+            advisory: default_advisory_tier(),
+            tentative: default_tentative_tier(),
         }
     }
 }

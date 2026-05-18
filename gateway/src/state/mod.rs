@@ -819,6 +819,10 @@ impl AppState {
             ingestion_adapter,
             goal_adapter,
             procedure_store_for_state.clone(),
+            gateway_services::SettingsService::new(paths.clone())
+                .load()
+                .map(|s| s.execution.memory.procedure_recommendation.clone())
+                .unwrap_or_default(),
             memory_llm_factory.clone(),
         ));
 
