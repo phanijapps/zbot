@@ -51,4 +51,9 @@ pub struct PatternProcedureInsert {
     pub steps_json: String,
     /// JSON-serialised `Vec<String>`, or `None` if no parameters.
     pub parameters_json: Option<String>,
+    /// Pre-computed embedding for the procedure description.
+    /// Populated by the writer (PatternExtractor / distillation) so the
+    /// SQLite store can upsert into `procedures_index`.
+    #[serde(default)]
+    pub embedding: Option<Vec<f32>>,
 }

@@ -138,7 +138,7 @@ impl ProcedureStore for GatewayProcedureStore {
             avg_duration_ms: None,
             avg_token_cost: None,
             last_used: None,
-            embedding: None,
+            embedding: req.embedding,
             created_at: now.clone(),
             updated_at: now,
         };

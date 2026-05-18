@@ -337,6 +337,8 @@ fn build_procedure_insert(
         trigger_pattern: Some(resp.trigger_pattern.clone()),
         steps_json,
         parameters_json,
+        // Populated by `PatternExtractor` in Task 2.
+        embedding: None,
     })
 }
 
