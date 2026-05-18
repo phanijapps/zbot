@@ -567,6 +567,7 @@ mod tests {
             procedure_store,
             compaction_store.clone(),
             Arc::new(RecordingPatternLlm),
+            None,
         ));
         let archiver_kg_store: Arc<dyn KnowledgeGraphStore> =
             Arc::new(SqliteKgStore::new(h.graph.clone()));
@@ -683,6 +684,7 @@ mod tests {
             procedure_store,
             compaction_store.clone(),
             counter.clone(),
+            None,
         ));
         let ops = SleepOps {
             synthesizer: Some(synth),

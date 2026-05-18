@@ -194,6 +194,7 @@ impl MemoryServices {
             procedure_store.clone(),
             compaction_store.clone(),
             pattern_llm,
+            embedding_client.clone(),
         ));
 
         let orphan_archiver = Arc::new(OrphanArchiver::new(

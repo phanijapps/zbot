@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::ChatMessage;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -103,6 +104,11 @@ pub struct PatternExtractor {
     procedure_store: Arc<dyn ProcedureStore>,
     compaction_store: Arc<dyn CompactionStore>,
     llm: Arc<dyn PatternExtractLlm>,
+    /// Optional embedding client used to populate `embedding` on the
+    /// synthesised `PatternProcedureInsert`. When `None` or when an
+    /// `embed()` call fails, the insert still proceeds — the embedding
+    /// is observability for vec-similarity recall, not correctness.
+    embedding_client: Option<Arc<dyn EmbeddingClient>>,
 }
 
 impl PatternExtractor {
@@ -112,6 +118,7 @@ impl PatternExtractor {
         procedure_store: Arc<dyn ProcedureStore>,
         compaction_store: Arc<dyn CompactionStore>,
         llm: Arc<dyn PatternExtractLlm>,
+        embedding_client: Option<Arc<dyn EmbeddingClient>>,
     ) -> Self {
         Self {
             episode_store,
@@ -119,6 +126,7 @@ impl PatternExtractor {
             procedure_store,
             compaction_store,
             llm,
+            embedding_client,
         }
     }
 
@@ -233,7 +241,7 @@ impl PatternExtractor {
             }
         }
 
-        let req = match build_procedure_insert(agent_id, &name, resp) {
+        let mut req = match build_procedure_insert(agent_id, &name, resp) {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(error = %e, "pattern: build procedure failed");
@@ -241,6 +249,22 @@ impl PatternExtractor {
                 return;
             }
         };
+
+        // Embed the procedure description so the SQLite vec index can
+        // be populated. Graceful: warn + proceed without on failure —
+        // the insert still succeeds, only vec-similarity recall is lost.
+        if let Some(client) = self.embedding_client.as_ref() {
+            let embed_input = format!("{}\n{}", resp.name, resp.description);
+            match client.embed(&[embed_input.as_str()]).await {
+                Ok(mut vecs) if !vecs.is_empty() => req.embedding = Some(vecs.remove(0)),
+                Ok(_) => {
+                    tracing::warn!("pattern: embedding returned no vectors; proceeding without");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "pattern: embedding failed; proceeding without");
+                }
+            }
+        }
 
         let proc_id = match self.procedure_store.insert_pattern_procedure(req).await {
             Ok(id) => id,
@@ -337,7 +361,10 @@ fn build_procedure_insert(
         trigger_pattern: Some(resp.trigger_pattern.clone()),
         steps_json,
         parameters_json,
-        // Populated by `PatternExtractor` in Task 2.
+        // The caller (`PatternExtractor::commit_pattern`) populates
+        // `embedding` after this function returns — keeping the embed
+        // call near the `procedure_store` write so failures degrade
+        // gracefully without rebuilding the row.
         embedding: None,
     })
 }
@@ -664,6 +691,7 @@ mod tests {
             h.procedure_store.clone(),
             h.compaction_store.clone(),
             mock.clone(),
+            None,
         );
 
         let stats = ext.run_cycle("run-pe-1").await.expect("run_cycle");
@@ -724,6 +752,7 @@ mod tests {
             h.procedure_store.clone(),
             h.compaction_store.clone(),
             mock,
+            None,
         );
         let stats = ext.run_cycle("run-pe-2").await.expect("run_cycle");
         assert_eq!(stats.procedures_inserted, 0);
@@ -772,4 +801,94 @@ mod tests {
     // see the SQLite-side `tool_sequence_for_session` impl for the
     // current behaviour test (covered indirectly via this module's
     // `extracts_pattern_across_two_sessions`).
+
+    // ------------------------------------------------------------------
+    // Task 2: verify the extractor populates `embedding` before insert.
+    // ------------------------------------------------------------------
+
+    use agent_runtime::llm::embedding::{EmbeddingClient, EmbeddingError};
+    use zero_stores_traits::ProcedureSummary;
+
+    /// `ProcedureStore` that captures the last `insert_pattern_procedure`
+    /// request so the test can assert on the inserted shape.
+    #[derive(Default)]
+    struct CapturingProcedureStore {
+        captured: Mutex<Option<PatternProcedureInsert>>,
+    }
+
+    #[async_trait]
+    impl ProcedureStore for CapturingProcedureStore {
+        async fn get_procedure_summary_by_name(
+            &self,
+            _agent_id: &str,
+            _name: &str,
+        ) -> Result<Option<ProcedureSummary>, String> {
+            Ok(None)
+        }
+        async fn insert_pattern_procedure(
+            &self,
+            req: PatternProcedureInsert,
+        ) -> Result<String, String> {
+            *self.captured.lock().unwrap() = Some(req);
+            Ok("proc-test".into())
+        }
+    }
+
+    /// Embedding client that always returns the same fixed-length vector.
+    struct FixedEmbeddingClient {
+        vec: Vec<f32>,
+    }
+    #[async_trait]
+    impl EmbeddingClient for FixedEmbeddingClient {
+        async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            Ok(texts.iter().map(|_| self.vec.clone()).collect())
+        }
+        fn dimensions(&self) -> usize {
+            self.vec.len()
+        }
+        fn model_name(&self) -> String {
+            "test-fixed".into()
+        }
+    }
+
+    /// `CompactionStore` no-op so `commit_pattern` doesn't need a real DB.
+    /// Default impls of the trait cover every method — explicit empty body
+    /// here just to give us a concrete type to instantiate.
+    struct NoopCompactionStore;
+    #[async_trait]
+    impl CompactionStore for NoopCompactionStore {}
+
+    #[tokio::test]
+    async fn extractor_passes_embedding_to_store() {
+        // Drive `commit_pattern` directly — it's the helper that builds
+        // and submits the `PatternProcedureInsert`, which is the exact
+        // surface we want to verify carries an embedding.
+        let store = Arc::new(CapturingProcedureStore::default());
+        let embed = Arc::new(FixedEmbeddingClient {
+            vec: vec![0.5_f32; 384],
+        });
+
+        // Stub stores for the deps `commit_pattern` doesn't actually touch.
+        let h = setup();
+        let mock_llm = Arc::new(MockLlm::new(ok_response("placeholder")));
+
+        let ext = PatternExtractor::new(
+            h.episode_store.clone(),
+            h.conversation_store.clone(),
+            store.clone() as Arc<dyn ProcedureStore>,
+            Arc::new(NoopCompactionStore) as Arc<dyn CompactionStore>,
+            mock_llm,
+            Some(embed.clone() as Arc<dyn EmbeddingClient>),
+        );
+
+        let mut stats = PatternStats::default();
+        let resp = ok_response("investigate_postgres_issue");
+        ext.commit_pattern("run-emb", "agent-emb", &resp, &mut stats)
+            .await;
+
+        assert_eq!(stats.procedures_inserted, 1);
+        let captured = store.captured.lock().unwrap();
+        let inserted = captured.as_ref().expect("no insert captured");
+        assert_eq!(inserted.embedding.as_ref().map(Vec::len), Some(384));
+    }
 }
