@@ -819,7 +819,7 @@ impl InvokeBootstrap {
             crate::middleware::intent_analysis::load_intent_analysis_prompt(&self.paths);
 
         let tool_inventory = root_orchestrator_tool_names(self);
-        let analysis = match analyze_intent(
+        let mut analysis = match analyze_intent(
             &retrying,
             msg,
             fs.as_ref(),
@@ -843,6 +843,24 @@ impl InvokeBootstrap {
                 return None;
             }
         };
+
+        // A `use_existing` recommendation must point at a ward that actually
+        // exists on disk — otherwise the warm-path delegation to `ward:<name>`
+        // would fail in `synthesize_ward_agent`. If the classifier mislabeled
+        // a non-existent ward as use_existing, fall back to create_new so the
+        // cold path builds it.
+        if analysis.ward_recommendation.action == "use_existing"
+            && !self
+                .paths
+                .ward_dir(&analysis.ward_recommendation.ward_name)
+                .is_dir()
+        {
+            tracing::info!(
+                ward = %analysis.ward_recommendation.ward_name,
+                "use_existing ward has no directory on disk — treating as create_new"
+            );
+            analysis.ward_recommendation.action = "create_new".to_string();
+        }
 
         tracing::info!(
             primary_intent = %analysis.primary_intent,

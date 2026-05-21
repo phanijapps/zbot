@@ -201,6 +201,37 @@ pub fn format_intent_injection(
         }
     }
 
+    // WARM PATH — an existing ward + a multi-step task: delegate the WHOLE
+    // task to that ward-agent in one call. The ward-agent plans and executes
+    // internally (see `synthesize_ward_agent` / the ward-as-agent design).
+    // The root does not enter the ward or run the planner itself. Callers
+    // must ensure `use_existing` only points at a ward that exists on disk.
+    if analysis.ward_recommendation.action == "use_existing"
+        && analysis.execution_strategy.approach == "graph"
+    {
+        let ward = analysis.ward_recommendation.ward_name.as_str();
+        let mut ward_task = String::new();
+        match original_message {
+            Some(msg) => ward_task.push_str(msg),
+            None => ward_task.push_str(&analysis.primary_intent),
+        }
+        for h in &analysis.hidden_intents {
+            ward_task.push_str(&format!("\\n- also: {}", h));
+        }
+        out.push_str(&format!(
+            "\n**Required action:** This task belongs to the existing `{ward}` ward. \
+             Delegate the ENTIRE task to that ward-agent in ONE call and wait for its result:\n\
+             ```\n\
+             delegate_to_agent(agent_id=\"ward:{ward}\", task=\"{ward_task}\", wait_for_result=true)\n\
+             ```\n\
+             The `ward:{ward}` agent plans and executes the whole task internally and returns \
+             a finished result. Do NOT call `ward(action=\"use\")`. Do NOT delegate to \
+             `planner-agent`. Do NOT plan or manage steps yourself. When the ward-agent \
+             returns, synthesize its result and call `respond`.\n"
+        ));
+        return out;
+    }
+
     // Ward — phrased as a directive, not a suggestion. The agent has
     // historically paraphrased the ward name to match task-specific
     // terminology (e.g. "geopolitical-analysis" → "india-pok-analysis")
@@ -2132,13 +2163,15 @@ mod tests {
     fn procedure_recommendation_flows_into_injection() {
         // Confirms the routing fix: a recommendation attached to IntentAnalysis
         // shows up in the root-agent system prompt rendered by format_intent_injection.
+        // Uses the cold path (create_new) — the warm path delegates to the
+        // ward-agent, which owns procedure selection itself.
         let analysis = IntentAnalysis {
             primary_intent: "peer valuation".to_string(),
             hidden_intents: vec![],
             recommended_skills: vec![],
             recommended_agents: vec![],
             ward_recommendation: WardRecommendation {
-                action: "use_existing".to_string(),
+                action: "create_new".to_string(),
                 ward_name: "financial-analysis".to_string(),
                 subdirectory: None,
                 structure: Default::default(),
@@ -2161,6 +2194,44 @@ mod tests {
             "injection missing procedure block; got:\n{injection}"
         );
         assert!(injection.contains("peer_valuation_analysis"));
+    }
+
+    #[test]
+    fn format_intent_injection_warm_path_delegates_to_ward_agent() {
+        // use_existing + graph → warm path: the root delegates the whole task
+        // to the ward-agent, not the planner.
+        let analysis = IntentAnalysis {
+            primary_intent: "peer valuation of WMT".to_string(),
+            hidden_intents: vec!["save the report".to_string()],
+            recommended_skills: vec![],
+            recommended_agents: vec![],
+            ward_recommendation: WardRecommendation {
+                action: "use_existing".to_string(),
+                ward_name: "financial-analysis".to_string(),
+                subdirectory: None,
+                structure: Default::default(),
+                reason: "existing financial ward".to_string(),
+            },
+            execution_strategy: ExecutionStrategy {
+                approach: "graph".to_string(),
+                graph: None,
+                explanation: "multi-step".to_string(),
+            },
+            rewritten_prompt: String::new(),
+            procedure_recommendation: Some(
+                "\n## Recommended action: run_procedure\nrun_procedure(name=\"x\")\n".to_string(),
+            ),
+        };
+        let injection = format_intent_injection(&analysis, None, Some("Analyze WMT against peers"));
+        // Warm path: delegate the whole task to the ward-agent and wait.
+        assert!(injection.contains("delegate_to_agent(agent_id=\"ward:financial-analysis\""));
+        assert!(injection.contains("wait_for_result=true"));
+        // Warm path must NOT emit the planner-delegation call (the cold path's
+        // routing). The text may *mention* planner-agent in a "do NOT" line —
+        // assert on the actual call string instead.
+        assert!(!injection.contains("delegate_to_agent(agent_id=\"planner-agent\""));
+        // Procedure selection is the ward-agent's job — not surfaced to the root.
+        assert!(!injection.contains("Recommended action: run_procedure"));
     }
 
     #[test]
