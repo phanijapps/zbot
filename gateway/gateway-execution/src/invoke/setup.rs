@@ -253,6 +253,13 @@ impl<'a> AgentLoader<'a> {
         &self,
         agent_id: &str,
     ) -> Result<(gateway_services::agents::Agent, Provider), String> {
+        // Ward-as-agent: a `ward:<name>` id synthesizes the agent from the
+        // ward directory instead of loading `agents/<id>/`. The ward IS the
+        // agent — no on-disk agent folder.
+        if let Some(ward_name) = agent_id.strip_prefix("ward:") {
+            return self.synthesize_ward_agent(ward_name);
+        }
+
         // Try loading existing agent first
         match self.agent_service.get(agent_id).await {
             Ok(mut agent) => {
@@ -298,6 +305,70 @@ impl<'a> AgentLoader<'a> {
                 Ok((agent, provider))
             }
         }
+    }
+
+    /// Synthesize a ward-agent for a `ward:<name>` delegation target.
+    ///
+    /// The ward IS the agent — no on-disk `agents/<id>/` folder. The system
+    /// prompt is a generated identity line + the standard system-context
+    /// shards + the ward's `AGENTS.md` doctrine. There is no `ZBOT.md`.
+    ///
+    /// P1 scope: the ward directory must already exist; creating a ward is
+    /// the cold path's job. A missing directory is an error here.
+    fn synthesize_ward_agent(
+        &self,
+        ward_name: &str,
+    ) -> Result<(gateway_services::agents::Agent, Provider), String> {
+        let ward_dir = self.paths.ward_dir(ward_name);
+        if !ward_dir.is_dir() {
+            return Err(format!(
+                "ward '{}' has no directory at {}",
+                ward_name,
+                ward_dir.display()
+            ));
+        }
+
+        let doctrine = std::fs::read_to_string(ward_dir.join("AGENTS.md")).unwrap_or_default();
+
+        let identity = format!(
+            "You are the {ward} ward-agent. You own the {ward} domain. Given a \
+             task, you plan and execute it to completion in this single \
+             delegation, then return a result.\n",
+            ward = ward_name
+        );
+        let instructions =
+            compose_ward_agent_instructions(&identity, &self.paths, ward_name, &doctrine);
+
+        let provider = self.provider_resolver.get_default()?;
+        let model = provider.default_model().to_string();
+
+        let agent = gateway_services::agents::Agent {
+            id: format!("ward:{ward_name}"),
+            name: format!("ward:{ward_name}"),
+            display_name: format!("Ward Agent: {ward_name}"),
+            description: format!("Ward-agent for the {ward_name} ward"),
+            agent_type: Some("ward".to_string()),
+            provider_id: provider.id.clone().unwrap_or_default(),
+            model,
+            temperature: 0.7,
+            max_tokens: 8192,
+            thinking_enabled: false,
+            voice_recording_enabled: false,
+            system_instruction: None,
+            instructions,
+            mcps: vec![],
+            skills: vec![],
+            middleware: None,
+            created_at: None,
+        };
+
+        tracing::info!(
+            ward = ward_name,
+            instructions_bytes = agent.instructions.len(),
+            doctrine_bytes = doctrine.len(),
+            "Synthesized ward-agent for delegation"
+        );
+        Ok((agent, provider))
     }
 
     /// Get the provider resolver.
@@ -443,7 +514,6 @@ fn build_specialist_instructions(agent_id: &str, paths: &SharedVaultPaths) -> St
 /// delimited header so the model can tell identity from conventions; an
 /// empty doctrine (fresh ward) omits the section. Free function so the
 /// composition is unit-testable without the agent/provider plumbing.
-#[allow(dead_code)]
 fn compose_ward_agent_instructions(
     identity: &str,
     paths: &SharedVaultPaths,
