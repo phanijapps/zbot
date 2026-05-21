@@ -238,6 +238,42 @@ fn insert_batch(
     })
 }
 
+/// Per-row fallback for when a batched embed call fails. Embeds each row on
+/// its own so a single oversized input skips only itself, not the whole batch.
+///
+/// Returns `(indexed, skipped)`.
+async fn reindex_rows_individually(
+    db: &KnowledgeDatabase,
+    client: &Arc<dyn EmbeddingClient>,
+    target: &ReindexTarget,
+    batch: &[(String, String)],
+) -> (usize, usize) {
+    let mut indexed = 0usize;
+    let mut skipped = 0usize;
+    for (id, text) in batch {
+        let truncated = truncate_for_embedding(text);
+        let emb = match client.embed(&[truncated]).await {
+            Ok(mut v) if v.len() == 1 => v.remove(0),
+            _ => {
+                skipped += 1;
+                continue;
+            }
+        };
+        match insert_batch(db, target, &[(id.clone(), emb)]) {
+            Ok(()) => indexed += 1,
+            Err(e) => {
+                tracing::warn!(
+                    target = target.table,
+                    error = %e,
+                    "reindex per-row insert failed; row skipped"
+                );
+                skipped += 1;
+            }
+        }
+    }
+    (indexed, skipped)
+}
+
 /// Reindex a single target table. Returns `(indexed, skipped)`.
 ///
 /// The caller supplies the active embedding `client`, the target dimension,
@@ -315,18 +351,24 @@ where
                     target = target.table,
                     returned = mismatched.len(),
                     expected = batch.len(),
-                    "embedding client returned wrong count; skipping batch"
+                    "embedding client returned wrong count; retrying rows individually"
                 );
-                summary.skipped += batch.len();
+                let (indexed, skipped) =
+                    reindex_rows_individually(db, &client, target, &batch).await;
+                summary.indexed += indexed;
+                summary.skipped += skipped;
             }
             Err(e) => {
                 tracing::warn!(
                     target = target.table,
                     error = %e,
                     count = batch.len(),
-                    "embedding batch failed; rows skipped"
+                    "embedding batch failed; retrying rows individually"
                 );
-                summary.skipped += batch.len();
+                let (indexed, skipped) =
+                    reindex_rows_individually(db, &client, target, &batch).await;
+                summary.indexed += indexed;
+                summary.skipped += skipped;
             }
         }
 
@@ -386,7 +428,6 @@ mod tests {
     }
 
     #[derive(Clone, Copy)]
-    #[allow(dead_code)] // OnLengthEq reserved for future partial-failure tests
     enum FailMode {
         Never,
         Always,
@@ -527,6 +568,26 @@ mod tests {
         assert_eq!(summary.total, 3);
         // Table exists but is empty.
         assert_eq!(row_count(&db, "memory_facts_index"), 0);
+    }
+
+    #[tokio::test]
+    async fn reindex_falls_back_to_per_row_when_batch_fails() {
+        let (_tmp, db) = fresh_db();
+        seed_memory_facts(&db, 3);
+        // Fails the batched call (3 texts) but succeeds per-row (1 text each):
+        // one oversized row must not drop the whole batch.
+        let mock = MockClient {
+            dim: 384,
+            calls: Arc::new(AtomicUsize::new(0)),
+            fail_mode: FailMode::OnLengthEq(3),
+        };
+        let client: Arc<dyn Trait> = Arc::new(mock);
+        let summary = reindex_table(&db, client, &REINDEX_TARGETS[0], 384, |_, _, _| {})
+            .await
+            .unwrap();
+        assert_eq!(summary.indexed, 3);
+        assert_eq!(summary.skipped, 0);
+        assert_eq!(row_count(&db, "memory_facts_index"), 3);
     }
 
     #[tokio::test]
