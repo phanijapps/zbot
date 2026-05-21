@@ -438,6 +438,28 @@ fn build_specialist_instructions(agent_id: &str, paths: &SharedVaultPaths) -> St
     )
 }
 
+/// Compose a ward-agent's system prompt: identity line → system-context
+/// shards → ward doctrine (`AGENTS.md`). The doctrine is framed under a
+/// delimited header so the model can tell identity from conventions; an
+/// empty doctrine (fresh ward) omits the section. Free function so the
+/// composition is unit-testable without the agent/provider plumbing.
+#[allow(dead_code)]
+fn compose_ward_agent_instructions(
+    identity: &str,
+    paths: &SharedVaultPaths,
+    ward_name: &str,
+    doctrine: &str,
+) -> String {
+    let mut instructions = append_system_context(identity.trim(), paths, SubagentRole::Executor);
+    if !doctrine.trim().is_empty() {
+        instructions.push_str(&format!(
+            "\n\n# --- WARD DOCTRINE: {ward_name} ---\n\n{}\n",
+            doctrine.trim()
+        ));
+    }
+    instructions
+}
+
 /// Generate a role-specific preamble based on the agent name.
 fn generate_role_preamble(agent_id: &str) -> String {
     let name_lower = agent_id.to_lowercase();
@@ -534,5 +556,32 @@ mod tests {
     fn test_generate_role_preamble_generic() {
         let preamble = generate_role_preamble("helper-bot");
         assert!(preamble.contains("specialist agent"));
+    }
+
+    #[test]
+    fn compose_ward_agent_instructions_places_identity_then_doctrine() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let paths: SharedVaultPaths =
+            Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
+        paths.ensure_dirs_exist().unwrap();
+        let out = compose_ward_agent_instructions(
+            "You are the maritime ward-agent.",
+            &paths,
+            "maritime",
+            "## Purpose\nVessel tracking.",
+        );
+        assert!(out.starts_with("You are the maritime ward-agent."));
+        assert!(out.contains("# --- WARD DOCTRINE: maritime ---"));
+        assert!(out.contains("Vessel tracking."));
+    }
+
+    #[test]
+    fn compose_ward_agent_instructions_omits_empty_doctrine() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let paths: SharedVaultPaths =
+            Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
+        paths.ensure_dirs_exist().unwrap();
+        let out = compose_ward_agent_instructions("identity line", &paths, "maritime", "   ");
+        assert!(!out.contains("WARD DOCTRINE"));
     }
 }
