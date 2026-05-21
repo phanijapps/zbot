@@ -344,7 +344,7 @@ impl<'a> AgentLoader<'a> {
 
         let agent = gateway_services::agents::Agent {
             id: format!("ward:{ward_name}"),
-            name: format!("ward:{ward_name}"),
+            name: ward_name.to_string(),
             display_name: format!("Ward Agent: {ward_name}"),
             description: format!("Ward-agent for the {ward_name} ward"),
             agent_type: Some("ward".to_string()),
