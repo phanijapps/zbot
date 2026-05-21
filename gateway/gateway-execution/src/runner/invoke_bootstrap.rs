@@ -844,22 +844,31 @@ impl InvokeBootstrap {
             }
         };
 
-        // A `use_existing` recommendation must point at a ward that actually
-        // exists on disk — otherwise the warm-path delegation to `ward:<name>`
-        // would fail in `synthesize_ward_agent`. If the classifier mislabeled
-        // a non-existent ward as use_existing, fall back to create_new so the
-        // cold path builds it.
-        if analysis.ward_recommendation.action == "use_existing"
-            && !self
-                .paths
-                .ward_dir(&analysis.ward_recommendation.ward_name)
-                .is_dir()
-        {
+        // The intent classifier's `action` is unreliable: ward semantic
+        // search frequently returns nothing, so the LLM is never shown the
+        // existing wards and defaults to `create_new` even for a ward that
+        // already exists. The filesystem is the source of truth — set
+        // `action` from whether the ward directory actually exists. This
+        // both routes existing wards to the warm path (delegate to the
+        // ward-agent) and keeps a missing ward on the cold path (planner
+        // builds it), regardless of what the classifier guessed.
+        let ward_exists = self
+            .paths
+            .ward_dir(&analysis.ward_recommendation.ward_name)
+            .is_dir();
+        let authoritative_action = if ward_exists {
+            "use_existing"
+        } else {
+            "create_new"
+        };
+        if analysis.ward_recommendation.action != authoritative_action {
             tracing::info!(
                 ward = %analysis.ward_recommendation.ward_name,
-                "use_existing ward has no directory on disk — treating as create_new"
+                classifier_action = %analysis.ward_recommendation.action,
+                corrected = authoritative_action,
+                "Correcting ward action from filesystem ground truth"
             );
-            analysis.ward_recommendation.action = "create_new".to_string();
+            analysis.ward_recommendation.action = authoritative_action.to_string();
         }
 
         tracing::info!(
