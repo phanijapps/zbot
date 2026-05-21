@@ -210,12 +210,15 @@ pub async fn spawn_delegated_agent(
     let settings_service = gateway_services::SettingsService::new(paths.clone());
     let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
 
-    // Look up active ward from parent session
-    let session_ward_id = state_service
+    // Look up the parent session's ward, then resolve the ward this
+    // delegation actually runs in: a `ward:<name>` target runs in its
+    // own ward; everything else inherits the parent's.
+    let parent_ward_id = state_service
         .get_session(&request.session_id)
         .ok()
         .flatten()
         .and_then(|s| s.ward_id);
+    let session_ward_id = effective_ward_id(&request.child_agent_id, parent_ward_id);
 
     // Inject ward context so subagent starts with complete knowledge
     if let Some(ref ward_id) = session_ward_id {
@@ -1212,6 +1215,16 @@ fn collect_spec_files(dir: &std::path::Path, specs_root: &std::path::Path, out: 
     }
 }
 
+/// The ward directory a delegated agent should operate in. A `ward:<name>`
+/// delegation always runs in its own ward, regardless of the parent's
+/// active ward; any other agent inherits the parent session's ward.
+fn effective_ward_id(child_agent_id: &str, parent_ward_id: Option<String>) -> Option<String> {
+    match child_agent_id.strip_prefix("ward:") {
+        Some(name) => Some(name.to_string()),
+        None => parent_ward_id,
+    }
+}
+
 /// Simple recursive directory listing that skips hidden files and common noise.
 fn walkdir_simple(dir: &Path) -> std::io::Result<Vec<String>> {
     let mut files = Vec::new();
@@ -1238,4 +1251,26 @@ fn walkdir_simple(dir: &Path) -> std::io::Result<Vec<String>> {
     }
     files.sort();
     Ok(files)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effective_ward_id_uses_ward_prefix_over_parent() {
+        assert_eq!(
+            effective_ward_id("ward:maritime", Some("finance".to_string())),
+            Some("maritime".to_string())
+        );
+    }
+
+    #[test]
+    fn effective_ward_id_falls_back_to_parent_for_normal_agents() {
+        assert_eq!(
+            effective_ward_id("planner", Some("finance".to_string())),
+            Some("finance".to_string())
+        );
+        assert_eq!(effective_ward_id("planner", None), None);
+    }
 }
