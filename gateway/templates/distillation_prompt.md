@@ -6,7 +6,7 @@ Return a JSON object with EXACTLY these five fields:
 
 {
   "facts": [
-    {"category": "...", "key": "category.subdomain.topic", "content": "1-2 sentence fact", "confidence": 0.0-1.0, "epistemic_class": "archival|current|convention|procedural"}
+    {"category": "...", "key": "category.subdomain.topic", "content": "one declarative sentence", "confidence": 0.0-1.0, "epistemic_class": "archival|current|convention|procedural"}
   ],
   "entities": [
     {"name": "entity name", "type": "person|organization|project|tool|concept|file", "properties": {}}
@@ -70,6 +70,23 @@ If the session is too short or unclear to assess, omit the episode field.
 - `instruction` — standing orders, workflow rules (e.g., "always use X", "never do Y", "run tests before commit")
 - `correction` — corrections to agent behavior (e.g., "don't suggest X because Y", mistakes and lessons learned)
 - `strategy` — successful approaches for recurring task types (e.g., "for data analysis tasks, delegate to data-analyst subagent")
+
+## Fact Content Length (STRICT)
+
+A fact is an atom of knowledge, not a summary. Each fact's `content` MUST be a
+single declarative sentence. Use at most THREE sentences, and only when an
+example is genuinely needed to make the fact usable. NEVER write a paragraph.
+
+- GOOD (one sentence): "The user prefers pytest over unittest for Python tests."
+- GOOD (three sentences, example earns its place): "Run `cargo check --workspace`
+  after Rust edits. It catches type errors before the slower full build.
+  Skipping it is the most common cause of broken CI."
+- BAD (paragraph): a multi-sentence write-up describing context, history, and
+  several findings at once — split it into separate atomic facts, or keep only
+  the single most reusable sentence and drop the rest.
+
+If a candidate fact runs longer than three sentences, split it into multiple
+atomic facts or keep just the one sentence that future sessions will reuse.
 
 ## Epistemic Classification (REQUIRED per fact)
 
