@@ -220,6 +220,7 @@ pub fn create_http_router(
             get(embeddings::list_ollama_models),
         )
         .route("/api/embeddings/configure", post(embeddings::configure))
+        .route("/api/embeddings/reindex", post(embeddings::reindex))
         // Memory endpoints
         .route("/api/memory", get(memory::list_all_memory_facts))
         .route(
