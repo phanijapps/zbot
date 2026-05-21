@@ -37,22 +37,48 @@ When emitting replacements, use the minimal seeds below. They are deliberately t
 
 ### Seed — `AGENTS.md`
 
+This is the ward's doctrine — the system prompt of the ward-agent that
+later runs this ward. Keep it generic and small: domain scope + role +
+high-level conventions. Operational specifics (formulas, data sources,
+thresholds) are NOT doctrine — they accumulate in `memory-bank/` and
+procedures, recalled on demand.
+
 ````markdown
-# <Ward Name Title-Case>
+# <ward-name>
 
-A `<language>` ward for `<one-sentence purpose inferred from spec intent>`.
+## Purpose / Scope
+IN  — <the reusable domain this ward owns, inferred from the spec intent —
+      a domain category, NOT one task. e.g. "equity & options valuation",
+      not "value one stock">.
+OUT — <adjacent domains this ward does not handle>.
+      If a task falls outside IN, return out_of_scope.
 
-## Conventions
-- Reusable primitives live under `<module_root>/`. Never under `<sub-domain>/`.
-- Sub-domain artifacts (scripts, computed data, reports) live under `<sub-domain>/{code,data,reports}/`.
-- Every reusable primitive is registered in `memory-bank/core_docs.md` when created.
-- Import syntax: `<example, e.g. from core.<module> import <symbol>>`.
-- One public function per primitive file. Take tickers / keys / domain values as arguments — never hardcode.
-- No `_v2` files. Fix the original.
+## Folder map
+- specs/<sub-domain>/   per-task spec + step files
+- <sub-domain>/         outputs: code/ · data/ · reports/ · summary.md · manifest.json
+- <module_root>/        reusable primitives — check here before writing code
+- data/                 shared reference data
+- memory-bank/          ward.md · structure.md · core_docs.md
+Read on demand — recall first, open a file only when recall points at it.
 
-## Sub-domain staging
-- `specs/<sub-domain>/` — spec + step files.
-- `<sub-domain>/` — outputs: `code/`, `data/`, `reports/`, plus `summary.md` + `manifest.json`.
+## Standards
+- Reusable primitives live in `<module_root>/`, one public function per file,
+  taking keys/values as arguments (never hardcoded); import as
+  `<example, e.g. from core.<module> import <symbol>>`. Register each new
+  primitive in `memory-bank/core_docs.md`.
+- Fix the original file — never create `_v2` variants.
+
+## Tools & delegation
+- Recall the ward's procedures before planning from scratch; reuse
+  `<module_root>/` before writing new code.
+- Delegate net-new code modules to `builder`.
+
+## Failure modes & hard don'ts
+- Don't fabricate data — if a source is unavailable, say so.
+- Don't expand beyond IN scope; surface it as out_of_scope.
+
+## Handoff
+Return: { status, summary, artifacts:[paths] }
 ````
 
 ### Seed — `memory-bank/ward.md`
