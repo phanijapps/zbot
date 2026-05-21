@@ -1273,4 +1273,14 @@ mod tests {
         );
         assert_eq!(effective_ward_id("planner", None), None);
     }
+
+    #[test]
+    fn effective_ward_id_uses_ward_prefix_when_parent_is_none() {
+        // The primary case: the root delegates to a ward without itself
+        // being in one — the ward delegation still lands in its own ward.
+        assert_eq!(
+            effective_ward_id("ward:maritime", None),
+            Some("maritime".to_string())
+        );
+    }
 }
