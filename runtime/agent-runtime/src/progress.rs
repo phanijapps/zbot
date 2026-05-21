@@ -4,7 +4,7 @@
 // ============================================================================
 
 use serde_json::Value;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Tracks execution progress to distinguish productive work from stuck loops.
 ///
@@ -41,6 +41,12 @@ pub(crate) struct ProgressTracker {
     pub(crate) planning_nudge_sent: bool,
     /// Non-todo tool calls made before first todos(action="add")
     pub(crate) tool_calls_before_plan: u32,
+    /// Per-path count of `write_file` overwrites. Catches the "rewrite the
+    /// same file over and over" loop — each rewrite carries different
+    /// content (so the args-hash repeat check misses it) and every write
+    /// succeeds (so the failed-call diversity check misses it too). That
+    /// loop shape burned 600K-1.8M tokens per runaway builder.
+    pub(crate) write_target_repeats: HashMap<String, u32>,
 }
 
 impl ProgressTracker {
@@ -60,6 +66,7 @@ impl ProgressTracker {
             plan_items_completed: 0,
             planning_nudge_sent: false,
             tool_calls_before_plan: 0,
+            write_target_repeats: HashMap::new(),
         }
     }
 
@@ -138,6 +145,33 @@ impl ProgressTracker {
             .any(|(n, h)| n == name && *h == args_hash);
         if is_exact_repeat && !succeeded {
             self.score -= 3;
+        }
+
+        // Same-file rewrite loop. A builder that overwrites the SAME path
+        // again and again — each time with slightly different content
+        // (shrinking a file to fit a size gate, re-fixing its own output) —
+        // evades both guards above: the args-hash repeat check (content
+        // differs => hash differs) and the failed-call diversity check
+        // (every write succeeds). This is the exact shape of the runaway
+        // builders that burned 600K-1.8M tokens. 3 free overwrites cover
+        // normal write→test→fix debugging; the 4th+ overwrite of one path
+        // takes a hard penalty so `score` crosses the stuck thresholds
+        // (-5 advisory nudge, -12 hard stop) within ~2 more iterations.
+        if name == "write_file" {
+            if let Some(path) = args
+                .get("path")
+                .or_else(|| args.get("file_path"))
+                .and_then(Value::as_str)
+            {
+                let n = self
+                    .write_target_repeats
+                    .entry(path.to_string())
+                    .or_insert(0);
+                *n += 1;
+                if *n >= 4 {
+                    self.score -= 10;
+                }
+            }
         }
 
         // Tool diversity scoring via rolling window
@@ -829,6 +863,62 @@ mod progress_tracker_tests {
         assert!(
             tracker.score <= -12,
             "Score should be <= -12 after 15 exact repeats, got: {}",
+            tracker.score
+        );
+    }
+
+    // ========================================================================
+    // SAME-FILE REWRITE LOOP DETECTION
+    // ========================================================================
+
+    #[test]
+    fn same_path_rewrite_loop_trips_stuck() {
+        // The runaway-builder shape: overwrite ONE file again and again,
+        // each time with different content, every write succeeding. The
+        // old scoring rewarded every success (+1) and never tripped — this
+        // is the regression that let builders burn 600K-1.8M tokens.
+        let mut tracker = ProgressTracker::new(3);
+        for i in 0..10 {
+            // Different content each call → different args hash → the
+            // exact-repeat guard does NOT fire. Same path → our new guard does.
+            let args = json!({"path": "report.html", "content": format!("v{i}")});
+            tracker.record_tool_call("write_file", &args, true);
+        }
+        assert!(
+            tracker.is_clearly_stuck(),
+            "10 overwrites of the same file must register as stuck (score: {})",
+            tracker.score
+        );
+    }
+
+    #[test]
+    fn distinct_path_writes_do_not_trip_stuck() {
+        // Writing 10 DIFFERENT files is productive work, not a loop. The
+        // per-path penalty must not fire — no path is overwritten 4+ times.
+        let mut tracker = ProgressTracker::new(3);
+        for i in 0..10 {
+            let args = json!({"path": format!("file_{i}.py"), "content": "x"});
+            tracker.record_tool_call("write_file", &args, true);
+        }
+        assert!(
+            !tracker.is_clearly_stuck(),
+            "writing 10 distinct files is productive, not stuck (score: {})",
+            tracker.score
+        );
+    }
+
+    #[test]
+    fn three_rewrites_of_same_file_still_allowed() {
+        // 3 overwrites = normal write→test→fix debugging. The 4th is where
+        // the penalty kicks in, so 3 must stay penalty-free.
+        let mut tracker = ProgressTracker::new(3);
+        for i in 0..3 {
+            let args = json!({"path": "x.py", "content": format!("v{i}")});
+            tracker.record_tool_call("write_file", &args, true);
+        }
+        assert!(
+            tracker.score > 0,
+            "3 overwrites must not be penalized (score: {})",
             tracker.score
         );
     }
