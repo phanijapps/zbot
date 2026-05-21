@@ -339,8 +339,24 @@ impl<'a> AgentLoader<'a> {
         let instructions =
             compose_ward_agent_instructions(&identity, &self.paths, ward_name, &doctrine);
 
-        let provider = self.provider_resolver.get_default()?;
-        let model = provider.default_model().to_string();
+        // Ward-agents inherit the orchestrator's LLM config (Settings >
+        // Advanced > Orchestrator) — the same provider/model/limits the root
+        // runs on — falling back to the default provider when unset. Mirrors
+        // `load_or_create_root` so wards and the root are controlled by one
+        // knob.
+        let orch = self
+            .settings
+            .and_then(|s| s.get_execution_settings().ok())
+            .map(|s| s.orchestrator)
+            .unwrap_or_default();
+        let provider = match &orch.provider_id {
+            Some(id) if !id.is_empty() => self.provider_resolver.get_or_default(id)?,
+            _ => self.provider_resolver.get_default()?,
+        };
+        let model = orch
+            .model
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| provider.default_model().to_string());
 
         let agent = gateway_services::agents::Agent {
             id: format!("ward:{ward_name}"),
@@ -350,9 +366,9 @@ impl<'a> AgentLoader<'a> {
             agent_type: Some("ward".to_string()),
             provider_id: provider.id.clone().unwrap_or_default(),
             model,
-            temperature: 0.7,
-            max_tokens: 8192,
-            thinking_enabled: false,
+            temperature: orch.temperature,
+            max_tokens: orch.max_tokens,
+            thinking_enabled: orch.thinking_enabled,
             voice_recording_enabled: false,
             system_instruction: None,
             instructions,
