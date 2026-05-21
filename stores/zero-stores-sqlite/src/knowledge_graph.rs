@@ -20,6 +20,47 @@ use zero_stores::{KgNodesForEpisodes, StoreResult};
 use crate::blocking::{block, map_graph_err};
 use crate::reindex;
 
+/// Embed each entity's `name` and assign it to `entity.name_embedding`.
+///
+/// `store_entity` (in `kg::storage`) writes a `kg_name_index` row only
+/// when `name_embedding` is `Some`. That index is what the hierarchy
+/// builder clusters on (`list_entities_with_embeddings_at_layer` JOINs
+/// `kg_name_index`). Without this step every entity lands with
+/// `name_embedding = None`, `kg_name_index` stays empty, and the
+/// hierarchy builder bails `PoolTooSmall` every cycle — never building a
+/// layer past 0.
+///
+/// Best-effort: on embed failure or a count mismatch the entities keep
+/// `name_embedding = None` and the caller proceeds — degraded exactly to
+/// pre-fix behavior, never an error.
+async fn embed_entity_names(client: &dyn EmbeddingClient, entities: &mut [Entity]) {
+    if entities.is_empty() {
+        return;
+    }
+    let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+    match client.embed(&names).await {
+        Ok(vecs) if vecs.len() == entities.len() => {
+            for (entity, vec) in entities.iter_mut().zip(vecs) {
+                entity.name_embedding = Some(vec);
+            }
+        }
+        Ok(vecs) => {
+            tracing::warn!(
+                expected = entities.len(),
+                got = vecs.len(),
+                "kg: entity-name embedding count mismatch — entities stored without name index"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                count = entities.len(),
+                "kg: entity-name embedding failed — entities stored without name index"
+            );
+        }
+    }
+}
+
 /// SQLite implementation of `KnowledgeGraphStore`. Wraps the existing
 /// `crate::kg::storage::GraphStorage` and bridges its synchronous
 /// rusqlite API into the async trait via `spawn_blocking`.
@@ -156,7 +197,7 @@ impl KnowledgeGraphStore for SqliteKgStore {
     async fn store_knowledge(
         &self,
         agent_id: &str,
-        knowledge: ExtractedKnowledge,
+        mut knowledge: ExtractedKnowledge,
     ) -> StoreResult<StoreOutcome> {
         let storage = self.storage.clone();
         let agent_id = agent_id.to_string();
@@ -166,6 +207,16 @@ impl KnowledgeGraphStore for SqliteKgStore {
         // this layer for Phase 1, so all entities count as inserted.
         let entity_count = knowledge.entities.len() as u64;
         let rel_count = knowledge.relationships.len() as u64;
+
+        // Embed entity names so `store_entity` populates `kg_name_index` —
+        // the index the hierarchy builder clusters on. Async, so it runs
+        // before the synchronous `block`. Best-effort (see
+        // `embed_entity_names`): a missing client or embed failure leaves
+        // `name_embedding = None` and the store proceeds unchanged.
+        if let Some(client) = self.embedding_client.clone() {
+            embed_entity_names(client.as_ref(), &mut knowledge.entities).await;
+        }
+
         block(move || {
             storage
                 .store_knowledge(&agent_id, knowledge.into())
@@ -1893,5 +1944,141 @@ mod tests {
             .await
             .expect("ok");
         assert_eq!(hits.len(), 2, "limit must cap deduped output to 2");
+    }
+
+    // =======================================================================
+    // Write-time entity-name embedding — kg_name_index population
+    //
+    // Regression: kg_name_index was never populated, so the hierarchy
+    // builder's pool fetch (which JOINs kg_name_index) always returned 0
+    // entities and bailed PoolTooSmall — the hierarchy never built past
+    // layer 0. Root cause: store_knowledge never set Entity.name_embedding.
+    // =======================================================================
+
+    /// Deterministic 384-dim embedder. `fail = true` simulates an
+    /// embedding-backend outage.
+    struct MockEmbedder {
+        fail: bool,
+    }
+
+    #[async_trait]
+    impl EmbeddingClient for MockEmbedder {
+        async fn embed(
+            &self,
+            texts: &[&str],
+        ) -> Result<Vec<Vec<f32>>, agent_runtime::llm::embedding::EmbeddingError> {
+            if self.fail {
+                return Err(agent_runtime::llm::embedding::EmbeddingError::ModelError(
+                    "mock embedding failure".into(),
+                ));
+            }
+            Ok(texts.iter().map(|_| vec![0.05_f32; 384]).collect())
+        }
+        fn dimensions(&self) -> usize {
+            384
+        }
+        fn model_name(&self) -> String {
+            "mock-384".to_string()
+        }
+    }
+
+    fn fresh_store() -> (tempfile::TempDir, Arc<KnowledgeDatabase>, GraphStorage) {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        let db = Arc::new(KnowledgeDatabase::new(paths).expect("db"));
+        let graph = GraphStorage::new(db.clone()).expect("graph");
+        (tmp, db, graph)
+    }
+
+    #[tokio::test]
+    async fn embed_entity_names_sets_embedding_on_each_entity() {
+        let mut entities = vec![
+            Entity::new("root".into(), EntityType::Concept, "Apple".into()),
+            Entity::new("root".into(), EntityType::Concept, "Banana".into()),
+        ];
+        embed_entity_names(&MockEmbedder { fail: false }, &mut entities).await;
+        assert!(entities[0].name_embedding.is_some());
+        assert!(entities[1].name_embedding.is_some());
+        assert_eq!(entities[0].name_embedding.as_ref().unwrap().len(), 384);
+    }
+
+    #[tokio::test]
+    async fn embed_entity_names_empty_slice_is_noop() {
+        let mut entities: Vec<Entity> = vec![];
+        // Must not panic / must not call the client.
+        embed_entity_names(&MockEmbedder { fail: false }, &mut entities).await;
+    }
+
+    #[tokio::test]
+    async fn embed_entity_names_failure_leaves_embeddings_none() {
+        let mut entities = vec![Entity::new("root".into(), EntityType::Concept, "X".into())];
+        embed_entity_names(&MockEmbedder { fail: true }, &mut entities).await;
+        assert!(
+            entities[0].name_embedding.is_none(),
+            "embed failure must leave name_embedding None — graceful, no regression"
+        );
+    }
+
+    /// The load-bearing test: store_knowledge with an embedding client
+    /// wired MUST land a kg_name_index row. This is the exact chain the
+    /// hierarchy builder depends on.
+    #[tokio::test]
+    async fn store_knowledge_populates_kg_name_index() {
+        let (_tmp, db, graph) = fresh_store();
+        let store = SqliteKgStore::with_embedding_client(
+            Arc::new(graph),
+            Arc::new(MockEmbedder { fail: false }),
+        );
+
+        let knowledge = ExtractedKnowledge {
+            entities: vec![Entity::new(
+                "root".into(),
+                EntityType::Concept,
+                "Apple Inc".into(),
+            )],
+            relationships: vec![],
+        };
+        store
+            .store_knowledge("root", knowledge)
+            .await
+            .expect("store_knowledge");
+
+        let n: i64 = db
+            .with_connection(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM kg_name_index", [], |r| r.get(0))
+            })
+            .unwrap();
+        assert_eq!(
+            n, 1,
+            "store_knowledge with an embedding client must populate kg_name_index"
+        );
+    }
+
+    #[tokio::test]
+    async fn store_knowledge_without_embedding_client_leaves_index_empty() {
+        // No embedding client → graceful degradation: entity is still
+        // stored, kg_name_index stays empty, no error. Pre-fix behavior.
+        let (_tmp, db, graph) = fresh_store();
+        let store = SqliteKgStore::new(Arc::new(graph));
+
+        let knowledge = ExtractedKnowledge {
+            entities: vec![Entity::new(
+                "root".into(),
+                EntityType::Concept,
+                "Apple Inc".into(),
+            )],
+            relationships: vec![],
+        };
+        store
+            .store_knowledge("root", knowledge)
+            .await
+            .expect("store_knowledge must still succeed without an embedding client");
+
+        let n: i64 = db
+            .with_connection(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM kg_name_index", [], |r| r.get(0))
+            })
+            .unwrap();
+        assert_eq!(n, 0, "no embedding client → no kg_name_index row, no error");
     }
 }
