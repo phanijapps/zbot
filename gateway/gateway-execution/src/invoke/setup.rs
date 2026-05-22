@@ -330,11 +330,28 @@ impl<'a> AgentLoader<'a> {
 
         let doctrine = std::fs::read_to_string(ward_dir.join("AGENTS.md")).unwrap_or_default();
 
-        let identity = format!(
-            "You are the {ward} ward-agent. You own the {ward} domain. Given a \
-             task, you plan and execute it to completion in this single \
-             delegation, then return a result.\n",
+        let mut identity = format!(
+            "You are the `{ward}` ward-agent — you own the `{ward}` domain end \
+             to end. Given ONE task you plan AND execute it to completion in \
+             this single delegation, then return a result. The caller does not \
+             orchestrate your steps.\n",
             ward = ward_name
+        );
+        identity.push_str(
+            "\n## First-turn protocol\n\
+             1. ward(action=\"use\") — land in your ward directory.\n\
+             2. recall — pull this ward's procedures, facts and past episodes \
+             for the task.\n\
+             3. Plan — take the cheapest route recall supports: replay a \
+             matching promoted procedure with run_procedure; adapt a partial \
+             match into a step plan; or, if nothing matches, decompose the \
+             task into steps yourself, binding each step to a tool, skill, or \
+             sub-delegation.\n\
+             4. Execute the plan step by step — act, observe, adjust.\n\
+             5. respond using the Handoff schema in your doctrine below.\n\
+             \n\
+             If the task falls outside your Purpose / Scope, do not attempt \
+             it — respond with status \"out_of_scope\" and a one-line reason.\n",
         );
         let instructions =
             compose_ward_agent_instructions(&identity, &self.paths, ward_name, &doctrine);
