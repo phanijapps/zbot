@@ -351,7 +351,8 @@ impl<'a> AgentLoader<'a> {
              5. respond using the Handoff schema in your doctrine below.\n\
              \n\
              If the task falls outside your Purpose / Scope, do not attempt \
-             it — respond with status \"out_of_scope\" and a one-line reason.\n",
+             it — call `respond` with a single line: \
+             `RESULT: OUT_OF_SCOPE — <one-line reason>`.\n",
         );
         let instructions =
             compose_ward_agent_instructions(&identity, &self.paths, ward_name, &doctrine);
