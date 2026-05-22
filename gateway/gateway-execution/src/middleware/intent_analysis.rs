@@ -201,14 +201,18 @@ pub fn format_intent_injection(
         }
     }
 
-    // WARM PATH — an existing ward + a multi-step task: delegate the WHOLE
-    // task to that ward-agent in one call. The ward-agent plans and executes
-    // internally (see `synthesize_ward_agent` / the ward-as-agent design).
-    // The root does not enter the ward or run the planner itself. Callers
-    // must ensure `use_existing` only points at a ward that exists on disk.
-    if analysis.ward_recommendation.action == "use_existing"
-        && analysis.execution_strategy.approach == "graph"
-    {
+    // WARM PATH — the task belongs to an existing, graduated ward: delegate
+    // the WHOLE task to that ward-agent in one call. The ward-agent plans and
+    // executes internally (see `synthesize_ward_agent` / the ward-as-agent
+    // design). The root does not enter the ward or run the planner itself.
+    //
+    // Gated on `action == "use_existing"` ALONE — not on `approach`. The
+    // intent classifier's graph/simple call is unreliable (it labels
+    // identical multi-step tasks both ways), so it cannot gate routing.
+    // `use_existing` is authoritative: callers (invoke_bootstrap's
+    // graduation gate) set it only when the ward directory exists on disk
+    // and carries a real doctrine, so it always points at a genuine ward.
+    if analysis.ward_recommendation.action == "use_existing" {
         let ward = analysis.ward_recommendation.ward_name.as_str();
         let mut ward_task = String::new();
         match original_message {
@@ -2196,6 +2200,40 @@ mod tests {
             "injection missing procedure block; got:\n{injection}"
         );
         assert!(injection.contains("peer_valuation_analysis"));
+    }
+
+    #[test]
+    fn format_intent_injection_warm_path_fires_regardless_of_approach() {
+        // The classifier's graph/simple label must NOT gate warm routing —
+        // an existing graduated ward is delegated to either way.
+        for approach in ["graph", "simple"] {
+            let analysis = IntentAnalysis {
+                primary_intent: "city itinerary".to_string(),
+                hidden_intents: vec![],
+                recommended_skills: vec![],
+                recommended_agents: vec![],
+                ward_recommendation: WardRecommendation {
+                    action: "use_existing".to_string(),
+                    ward_name: "travel-planning".to_string(),
+                    subdirectory: None,
+                    structure: Default::default(),
+                    reason: "existing ward".to_string(),
+                },
+                execution_strategy: ExecutionStrategy {
+                    approach: approach.to_string(),
+                    graph: None,
+                    explanation: "x".to_string(),
+                },
+                rewritten_prompt: String::new(),
+                procedure_recommendation: None,
+            };
+            let injection = format_intent_injection(&analysis, None, Some("Barcelona itinerary"));
+            assert!(
+                injection.contains("delegate_to_agent(agent_id=\"ward:travel-planning\""),
+                "warm path should fire for approach={approach}"
+            );
+            assert!(!injection.contains("delegate_to_agent(agent_id=\"planner-agent\""));
+        }
     }
 
     #[test]
