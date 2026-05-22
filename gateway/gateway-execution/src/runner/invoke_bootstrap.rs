@@ -212,13 +212,37 @@ fn format_goals_block(goals: &[agent_tools::GoalSummary]) -> Option<String> {
     Some(format!("## Active Goals\n{}", lines.join("\n")))
 }
 
-/// Graduation gate (P3): a ward is warm-routable — delegated to as a
-/// ward-agent — only once its `AGENTS.md` carries a real Purpose/Scope
-/// doctrine. A missing, empty, or stub `AGENTS.md` (no `## Purpose`
-/// section) means the ward has not been built up yet, so the task should
-/// route cold (planner) instead of warm.
+/// Doctrine half of the graduation gate: true when a ward's `AGENTS.md`
+/// carries a real Purpose/Scope section (not a missing, empty, or stub
+/// file). The full gate also requires ≥1 promoted procedure — see
+/// [`ward_has_promoted_procedure`] and §8 of the ward-as-agent design.
 fn ward_doctrine_is_graduated(agents_md: &str) -> bool {
     agents_md.contains("## Purpose")
+}
+
+/// Procedure half of the graduation gate (§8): a ward graduates to
+/// warm-routable only with ≥1 promoted procedure — one proven, reusable
+/// capability — on top of its doctrine. Returns `true` when no procedure
+/// store is wired (the requirement cannot be evaluated, so it must not block
+/// graduation) and `false` on a store error.
+async fn ward_has_promoted_procedure(
+    store: Option<&Arc<dyn zero_stores_traits::ProcedureStore>>,
+    ward: &str,
+) -> bool {
+    let Some(store) = store else {
+        return true;
+    };
+    match store.list_by_ward(ward, 1).await {
+        Ok(procs) => !procs.is_empty(),
+        Err(e) => {
+            tracing::warn!(
+                ward = %ward,
+                error = %e,
+                "Procedure lookup failed; treating ward as not graduated"
+            );
+            false
+        }
+    }
 }
 
 /// Enumerate the wards on disk, each as `"<name> — <purpose blurb>"` (or just
@@ -919,16 +943,22 @@ impl InvokeBootstrap {
         // existing wards and defaults to `create_new` even for a ward that
         // already exists. The filesystem is the source of truth.
         //
-        // Graduation gate (P3): a ward is warm-routable — delegated to as a
-        // ward-agent — only once it has GRADUATED, i.e. its AGENTS.md carries
-        // a real Purpose/Scope doctrine. A missing or stub AGENTS.md means
-        // the ward isn't built up yet; route cold so the planner scaffolds
-        // and populates it. This overrides the classifier's guess in both
-        // directions.
+        // Graduation gate: a ward is warm-routable — delegated to as a
+        // ward-agent — only once it has GRADUATED. Graduation requires BOTH
+        // a real Purpose/Scope doctrine in AGENTS.md AND ≥1 promoted
+        // procedure (§8) — one proven, reusable capability. A ward missing
+        // either is still a scaffold; route cold so the planner builds it
+        // up. This overrides the classifier's guess in both directions.
         let ward_dir = self.paths.ward_dir(&analysis.ward_recommendation.ward_name);
-        let ward_graduated = std::fs::read_to_string(ward_dir.join("AGENTS.md"))
+        let doctrine_ok = std::fs::read_to_string(ward_dir.join("AGENTS.md"))
             .map(|md| ward_doctrine_is_graduated(&md))
             .unwrap_or(false);
+        let ward_graduated = doctrine_ok
+            && ward_has_promoted_procedure(
+                self.procedure_store.as_ref(),
+                &analysis.ward_recommendation.ward_name,
+            )
+            .await;
         let authoritative_action = if ward_graduated {
             "use_existing"
         } else {
@@ -1121,6 +1151,54 @@ mod tests {
         assert!(!ward_doctrine_is_graduated(
             "# automotive-research\n\n## Conventions\n- reuse core/\n"
         ));
+    }
+
+    struct FakeProcStore {
+        ward_procs: usize,
+        fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl zero_stores_traits::ProcedureStore for FakeProcStore {
+        async fn list_by_ward(
+            &self,
+            _ward_id: &str,
+            limit: usize,
+        ) -> Result<Vec<serde_json::Value>, String> {
+            if self.fail {
+                return Err("store unavailable".to_string());
+            }
+            Ok((0..self.ward_procs.min(limit))
+                .map(|_| serde_json::json!({}))
+                .collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn graduation_procedure_gate() {
+        // No store wired — cannot evaluate, must not block graduation.
+        assert!(ward_has_promoted_procedure(None, "w").await);
+
+        // Doctrine present but zero procedures — not graduated.
+        let empty: Arc<dyn zero_stores_traits::ProcedureStore> = Arc::new(FakeProcStore {
+            ward_procs: 0,
+            fail: false,
+        });
+        assert!(!ward_has_promoted_procedure(Some(&empty), "w").await);
+
+        // At least one promoted procedure — graduated.
+        let stocked: Arc<dyn zero_stores_traits::ProcedureStore> = Arc::new(FakeProcStore {
+            ward_procs: 2,
+            fail: false,
+        });
+        assert!(ward_has_promoted_procedure(Some(&stocked), "w").await);
+
+        // Store error — conservatively treated as not graduated.
+        let broken: Arc<dyn zero_stores_traits::ProcedureStore> = Arc::new(FakeProcStore {
+            ward_procs: 5,
+            fail: true,
+        });
+        assert!(!ward_has_promoted_procedure(Some(&broken), "w").await);
     }
 
     #[test]
