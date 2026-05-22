@@ -603,6 +603,9 @@ impl ExecutionRunner {
             goal_adapter: self.goal_adapter.clone(),
             steering_registry: self.steering_registry.clone(),
             agent_result_bus: self.agent_result_bus.clone(),
+            ward_locks: std::sync::Arc::new(
+                std::sync::Mutex::new(std::collections::HashMap::new()),
+            ),
         }
     }
 

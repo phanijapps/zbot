@@ -193,6 +193,33 @@ impl DelegationDispatcher {
 // RunnerDelegationInvoker
 // ============================================================================
 
+/// Per-ward serialization locks: ward name → an async mutex held for the
+/// duration of that ward's currently-running ward-agent. The dispatcher
+/// already serializes delegations per session; this closes the cross-session
+/// gap, because a ward's shared files (`memory-bank/*.md`, specs) are written
+/// by tools without filesystem locks.
+pub(crate) type WardLocks = std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>;
+
+/// Get-or-create the lock for `ward` and acquire it. The returned guard must
+/// be held for the whole ward-agent execution.
+///
+/// The guard spans the entire child execution, including any sub-delegations
+/// it issues. This assumes a ward-agent never delegates to another ward — the
+/// ward-as-agent design routes sub-work to the generic worker agents, never to
+/// sibling wards, so no `ward A → ward B → ward A` cycle (which would deadlock)
+/// can form.
+async fn acquire_ward_lock(locks: &Arc<WardLocks>, ward: &str) -> tokio::sync::OwnedMutexGuard<()> {
+    let ward_mutex = {
+        let mut map = locks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        map.entry(ward.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    };
+    ward_mutex.lock_owned().await
+}
+
 /// Companion to `ExecutionRunner` that holds the subset of runner fields
 /// needed to call `spawn_delegated_agent`, implementing [`DelegationSpawner`]
 /// so `DelegationDispatcher` remains decoupled from the concrete runner type.
@@ -231,6 +258,8 @@ pub(crate) struct RunnerDelegationInvoker {
     pub(crate) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     pub(crate) steering_registry: Arc<agent_runtime::SteeringRegistry>,
     pub(crate) agent_result_bus: Arc<AgentResultBus>,
+    /// Per-ward serialization locks (see [`acquire_ward_lock`]).
+    pub(crate) ward_locks: Arc<WardLocks>,
 }
 
 #[async_trait]
@@ -240,6 +269,15 @@ impl DelegationSpawner for RunnerDelegationInvoker {
         request: DelegationRequest,
         permit: Option<OwnedSemaphorePermit>,
     ) -> Result<(), String> {
+        // Serialize ward-agent delegations per ward. Ward-shared files
+        // (memory-bank/*.md, specs) are written by tools without filesystem
+        // locks; the dispatcher only serializes per session, so two sessions
+        // delegating to the same ward could lose updates. Holding this guard
+        // for the whole child execution makes it one ward-agent per ward.
+        let _ward_guard = match request.child_agent_id.strip_prefix("ward:") {
+            Some(ward) => Some(acquire_ward_lock(&self.ward_locks, ward).await),
+            None => None,
+        };
         spawn_delegated_agent(
             &request,
             self.event_bus.clone(),
@@ -267,5 +305,47 @@ impl DelegationSpawner for RunnerDelegationInvoker {
         )
         .await
         .map(|_| ())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ward_lock_serializes_same_ward() {
+        let locks: Arc<WardLocks> = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let guard = acquire_ward_lock(&locks, "alpha").await;
+
+        // A second acquire of the same ward must block while the guard is held.
+        let blocked = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            acquire_ward_lock(&locks, "alpha"),
+        )
+        .await;
+        assert!(blocked.is_err(), "same-ward lock must block while held");
+
+        // After release the ward is acquirable again.
+        drop(guard);
+        let _reacquired = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            acquire_ward_lock(&locks, "alpha"),
+        )
+        .await
+        .expect("ward lock must be free after release");
+    }
+
+    #[tokio::test]
+    async fn ward_lock_allows_different_wards() {
+        let locks: Arc<WardLocks> = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let _alpha = acquire_ward_lock(&locks, "alpha").await;
+
+        // A different ward never contends with `alpha`.
+        let beta = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            acquire_ward_lock(&locks, "beta"),
+        )
+        .await;
+        assert!(beta.is_ok(), "different wards must not contend");
     }
 }
