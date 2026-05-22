@@ -253,6 +253,13 @@ impl<'a> AgentLoader<'a> {
         &self,
         agent_id: &str,
     ) -> Result<(gateway_services::agents::Agent, Provider), String> {
+        // Ward-as-agent: a `ward:<name>` id synthesizes the agent from the
+        // ward directory instead of loading `agents/<id>/`. The ward IS the
+        // agent — no on-disk agent folder.
+        if let Some(ward_name) = agent_id.strip_prefix("ward:") {
+            return self.synthesize_ward_agent(ward_name);
+        }
+
         // Try loading existing agent first
         match self.agent_service.get(agent_id).await {
             Ok(mut agent) => {
@@ -298,6 +305,103 @@ impl<'a> AgentLoader<'a> {
                 Ok((agent, provider))
             }
         }
+    }
+
+    /// Synthesize a ward-agent for a `ward:<name>` delegation target.
+    ///
+    /// The ward IS the agent — no on-disk `agents/<id>/` folder. The system
+    /// prompt is a generated identity line + the standard system-context
+    /// shards + the ward's `AGENTS.md` doctrine. There is no `ZBOT.md`.
+    ///
+    /// P1 scope: the ward directory must already exist; creating a ward is
+    /// the cold path's job. A missing directory is an error here.
+    fn synthesize_ward_agent(
+        &self,
+        ward_name: &str,
+    ) -> Result<(gateway_services::agents::Agent, Provider), String> {
+        let ward_dir = self.paths.ward_dir(ward_name);
+        if !ward_dir.is_dir() {
+            return Err(format!(
+                "ward '{}' has no directory at {}",
+                ward_name,
+                ward_dir.display()
+            ));
+        }
+
+        let doctrine = std::fs::read_to_string(ward_dir.join("AGENTS.md")).unwrap_or_default();
+
+        let mut identity = format!(
+            "You are the `{ward}` ward-agent — you own the `{ward}` domain end \
+             to end. Given ONE task you plan AND execute it to completion in \
+             this single delegation, then return a result. The caller does not \
+             orchestrate your steps.\n",
+            ward = ward_name
+        );
+        identity.push_str(
+            "\n## First-turn protocol\n\
+             1. ward(action=\"use\") — land in your ward directory.\n\
+             2. recall — pull this ward's procedures, facts and past episodes \
+             for the task.\n\
+             3. Plan — take the cheapest route recall supports: replay a \
+             matching promoted procedure with run_procedure; adapt a partial \
+             match into a step plan; or, if nothing matches, decompose the \
+             task into steps yourself, binding each step to a tool, skill, or \
+             sub-delegation.\n\
+             4. Execute the plan step by step — act, observe, adjust.\n\
+             5. respond using the Handoff schema in your doctrine below.\n\
+             \n\
+             If the task falls outside your Purpose / Scope, do not attempt \
+             it — respond with status \"out_of_scope\" and a one-line reason.\n",
+        );
+        let instructions =
+            compose_ward_agent_instructions(&identity, &self.paths, ward_name, &doctrine);
+
+        // Ward-agents inherit the orchestrator's LLM config (Settings >
+        // Advanced > Orchestrator) — the same provider/model/limits the root
+        // runs on — falling back to the default provider when unset. Mirrors
+        // `load_or_create_root` so wards and the root are controlled by one
+        // knob.
+        let orch = self
+            .settings
+            .and_then(|s| s.get_execution_settings().ok())
+            .map(|s| s.orchestrator)
+            .unwrap_or_default();
+        let provider = match &orch.provider_id {
+            Some(id) if !id.is_empty() => self.provider_resolver.get_or_default(id)?,
+            _ => self.provider_resolver.get_default()?,
+        };
+        let model = orch
+            .model
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| provider.default_model().to_string());
+
+        let agent = gateway_services::agents::Agent {
+            id: format!("ward:{ward_name}"),
+            name: ward_name.to_string(),
+            display_name: format!("Ward Agent: {ward_name}"),
+            description: format!("Ward-agent for the {ward_name} ward"),
+            agent_type: Some("ward".to_string()),
+            provider_id: provider.id.clone().unwrap_or_default(),
+            model,
+            temperature: orch.temperature,
+            max_tokens: orch.max_tokens,
+            thinking_enabled: orch.thinking_enabled,
+            voice_recording_enabled: false,
+            system_instruction: None,
+            instructions,
+            mcps: vec![],
+            skills: vec![],
+            middleware: None,
+            created_at: None,
+        };
+
+        tracing::info!(
+            ward = ward_name,
+            instructions_bytes = agent.instructions.len(),
+            doctrine_bytes = doctrine.len(),
+            "Synthesized ward-agent for delegation"
+        );
+        Ok((agent, provider))
     }
 
     /// Get the provider resolver.
@@ -438,6 +542,27 @@ fn build_specialist_instructions(agent_id: &str, paths: &SharedVaultPaths) -> St
     )
 }
 
+/// Compose a ward-agent's system prompt: identity line → system-context
+/// shards → ward doctrine (`AGENTS.md`). The doctrine is framed under a
+/// delimited header so the model can tell identity from conventions; an
+/// empty doctrine (fresh ward) omits the section. Free function so the
+/// composition is unit-testable without the agent/provider plumbing.
+fn compose_ward_agent_instructions(
+    identity: &str,
+    paths: &SharedVaultPaths,
+    ward_name: &str,
+    doctrine: &str,
+) -> String {
+    let mut instructions = append_system_context(identity.trim(), paths, SubagentRole::Executor);
+    if !doctrine.trim().is_empty() {
+        instructions.push_str(&format!(
+            "\n\n# --- WARD DOCTRINE: {ward_name} ---\n\n{}\n",
+            doctrine.trim()
+        ));
+    }
+    instructions
+}
+
 /// Generate a role-specific preamble based on the agent name.
 fn generate_role_preamble(agent_id: &str) -> String {
     let name_lower = agent_id.to_lowercase();
@@ -534,5 +659,32 @@ mod tests {
     fn test_generate_role_preamble_generic() {
         let preamble = generate_role_preamble("helper-bot");
         assert!(preamble.contains("specialist agent"));
+    }
+
+    #[test]
+    fn compose_ward_agent_instructions_places_identity_then_doctrine() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let paths: SharedVaultPaths =
+            Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
+        paths.ensure_dirs_exist().unwrap();
+        let out = compose_ward_agent_instructions(
+            "You are the maritime ward-agent.",
+            &paths,
+            "maritime",
+            "## Purpose\nVessel tracking.",
+        );
+        assert!(out.starts_with("You are the maritime ward-agent."));
+        assert!(out.contains("# --- WARD DOCTRINE: maritime ---"));
+        assert!(out.contains("Vessel tracking."));
+    }
+
+    #[test]
+    fn compose_ward_agent_instructions_omits_empty_doctrine() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let paths: SharedVaultPaths =
+            Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
+        paths.ensure_dirs_exist().unwrap();
+        let out = compose_ward_agent_instructions("identity line", &paths, "maritime", "   ");
+        assert!(!out.contains("WARD DOCTRINE"));
     }
 }
