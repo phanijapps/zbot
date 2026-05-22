@@ -352,7 +352,11 @@ impl<'a> AgentLoader<'a> {
              \n\
              If the task falls outside your Purpose / Scope, do not attempt \
              it — call `respond` with a single line: \
-             `RESULT: OUT_OF_SCOPE — <one-line reason>`.\n",
+             `RESULT: OUT_OF_SCOPE — <one-line reason>`.\n\
+             If the task is within your Purpose / Scope but you lack a \
+             tool, skill, or MCP needed to finish it, do not fake a \
+             partial result — call `respond` with a single line: \
+             `RESULT: CAPABILITY_MISSING — <the missing capability>`.\n",
         );
         let instructions =
             compose_ward_agent_instructions(&identity, &self.paths, ward_name, &doctrine);

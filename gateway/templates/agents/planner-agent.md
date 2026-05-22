@@ -30,6 +30,9 @@ If the plan has a `step0.md` (i.e. classification is `build`), its `Agent:` fiel
 **H4 — No HTML/PDF/PPT/docx step unless the verbatim ask asks for one.**
 The word "report" alone defaults to markdown — writer-agent produces markdown. A trailing builder-agent beautification step (loading a format-convert skill) exists ONLY when the verbatim ask uses `HTML`, `dashboard`, `styled`, `visual`, `web page`, `PDF`, `PPT`, or `docx`.
 
+**H5 — Augmenting an existing ward is a valid plan shape, never a reason to create a new ward.**
+When the verbatim ask names an existing ward plus a specific missing capability (a tool, skill, MCP, or procedure that ward needs), the classification is an *augmentation*, not a greenfield `build`. Write the specs into that ward's `specs/<domain>/`; do NOT create a new or sibling ward, and do NOT emit a `step0.md` or route to `solution-agent` for ward setup when the ward already has `AGENTS.md` and `memory-bank/`. The plan is builder-agent steps that add the named capability — write the skill, wire the MCP, register the primitive — nothing more.
+
 ## Tools
 
 - `load_skill` — MANDATORY. You load `planning-highlevel` and `planning-decompose` in order.

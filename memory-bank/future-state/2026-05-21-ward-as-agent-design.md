@@ -298,3 +298,16 @@ root routes into an existing ward instead of minting a near-duplicate.
 - **P5 — anti-fragmentation:** semantic ward match before cold-path create.
 
 Procedures (`run_procedure`) already merged via PR #185 — no work needed.
+
+## 11. Known limitations
+
+**`capability_missing` resolution — built-in tools cannot be self-healed.**
+When a ward returns `RESULT: CAPABILITY_MISSING`, the cold-path builder
+augments the ward by writing skills, wiring MCP config, and registering
+procedures — all file/shell work it can do. It *cannot* add a new built-in
+daemon tool at runtime; that needs a Rust change and a rebuild. Built-in-tool
+gaps are rare (most capability gaps are skills/MCPs/procedures), but a
+`capability_missing` whose missing piece is a built-in tool cannot be
+augmented away — it must surface to the user. Also note: an MCP wired during
+augmentation only loads on the next daemon restart, so the augmented ward is
+not immediately able to use it within the same session.
