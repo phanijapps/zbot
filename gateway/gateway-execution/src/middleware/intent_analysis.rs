@@ -143,7 +143,9 @@ pub const DEFAULT_INTENT_ANALYSIS_PROMPT: &str = r#"You are an intent analyzer. 
   GOOD: "financial-analysis", "stock-analysis", "market-research", "personal-life", "homework"
   BAD: "amd-stock-analysis", "spy-options-trade", "math-homework-ch5"
   The ward is reused across many tasks in the same domain. Use subdirectory for task-specific paths.
-- If an existing ward matches the domain, use action "use_existing" with that ward name.
+- The "Existing Wards" list shows wards that ALREADY EXIST, with their scope. If one
+  covers this task's domain, set action "use_existing" and ward_name to its EXACT listed
+  name — never invent a near-duplicate. Use "create_new" only when no listed ward fits.
 - approach "simple" for greetings, quick questions, single-step tasks.
 - approach "graph" when the task needs multiple agents, code, or multi-step orchestration.
 - When approach is "graph", ALWAYS include "coding" in recommended_skills — it provides the ward structure and task runner.
@@ -623,6 +625,11 @@ async fn build_procedure_recommendation(
 /// recommendation. Pass `&[]` from tests / call sites without a registry
 /// snapshot — the promotion gate stays off and the legacy advisory
 /// surfacing still fires for medium-confidence matches.
+// Established orchestration entry point: each parameter is an independent
+// input (LLM client, message, stores, prompt, tool inventory, procedure
+// config, existing wards). Bundling into a struct would obscure call sites
+// without reducing coupling.
+#[allow(clippy::too_many_arguments)]
 pub async fn analyze_intent(
     llm_client: &dyn LlmClient,
     user_message: &str,
@@ -631,6 +638,7 @@ pub async fn analyze_intent(
     system_prompt: &str,
     tool_inventory: &[String],
     procedure_recommendation_cfg: Option<&gateway_memory::ProcedureRecommendationConfig>,
+    existing_wards: &[String],
 ) -> Result<IntentAnalysis, String> {
     // Use the supplied config or fall back to defaults. Callers that don't
     // wire settings (tests, simple invocations) get the canonical tier
@@ -718,11 +726,15 @@ pub async fn analyze_intent(
     );
 
     // Step 2: Build LLM prompt with only relevant resources
+    // Existing wards come from the filesystem (the caller enumerates them) —
+    // not from `results.wards`, which relies on a `category:"ward"` fact recall
+    // that returns nothing. Showing the real ward list is what stops the
+    // classifier inventing near-duplicate ward names (P5 anti-fragmentation).
     let user_template = format_user_template(
         user_message,
         &results.skills,
         &results.agents,
-        &results.wards,
+        existing_wards,
     );
 
     // Prepend memory context to user message if available
@@ -1893,6 +1905,7 @@ mod tests {
             DEFAULT_INTENT_ANALYSIS_PROMPT,
             &[],
             None,
+            &[],
         )
         .await;
         let analysis = result.expect("should parse simple intent");
@@ -1935,6 +1948,7 @@ mod tests {
             DEFAULT_INTENT_ANALYSIS_PROMPT,
             &[],
             None,
+            &[],
         )
         .await;
         let analysis = result.expect("should parse graph intent");
@@ -1964,6 +1978,7 @@ mod tests {
             DEFAULT_INTENT_ANALYSIS_PROMPT,
             &[],
             None,
+            &[],
         )
         .await;
         assert!(result.is_err());
@@ -2003,6 +2018,7 @@ mod tests {
             DEFAULT_INTENT_ANALYSIS_PROMPT,
             &[],
             None,
+            &[],
         )
         .await;
         let analysis = result.expect("should strip fences and parse");

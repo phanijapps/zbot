@@ -221,6 +221,65 @@ fn ward_doctrine_is_graduated(agents_md: &str) -> bool {
     agents_md.contains("## Purpose")
 }
 
+/// Enumerate the wards on disk, each as `"<name> — <purpose blurb>"` (or just
+/// `"<name>"` when the AGENTS.md has no Purpose section). Feeds the intent
+/// classifier the real ward list so it reuses an existing ward instead of
+/// inventing a near-duplicate name (P5 anti-fragmentation).
+fn list_existing_wards(paths: &SharedVaultPaths) -> Vec<String> {
+    let mut wards: Vec<String> = Vec::new();
+    let Ok(entries) = std::fs::read_dir(paths.wards_dir()) else {
+        return wards;
+    };
+    for entry in entries.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let agents_md = match std::fs::read_to_string(entry.path().join("AGENTS.md")) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let name = entry.file_name().to_string_lossy().to_string();
+        wards.push(match ward_purpose_blurb(&agents_md) {
+            Some(blurb) => format!("{name} — {blurb}"),
+            None => name,
+        });
+    }
+    wards.sort();
+    wards
+}
+
+/// Extract a one-line scope blurb from a ward's AGENTS.md `## Purpose`
+/// section — its body lines collapsed and truncated. `None` when absent.
+fn ward_purpose_blurb(agents_md: &str) -> Option<String> {
+    let mut lines = agents_md.lines();
+    lines
+        .by_ref()
+        .find(|l| l.trim_start().starts_with("## Purpose"))?;
+    let mut blurb = String::new();
+    for line in lines {
+        if line.trim_start().starts_with("## ") {
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !blurb.is_empty() {
+            blurb.push(' ');
+        }
+        blurb.push_str(trimmed);
+        if blurb.chars().count() >= 200 {
+            break;
+        }
+    }
+    let blurb: String = blurb.chars().take(200).collect();
+    if blurb.is_empty() {
+        None
+    } else {
+        Some(blurb)
+    }
+}
+
 // ============================================================================
 // IMPL
 // ============================================================================
@@ -828,6 +887,7 @@ impl InvokeBootstrap {
             crate::middleware::intent_analysis::load_intent_analysis_prompt(&self.paths);
 
         let tool_inventory = root_orchestrator_tool_names(self);
+        let existing_wards = list_existing_wards(&self.paths);
         let mut analysis = match analyze_intent(
             &retrying,
             msg,
@@ -836,6 +896,7 @@ impl InvokeBootstrap {
             &system_prompt,
             &tool_inventory,
             Some(&self.procedure_recommendation_cfg),
+            &existing_wards,
         )
         .await
         {
@@ -1060,6 +1121,40 @@ mod tests {
         assert!(!ward_doctrine_is_graduated(
             "# automotive-research\n\n## Conventions\n- reuse core/\n"
         ));
+    }
+
+    #[test]
+    fn ward_purpose_blurb_extracts_purpose_section() {
+        let md = "# foo\n\n## Purpose / Scope\nIN — vehicles and the market\nOUT — repair\n\n## Folder map\n- x\n";
+        let blurb = ward_purpose_blurb(md).expect("blurb");
+        assert!(blurb.contains("IN — vehicles"));
+        assert!(!blurb.contains("Folder map"));
+    }
+
+    #[test]
+    fn ward_purpose_blurb_none_without_purpose() {
+        assert!(ward_purpose_blurb("# foo\n\n## Conventions\n- x\n").is_none());
+    }
+
+    #[test]
+    fn list_existing_wards_lists_ward_dirs_with_blurbs() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths: SharedVaultPaths =
+            std::sync::Arc::new(gateway_services::VaultPaths::new(dir.path().to_path_buf()));
+        let wards = paths.wards_dir();
+        std::fs::create_dir_all(wards.join("travel-planning")).unwrap();
+        std::fs::write(
+            wards.join("travel-planning/AGENTS.md"),
+            "# travel-planning\n\n## Purpose / Scope\nIN — city itineraries\n",
+        )
+        .unwrap();
+        // A directory without an AGENTS.md is not a real ward — skipped.
+        std::fs::create_dir_all(wards.join("no-doctrine")).unwrap();
+
+        let listed = list_existing_wards(&paths);
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].starts_with("travel-planning — "));
+        assert!(listed[0].contains("city itineraries"));
     }
 
     #[test]

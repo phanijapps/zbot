@@ -179,6 +179,7 @@ async fn test_full_enrichment_flow() {
         DEFAULT_INTENT_ANALYSIS_PROMPT,
         &[],
         None,
+        &[],
     )
     .await
     .expect("analyze_intent should succeed with valid JSON");
@@ -222,6 +223,7 @@ async fn test_graceful_degradation_on_llm_failure() {
         DEFAULT_INTENT_ANALYSIS_PROMPT,
         &[],
         None,
+        &[],
     )
     .await;
 
@@ -250,6 +252,7 @@ async fn test_graceful_degradation_on_malformed_json() {
         DEFAULT_INTENT_ANALYSIS_PROMPT,
         &[],
         None,
+        &[],
     )
     .await;
 
@@ -296,6 +299,7 @@ async fn test_simple_request_no_graph() {
         DEFAULT_INTENT_ANALYSIS_PROMPT,
         &[],
         None,
+        &[],
     )
     .await
     .expect("should parse simple intent");
@@ -321,6 +325,7 @@ async fn test_skills_recommended() {
         DEFAULT_INTENT_ANALYSIS_PROMPT,
         &[],
         None,
+        &[],
     )
     .await
     .expect("should succeed");
