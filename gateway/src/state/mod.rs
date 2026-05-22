@@ -1845,8 +1845,10 @@ impl AppState {
             let content = format!(
                 "<!-- obsidian-vault -->\n\
                  # {wiki_name}\n\n\
-                 ## Purpose\n\
+                 ## Purpose / Scope\n\
                  Obsidian-style vault. Producer skills (book-reader, stock-analysis, news-research, …) emit vault-ready folders in their origin ward; the `wiki` skill promotes them here. **This AGENTS.md is the authoritative routing map.** If a memory fact contradicts it, this file wins.\n\n\
+                 - **IN scope** — promoting producer-emitted, vault-ready folders from any origin ward into the numbered Obsidian tree; whole-folder copy; routing unmatched items to `00_Inbox/`.\n\
+                 - **OUT of scope** — running code, research, or data fetching; rewriting promoted content; writing to user-managed folders; deleting from origin wards. Tasks needing any of these belong in another ward.\n\n\
                  ## Folder map — what goes where\n\n\
                  | Vault path | What lives here | Producer source |\n\
                  | --- | --- | --- |\n\
@@ -1883,6 +1885,9 @@ impl AppState {
                  - Do NOT write into `50_Resources/`, `60_Archive/`, `_zztemplates/`, or `70_Assets/Knowledge_Graphs/` — those are user-managed or reserved.\n\
                  - Do NOT run code, fetch data, or do research in this ward. It is content-only.\n\
                  - Do NOT edit promoted files outside their `<!-- manual -->` blocks — the skill overwrites on re-promotion.\n\n\
+                 ## Handoff\n\n\
+                 On completion, return a JSON object summarizing the promotion run: `{{ \"status\": \"ok | partial | failed\", \"summary\": \"one line\", \"promoted\": [\"<vault-path>\"], \"inboxed\": [\"<vault-path>\"], \"skipped\": [\"<path>\"] }}`.\n\n\
+                 `promoted` = folders copied to a numbered path; `inboxed` = folders routed to `00_Inbox/` because no rule matched; `skipped` = paths intentionally left in the origin ward.\n\n\
                  ## Discovery marker\n\n\
                  The first line of this file (`<!-- obsidian-vault -->`) is the marker the wiki skill uses to find this ward via `ward(action=\"list\")`. Do not remove it.\n"
             );
