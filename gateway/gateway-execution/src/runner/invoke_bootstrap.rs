@@ -212,6 +212,15 @@ fn format_goals_block(goals: &[agent_tools::GoalSummary]) -> Option<String> {
     Some(format!("## Active Goals\n{}", lines.join("\n")))
 }
 
+/// Graduation gate (P3): a ward is warm-routable — delegated to as a
+/// ward-agent — only once its `AGENTS.md` carries a real Purpose/Scope
+/// doctrine. A missing, empty, or stub `AGENTS.md` (no `## Purpose`
+/// section) means the ward has not been built up yet, so the task should
+/// route cold (planner) instead of warm.
+fn ward_doctrine_is_graduated(agents_md: &str) -> bool {
+    agents_md.contains("## Purpose")
+}
+
 // ============================================================================
 // IMPL
 // ============================================================================
@@ -847,16 +856,19 @@ impl InvokeBootstrap {
         // The intent classifier's `action` is unreliable: ward semantic
         // search frequently returns nothing, so the LLM is never shown the
         // existing wards and defaults to `create_new` even for a ward that
-        // already exists. The filesystem is the source of truth — set
-        // `action` from whether the ward directory actually exists. This
-        // both routes existing wards to the warm path (delegate to the
-        // ward-agent) and keeps a missing ward on the cold path (planner
-        // builds it), regardless of what the classifier guessed.
-        let ward_exists = self
-            .paths
-            .ward_dir(&analysis.ward_recommendation.ward_name)
-            .is_dir();
-        let authoritative_action = if ward_exists {
+        // already exists. The filesystem is the source of truth.
+        //
+        // Graduation gate (P3): a ward is warm-routable — delegated to as a
+        // ward-agent — only once it has GRADUATED, i.e. its AGENTS.md carries
+        // a real Purpose/Scope doctrine. A missing or stub AGENTS.md means
+        // the ward isn't built up yet; route cold so the planner scaffolds
+        // and populates it. This overrides the classifier's guess in both
+        // directions.
+        let ward_dir = self.paths.ward_dir(&analysis.ward_recommendation.ward_name);
+        let ward_graduated = std::fs::read_to_string(ward_dir.join("AGENTS.md"))
+            .map(|md| ward_doctrine_is_graduated(&md))
+            .unwrap_or(false);
+        let authoritative_action = if ward_graduated {
             "use_existing"
         } else {
             "create_new"
@@ -866,6 +878,7 @@ impl InvokeBootstrap {
                 ward = %analysis.ward_recommendation.ward_name,
                 classifier_action = %analysis.ward_recommendation.action,
                 corrected = authoritative_action,
+                graduated = ward_graduated,
                 "Correcting ward action from filesystem ground truth"
             );
             analysis.ward_recommendation.action = authoritative_action.to_string();
@@ -1033,6 +1046,21 @@ mod tests {
     use gateway_services::VaultPaths;
     use tokio::sync::RwLock;
     use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+
+    #[test]
+    fn ward_doctrine_is_graduated_true_for_canonical_agents_md() {
+        let md = "# automotive-research\n\n## Purpose / Scope\nIN — vehicles\n";
+        assert!(ward_doctrine_is_graduated(md));
+    }
+
+    #[test]
+    fn ward_doctrine_is_graduated_false_for_stub_or_old_format() {
+        assert!(!ward_doctrine_is_graduated(""));
+        assert!(!ward_doctrine_is_graduated("# automotive-research\n"));
+        assert!(!ward_doctrine_is_graduated(
+            "# automotive-research\n\n## Conventions\n- reuse core/\n"
+        ));
+    }
 
     #[test]
     fn invoke_bootstrap_constructs_with_minimum_required_deps() {
