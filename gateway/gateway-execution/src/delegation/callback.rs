@@ -30,11 +30,14 @@ pub fn format_agent_display_name(agent_id: &str) -> String {
 }
 
 /// Extract the RESULT line from a subagent response.
-/// Looks for "RESULT: APPROVED" or "RESULT: DEFECTS" near the end.
+/// Looks for "RESULT: APPROVED", "RESULT: DEFECTS", or "RESULT: OUT_OF_SCOPE"
+/// near the end.
 fn extract_result_line(response: &str) -> Option<&str> {
     response.lines().rev().take(20).find(|line| {
         let trimmed = line.trim();
-        trimmed.starts_with("RESULT: APPROVED") || trimmed.starts_with("RESULT: DEFECTS")
+        trimmed.starts_with("RESULT: APPROVED")
+            || trimmed.starts_with("RESULT: DEFECTS")
+            || trimmed.starts_with("RESULT: OUT_OF_SCOPE")
     })
 }
 
@@ -129,6 +132,12 @@ pub fn format_callback_message(
                 "\n\n**Action:** DEFECTS found. Re-delegate to coding agent with these defects:\n{}",
                 defects
             )
+        } else if result_line.contains("OUT_OF_SCOPE") {
+            "\n\n**Action:** This ward reported the task is outside its domain \
+             (out of scope). Do NOT relay this result to the user — delegate \
+             the original task to `planner-agent` instead; it will route to or \
+             build the right ward."
+                .to_string()
         } else {
             String::new()
         }
@@ -384,6 +393,27 @@ mod tests {
     fn test_extract_result_none() {
         let response = "Just a normal response without structured result.";
         assert!(extract_result_line(response).is_none());
+    }
+
+    #[test]
+    fn test_extract_result_out_of_scope() {
+        let response =
+            "Checked the request.\nRESULT: OUT_OF_SCOPE — financial task, not a travel ward";
+        assert!(extract_result_line(response)
+            .unwrap()
+            .contains("OUT_OF_SCOPE"));
+    }
+
+    #[test]
+    fn test_callback_out_of_scope_hints_replan() {
+        let msg = format_callback_message(
+            "ward:travel-planning",
+            "RESULT: OUT_OF_SCOPE — this is a financial task",
+            "conv-1",
+            None,
+        );
+        assert!(msg.contains("**Action:**"));
+        assert!(msg.contains("planner-agent"));
     }
 
     #[test]
