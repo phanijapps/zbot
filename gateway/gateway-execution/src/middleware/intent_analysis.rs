@@ -219,8 +219,10 @@ pub fn format_intent_injection(
             ward_task.push_str(&format!("\\n- also: {}", h));
         }
         out.push_str(&format!(
-            "\n**Required action:** This task belongs to the existing `{ward}` ward. \
-             Delegate the ENTIRE task to that ward-agent in ONE call and wait for its result:\n\
+            "\n**Required action:** This task belongs to the existing `{ward}` ward.\n\
+             1. Call `set_session_title` with a concise 2-8 word title.\n\
+             2. Then delegate the ENTIRE task to the ward-agent in ONE call and wait \
+             for its result:\n\
              ```\n\
              delegate_to_agent(agent_id=\"ward:{ward}\", task=\"{ward_task}\", wait_for_result=true)\n\
              ```\n\
@@ -2226,6 +2228,8 @@ mod tests {
         // Warm path: delegate the whole task to the ward-agent and wait.
         assert!(injection.contains("delegate_to_agent(agent_id=\"ward:financial-analysis\""));
         assert!(injection.contains("wait_for_result=true"));
+        // The root must still set the session title before delegating.
+        assert!(injection.contains("set_session_title"));
         // Warm path must NOT emit the planner-delegation call (the cold path's
         // routing). The text may *mention* planner-agent in a "do NOT" line —
         // assert on the actual call string instead.
