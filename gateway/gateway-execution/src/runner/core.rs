@@ -124,6 +124,9 @@ pub struct ExecutionRunner {
     agent_result_bus: Arc<AgentResultBus>,
     /// Trait-routed procedure store for the `run_procedure` tool — wired by AppState.
     procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    /// Per-ward usage telemetry — every `ward:<name>` delegation bumps it,
+    /// the curator reads it. Wired by AppState via [`ExecutionRunnerConfig`].
+    ward_usage: Arc<gateway_services::WardUsage>,
     /// Pre-session setup delegate. Holds the dependency set needed by
     /// `invoke_with_callback`'s bootstrap phase, extracted here so
     /// `setup()` can be tested and read independently of the full runner.
@@ -153,6 +156,9 @@ pub struct ExecutionRunnerConfig {
     pub skill_service: Arc<gateway_services::SkillService>,
     pub log_service: Arc<LogService<DatabaseManager>>,
     pub state_service: Arc<StateService<DatabaseManager>>,
+    /// Per-ward usage telemetry — feeds the curator. Required so every
+    /// `ward:<name>` delegation can `bump_use` persistently.
+    pub ward_usage: Arc<gateway_services::WardUsage>,
 
     // --- Optional integrations ---
     pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
@@ -393,6 +399,7 @@ impl ExecutionRunner {
             procedure_store,
             procedure_recommendation_cfg,
             max_parallel_agents,
+            ward_usage,
         } = config;
 
         // Create channel for delegation requests
@@ -475,6 +482,7 @@ impl ExecutionRunner {
             steering_registry,
             agent_result_bus,
             procedure_store,
+            ward_usage,
             bootstrap,
         };
 
@@ -606,6 +614,7 @@ impl ExecutionRunner {
             ward_locks: std::sync::Arc::new(
                 std::sync::Mutex::new(std::collections::HashMap::new()),
             ),
+            ward_usage: self.ward_usage.clone(),
         }
     }
 

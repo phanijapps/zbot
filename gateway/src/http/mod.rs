@@ -37,6 +37,8 @@ mod tools;
 mod upload;
 mod ward_actions;
 mod ward_content;
+mod ward_curator;
+mod ward_usage;
 mod webhooks;
 
 use crate::config::GatewayConfig;
@@ -267,6 +269,15 @@ pub fn create_http_router(
             "/api/contradictions/:contradiction_id/resolve",
             post(beliefs::resolve_contradiction),
         )
+        // Ward curator — per-ward usage telemetry (Phase A.3) +
+        // heuristic cleanup endpoint (Phase B). Spec:
+        // 2026-05-23-ward-curator-spec.md. Under /api/curator/ rather
+        // than /api/wards/curator to avoid colliding with /api/wards/:ward_id.
+        .route("/api/curator/usage", get(ward_usage::list_usage))
+        .route("/api/curator/usage/:ward", get(ward_usage::get_usage))
+        .route("/api/curator/usage/:ward/pin", post(ward_usage::set_pinned))
+        .route("/api/curator/cleanup", post(ward_curator::cleanup))
+        .route("/api/curator/restore", post(ward_curator::restore))
         // Ward listing (Memory Tab Command Deck — Task 9)
         .route("/api/wards", get(ward_content::list_wards))
         // Ward content aggregator (Memory Tab Command Deck — Task 5)
