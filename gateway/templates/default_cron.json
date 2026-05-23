@@ -12,5 +12,19 @@
       "source": "default_cron.json",
       "purpose": "cleanup"
     }
+  },
+  {
+    "id": "ward-curator-cleanup-weekly",
+    "name": "Ward curator weekly cleanup",
+    "schedule": "0 0 3 * * 1",
+    "agent_id": "general-purpose",
+    "message": "Run `curl -sS -X POST http://localhost:${ZBOT_API_PORT:-8080}/api/curator/cleanup -H 'Content-Type: application/json' -d '{}'` and report the transitions, scanned/skipped counts, backup_path, and report_path from the JSON response. Surface any errors verbatim.",
+    "respond_to": [],
+    "enabled": true,
+    "timezone": null,
+    "metadata": {
+      "source": "default_cron.json",
+      "purpose": "ward-curator-layer-1"
+    }
   }
 ]
