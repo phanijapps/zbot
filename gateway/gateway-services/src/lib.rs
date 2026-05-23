@@ -25,6 +25,7 @@ pub mod providers;
 pub mod recall_config;
 pub mod settings;
 pub mod skills;
+pub mod ward_usage;
 pub mod watcher;
 
 pub use agent_registry::AgentRegistry;
@@ -50,4 +51,5 @@ pub use skills::{
     Skill, SkillFileInfo, SkillFrontmatter, SkillService, SkillSource, WardAgentsMdConfig,
     WardSetup,
 };
+pub use ward_usage::{WardProvenance, WardRecord, WardState, WardUsage, WardUsageMap};
 pub use watcher::{FileWatcher, WatchConfig};
