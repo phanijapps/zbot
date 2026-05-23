@@ -352,28 +352,38 @@ impl<'a> AgentLoader<'a> {
              \n\
              If the task falls outside your Purpose / Scope, do not attempt \
              it — call `respond` with a single line: \
-             `RESULT: OUT_OF_SCOPE — <one-line reason>`.\n",
+             `RESULT: OUT_OF_SCOPE — <one-line reason>`.\n\
+             If the task is within your Purpose / Scope but you lack a \
+             tool, skill, or MCP needed to finish it, do not fake a \
+             partial result — call `respond` with a single line: \
+             `RESULT: CAPABILITY_MISSING — <the missing capability>`.\n",
         );
         let instructions =
             compose_ward_agent_instructions(&identity, &self.paths, ward_name, &doctrine);
 
-        // Ward-agents inherit the orchestrator's LLM config (Settings >
-        // Advanced > Orchestrator) — the same provider/model/limits the root
-        // runs on — falling back to the default provider when unset. Mirrors
-        // `load_or_create_root` so wards and the root are controlled by one
-        // knob.
+        // Ward-agent LLM config resolves in three tiers: the ward's own
+        // `config.yaml` overrides the orchestrator (Settings > Advanced >
+        // Orchestrator), which in turn falls back to the provider default.
+        // A `null` provider/model in `config.yaml` inherits the orchestrator,
+        // so an untouched ward behaves exactly as before.
         let orch = self
             .settings
             .and_then(|s| s.get_execution_settings().ok())
             .map(|s| s.orchestrator)
             .unwrap_or_default();
-        let provider = match &orch.provider_id {
-            Some(id) if !id.is_empty() => self.provider_resolver.get_or_default(id)?,
-            _ => self.provider_resolver.get_default()?,
+        let ward_cfg = load_or_seed_ward_config(&ward_dir);
+        let provider_id = ward_cfg
+            .provider
+            .filter(|p| !p.is_empty())
+            .or_else(|| orch.provider_id.filter(|p| !p.is_empty()));
+        let provider = match &provider_id {
+            Some(id) => self.provider_resolver.get_or_default(id)?,
+            None => self.provider_resolver.get_default()?,
         };
-        let model = orch
+        let model = ward_cfg
             .model
             .filter(|m| !m.is_empty())
+            .or_else(|| orch.model.filter(|m| !m.is_empty()))
             .unwrap_or_else(|| provider.default_model().to_string());
 
         let agent = gateway_services::agents::Agent {
@@ -564,6 +574,53 @@ fn compose_ward_agent_instructions(
     instructions
 }
 
+/// Per-ward LLM config from `wards/<ward>/config.yaml`. Each `None` field
+/// inherits the orchestrator setting — see [`load_or_seed_ward_config`].
+#[derive(Debug, Default, serde::Deserialize)]
+struct WardConfig {
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// Default `config.yaml` seeded into a ward the first time it runs as a
+/// ward-agent. Every field is `null`, so the ward inherits the orchestrator
+/// until the user edits it.
+const DEFAULT_WARD_CONFIG_YAML: &str = "\
+# Per-ward LLM config. A null field inherits the orchestrator setting
+# (Settings > Advanced > Orchestrator). Set provider/model to override.
+provider: null
+model: null
+";
+
+/// Read `wards/<ward>/config.yaml`, or seed it with [`DEFAULT_WARD_CONFIG_YAML`]
+/// and return the all-`None` default. A malformed file logs a warning and
+/// falls back to the default rather than failing the delegation.
+fn load_or_seed_ward_config(ward_dir: &std::path::Path) -> WardConfig {
+    let path = ward_dir.join("config.yaml");
+    match std::fs::read_to_string(&path) {
+        Ok(raw) => serde_yaml::from_str(&raw).unwrap_or_else(|e| {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "Malformed ward config.yaml; inheriting orchestrator config"
+            );
+            WardConfig::default()
+        }),
+        Err(_) => {
+            if let Err(e) = std::fs::write(&path, DEFAULT_WARD_CONFIG_YAML) {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "Failed to seed ward config.yaml"
+                );
+            }
+            WardConfig::default()
+        }
+    }
+}
+
 /// Generate a role-specific preamble based on the agent name.
 fn generate_role_preamble(agent_id: &str) -> String {
     let name_lower = agent_id.to_lowercase();
@@ -620,6 +677,52 @@ fn format_agent_display_name(agent_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ward_config_seeds_default_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = load_or_seed_ward_config(dir.path());
+        assert!(cfg.provider.is_none());
+        assert!(cfg.model.is_none());
+        // The seed file is written so the user can edit it to override.
+        let written = std::fs::read_to_string(dir.path().join("config.yaml")).unwrap();
+        assert!(written.contains("provider: null"));
+        assert!(written.contains("model: null"));
+    }
+
+    #[test]
+    fn ward_config_seeded_file_reparses_to_all_none() {
+        // The seeded `null` fields must round-trip back to `None`.
+        let dir = tempfile::tempdir().unwrap();
+        let _ = load_or_seed_ward_config(dir.path());
+        let cfg = load_or_seed_ward_config(dir.path());
+        assert!(cfg.provider.is_none() && cfg.model.is_none());
+    }
+
+    #[test]
+    fn ward_config_reads_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.yaml"),
+            "provider: provider-openai\nmodel: gpt-4o\n",
+        )
+        .unwrap();
+        let cfg = load_or_seed_ward_config(dir.path());
+        assert_eq!(cfg.provider.as_deref(), Some("provider-openai"));
+        assert_eq!(cfg.model.as_deref(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn ward_config_malformed_falls_back_to_default() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.yaml"),
+            "provider: [not, a, string\n",
+        )
+        .unwrap();
+        let cfg = load_or_seed_ward_config(dir.path());
+        assert!(cfg.provider.is_none() && cfg.model.is_none());
+    }
 
     #[test]
     fn test_format_agent_display_name() {

@@ -30,14 +30,15 @@ pub fn format_agent_display_name(agent_id: &str) -> String {
 }
 
 /// Extract the RESULT line from a subagent response.
-/// Looks for "RESULT: APPROVED", "RESULT: DEFECTS", or "RESULT: OUT_OF_SCOPE"
-/// near the end.
+/// Looks for "RESULT: APPROVED", "RESULT: DEFECTS", "RESULT: OUT_OF_SCOPE",
+/// or "RESULT: CAPABILITY_MISSING" near the end.
 fn extract_result_line(response: &str) -> Option<&str> {
     response.lines().rev().take(20).find(|line| {
         let trimmed = line.trim();
         trimmed.starts_with("RESULT: APPROVED")
             || trimmed.starts_with("RESULT: DEFECTS")
             || trimmed.starts_with("RESULT: OUT_OF_SCOPE")
+            || trimmed.starts_with("RESULT: CAPABILITY_MISSING")
     })
 }
 
@@ -137,6 +138,14 @@ pub fn format_callback_message(
              (out of scope). Do NOT relay this result to the user — delegate \
              the original task to `planner-agent` instead; it will route to or \
              build the right ward."
+                .to_string()
+        } else if result_line.contains("CAPABILITY_MISSING") {
+            "\n\n**Action:** This ward reported the task IS in its domain but \
+             it lacks a required capability. Do NOT relay this result to the \
+             user — delegate the original task to `planner-agent`, stating \
+             that this existing ward is the correct one and only the missing \
+             capability must be ADDED to it. The planner must augment the \
+             existing ward, not create a new one."
                 .to_string()
         } else {
             String::new()
@@ -414,6 +423,27 @@ mod tests {
         );
         assert!(msg.contains("**Action:**"));
         assert!(msg.contains("planner-agent"));
+    }
+
+    #[test]
+    fn test_extract_result_capability_missing() {
+        let response = "Checked the request.\nRESULT: CAPABILITY_MISSING — no dealer-inventory MCP";
+        assert!(extract_result_line(response)
+            .unwrap()
+            .contains("CAPABILITY_MISSING"));
+    }
+
+    #[test]
+    fn test_callback_capability_missing_hints_augment() {
+        let msg = format_callback_message(
+            "ward:automotive-research",
+            "RESULT: CAPABILITY_MISSING — no dealer-inventory MCP",
+            "conv-2",
+            None,
+        );
+        assert!(msg.contains("**Action:**"));
+        assert!(msg.contains("planner-agent"));
+        assert!(msg.contains("augment the existing ward"));
     }
 
     #[test]
