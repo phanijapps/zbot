@@ -53,7 +53,7 @@ pub use memory::{MemoryEntry, MemoryStore, MemoryTool};
 pub use multimodal::MultimodalAnalyzeTool;
 pub use search::{GlobTool, GrepTool};
 pub use ui::{RequestInputTool, ShowContentTool};
-pub use ward::WardTool;
+pub use ward::{WardTool, WardUsageAccess};
 pub use web::WebFetchTool;
 
 // ============================================================================
@@ -155,6 +155,7 @@ fn default_offload_enabled() -> bool {
 pub fn core_tools(
     fs: Arc<dyn FileSystemContext>,
     fact_store: Option<Arc<dyn MemoryFactStore>>,
+    ward_usage: Option<Arc<dyn WardUsageAccess>>,
 ) -> Vec<Arc<dyn Tool>> {
     vec![
         // Primary execution tool
@@ -165,7 +166,7 @@ pub fn core_tools(
         // Persistent memory (with optional DB-backed fact store)
         Arc::new(MemoryTool::new(fs.clone(), fact_store.clone())),
         // Ward management (named project directories, with recall on entry)
-        Arc::new(WardTool::new(fs.clone(), fact_store)),
+        Arc::new(WardTool::new(fs.clone(), fact_store, ward_usage)),
         // Lightweight plan tracking
         Arc::new(UpdatePlanTool::new()),
         // Session title (human-readable label for the UI)
@@ -250,7 +251,7 @@ pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool
         offload_threshold_tokens: default_offload_threshold(),
     };
 
-    let mut tools = core_tools(fs.clone(), None);
+    let mut tools = core_tools(fs.clone(), None, None);
     tools.extend(optional_tools(fs, &all_enabled));
     tools
 }

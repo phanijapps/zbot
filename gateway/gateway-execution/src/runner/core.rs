@@ -213,6 +213,7 @@ pub(super) struct ContinuationArgs<'a> {
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     pub(super) procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    pub(super) ward_usage: Arc<gateway_services::WardUsage>,
 }
 
 /// Prepend recalled facts to `history` as a system message at position 0.
@@ -447,6 +448,7 @@ impl ExecutionRunner {
             agent_result_bus: Some(agent_result_bus.clone()),
             procedure_store: procedure_store.clone(),
             procedure_recommendation_cfg,
+            ward_usage: ward_usage.clone(),
             event_bus: event_bus.clone(),
             handles: handles.clone(),
         };
@@ -578,6 +580,7 @@ impl ExecutionRunner {
             ingestion_adapter: self.ingestion_adapter.clone(),
             goal_adapter: self.goal_adapter.clone(),
             procedure_store: self.procedure_store.clone(),
+            ward_usage: self.ward_usage.clone(),
         }
     }
 
@@ -1099,6 +1102,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         ingestion_adapter,
         goal_adapter,
         procedure_store,
+        ward_usage,
     } = args;
     // Generate a new conversation ID for this continuation turn
     let conversation_id = format!(
@@ -1216,6 +1220,13 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
     }
     if let Some(a) = goal_adapter {
         builder = builder.with_goal_adapter(a);
+    }
+    {
+        // Ward-curator observer (matches the bootstrap path's wiring).
+        let observer = std::sync::Arc::new(
+            crate::invoke::ward_usage_adapter::WardUsageAdapter::new(ward_usage.clone()),
+        );
+        builder = builder.with_ward_usage(observer);
     }
     if let Some(ps) = procedure_store.clone() {
         builder = builder.with_procedure_store(ps);

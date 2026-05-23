@@ -70,6 +70,9 @@ pub(super) struct InvokeBootstrap {
     pub(super) agent_result_bus: Option<Arc<AgentResultBus>>,
     /// Trait-routed procedure store used to build the executor's run_procedure tool.
     pub(super) procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    /// Per-ward usage telemetry — feeds the curator and gets a
+    /// `created_by = "agent"` mark whenever the `ward` tool creates a new ward.
+    pub(super) ward_usage: Arc<gateway_services::WardUsage>,
     /// Procedure recommendation tier thresholds. Threaded from settings.json
     /// at AppState wiring time; default tiers if absent. See
     /// `gateway_memory::ProcedureRecommendationConfig`.
@@ -747,6 +750,15 @@ impl InvokeBootstrap {
         if let Some(ref a) = self.goal_adapter {
             builder = builder.with_goal_adapter(a.clone());
         }
+        // Ward-curator observer — bumps `created_by=agent` whenever the
+        // `ward` tool creates a new ward dir. Always wired in production
+        // (WardUsage is a required ExecutionRunnerConfig field).
+        {
+            let observer = std::sync::Arc::new(
+                crate::invoke::ward_usage_adapter::WardUsageAdapter::new(self.ward_usage.clone()),
+            );
+            builder = builder.with_ward_usage(observer);
+        }
         if let Some(ref sr) = self.steering_registry {
             builder = builder.with_steering_registry(sr.clone());
         }
@@ -1271,6 +1283,9 @@ mod tests {
             agent_result_bus: None,
             procedure_store: None,
             procedure_recommendation_cfg: gateway_memory::ProcedureRecommendationConfig::default(),
+            ward_usage: Arc::new(gateway_services::WardUsage::new(
+                std::env::temp_dir().join("zbot-test-wards"),
+            )),
             event_bus: Arc::new(EventBus::new()),
             handles,
         };
