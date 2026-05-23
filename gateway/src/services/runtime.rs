@@ -156,6 +156,7 @@ impl RuntimeService {
             procedure_store,
             procedure_recommendation_cfg,
             max_parallel_agents,
+            ward_usage: Arc::new(gateway_services::WardUsage::new(paths.wards_dir())),
         });
 
         // Initialize model registry from bundled + local overrides

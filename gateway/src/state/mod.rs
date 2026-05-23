@@ -17,7 +17,7 @@ use crate::services::{
 use agent_runtime::llm::EmbeddingClient;
 use api_logs::LogService;
 use execution_state::StateService;
-use gateway_services::EmbeddingService;
+use gateway_services::{EmbeddingService, WardProvenance, WardUsage};
 use std::path::PathBuf;
 use std::sync::Arc;
 use zero_stores_sqlite::kg::service::GraphService;
@@ -1786,6 +1786,13 @@ impl AppState {
             }
         }
 
+        // Mark the bundled provenance so the curator never archives `scratch`.
+        // Idempotent: re-marking on every boot just refreshes `created_by`.
+        if let Err(e) = WardUsage::new(&wards_dir).mark_created("scratch", WardProvenance::Bundled)
+        {
+            tracing::warn!(error = %e, "ward_usage: failed to mark scratch as bundled");
+        }
+
         let wiki_name = self
             .settings
             .load()
@@ -1902,6 +1909,15 @@ impl AppState {
             if !path.exists() {
                 let _ = std::fs::write(&path, "");
             }
+        }
+
+        // Mark the bundled provenance so the curator never archives the wiki.
+        if let Err(e) = WardUsage::new(wards_dir).mark_created(wiki_name, WardProvenance::Bundled) {
+            tracing::warn!(
+                ward = %wiki_name,
+                error = %e,
+                "ward_usage: failed to mark wiki as bundled"
+            );
         }
 
         tracing::info!("Wiki vault ward ready at {}", wiki_dir.display());

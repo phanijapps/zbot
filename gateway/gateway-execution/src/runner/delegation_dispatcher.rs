@@ -260,6 +260,8 @@ pub(crate) struct RunnerDelegationInvoker {
     pub(crate) agent_result_bus: Arc<AgentResultBus>,
     /// Per-ward serialization locks (see [`acquire_ward_lock`]).
     pub(crate) ward_locks: Arc<WardLocks>,
+    /// Per-ward usage telemetry — bumped on every `ward:<name>` delegation.
+    pub(crate) ward_usage: Arc<gateway_services::WardUsage>,
 }
 
 #[async_trait]
@@ -269,12 +271,23 @@ impl DelegationSpawner for RunnerDelegationInvoker {
         request: DelegationRequest,
         permit: Option<OwnedSemaphorePermit>,
     ) -> Result<(), String> {
+        // Bump per-ward usage telemetry as soon as we know this is a ward
+        // delegation, before any locking. The curator reads these counters
+        // to decide what's active vs stale (see Phase B). Failures here
+        // never block delegation — telemetry is best-effort.
+        let ward_name = request.child_agent_id.strip_prefix("ward:");
+        if let Some(ward) = ward_name {
+            if let Err(e) = self.ward_usage.bump_use(ward) {
+                tracing::warn!(ward = %ward, error = %e, "ward_usage.bump_use failed");
+            }
+        }
+
         // Serialize ward-agent delegations per ward. Ward-shared files
         // (memory-bank/*.md, specs) are written by tools without filesystem
         // locks; the dispatcher only serializes per session, so two sessions
         // delegating to the same ward could lose updates. Holding this guard
         // for the whole child execution makes it one ward-agent per ward.
-        let _ward_guard = match request.child_agent_id.strip_prefix("ward:") {
+        let _ward_guard = match ward_name {
             Some(ward) => Some(acquire_ward_lock(&self.ward_locks, ward).await),
             None => None,
         };
