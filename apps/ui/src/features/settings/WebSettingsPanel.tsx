@@ -751,6 +751,118 @@ export function WebSettingsPanel() {
                   </div>
                 </div>
 
+                {/* ── Curator Card ── */}
+                <div className="card card__padding--lg">
+                  <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
+                    <div className="card__icon card__icon--primary">
+                      <Sparkles style={{ width: 18, height: 18 }} />
+                    </div>
+                    <div>
+                      <h2 className="settings-section-header">Curator</h2>
+                      <p className="page-subtitle">Override for ward consolidation</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="settings-field-label" htmlFor="cur-provider">Provider</label>
+                      <select
+                        id="cur-provider"
+                        className="form-input form-select"
+                        value={execSettings.curator?.providerId || ""}
+                        onChange={(e) => handleExecChange({
+                          curator: {
+                            ...execSettings.curator,
+                            providerId: e.target.value || null,
+                            model: e.target.value ? (execSettings.curator?.model || null) : null,
+                          },
+                        })}
+                      >
+                        <option value="">Inherit from Orchestrator</option>
+                        {providers.filter((p) => p.verified).map((p) => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="settings-field-label" htmlFor="cur-model">Model</label>
+                      <ModelTextInput
+                        id="cur-model"
+                        value={execSettings.curator?.model || ""}
+                        onChange={(next) => handleExecChange({
+                          curator: {
+                            ...execSettings.curator,
+                            model: next || null,
+                          },
+                        })}
+                        suggestions={(() => {
+                          const curProviderId = execSettings.curator?.providerId
+                            || execSettings.orchestrator?.providerId
+                            || defaultProviderId;
+                          return providers.find((p) => p.id === curProviderId)?.models || [];
+                        })()}
+                        placeholder="provider default"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Intent Analysis Card ── */}
+                <div className="card card__padding--lg">
+                  <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
+                    <div className="card__icon card__icon--primary">
+                      <Sparkles style={{ width: 18, height: 18 }} />
+                    </div>
+                    <div>
+                      <h2 className="settings-section-header">Intent Analysis</h2>
+                      <p className="page-subtitle">Override for the per-prompt routing classifier</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="settings-field-label" htmlFor="intent-provider">Provider</label>
+                      <select
+                        id="intent-provider"
+                        className="form-input form-select"
+                        value={execSettings.intentAnalysis?.providerId || ""}
+                        onChange={(e) => handleExecChange({
+                          intentAnalysis: {
+                            ...execSettings.intentAnalysis,
+                            providerId: e.target.value || null,
+                            model: e.target.value ? (execSettings.intentAnalysis?.model || null) : null,
+                          },
+                        })}
+                      >
+                        <option value="">Inherit from Orchestrator</option>
+                        {providers.filter((p) => p.verified).map((p) => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="settings-field-label" htmlFor="intent-model">Model</label>
+                      <ModelTextInput
+                        id="intent-model"
+                        value={execSettings.intentAnalysis?.model || ""}
+                        onChange={(next) => handleExecChange({
+                          intentAnalysis: {
+                            ...execSettings.intentAnalysis,
+                            model: next || null,
+                          },
+                        })}
+                        suggestions={(() => {
+                          const intentProviderId = execSettings.intentAnalysis?.providerId
+                            || execSettings.orchestrator?.providerId
+                            || defaultProviderId;
+                          return providers.find((p) => p.id === intentProviderId)?.models || [];
+                        })()}
+                        placeholder="provider default"
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 {/* ── Multimodal Card ── */}
                 <div className="card card__padding--lg">
                   <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
