@@ -266,7 +266,9 @@ mod tests {
     fn parse_plan_response_errors_on_invalid_yaml() {
         // Properly fenced (so extract_yaml_block succeeds) but the inner
         // content is broken YAML — parse step should surface that.
-        let err = parse_plan_response("```yaml\nconsolidations:\n  - action: merge\n    from: [\n```").unwrap_err();
+        let err =
+            parse_plan_response("```yaml\nconsolidations:\n  - action: merge\n    from: [\n```")
+                .unwrap_err();
         assert!(err.contains("parse plan YAML"), "unexpected error: {err}");
     }
 

@@ -278,6 +278,7 @@ pub fn create_http_router(
         .route("/api/curator/usage/:ward/pin", post(ward_usage::set_pinned))
         .route("/api/curator/cleanup", post(ward_curator::cleanup))
         .route("/api/curator/restore", post(ward_curator::restore))
+        .route("/api/curator/consolidate", post(ward_curator::consolidate))
         // Ward listing (Memory Tab Command Deck — Task 9)
         .route("/api/wards", get(ward_content::list_wards))
         // Ward content aggregator (Memory Tab Command Deck — Task 5)
