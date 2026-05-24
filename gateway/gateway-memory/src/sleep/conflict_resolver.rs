@@ -303,7 +303,10 @@ pub struct LlmConflictJudge {
 impl LlmConflictJudge {
     pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
         Self {
-            client: CachedLlmClient::new(factory, LlmClientConfig::new(0.0, 256)),
+            client: CachedLlmClient::new(
+                factory,
+                LlmClientConfig::new(0.0, 256).with_task("sleep_time"),
+            ),
         }
     }
 }

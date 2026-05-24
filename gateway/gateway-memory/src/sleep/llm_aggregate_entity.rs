@@ -77,11 +77,11 @@ impl LlmAggregateEntity {
         Self {
             aggregate_client: CachedLlmClient::new(
                 factory.clone(),
-                LlmClientConfig::new(TEMPERATURE, MAX_TOKENS_AGGREGATE),
+                LlmClientConfig::new(TEMPERATURE, MAX_TOKENS_AGGREGATE).with_task("sleep_time"),
             ),
             relation_client: CachedLlmClient::new(
                 factory,
-                LlmClientConfig::new(TEMPERATURE, MAX_TOKENS_RELATION),
+                LlmClientConfig::new(TEMPERATURE, MAX_TOKENS_RELATION).with_task("sleep_time"),
             ),
         }
     }

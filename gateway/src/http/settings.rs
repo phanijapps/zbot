@@ -302,6 +302,9 @@ pub struct UpdateExecutionSettingsRequest {
     /// Intent-analysis model configuration (every root prompt)
     #[serde(default)]
     pub intent_analysis: Option<gateway_services::IntentAnalysisConfig>,
+    /// Sleep-time pipeline model configuration
+    #[serde(default)]
+    pub sleep_time: Option<gateway_services::SleepTimeConfig>,
     /// Default multimodal (vision) model configuration
     #[serde(default)]
     pub multimodal: Option<gateway_services::MultimodalConfig>,
@@ -349,6 +352,7 @@ impl UpdateExecutionSettingsRequest {
             distillation: self.distillation.unwrap_or_default(),
             curator: self.curator.unwrap_or_default(),
             intent_analysis: self.intent_analysis.unwrap_or_default(),
+            sleep_time: self.sleep_time.unwrap_or_default(),
             multimodal: self.multimodal.unwrap_or_default(),
             feature_flags: self.feature_flags,
 
@@ -504,6 +508,7 @@ mod tests {
             distillation: None,
             curator: None,
             intent_analysis: None,
+            sleep_time: None,
             multimodal: None,
             memory: None,
             feature_flags: std::collections::HashMap::new(),

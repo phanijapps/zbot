@@ -263,9 +263,11 @@ impl AppState {
 
         // Factory for sleep-time memory LLM clients — built once, shared
         // across every sleep-time component that needs an LLM call.
-        let memory_llm_factory: Arc<dyn gateway_memory::MemoryLlmFactory> = Arc::new(
-            crate::memory_llm_factory::ProviderServiceLlmFactory::new(provider_service.clone()),
-        );
+        let memory_llm_factory: Arc<dyn gateway_memory::MemoryLlmFactory> =
+            Arc::new(crate::memory_llm_factory::ProviderServiceLlmFactory::new(
+                provider_service.clone(),
+                paths.clone(),
+            ));
 
         // Initialize model capabilities registry (bundled + local overrides)
         let bundled_models = gateway_templates::Templates::get("models_registry.json")

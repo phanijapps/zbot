@@ -360,7 +360,10 @@ pub struct LlmSynthesizer {
 impl LlmSynthesizer {
     pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
         Self {
-            client: CachedLlmClient::new(factory, LlmClientConfig::new(0.0, 512)),
+            client: CachedLlmClient::new(
+                factory,
+                LlmClientConfig::new(0.0, 512).with_task("sleep_time"),
+            ),
         }
     }
 }

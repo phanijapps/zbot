@@ -63,9 +63,11 @@ impl RuntimeService {
         log_service: Arc<LogService<DatabaseManager>>,
         state_service: Arc<StateService<DatabaseManager>>,
     ) -> Self {
-        let memory_llm_factory: Arc<dyn gateway_memory::MemoryLlmFactory> = Arc::new(
-            crate::memory_llm_factory::ProviderServiceLlmFactory::new(provider_service.clone()),
-        );
+        let memory_llm_factory: Arc<dyn gateway_memory::MemoryLlmFactory> =
+            Arc::new(crate::memory_llm_factory::ProviderServiceLlmFactory::new(
+                provider_service.clone(),
+                paths.clone(),
+            ));
         Self::with_runner_and_connectors(
             event_bus,
             agent_service,

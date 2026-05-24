@@ -23,9 +23,9 @@ Design work tracked separately: `2026-05-22-zbot-curator-design.md` (to follow).
 
 Hermes ships seven terminal backends: **local, Docker, SSH, Singularity, Modal, Daytona, Vercel Sandbox** — Modal and Daytona offer serverless hibernation. z-Bot is local-shell only. Real gap for "agent that lives on a $5 VPS to a GPU cluster" deployments.
 
-### 3. Smart per-task model routing — **IN PROGRESS (2026-05-24)**
+### 3. Smart per-task model routing — **DONE (2026-05-24)**
 
-Implemented for **curator** + **intent_analysis** (the two highest-value missing slots). Per-task `CuratorConfig` / `IntentAnalysisConfig` in `ExecutionSettings`, three-tier resolution (task → orchestrator → provider default), Settings > Advanced UI cards mirroring the Distillation pattern. Sleep-time stages (verifier, contradiction_detector, pattern_extractor, etc.) and other `MemoryLlmFactory`-routed calls remain on the orchestrator — covered in a separate follow-up since they need a small factory refactor.
+Implemented for **curator**, **intent_analysis**, and **sleep_time** (the memory-cycle pipeline). Per-task `CuratorConfig` / `IntentAnalysisConfig` / `SleepTimeConfig` in `ExecutionSettings`, three-tier resolution (task → orchestrator → provider default), Settings > Advanced UI cards mirroring the Distillation pattern. The `MemoryLlmFactory` was extended with a `task: Option<String>` tag on `LlmClientConfig`; `ProviderServiceLlmFactory::build_client` picks the per-task override when the tag matches. All 10 sleep-time call sites (synthesizer, belief_synthesizer, corrections_abstractor, verifier, pattern_extractor, conflict_resolver, llm_aggregate_entity ×2, belief_contradiction_detector, handoff_writer) carry `.with_task("sleep_time")`.
 
 Hermes routes auxiliary work — Curator, vision, embeddings, title generation, session search — to **different** models with per-task `reasoning_effort`. z-Bot has per-ward LLM config (shipped via PR #191) but no per-side-task routing.
 

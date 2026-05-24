@@ -72,6 +72,9 @@ pub struct ExecutionSettings {
     /// Intent-analysis LLM configuration (provider/model override).
     #[serde(default)]
     pub intent_analysis: IntentAnalysisConfig,
+    /// Sleep-time pipeline LLM configuration (provider/model override).
+    #[serde(default)]
+    pub sleep_time: SleepTimeConfig,
     /// Multimodal model configuration (vision analysis fallback).
     #[serde(default)]
     pub multimodal: MultimodalConfig,
@@ -185,6 +188,24 @@ pub struct IntentAnalysisConfig {
     pub model: Option<String>,
 }
 
+/// Sleep-time pipeline LLM configuration (provider/model override).
+/// Applies to every background-memory stage that runs each sleep cycle:
+/// pattern_extractor, hierarchy_builder, belief_synthesizer,
+/// contradiction_detector, corrections_abstractor, verifier,
+/// llm_aggregate_entity, conflict_resolver, synthesizer, handoff_writer.
+/// These stages run many LLM calls per cycle, so routing them to a
+/// cheaper model compounds across cycles.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SleepTimeConfig {
+    /// Provider ID override. None = inherit from orchestrator config.
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    /// Model override. None = inherit from orchestrator config.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
 /// Default multimodal model configuration.
 /// Used by the multimodal_analyze tool as a universal vision fallback.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,6 +287,7 @@ impl Default for ExecutionSettings {
             distillation: DistillationConfig::default(),
             curator: CuratorConfig::default(),
             intent_analysis: IntentAnalysisConfig::default(),
+            sleep_time: SleepTimeConfig::default(),
             multimodal: MultimodalConfig::default(),
             chat: ChatConfig::default(),
             wiki: WikiConfig::default(),

@@ -445,6 +445,14 @@ export interface IntentAnalysisConfig {
   model?: string | null;
 }
 
+/** Sleep-time pipeline model configuration (every memory-cycle LLM call) */
+export interface SleepTimeConfig {
+  /** Provider ID override. null = inherit from orchestrator */
+  providerId?: string | null;
+  /** Model override. null = inherit from orchestrator */
+  model?: string | null;
+}
+
 // ============================================================================
 // Session State (snapshot API for reconnection)
 // ============================================================================
@@ -517,6 +525,8 @@ export interface ExecutionSettings {
   curator?: CuratorConfig;
   /** Intent-analysis model (every root prompt) — inherits from orchestrator by default */
   intentAnalysis?: IntentAnalysisConfig;
+  /** Sleep-time pipeline model (memory cycle stages) — inherits from orchestrator by default */
+  sleepTime?: SleepTimeConfig;
   /** Default multimodal (vision) model for the multimodal_analyze tool */
   multimodal?: MultimodalConfig;
   /** Opt-in feature flags (gate beta UI surfaces and experimental behavior) */

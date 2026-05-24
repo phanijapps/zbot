@@ -157,7 +157,7 @@ impl HandoffLlm for LlmHandoffWriter {
     async fn summarize(&self, input: &HandoffInput) -> Result<String, String> {
         let client = self
             .factory
-            .build_client(LlmClientConfig::new(0.2, 256))
+            .build_client(LlmClientConfig::new(0.2, 256).with_task("sleep_time"))
             .await?;
         let conversation = format_conversation_for_summary(&input.messages);
         let prompt = format!(

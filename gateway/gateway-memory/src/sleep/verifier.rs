@@ -30,7 +30,10 @@ pub struct LlmPairwiseVerifier {
 impl LlmPairwiseVerifier {
     pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
         Self {
-            client: CachedLlmClient::new(factory, LlmClientConfig::new(0.0, 128)),
+            client: CachedLlmClient::new(
+                factory,
+                LlmClientConfig::new(0.0, 128).with_task("sleep_time"),
+            ),
         }
     }
 }

@@ -863,6 +863,62 @@ export function WebSettingsPanel() {
                   </div>
                 </div>
 
+                {/* ── Sleep-time Pipeline Card ── */}
+                <div className="card card__padding--lg">
+                  <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
+                    <div className="card__icon card__icon--primary">
+                      <Sparkles style={{ width: 18, height: 18 }} />
+                    </div>
+                    <div>
+                      <h2 className="settings-section-header">Sleep-time Pipeline</h2>
+                      <p className="page-subtitle">Override for memory-cycle LLM calls (synthesis, beliefs, abstraction)</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="settings-field-label" htmlFor="sleep-provider">Provider</label>
+                      <select
+                        id="sleep-provider"
+                        className="form-input form-select"
+                        value={execSettings.sleepTime?.providerId || ""}
+                        onChange={(e) => handleExecChange({
+                          sleepTime: {
+                            ...execSettings.sleepTime,
+                            providerId: e.target.value || null,
+                            model: e.target.value ? (execSettings.sleepTime?.model || null) : null,
+                          },
+                        })}
+                      >
+                        <option value="">Inherit from Orchestrator</option>
+                        {providers.filter((p) => p.verified).map((p) => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="settings-field-label" htmlFor="sleep-model">Model</label>
+                      <ModelTextInput
+                        id="sleep-model"
+                        value={execSettings.sleepTime?.model || ""}
+                        onChange={(next) => handleExecChange({
+                          sleepTime: {
+                            ...execSettings.sleepTime,
+                            model: next || null,
+                          },
+                        })}
+                        suggestions={(() => {
+                          const sleepProviderId = execSettings.sleepTime?.providerId
+                            || execSettings.orchestrator?.providerId
+                            || defaultProviderId;
+                          return providers.find((p) => p.id === sleepProviderId)?.models || [];
+                        })()}
+                        placeholder="provider default"
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 {/* ── Multimodal Card ── */}
                 <div className="card card__padding--lg">
                   <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>

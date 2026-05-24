@@ -47,6 +47,7 @@ pub use recall_config::{KgDecayConfig, RecallConfig};
 pub use settings::{
     AppSettings, ChatConfig, CuratorConfig, DistillationConfig, ExecutionSettings,
     IntentAnalysisConfig, MemorySettings, MultimodalConfig, OrchestratorConfig, SettingsService,
+    SleepTimeConfig,
 };
 pub use skills::{
     Skill, SkillFileInfo, SkillFrontmatter, SkillService, SkillSource, WardAgentsMdConfig,

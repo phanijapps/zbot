@@ -13,12 +13,17 @@ use agent_runtime::llm::LlmClient;
 use async_trait::async_trait;
 
 /// Per-call configuration each component supplies when asking the factory
-/// for a client. Currently captures only the values that vary between
-/// production sleep components — temperature and max-tokens.
+/// for a client. Captures the values that vary between production sleep
+/// components — temperature, max-tokens, and an optional task tag that the
+/// production factory uses to look up per-task provider/model overrides
+/// (e.g. `"sleep_time"` → `settings.execution.sleepTime.{providerId, model}`).
+/// `None` falls through to the default provider, matching the pre-tagging
+/// behavior — existing callers don't need updating to keep working.
 #[derive(Debug, Clone)]
 pub struct LlmClientConfig {
     pub temperature: f64,
     pub max_tokens: u32,
+    pub task: Option<String>,
 }
 
 impl LlmClientConfig {
@@ -26,7 +31,18 @@ impl LlmClientConfig {
         Self {
             temperature,
             max_tokens,
+            task: None,
         }
+    }
+
+    /// Tag this config with a task identifier so the production factory
+    /// can resolve a per-task override. Builder-style so existing
+    /// constructions opt in cleanly:
+    /// `LlmClientConfig::new(0.0, 256).with_task("sleep_time")`.
+    #[must_use]
+    pub fn with_task(mut self, task: impl Into<String>) -> Self {
+        self.task = Some(task.into());
+        self
     }
 }
 
