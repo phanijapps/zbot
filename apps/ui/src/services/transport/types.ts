@@ -429,6 +429,22 @@ export interface DistillationConfig {
   model?: string | null;
 }
 
+/** Ward-curator model configuration (Phase C consolidation LLM call) */
+export interface CuratorConfig {
+  /** Provider ID override. null = inherit from orchestrator */
+  providerId?: string | null;
+  /** Model override. null = inherit from orchestrator */
+  model?: string | null;
+}
+
+/** Intent-analysis model configuration (every root prompt) */
+export interface IntentAnalysisConfig {
+  /** Provider ID override. null = inherit from orchestrator */
+  providerId?: string | null;
+  /** Model override. null = inherit from orchestrator */
+  model?: string | null;
+}
+
 // ============================================================================
 // Session State (snapshot API for reconnection)
 // ============================================================================
@@ -497,6 +513,10 @@ export interface ExecutionSettings {
   orchestrator?: OrchestratorConfig;
   /** Distillation model configuration (inherits from orchestrator by default) */
   distillation?: DistillationConfig;
+  /** Ward-curator (Phase C consolidation) model — inherits from orchestrator by default */
+  curator?: CuratorConfig;
+  /** Intent-analysis model (every root prompt) — inherits from orchestrator by default */
+  intentAnalysis?: IntentAnalysisConfig;
   /** Default multimodal (vision) model for the multimodal_analyze tool */
   multimodal?: MultimodalConfig;
   /** Opt-in feature flags (gate beta UI surfaces and experimental behavior) */

@@ -66,6 +66,12 @@ pub struct ExecutionSettings {
     /// Distillation model configuration (provider/model override).
     #[serde(default)]
     pub distillation: DistillationConfig,
+    /// Ward-curator LLM configuration (provider/model override).
+    #[serde(default)]
+    pub curator: CuratorConfig,
+    /// Intent-analysis LLM configuration (provider/model override).
+    #[serde(default)]
+    pub intent_analysis: IntentAnalysisConfig,
     /// Multimodal model configuration (vision analysis fallback).
     #[serde(default)]
     pub multimodal: MultimodalConfig,
@@ -139,6 +145,38 @@ impl Default for OrchestratorConfig {
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
 pub struct DistillationConfig {
+    /// Provider ID override. None = inherit from orchestrator config.
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    /// Model override. None = inherit from orchestrator config.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// Ward-curator LLM configuration (provider/model override).
+/// Used by `POST /api/curator/consolidate` for the Phase C consolidation
+/// LLM call. Mirrors `DistillationConfig`'s shape — empty values inherit
+/// the orchestrator.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CuratorConfig {
+    /// Provider ID override. None = inherit from orchestrator config.
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    /// Model override. None = inherit from orchestrator config.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// Intent-analysis LLM configuration (provider/model override).
+/// Used by `analyze_intent` at root-session pre-flight — the
+/// highest-frequency LLM call in the system (every root prompt), so
+/// routing this to a cheaper/faster model has the biggest recurring cost
+/// impact. Quality risk: bad classification mis-routes the rest of the
+/// session, so verify before pinning to a weaker model.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntentAnalysisConfig {
     /// Provider ID override. None = inherit from orchestrator config.
     #[serde(default)]
     pub provider_id: Option<String>,
@@ -226,6 +264,8 @@ impl Default for ExecutionSettings {
             subagent_non_streaming: true,
             orchestrator: OrchestratorConfig::default(),
             distillation: DistillationConfig::default(),
+            curator: CuratorConfig::default(),
+            intent_analysis: IntentAnalysisConfig::default(),
             multimodal: MultimodalConfig::default(),
             chat: ChatConfig::default(),
             wiki: WikiConfig::default(),

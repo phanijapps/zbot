@@ -62,28 +62,34 @@ pub async fn restore(
         })
 }
 
-/// Build an LLM client from the orchestrator-configured provider/model.
-/// Falls back to the default provider when orchestrator config is unset.
-/// Mirrors `synthesize_ward_agent`'s resolution so the curator runs on the
-/// same LLM the user picked for the root agent.
+/// Build an LLM client for the ward curator. Three-tier resolution mirrors
+/// the distillation pattern:
+///   `settings.curator.{provider_id,model}` → `settings.orchestrator.{…}` → provider default
+/// `temperature` / `max_tokens` always inherit the orchestrator — the per-
+/// task config only exposes provider+model, matching the existing
+/// Distillation card in Settings > Advanced.
 fn make_curator_llm(state: &AppState) -> Result<Arc<dyn LlmClient>, String> {
-    let orch = state
-        .settings
-        .get_execution_settings()
-        .map(|s| s.orchestrator)
-        .unwrap_or_default();
+    let exec = state.settings.get_execution_settings().unwrap_or_default();
+    let curator = &exec.curator;
+    let orch = &exec.orchestrator;
 
     let providers = state
         .provider_service
         .list()
         .map_err(|e| format!("list providers: {e}"))?;
 
-    let provider = match orch.provider_id.as_deref() {
-        Some(id) if !id.is_empty() => state
+    let provider_id_override = curator
+        .provider_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or_else(|| orch.provider_id.as_deref().filter(|s| !s.is_empty()));
+
+    let provider = match provider_id_override {
+        Some(id) => state
             .provider_service
             .get(id)
             .map_err(|e| format!("provider {id}: {e}"))?,
-        _ => providers
+        None => providers
             .iter()
             .find(|p| p.is_default)
             .or_else(|| providers.first())
@@ -91,10 +97,14 @@ fn make_curator_llm(state: &AppState) -> Result<Arc<dyn LlmClient>, String> {
             .ok_or_else(|| "no providers configured".to_string())?,
     };
 
-    let model = orch
+    let model = curator
         .model
+        .as_deref()
         .filter(|m| !m.is_empty())
+        .map(str::to_string)
+        .or_else(|| orch.model.clone().filter(|m| !m.is_empty()))
         .unwrap_or_else(|| provider.default_model().to_string());
+
     let provider_id = provider.id.clone().unwrap_or_else(|| "default".to_string());
     let llm_config = LlmConfig::new(provider.base_url, provider.api_key, model, provider_id)
         .with_temperature(orch.temperature)

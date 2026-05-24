@@ -891,12 +891,37 @@ impl InvokeBootstrap {
             })
             .await;
 
-        // Build temporary LLM client for analysis.
+        // Build temporary LLM client for analysis. Per-task override:
+        // `settings.intent_analysis.{provider_id,model}` swaps the
+        // root-agent provider/model used for analysis. Empty values
+        // inherit (= what the root agent already resolved to). Lets
+        // users route this every-prompt call to a cheaper/faster model.
+        let exec_settings = gateway_services::SettingsService::new(self.paths.clone())
+            .get_execution_settings()
+            .unwrap_or_default();
+        let intent_cfg = exec_settings.intent_analysis;
+
+        let target_provider =
+            if let Some(id) = intent_cfg.provider_id.as_deref().filter(|s| !s.is_empty()) {
+                self.provider_service
+                    .get(id)
+                    .unwrap_or_else(|_| provider.clone())
+            } else {
+                provider.clone()
+            };
+        let target_model = intent_cfg
+            .model
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| agent.model.clone());
+
         let llm_config = agent_runtime::LlmConfig::new(
-            provider.base_url.clone(),
-            provider.api_key.clone(),
-            agent.model.clone(),
-            provider.id.clone().unwrap_or_else(|| provider.name.clone()),
+            target_provider.base_url.clone(),
+            target_provider.api_key.clone(),
+            target_model,
+            target_provider
+                .id
+                .clone()
+                .unwrap_or_else(|| target_provider.name.clone()),
         )
         .with_max_tokens(2048); // Intent analysis JSON is 1-2KB — keep max_tokens low for speed
 
