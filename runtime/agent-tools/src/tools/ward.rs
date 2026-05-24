@@ -14,6 +14,21 @@ use zero_stores_traits::MemoryFactStore;
 /// AGENTS.md file name - living readme for agent executions
 const WARD_AGENTS_MD: &str = "AGENTS.md";
 
+/// Observer for ward-tool creation events. Implemented gateway-side so the
+/// ward curator's telemetry sidecar gets a `created_by = "agent"` mark
+/// whenever an agent scaffolds a new ward through this tool.
+///
+/// The trait is async (mirrors [`IngestionAccess`] / [`GoalAccess`]) even
+/// though current implementations only do a brief synchronous bump — keeps
+/// the surface uniform if future observers wire IO.
+#[async_trait]
+pub trait WardUsageAccess: Send + Sync + 'static {
+    /// Called immediately after the ward tool creates a new ward directory,
+    /// before the tool returns. Implementations should not panic — telemetry
+    /// is best-effort.
+    async fn mark_created_agent(&self, ward: &str);
+}
+
 /// Tool for managing wards (named project directories).
 ///
 /// Wards are persistent, agent-named project directories under `vault/wards/`.
@@ -27,16 +42,26 @@ const WARD_AGENTS_MD: &str = "AGENTS.md";
 pub struct WardTool {
     fs: Arc<dyn FileSystemContext>,
     fact_store: Option<Arc<dyn MemoryFactStore>>,
+    /// Optional observer that gets a `created_by = "agent"` mark whenever the
+    /// `use`/`create` action scaffolds a new ward directory. `None` is a
+    /// valid no-op (tests, minimal configurations).
+    ward_usage: Option<Arc<dyn WardUsageAccess>>,
 }
 
 impl WardTool {
-    /// Create a new WardTool with file system context and optional fact store.
+    /// Create a new WardTool with file system context, optional fact store,
+    /// and optional ward-usage observer.
     #[must_use]
     pub fn new(
         fs: Arc<dyn FileSystemContext>,
         fact_store: Option<Arc<dyn MemoryFactStore>>,
+        ward_usage: Option<Arc<dyn WardUsageAccess>>,
     ) -> Self {
-        Self { fs, fact_store }
+        Self {
+            fs,
+            fact_store,
+            ward_usage,
+        }
     }
 
     /// List files in a ward directory (non-recursive, top-level only).
@@ -299,6 +324,14 @@ impl Tool for WardTool {
                     Self::write_agents_md(&ward_dir, name);
                     Self::scaffold_empty_dirs(&ward_dir, name);
                     let _ = std::fs::create_dir_all(ward_dir.join("specs"));
+
+                    // Tell the ward-curator telemetry sidecar that this ward
+                    // is agent-authored. Curator-eligible wards must have
+                    // `created_by = "agent"`; without this hook every
+                    // scaffolded ward lazy-inserts as `user` and is skipped.
+                    if let Some(observer) = self.ward_usage.as_ref() {
+                        observer.mark_created_agent(name).await;
+                    }
                 }
 
                 // Set ward_id in context state
@@ -446,7 +479,7 @@ mod tests {
         let fs = Arc::new(TestFs {
             base: dir.path().to_path_buf(),
         });
-        let tool = WardTool::new(fs, None);
+        let tool = WardTool::new(fs, None, None);
         let ward_dir = dir.path().join("wards").join("test");
         std::fs::create_dir_all(&ward_dir).unwrap();
 
@@ -460,7 +493,7 @@ mod tests {
         let fs = Arc::new(TestFs {
             base: dir.path().to_path_buf(),
         });
-        let tool = WardTool::new(fs, None);
+        let tool = WardTool::new(fs, None, None);
         let ward_dir = dir.path().join("wards").join("test");
         std::fs::create_dir_all(&ward_dir).unwrap();
 
@@ -485,7 +518,7 @@ mod tests {
         let fs = Arc::new(TestFs {
             base: dir.path().to_path_buf(),
         });
-        let tool = WardTool::new(fs, None);
+        let tool = WardTool::new(fs, None, None);
 
         std::fs::write(
             dir.path().join("AGENTS.md"),
@@ -503,7 +536,7 @@ mod tests {
         let fs = Arc::new(TestFs {
             base: dir.path().to_path_buf(),
         });
-        let tool = WardTool::new(fs, None);
+        let tool = WardTool::new(fs, None, None);
 
         let desc = tool.ward_description(dir.path());
         assert!(desc.is_none());
@@ -569,7 +602,7 @@ mod tests {
         let fs = Arc::new(TestFs {
             base: dir.path().to_path_buf(),
         });
-        let tool = WardTool::new(fs, None);
+        let tool = WardTool::new(fs, None, None);
 
         std::fs::write(dir.path().join("AGENTS.md"), "# My Project\n\nTest content").unwrap();
 

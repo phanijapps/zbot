@@ -4,6 +4,35 @@
 
 use serde::{Deserialize, Serialize};
 
+/// What a cron tick actually does. `Agent` (default) submits an agent
+/// session through the gateway bus; `Http` makes a direct HTTP request
+/// — no LLM in the loop, useful for periodic maintenance endpoints.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CronJobKind {
+    #[default]
+    Agent,
+    Http,
+}
+
+/// HTTP action payload — required when `kind = "http"`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CronHttpAction {
+    /// Full target URL (e.g. `http://localhost:18791/api/curator/cleanup`).
+    pub url: String,
+    /// HTTP method. Defaults to `POST` — matches the most common
+    /// "run-an-endpoint" cron pattern.
+    #[serde(default = "default_http_method")]
+    pub method: String,
+    /// JSON body (sent as `application/json`). `None` means no body.
+    #[serde(default)]
+    pub body: Option<serde_json::Value>,
+}
+
+fn default_http_method() -> String {
+    "POST".to_string()
+}
+
 /// Configuration for a scheduled cron job.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronJobConfig {
@@ -16,11 +45,23 @@ pub struct CronJobConfig {
     /// Cron schedule expression (e.g., "0 9 * * *" for 9am daily).
     pub schedule: String,
 
-    /// Agent ID to execute.
+    /// Job action. Defaults to `Agent` so pre-existing configs continue
+    /// to deserialise unchanged.
+    #[serde(default)]
+    pub kind: CronJobKind,
+
+    /// Agent ID to execute. Used when `kind = Agent`; ignored for `Http`.
+    /// `#[serde(default)]` keeps `Http` configs from having to specify it.
+    #[serde(default)]
     pub agent_id: String,
 
-    /// Message to send to the agent.
+    /// Message to send to the agent. Used when `kind = Agent`.
+    #[serde(default)]
     pub message: String,
+
+    /// HTTP action payload. Required when `kind = Http`, ignored for `Agent`.
+    #[serde(default)]
+    pub http: Option<CronHttpAction>,
 
     /// Connector IDs to send the response to.
     #[serde(default)]
@@ -66,8 +107,14 @@ pub struct CreateCronJobRequest {
     pub id: String,
     pub name: String,
     pub schedule: String,
+    #[serde(default)]
+    pub kind: CronJobKind,
+    #[serde(default)]
     pub agent_id: String,
+    #[serde(default)]
     pub message: String,
+    #[serde(default)]
+    pub http: Option<CronHttpAction>,
     #[serde(default)]
     pub respond_to: Vec<String>,
     #[serde(default = "default_enabled")]
@@ -124,8 +171,10 @@ mod tests {
             id: "daily-report".to_string(),
             name: "Daily Report".to_string(),
             schedule: "0 0 9 * * *".to_string(), // sec min hour day month weekday
+            kind: Default::default(),
             agent_id: "report-agent".to_string(),
             message: "Generate daily report".to_string(),
+            http: None,
             respond_to: vec!["email-connector".to_string()],
             enabled: true,
             timezone: Some("America/New_York".to_string()),

@@ -83,6 +83,9 @@ pub struct ExecutorBuilder {
     kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+    /// Observer for ward-tool creation events — bumps the curator sidecar's
+    /// `created_by = "agent"` on every freshly-scaffolded ward.
+    ward_usage: Option<Arc<dyn agent_tools::WardUsageAccess>>,
     steering_registry: Option<Arc<agent_runtime::SteeringRegistry>>,
     agent_result_bus: Option<Arc<AgentResultBus>>,
     state_service: Option<Arc<StateService<DatabaseManager>>>,
@@ -108,6 +111,7 @@ impl ExecutorBuilder {
             kg_store: None,
             ingestion_adapter: None,
             goal_adapter: None,
+            ward_usage: None,
             steering_registry: None,
             agent_result_bus: None,
             state_service: None,
@@ -184,6 +188,12 @@ impl ExecutorBuilder {
     /// Set the goal access adapter for the `goal` tool.
     pub fn with_goal_adapter(mut self, adapter: Arc<dyn agent_tools::GoalAccess>) -> Self {
         self.goal_adapter = Some(adapter);
+        self
+    }
+
+    /// Set the ward-usage observer for the `ward` tool's create action.
+    pub fn with_ward_usage(mut self, observer: Arc<dyn agent_tools::WardUsageAccess>) -> Self {
+        self.ward_usage = Some(observer);
         self
     }
 
@@ -576,6 +586,7 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(WardTool::new(
                 fs_context.clone(),
                 self.fact_store.clone(),
+                self.ward_usage.clone(),
             )));
             tool_registry.register(Arc::new(MemoryTool::new(
                 fs_context.clone(),
@@ -615,6 +626,7 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(WardTool::new(
                 fs_context.clone(),
                 self.fact_store.clone(),
+                self.ward_usage.clone(),
             )));
             tool_registry.register(Arc::new(UpdatePlanTool::new()));
             tool_registry.register(Arc::new(SetSessionTitleTool::new()));

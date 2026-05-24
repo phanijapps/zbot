@@ -160,8 +160,10 @@ impl CronService {
             id: request.id.clone(),
             name: request.name,
             schedule,
+            kind: request.kind,
             agent_id: request.agent_id,
             message: request.message,
+            http: request.http,
             respond_to: request.respond_to,
             enabled: request.enabled,
             timezone: request.timezone,
@@ -333,6 +335,8 @@ mod tests {
                 enabled: true,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             })
             .await
             .unwrap();
@@ -382,6 +386,8 @@ mod tests {
                 enabled: true,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             })
             .await;
 
@@ -403,6 +409,8 @@ mod tests {
                 enabled: true,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             })
             .await
             .unwrap();
@@ -418,6 +426,8 @@ mod tests {
                 enabled: true,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             })
             .await;
 
@@ -466,6 +476,8 @@ mod tests {
                 enabled: true,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             })
             .await
             .unwrap();

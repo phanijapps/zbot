@@ -52,6 +52,62 @@ fn resolve_cron_agent_id(configured: &str) -> &str {
     }
 }
 
+/// Execute a `kind = "http"` cron action. Builds a `reqwest::Client`
+/// per-call (cheap; cron firings are infrequent) so there's no shared
+/// state to worry about. Errors are logged but never bubble — a cron
+/// firing that fails does not block subsequent ticks.
+async fn fire_http_action(job_id: &str, http: &gateway_cron::CronHttpAction) {
+    info!(
+        job_id = %job_id,
+        method = %http.method,
+        url = %http.url,
+        "Cron job triggered (http)"
+    );
+    let method = match reqwest::Method::from_bytes(http.method.as_bytes()) {
+        Ok(m) => m,
+        Err(_) => {
+            error!(
+                job_id = %job_id,
+                method = %http.method,
+                "Cron http: invalid HTTP method"
+            );
+            return;
+        }
+    };
+    let client = reqwest::Client::new();
+    let mut req = client.request(method, &http.url);
+    if let Some(body) = &http.body {
+        req = req.json(body);
+    }
+    match req.send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                info!(
+                    job_id = %job_id,
+                    status = %status,
+                    "Cron http succeeded"
+                );
+            } else {
+                let body = resp.text().await.unwrap_or_default();
+                warn!(
+                    job_id = %job_id,
+                    status = %status,
+                    body = %body.chars().take(500).collect::<String>(),
+                    "Cron http returned non-success status"
+                );
+            }
+        }
+        Err(e) => {
+            error!(
+                job_id = %job_id,
+                error = %e,
+                "Cron http request failed"
+            );
+        }
+    }
+}
+
 /// The cron scheduler for scheduling agent executions.
 pub struct CronScheduler {
     service: CronService,
@@ -133,8 +189,10 @@ impl CronScheduler {
     /// Schedule a job.
     async fn schedule_job(&self, job_config: &CronJobConfig) -> Result<(), CronSchedulerError> {
         let job_id = job_config.id.clone();
+        let kind = job_config.kind;
         let agent_id = job_config.agent_id.clone();
         let message = job_config.message.clone();
+        let http = job_config.http.clone();
         let respond_to = job_config.respond_to.clone();
         let bus = self.bus.clone();
         let service = self.service.clone();
@@ -147,7 +205,7 @@ impl CronScheduler {
         debug!(
             job_id = %job_id,
             schedule = %job_config.schedule,
-            agent_id = %agent_id,
+            kind = ?kind,
             "Scheduling cron job"
         );
 
@@ -155,6 +213,7 @@ impl CronScheduler {
             let job_id = job_id.clone();
             let agent_id = agent_id.clone();
             let message = message.clone();
+            let http = http.clone();
             let respond_to = respond_to.clone();
             let bus = bus.clone();
             let service = service.clone();
@@ -169,38 +228,49 @@ impl CronScheduler {
                     return;
                 }
 
-                let target_agent = resolve_cron_agent_id(&agent_id).to_string();
-                info!(
-                    job_id = %job_id,
-                    agent_id = %target_agent,
-                    "Cron job triggered"
-                );
-
-                let request = SessionRequest::new(&target_agent, &message)
-                    .with_source(TriggerSource::Cron)
-                    .with_external_ref(format!("cron-{}", job_id))
-                    .with_respond_to(respond_to);
-
-                // Submit to gateway bus
-                match bus.submit(request).await {
-                    Ok(handle) => {
+                match kind {
+                    gateway_cron::CronJobKind::Agent => {
+                        let target_agent = resolve_cron_agent_id(&agent_id).to_string();
                         info!(
                             job_id = %job_id,
-                            session_id = %handle.session_id,
-                            execution_id = %handle.execution_id,
-                            "Cron job submitted successfully"
+                            agent_id = %target_agent,
+                            "Cron job triggered (agent)"
                         );
+                        let request = SessionRequest::new(&target_agent, &message)
+                            .with_source(TriggerSource::Cron)
+                            .with_external_ref(format!("cron-{}", job_id))
+                            .with_respond_to(respond_to);
+                        match bus.submit(request).await {
+                            Ok(handle) => {
+                                info!(
+                                    job_id = %job_id,
+                                    session_id = %handle.session_id,
+                                    execution_id = %handle.execution_id,
+                                    "Cron job submitted successfully"
+                                );
+                            }
+                            Err(e) => {
+                                error!(
+                                    job_id = %job_id,
+                                    error = %e,
+                                    "Failed to submit cron job"
+                                );
+                            }
+                        }
                     }
-                    Err(e) => {
-                        error!(
-                            job_id = %job_id,
-                            error = %e,
-                            "Failed to submit cron job"
-                        );
+                    gateway_cron::CronJobKind::Http => {
+                        let Some(http) = http.as_ref() else {
+                            error!(
+                                job_id = %job_id,
+                                "Cron job marked kind=http but `http` payload is missing; skipping"
+                            );
+                            return;
+                        };
+                        fire_http_action(&job_id, http).await;
                     }
                 }
 
-                // Update last run time
+                // Update last run time regardless of kind.
                 if let Err(e) = service.update_last_run(&job_id).await {
                     warn!(
                         job_id = %job_id,
@@ -537,8 +607,10 @@ mod tests {
                 id: id.to_string(),
                 name: format!("{id} display"),
                 schedule: "0 0 */4 * * *".to_string(),
+                kind: Default::default(),
                 agent_id: "general-purpose".to_string(),
                 message: "noop".to_string(),
+                http: None,
                 respond_to: vec![],
                 enabled: true,
                 timezone: None,
@@ -607,6 +679,8 @@ mod tests {
                 enabled: true,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             };
             let job = scheduler.create_job(request).await.unwrap();
             assert_eq!(job.id, "j1");
@@ -640,6 +714,8 @@ mod tests {
                 enabled: false,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             };
             let job = scheduler.create_job(request).await.unwrap();
             assert!(!job.enabled);
@@ -664,6 +740,8 @@ mod tests {
                 enabled: false,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             };
             scheduler.create_job(request).await.unwrap();
             assert!(!scheduler.job_uuids.read().await.contains_key("j2"));
@@ -692,6 +770,8 @@ mod tests {
                 enabled: true,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             };
             scheduler.create_job(request).await.unwrap();
             let jobs = scheduler.list_jobs().await.unwrap();
@@ -712,6 +792,8 @@ mod tests {
                 enabled: true,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             };
             scheduler.create_job(request).await.unwrap();
             let job = scheduler.get_job("beta").await.unwrap();
@@ -737,6 +819,8 @@ mod tests {
                 enabled: true,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             };
             scheduler.create_job(request).await.unwrap();
 
@@ -760,6 +844,8 @@ mod tests {
                 enabled: true,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             };
             scheduler.create_job(request).await.unwrap();
             let result = scheduler.trigger("j-blank").await.unwrap();
@@ -810,6 +896,8 @@ mod tests {
                 enabled: true,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             };
             scheduler.create_job(request).await.unwrap();
 
@@ -832,6 +920,8 @@ mod tests {
                 enabled: true,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             };
             scheduler.create_job(request).await.unwrap();
             let original = scheduler
@@ -872,6 +962,8 @@ mod tests {
                 enabled: true,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             };
             scheduler.create_job(request).await.unwrap();
             let original = scheduler
@@ -942,6 +1034,8 @@ mod tests {
                 enabled: true,
                 timezone: None,
                 metadata: None,
+                kind: Default::default(),
+                http: None,
             };
             scheduler.create_job(request).await.unwrap();
             let original = scheduler

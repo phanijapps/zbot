@@ -54,6 +54,8 @@ pub use tools::{
     UpdatePlanTool,
     // Orchestrator tools
     WardTool,
+    // Ward-curator observer trait (see gateway/gateway-execution/.../ward_usage_adapter.rs)
+    WardUsageAccess,
     WriteFileTool,
     builtin_tools_with_fs,
     core_tools,
