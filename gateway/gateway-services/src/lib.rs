@@ -53,7 +53,9 @@ pub use skills::{
     WardSetup,
 };
 pub use ward_curator::{
-    CleanupReport, CleanupRequest, RestoreReport, RestoreRequest, Transition, WardCurator,
+    AppliedAction, ApplyStatus, CleanupReport, CleanupRequest, ConsolidateRequest,
+    ConsolidationAction, ConsolidationPlan, ConsolidationReport, RestoreReport, RestoreRequest,
+    Transition, WardCandidate, WardCurator,
 };
 pub use ward_usage::{WardProvenance, WardRecord, WardState, WardUsage, WardUsageMap};
 pub use watcher::{FileWatcher, WatchConfig};
