@@ -401,6 +401,31 @@ pub struct WardCandidate {
 }
 
 /// A single decision the curator-agent (LLM) returned.
+/// `POST /api/curator/consolidate` body. All fields optional — `dry_run`
+/// defaults to **true** (the LLM consolidation is heavier and rarer than
+/// cleanup, so mutation is opt-in). Passing `plan` short-circuits the LLM
+/// call entirely, which the curator-agent flow uses to keep "decide" and
+/// "apply" cleanly separable.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ConsolidateRequest {
+    #[serde(default = "default_consolidate_dry_run")]
+    pub dry_run: bool,
+    #[serde(default = "default_max_consolidations")]
+    pub max_consolidations: usize,
+    /// If present, skip the LLM and apply this plan directly. Useful for
+    /// tests, replays, and dry-run-then-commit workflows.
+    #[serde(default)]
+    pub plan: Option<ConsolidationPlan>,
+}
+
+fn default_consolidate_dry_run() -> bool {
+    true
+}
+
+fn default_max_consolidations() -> usize {
+    5
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "action", rename_all = "lowercase")]
 pub enum ConsolidationAction {
