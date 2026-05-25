@@ -1,23 +1,24 @@
-//! Interactive chat REPL — iocraft component tree.
+//! Interactive chat REPL — iocraft component tree (Direction B).
 //!
-//! Phase 4 adds:
-//! - Slash command dispatch (`/help`, `/new`, `/sessions`, `/wards`,
-//!   `/memory <q>`, `/quit`)
-//! - Tool-call visualization (compact one-liner per call)
-//! - System messages (slash-command output rendered inline)
+//! Aesthetic: Cool Terminal — slate neutrals + violet primary + sky
+//! secondary. All-caps role labels in the speaker's color, sharp
+//! single-line borders around each block, animated braille spinner
+//! while a turn is in flight, status footer pinned at the bottom.
 //!
-//! Phase 5+ adds permission prompts. Phase 6 adds markdown rendering
-//! and one-shot mode.
+//! All palette / glyph constants live in `crate::theme` so future theme
+//! swaps are a single-file change.
 
 use anyhow::{Context, Result};
 use gateway_ws_protocol::ServerMessage;
 use iocraft::prelude::*;
 use serde_json::Value;
+use std::time::Duration;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::client::{ChatInit, DaemonClient};
 use crate::events::EventStream;
 use crate::slash::{self, SlashCommand};
+use crate::theme;
 
 // =========================================================================
 // Channel payloads
@@ -30,8 +31,8 @@ enum UiUpdate {
     ToolCallCompleted { id: String, ok: bool, summary: String },
     TurnComplete,
     Error(String),
-    /// Slash-command output or other inline informational messages.
     System(String),
+    Tokens { tokens_in: u64, tokens_out: u64 },
 }
 
 #[derive(Debug)]
@@ -75,9 +76,7 @@ struct ToolCallView {
 struct AppProps {
     daemon_url: String,
     session_id: String,
-    /// Drained once on first render.
     update_rx: Option<UnboundedReceiver<UiUpdate>>,
-    /// Cloned per-callback.
     action_tx: Option<UnboundedSender<UserAction>>,
 }
 
@@ -89,10 +88,11 @@ fn App(props: &mut AppProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>>
     let mut input = hooks.use_state(String::new);
     let mut streaming = hooks.use_state(|| false);
     let mut should_exit = hooks.use_state(|| false);
+    let mut spinner_frame = hooks.use_state(|| 0_usize);
+    let mut tokens_total = hooks.use_state(|| 0_u64);
     let mut system = hooks.use_context_mut::<SystemContext>();
 
-    // Always call use_future (rules of hooks). The future captures the
-    // only rx on first render; re-render closures see None and bail.
+    // ── update channel pump (always called; first render owns the rx) ──────
     let rx_opt = props.update_rx.take();
     hooks.use_future(async move {
         let Some(mut rx) = rx_opt else { return; };
@@ -146,10 +146,23 @@ fn App(props: &mut AppProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>>
                     });
                     messages.set(msgs);
                 }
+                UiUpdate::Tokens { tokens_in, tokens_out } => {
+                    tokens_total.set(tokens_in + tokens_out);
+                }
             }
         }
     });
 
+    // ── spinner tick ───────────────────────────────────────────────────────
+    hooks.use_future(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(theme::SPINNER_TICK_MS)).await;
+            let next = (spinner_frame.get() + 1) % theme::SPINNER_FRAMES.len();
+            spinner_frame.set(next);
+        }
+    });
+
+    // ── keyboard ───────────────────────────────────────────────────────────
     let action_tx = props.action_tx.clone();
     hooks.use_terminal_events({
         move |event| {
@@ -169,18 +182,14 @@ fn App(props: &mut AppProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>>
                         if trimmed.is_empty() {
                             return;
                         }
-                        // Slash command?
                         if let Some(cmd) = slash::parse(trimmed) {
                             input.set(String::new());
-                            // Echo the command into history so users can see what they ran.
                             let mut msgs = messages.read().clone();
                             msgs.push(ChatMsg {
                                 kind: MessageKind::User,
                                 content: trimmed.to_string(),
                             });
                             messages.set(msgs);
-
-                            // /quit handled locally for snappiness.
                             if matches!(cmd, SlashCommand::Quit) {
                                 should_exit.set(true);
                                 return;
@@ -190,8 +199,6 @@ fn App(props: &mut AppProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>>
                             }
                             return;
                         }
-                        // Streaming guard only blocks normal messages — slash
-                        // commands always work.
                         if streaming.get() {
                             return;
                         }
@@ -220,33 +227,33 @@ fn App(props: &mut AppProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>>
         system.exit();
     }
 
-    // ---- Render ----
-    //
-    // Direction B: left rail + indent. Each message is a column of rows.
-    // Every row begins with `┃ ` in the speaker's color. Role label is the
-    // first row, bold. Content lines follow.
-    //
-    // Assistant messages are markdown-parsed once finalized. The in-flight
-    // streaming response renders plain (markdown could be malformed mid-stream).
+    // ─────────────────────────────────────────────────────────────────────
+    // Render
+    // ─────────────────────────────────────────────────────────────────────
 
-    let prompt_marker = if streaming.get() { "… " } else { "▸ " };
-    let prompt_color = if streaming.get() { Color::DarkGrey } else { Color::Green };
+    let chat_empty = messages.read().is_empty() && active_assistant.read().is_empty();
+
+    let welcome_view: AnyElement<'static> = if chat_empty {
+        render_welcome(&props.daemon_url, &props.session_id)
+    } else {
+        element!(View).into()
+    };
 
     let msg_views = messages
         .read()
         .iter()
         .enumerate()
         .map(|(i, m)| {
-            let (speaker_color, label) = match m.kind {
-                MessageKind::User => (Color::Cyan, "you"),
-                MessageKind::Assistant => (Color::Green, "assistant"),
-                MessageKind::System => (Color::Yellow, "system"),
+            let (border_color, label) = match m.kind {
+                MessageKind::User => (theme::BORDER_USER, "YOU"),
+                MessageKind::Assistant => (theme::BORDER_ASSISTANT, "ASSISTANT"),
+                MessageKind::System => (theme::BORDER_SYSTEM, "SYSTEM"),
             };
             let lines = match m.kind {
                 MessageKind::Assistant => crate::render::parse_markdown(&m.content),
                 _ => crate::render::plain_lines(&m.content),
             };
-            render_message_block(i, label, speaker_color, &lines)
+            render_message_block(i, label, border_color, &lines)
         })
         .collect::<Vec<_>>();
 
@@ -261,48 +268,98 @@ fn App(props: &mut AppProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>>
         element!(View).into()
     } else {
         let lines = crate::render::plain_lines(&active_assistant.to_string());
-        render_message_block(usize::MAX, "assistant", Color::Green, &lines).into()
+        render_message_block(usize::MAX, "ASSISTANT", theme::BORDER_ASSISTANT, &lines)
     };
 
-    let session_short = short_id(&props.session_id);
-    let left = format!("zbot · {}", props.daemon_url);
-    let right = format!("session {session_short}");
+    let spinner_view: AnyElement<'static> = if streaming.get() {
+        let frame = theme::SPINNER_FRAMES[spinner_frame.get() % theme::SPINNER_FRAMES.len()];
+        element! {
+            View(margin_top: 1, flex_direction: FlexDirection::Row) {
+                Text(content: format!("{frame} "), color: theme::ACCENT)
+                Text(content: "thinking".to_string(), color: theme::MUTED)
+            }
+        }
+        .into()
+    } else {
+        element!(View).into()
+    };
+
+    let footer_left = format!("── {}", props.daemon_url.to_uppercase());
+    let footer_right = format!(
+        "── {} ── {} TOKS ── /HELP ──",
+        short_id(&props.session_id).to_uppercase(),
+        format_tokens(tokens_total.get()),
+    );
 
     element! {
         View(flex_direction: FlexDirection::Column, padding: 0) {
-            // Header — two-column status line
-            View(
-                flex_direction: FlexDirection::Row,
-                justify_content: JustifyContent::SpaceBetween,
-                margin_bottom: 1,
-            ) {
-                Text(content: left, color: Color::DarkGrey)
-                Text(content: right, color: Color::DarkGrey)
-            }
+            #(welcome_view)
             #(msg_views)
             #(tool_views)
             #(streaming_view)
+            #(spinner_view)
+
+            // Input row
             View(margin_top: 1, flex_direction: FlexDirection::Row) {
-                Text(content: prompt_marker.to_string(), color: prompt_color, weight: Weight::Bold)
+                Text(content: "> ".to_string(), color: theme::ACCENT, weight: Weight::Bold)
                 TextInput(
                     has_focus: !streaming.get(),
                     value: input.to_string(),
                     on_change: move |v| input.set(v),
                 )
             }
+
+            // Status footer
+            View(
+                margin_top: 1,
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::SpaceBetween,
+            ) {
+                Text(content: footer_left, color: theme::MUTED_DIM)
+                Text(content: footer_right, color: theme::MUTED_DIM)
+            }
         }
     }
 }
 
 // =========================================================================
-// Render helpers — rail layout
+// Render helpers
 // =========================================================================
 
-/// Render a single message turn (column of rail-prefixed rows).
+fn render_welcome(daemon_url: &str, session_id: &str) -> AnyElement<'static> {
+    let title = format!("ZBOT v{}", env!("CARGO_PKG_VERSION"));
+    let daemon_line = format!("daemon   {daemon_url}");
+    let session_line = format!("session  {}", short_id(session_id));
+    let hint = "↵ to send · /help · ⌃C to quit".to_string();
+
+    element! {
+        View(
+            border_style: BorderStyle::Single,
+            border_color: theme::ACCENT,
+            padding_left: 2,
+            padding_right: 2,
+            padding_top: 1,
+            padding_bottom: 1,
+            margin_bottom: 1,
+            flex_direction: FlexDirection::Column,
+        ) {
+            Text(content: title, color: theme::ACCENT, weight: Weight::Bold)
+            View(margin_top: 1, flex_direction: FlexDirection::Column) {
+                Text(content: daemon_line, color: theme::MUTED)
+                Text(content: session_line, color: theme::MUTED)
+            }
+            View(margin_top: 1) {
+                Text(content: hint, color: theme::MUTED_DIM)
+            }
+        }
+    }
+    .into()
+}
+
 fn render_message_block(
     key: usize,
     role_label: &str,
-    rail_color: Color,
+    border_color: Color,
     lines: &[crate::render::Line],
 ) -> AnyElement<'static> {
     let label = role_label.to_string();
@@ -314,71 +371,67 @@ fn render_message_block(
             flex_direction: FlexDirection::Column,
             margin_bottom: 1,
         ) {
-            // Role label row
-            View(flex_direction: FlexDirection::Row) {
-                Text(content: "┃ ".to_string(), color: rail_color)
-                Text(content: label, color: rail_color, weight: Weight::Bold)
+            // All-caps role label outside the border, in the speaker's color
+            Text(content: label, color: border_color, weight: Weight::Bold)
+            // Bordered content
+            View(
+                border_style: BorderStyle::Single,
+                border_color,
+                padding_left: 1,
+                padding_right: 1,
+                flex_direction: FlexDirection::Column,
+            ) {
+                #(lines_owned.iter().enumerate().map(|(li, line)| {
+                    render_content_row(li, line)
+                }).collect::<Vec<_>>())
             }
-            // Content rows
-            #(lines_owned.iter().enumerate().map(|(li, line)| {
-                render_content_row(li, line, rail_color)
-            }).collect::<Vec<_>>())
         }
     }
     .into()
 }
 
-/// Render one content line — rail prefix + styled content.
-fn render_content_row(idx: usize, line: &crate::render::Line, rail_color: Color) -> AnyElement<'static> {
+fn render_content_row(idx: usize, line: &crate::render::Line) -> AnyElement<'static> {
     use crate::render::{LineKind, SpanStyle};
 
-    // Empty blank line — just the rail, no content.
     if matches!(line.kind, LineKind::Blank) || line.spans.is_empty() {
         return element! {
-            View(key: format!("c-{idx}"), flex_direction: FlexDirection::Row) {
-                Text(content: "┃".to_string(), color: rail_color)
+            View(key: format!("c-{idx}")) {
+                Text(content: " ".to_string())
             }
         }
         .into();
     }
 
-    // Pick a single dominant style for the line (iocraft Text is mono-styled).
     let has_bold = line.spans.iter().any(|s| s.style == SpanStyle::Bold);
     let has_code = line.spans.iter().any(|s| s.style == SpanStyle::Code);
 
     let (text_color, text_weight, prefix): (Color, Weight, &'static str) = match (&line.kind, has_bold, has_code) {
         (LineKind::Heading { .. }, _, _) => (Color::White, Weight::Bold, ""),
-        (LineKind::CodeBlock, _, _) => (Color::Cyan, Weight::Normal, "  "),
-        (LineKind::Bullet, _, _) => (Color::Reset, Weight::Normal, "• "),
+        (LineKind::CodeBlock, _, _) => (theme::SECONDARY, Weight::Normal, "  "),
+        (LineKind::Bullet, _, _) => (theme::TEXT, Weight::Normal, "▪ "),
         (_, true, _) => (Color::White, Weight::Bold, ""),
-        (_, _, true) => (Color::Cyan, Weight::Normal, ""),
-        _ => (Color::Reset, Weight::Normal, ""),
+        (_, _, true) => (theme::SECONDARY, Weight::Normal, ""),
+        _ => (theme::TEXT, Weight::Normal, ""),
     };
 
     let content: String = line.spans.iter().map(|s| s.text.as_str()).collect();
     let full = format!("{prefix}{content}");
 
     element! {
-        View(key: format!("c-{idx}"), flex_direction: FlexDirection::Row) {
-            Text(content: "┃ ".to_string(), color: rail_color)
+        View(key: format!("c-{idx}")) {
             Text(content: full, color: text_color, weight: text_weight)
         }
     }
     .into()
 }
 
-/// Render a tool call as a compact two-row block under its assistant.
 fn render_tool_call_block(key: usize, tc: &ToolCallView) -> AnyElement<'static> {
-    let (icon, color) = match &tc.status {
-        None => ("▶", Color::DarkYellow),
-        Some(Ok(_)) => ("✓", Color::DarkGreen),
-        Some(Err(_)) => ("✗", Color::DarkRed),
+    let (status_label, status_color) = match &tc.status {
+        None => ("running", theme::MUTED),
+        Some(Ok(_)) => ("✓", theme::SUCCESS),
+        Some(Err(_)) => ("✗", theme::ERROR),
     };
-    let head_line = match &tc.status {
-        None => format!("{icon} {} · running", tc.tool),
-        Some(Ok(_)) => format!("{icon} {}", tc.tool),
-        Some(Err(_)) => format!("{icon} {}", tc.tool),
-    };
+    let head = format!("{} · {}", tc.tool, status_label);
     let detail = match &tc.status {
         None => format!("args {}", truncate(&tc.args, 60)),
         Some(Ok(s)) => truncate(s, 80),
@@ -390,14 +443,17 @@ fn render_tool_call_block(key: usize, tc: &ToolCallView) -> AnyElement<'static> 
             key: format!("tc-{key}"),
             flex_direction: FlexDirection::Column,
             margin_bottom: 1,
+            padding_left: 2,
         ) {
-            View(flex_direction: FlexDirection::Row) {
-                Text(content: "┃   ".to_string(), color: Color::Green)
-                Text(content: head_line, color, weight: Weight::Bold)
-            }
-            View(flex_direction: FlexDirection::Row) {
-                Text(content: "┃   ".to_string(), color: Color::Green)
-                Text(content: detail, color: Color::DarkGrey)
+            View(
+                border_style: BorderStyle::Single,
+                border_color: theme::BORDER_TOOL,
+                padding_left: 1,
+                padding_right: 1,
+                flex_direction: FlexDirection::Column,
+            ) {
+                Text(content: head, color: status_color, weight: Weight::Bold)
+                Text(content: detail, color: theme::MUTED)
             }
         }
     }
@@ -408,7 +464,6 @@ fn render_tool_call_block(key: usize, tc: &ToolCallView) -> AnyElement<'static> 
 // WS + slash bridge + entry point
 // =========================================================================
 
-/// Run the interactive chat REPL. Blocks until the user quits.
 pub async fn run_interactive(
     chat: ChatInit,
     daemon_url: String,
@@ -477,12 +532,15 @@ async fn handle_slash(
     };
     match cmd {
         SlashCommand::Help => push(slash::HELP_TEXT.to_string()),
-        SlashCommand::Quit => { /* handled in App locally */ }
+        SlashCommand::Quit => {}
         SlashCommand::New => match client.clear_chat_session().await {
             Ok(()) => match client.init_chat_session().await {
                 Ok(chat) => {
                     *session_id = chat.session_id.clone();
-                    push(format!("session cleared. new session: {}", short_id(&chat.session_id)));
+                    push(format!(
+                        "session cleared. new session: {}",
+                        short_id(&chat.session_id)
+                    ));
                 }
                 Err(e) => push(format!("session cleared, but init failed: {e}")),
             },
@@ -506,9 +564,7 @@ async fn handle_slash(
                 }
             }
         }
-        SlashCommand::Unknown(name) => push(format!(
-            "unknown command: /{name} — try /help"
-        )),
+        SlashCommand::Unknown(name) => push(format!("unknown command: /{name} — try /help")),
     }
 }
 
@@ -519,14 +575,8 @@ fn format_conversations(v: &Value) -> String {
     }
     let mut out = String::from("recent conversations:\n");
     for c in arr.iter().take(10) {
-        let id = c
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or("?");
-        let title = c
-            .get("title")
-            .and_then(Value::as_str)
-            .unwrap_or("(untitled)");
+        let id = c.get("id").and_then(Value::as_str).unwrap_or("?");
+        let title = c.get("title").and_then(Value::as_str).unwrap_or("(untitled)");
         let updated = c
             .get("updatedAt")
             .or_else(|| c.get("updated_at"))
@@ -578,10 +628,7 @@ fn format_memory(v: &Value) -> String {
             .or_else(|| item.get("text"))
             .and_then(Value::as_str)
             .unwrap_or("?");
-        let category = item
-            .get("category")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let category = item.get("category").and_then(Value::as_str).unwrap_or("");
         let cat = if category.is_empty() {
             String::new()
         } else {
@@ -614,6 +661,9 @@ fn map_server_msg(msg: ServerMessage) -> Option<UiUpdate> {
                 summary,
             })
         }
+        ServerMessage::TokenUsage { tokens_in, tokens_out, .. } => {
+            Some(UiUpdate::Tokens { tokens_in, tokens_out })
+        }
         _ => None,
     }
 }
@@ -633,4 +683,14 @@ fn truncate(s: &str, n: usize) -> String {
 
 fn short_id(id: &str) -> String {
     id.rsplit('-').next().unwrap_or(id).chars().take(8).collect()
+}
+
+fn format_tokens(n: u64) -> String {
+    if n < 1_000 {
+        format!("{n}")
+    } else if n < 100_000 {
+        format!("{:.1}K", n as f64 / 1000.0)
+    } else {
+        format!("{}K", n / 1000)
+    }
 }

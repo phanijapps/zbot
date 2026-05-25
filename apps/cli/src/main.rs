@@ -19,6 +19,7 @@ mod events;
 mod oneshot;
 mod render;
 mod slash;
+mod theme;
 mod ui;
 
 use anyhow::{Context, Result};
