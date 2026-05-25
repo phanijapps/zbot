@@ -221,12 +221,14 @@ fn App(props: &mut AppProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>>
     }
 
     // ---- Render ----
+    //
+    // Direction B: left rail + indent. Each message is a column of rows.
+    // Every row begins with `┃ ` in the speaker's color. Role label is the
+    // first row, bold. Content lines follow.
+    //
+    // Assistant messages are markdown-parsed once finalized. The in-flight
+    // streaming response renders plain (markdown could be malformed mid-stream).
 
-    let header = format!(
-        "zbot · {} · session {}",
-        props.daemon_url,
-        short_id(&props.session_id)
-    );
     let prompt_marker = if streaming.get() { "… " } else { "▸ " };
     let prompt_color = if streaming.get() { Color::DarkGrey } else { Color::Green };
 
@@ -235,17 +237,16 @@ fn App(props: &mut AppProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>>
         .iter()
         .enumerate()
         .map(|(i, m)| {
-            let (color, prefix) = match m.kind {
-                MessageKind::User => (Color::Cyan, "› "),
-                MessageKind::Assistant => (Color::Reset, "◂ "),
-                MessageKind::System => (Color::Yellow, "‼ "),
+            let (speaker_color, label) = match m.kind {
+                MessageKind::User => (Color::Cyan, "you"),
+                MessageKind::Assistant => (Color::Green, "assistant"),
+                MessageKind::System => (Color::Yellow, "system"),
             };
-            let content = format!("{prefix}{}", m.content);
-            element! {
-                View(key: i.to_string(), margin_bottom: 1) {
-                    Text(content, color)
-                }
-            }
+            let lines = match m.kind {
+                MessageKind::Assistant => crate::render::parse_markdown(&m.content),
+                _ => crate::render::plain_lines(&m.content),
+            };
+            render_message_block(i, label, speaker_color, &lines)
         })
         .collect::<Vec<_>>();
 
@@ -253,48 +254,36 @@ fn App(props: &mut AppProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>>
         .read()
         .iter()
         .enumerate()
-        .map(|(i, tc)| {
-            let (icon, color) = match &tc.status {
-                None => ("▶", Color::DarkYellow),
-                Some(Ok(_)) => ("✓", Color::DarkGreen),
-                Some(Err(_)) => ("✗", Color::DarkRed),
-            };
-            let detail = match &tc.status {
-                None => format!("running · args={}", truncate(&tc.args, 50)),
-                Some(Ok(s)) => truncate(s, 70),
-                Some(Err(e)) => format!("error: {}", truncate(e, 60)),
-            };
-            let line = format!("  {icon} {} · {}", tc.tool, detail);
-            element! {
-                View(key: format!("tc-{i}")) {
-                    Text(content: line, color)
-                }
-            }
-        })
+        .map(|(i, tc)| render_tool_call_block(i, tc))
         .collect::<Vec<_>>();
 
     let streaming_view: AnyElement<'static> = if active_assistant.read().is_empty() {
         element!(View).into()
     } else {
-        let content = format!("◂ {}", active_assistant.to_string());
-        element! {
-            View(margin_bottom: 1) {
-                Text(content, color: Color::Grey)
-            }
-        }
-        .into()
+        let lines = crate::render::plain_lines(&active_assistant.to_string());
+        render_message_block(usize::MAX, "assistant", Color::Green, &lines).into()
     };
+
+    let session_short = short_id(&props.session_id);
+    let left = format!("zbot · {}", props.daemon_url);
+    let right = format!("session {session_short}");
 
     element! {
         View(flex_direction: FlexDirection::Column, padding: 0) {
-            View(margin_bottom: 1) {
-                Text(content: header, color: Color::DarkGrey)
+            // Header — two-column status line
+            View(
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::SpaceBetween,
+                margin_bottom: 1,
+            ) {
+                Text(content: left, color: Color::DarkGrey)
+                Text(content: right, color: Color::DarkGrey)
             }
             #(msg_views)
             #(tool_views)
             #(streaming_view)
             View(margin_top: 1, flex_direction: FlexDirection::Row) {
-                Text(content: prompt_marker.to_string(), color: prompt_color)
+                Text(content: prompt_marker.to_string(), color: prompt_color, weight: Weight::Bold)
                 TextInput(
                     has_focus: !streaming.get(),
                     value: input.to_string(),
@@ -303,6 +292,116 @@ fn App(props: &mut AppProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>>
             }
         }
     }
+}
+
+// =========================================================================
+// Render helpers — rail layout
+// =========================================================================
+
+/// Render a single message turn (column of rail-prefixed rows).
+fn render_message_block(
+    key: usize,
+    role_label: &str,
+    rail_color: Color,
+    lines: &[crate::render::Line],
+) -> AnyElement<'static> {
+    let label = role_label.to_string();
+    let lines_owned: Vec<crate::render::Line> = lines.to_vec();
+
+    element! {
+        View(
+            key: key.to_string(),
+            flex_direction: FlexDirection::Column,
+            margin_bottom: 1,
+        ) {
+            // Role label row
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "┃ ".to_string(), color: rail_color)
+                Text(content: label, color: rail_color, weight: Weight::Bold)
+            }
+            // Content rows
+            #(lines_owned.iter().enumerate().map(|(li, line)| {
+                render_content_row(li, line, rail_color)
+            }).collect::<Vec<_>>())
+        }
+    }
+    .into()
+}
+
+/// Render one content line — rail prefix + styled content.
+fn render_content_row(idx: usize, line: &crate::render::Line, rail_color: Color) -> AnyElement<'static> {
+    use crate::render::{LineKind, SpanStyle};
+
+    // Empty blank line — just the rail, no content.
+    if matches!(line.kind, LineKind::Blank) || line.spans.is_empty() {
+        return element! {
+            View(key: format!("c-{idx}"), flex_direction: FlexDirection::Row) {
+                Text(content: "┃".to_string(), color: rail_color)
+            }
+        }
+        .into();
+    }
+
+    // Pick a single dominant style for the line (iocraft Text is mono-styled).
+    let has_bold = line.spans.iter().any(|s| s.style == SpanStyle::Bold);
+    let has_code = line.spans.iter().any(|s| s.style == SpanStyle::Code);
+
+    let (text_color, text_weight, prefix): (Color, Weight, &'static str) = match (&line.kind, has_bold, has_code) {
+        (LineKind::Heading { .. }, _, _) => (Color::White, Weight::Bold, ""),
+        (LineKind::CodeBlock, _, _) => (Color::Cyan, Weight::Normal, "  "),
+        (LineKind::Bullet, _, _) => (Color::Reset, Weight::Normal, "• "),
+        (_, true, _) => (Color::White, Weight::Bold, ""),
+        (_, _, true) => (Color::Cyan, Weight::Normal, ""),
+        _ => (Color::Reset, Weight::Normal, ""),
+    };
+
+    let content: String = line.spans.iter().map(|s| s.text.as_str()).collect();
+    let full = format!("{prefix}{content}");
+
+    element! {
+        View(key: format!("c-{idx}"), flex_direction: FlexDirection::Row) {
+            Text(content: "┃ ".to_string(), color: rail_color)
+            Text(content: full, color: text_color, weight: text_weight)
+        }
+    }
+    .into()
+}
+
+/// Render a tool call as a compact two-row block under its assistant.
+fn render_tool_call_block(key: usize, tc: &ToolCallView) -> AnyElement<'static> {
+    let (icon, color) = match &tc.status {
+        None => ("▶", Color::DarkYellow),
+        Some(Ok(_)) => ("✓", Color::DarkGreen),
+        Some(Err(_)) => ("✗", Color::DarkRed),
+    };
+    let head_line = match &tc.status {
+        None => format!("{icon} {} · running", tc.tool),
+        Some(Ok(_)) => format!("{icon} {}", tc.tool),
+        Some(Err(_)) => format!("{icon} {}", tc.tool),
+    };
+    let detail = match &tc.status {
+        None => format!("args {}", truncate(&tc.args, 60)),
+        Some(Ok(s)) => truncate(s, 80),
+        Some(Err(e)) => format!("error: {}", truncate(e, 70)),
+    };
+
+    element! {
+        View(
+            key: format!("tc-{key}"),
+            flex_direction: FlexDirection::Column,
+            margin_bottom: 1,
+        ) {
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "┃   ".to_string(), color: Color::Green)
+                Text(content: head_line, color, weight: Weight::Bold)
+            }
+            View(flex_direction: FlexDirection::Row) {
+                Text(content: "┃   ".to_string(), color: Color::Green)
+                Text(content: detail, color: Color::DarkGrey)
+            }
+        }
+    }
+    .into()
 }
 
 // =========================================================================

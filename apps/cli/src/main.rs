@@ -17,6 +17,7 @@ mod client;
 mod config;
 mod events;
 mod oneshot;
+mod render;
 mod slash;
 mod ui;
 
