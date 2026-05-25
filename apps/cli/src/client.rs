@@ -1,392 +1,175 @@
-// ============================================================================
-// GATEWAY CLIENT
-// HTTP and WebSocket client for communicating with Zero Gateway daemon
-// ============================================================================
+//! HTTP client for the z-Bot daemon.
+//!
+//! Wraps the REST endpoints the CLI consumes:
+//! - `GET  /api/health`         — smoke test on startup
+//! - `POST /api/chat/init`      — reserve / reuse the persistent chat session
+//! - `DELETE /api/chat/session` — clear the chat session (for `/new`)
+//! - `GET  /api/wards`          — list wards (for `/wards` slash command)
+//! - `GET  /api/conversations`  — list conversations (for `/sessions` picker)
+//! - `GET  /api/memory/search`  — quick recall (for `/memory <q>`)
+//!
+//! The chat message flow goes over WebSocket — see `events.rs`.
 
-use anyhow::{anyhow, Result};
-use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+// Some methods are scaffolded ahead of the slash commands that consume them.
+#![allow(dead_code)]
 
-// ============================================================================
-// Types
-// ============================================================================
+use anyhow::{anyhow, Context, Result};
+use serde::Deserialize;
+use serde_json::Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Agent {
-    pub id: String,
-    pub name: String,
-    pub description: Option<String>,
+use crate::config::Config;
+
+/// Thin wrapper over `reqwest::Client` bound to a daemon URL.
+#[derive(Debug, Clone)]
+pub struct DaemonClient {
+    http: reqwest::Client,
+    base: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatewayStatus {
+impl DaemonClient {
+    pub fn new(cfg: Config) -> Self {
+        let http = reqwest::Client::builder()
+            .user_agent(concat!("zbot/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .expect("reqwest::Client should always build");
+        Self { http, base: cfg.daemon_url }
+    }
+
+    /// `GET /api/health` — startup smoke test.
+    pub async fn health(&self) -> Result<HealthResponse> {
+        let url = format!("{}/api/health", self.base);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("GET {url}"))?;
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "daemon health check returned HTTP {}",
+                resp.status()
+            ));
+        }
+        let body: HealthResponse = resp.json().await.context("parse /api/health body")?;
+        Ok(body)
+    }
+
+    /// `POST /api/chat/init` — reserve (or reuse) the persistent chat session.
+    ///
+    /// Returns `{sessionId, conversationId, created}`. Idempotent — repeated
+    /// calls return the same ids until `/api/chat/session` (DELETE) clears
+    /// them or the cached session row disappears from the DB.
+    pub async fn init_chat_session(&self) -> Result<ChatInit> {
+        let url = format!("{}/api/chat/init", self.base);
+        let resp = self
+            .http
+            .post(&url)
+            .send()
+            .await
+            .with_context(|| format!("POST {url}"))?;
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "/api/chat/init returned HTTP {}",
+                resp.status()
+            ));
+        }
+        let body: ChatInit = resp.json().await.context("parse /api/chat/init body")?;
+        Ok(body)
+    }
+
+    /// `DELETE /api/chat/session` — clear the cached chat session (for `/new`).
+    pub async fn clear_chat_session(&self) -> Result<()> {
+        let url = format!("{}/api/chat/session", self.base);
+        let resp = self
+            .http
+            .delete(&url)
+            .send()
+            .await
+            .with_context(|| format!("DELETE {url}"))?;
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "/api/chat/session returned HTTP {}",
+                resp.status()
+            ));
+        }
+        Ok(())
+    }
+
+    /// `GET /api/wards` — list wards for `/wards` slash command.
+    pub async fn list_wards(&self) -> Result<Value> {
+        let url = format!("{}/api/wards", self.base);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("GET {url}"))?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("/api/wards returned HTTP {}", resp.status()));
+        }
+        resp.json::<Value>().await.context("parse /api/wards body")
+    }
+
+    /// `GET /api/conversations` — list recent conversations for `/sessions`.
+    pub async fn list_conversations(&self) -> Result<Value> {
+        let url = format!("{}/api/conversations", self.base);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("GET {url}"))?;
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "/api/conversations returned HTTP {}",
+                resp.status()
+            ));
+        }
+        resp.json::<Value>()
+            .await
+            .context("parse /api/conversations body")
+    }
+
+    /// `GET /api/memory/search?q=...` — quick memory recall for `/memory <q>`.
+    pub async fn memory_search(&self, query: &str, limit: usize) -> Result<Value> {
+        let url = format!("{}/api/memory/search", self.base);
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[("q", query), ("limit", &limit.to_string())])
+            .send()
+            .await
+            .with_context(|| format!("GET {url}"))?;
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "/api/memory/search returned HTTP {}",
+                resp.status()
+            ));
+        }
+        resp.json::<Value>()
+            .await
+            .context("parse /api/memory/search body")
+    }
+}
+
+/// Shape of the `/api/health` response.
+#[derive(Debug, Deserialize)]
+pub struct HealthResponse {
     pub status: String,
     pub version: String,
-    pub agent_count: Option<usize>,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub enum GatewayEvent {
-    Connected {
-        session_id: String,
-    },
-    Token {
-        content: String,
-    },
-    Thinking {
-        content: String,
-    },
-    ToolCall {
-        tool_call_id: String,
-        tool: String,
-        args: serde_json::Value,
-    },
-    ToolResult {
-        tool_call_id: String,
-        result: Option<String>,
-        error: Option<String>,
-    },
-    Iteration {
-        current: u32,
-        max: u32,
-    },
-    Done {
-        final_message: Option<String>,
-    },
-    Error {
-        code: Option<String>,
-        message: String,
-    },
-}
-
-// ============================================================================
-// Client Messages (to server)
-// ============================================================================
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[allow(dead_code)]
-enum ClientMessage {
-    Invoke {
-        agent_id: String,
-        conversation_id: String,
-        message: String,
-    },
-    Stop {
-        conversation_id: String,
-    },
-    Continue {
-        conversation_id: String,
-        additional_iterations: u32,
-    },
-    Ping,
-}
-
-// ============================================================================
-// Server Messages (from server)
-// ============================================================================
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[allow(dead_code)]
-enum ServerMessage {
-    Connected {
-        session_id: String,
-    },
-    AgentStarted {
-        agent_id: String,
-        conversation_id: String,
-    },
-    AgentCompleted {
-        agent_id: String,
-        conversation_id: String,
-        result: Option<String>,
-    },
-    AgentStopped {
-        agent_id: String,
-        conversation_id: String,
-        iteration: u32,
-    },
-    Token {
-        conversation_id: String,
-        delta: String,
-    },
-    Thinking {
-        conversation_id: String,
-        content: String,
-    },
-    ToolCall {
-        conversation_id: String,
-        tool_call_id: String,
-        tool: String,
-        args: serde_json::Value,
-    },
-    ToolResult {
-        conversation_id: String,
-        tool_call_id: String,
-        result: Option<String>,
-        error: Option<String>,
-    },
-    TurnComplete {
-        conversation_id: String,
-        final_message: Option<String>,
-    },
-    Iteration {
-        conversation_id: String,
-        current: u32,
-        max: u32,
-    },
-    ContinuationPrompt {
-        conversation_id: String,
-        iteration: u32,
-        message: String,
-    },
-    Error {
-        conversation_id: Option<String>,
-        code: Option<String>,
-        message: String,
-    },
-    Pong,
-}
-
-// ============================================================================
-// Gateway Client
-// ============================================================================
-
-pub struct GatewayClient {
-    http_url: String,
-    ws_url: String,
-    http_client: reqwest::Client,
-}
-
-impl GatewayClient {
-    pub fn new(http_url: &str, ws_url: &str) -> Self {
-        Self {
-            http_url: http_url.to_string(),
-            ws_url: ws_url.to_string(),
-            http_client: reqwest::Client::builder().build().expect("reqwest client"),
-        }
-    }
-
-    /// Check if the gateway daemon is running
-    pub async fn is_running(&self) -> bool {
-        self.http_client
-            .get(format!("{}/api/health", self.http_url))
-            .timeout(std::time::Duration::from_secs(2))
-            .send()
-            .await
-            .is_ok()
-    }
-
-    /// Get gateway status
-    pub async fn get_status(&self) -> Result<GatewayStatus> {
-        let resp = self
-            .http_client
-            .get(format!("{}/api/status", self.http_url))
-            .timeout(std::time::Duration::from_secs(5))
-            .send()
-            .await?
-            .json::<GatewayStatus>()
-            .await?;
-        Ok(resp)
-    }
-
-    /// List available agents
-    pub async fn list_agents(&self) -> Result<Vec<Agent>> {
-        let resp = self
-            .http_client
-            .get(format!("{}/api/agents", self.http_url))
-            .timeout(std::time::Duration::from_secs(10))
-            .send()
-            .await?
-            .json::<Vec<Agent>>()
-            .await?;
-        Ok(resp)
-    }
-
-    /// Invoke an agent and return a stream of events
-    pub async fn invoke(
-        &self,
-        agent_id: &str,
-        conversation_id: &str,
-        message: &str,
-    ) -> Result<mpsc::Receiver<GatewayEvent>> {
-        let (tx, rx) = mpsc::channel(100);
-
-        let ws_url = format!("{}/ws", self.ws_url);
-        let agent_id = agent_id.to_string();
-        let conversation_id = conversation_id.to_string();
-        let message = message.to_string();
-
-        tokio::spawn(async move {
-            if let Err(e) =
-                Self::run_websocket(ws_url, agent_id, conversation_id, message, tx.clone()).await
-            {
-                let _ = tx
-                    .send(GatewayEvent::Error {
-                        code: None,
-                        message: e.to_string(),
-                    })
-                    .await;
-            }
-        });
-
-        Ok(rx)
-    }
-
-    async fn run_websocket(
-        ws_url: String,
-        agent_id: String,
-        conversation_id: String,
-        message: String,
-        tx: mpsc::Sender<GatewayEvent>,
-    ) -> Result<()> {
-        // Connect to WebSocket
-        let (ws_stream, _) = connect_async(&ws_url)
-            .await
-            .map_err(|e| anyhow!("Failed to connect to gateway: {}", e))?;
-
-        let (mut write, mut read) = ws_stream.split();
-
-        // Wait for connected message
-        let mut connected = false;
-        while let Some(msg) = read.next().await {
-            match msg {
-                Ok(Message::Text(text)) => {
-                    if let Ok(ServerMessage::Connected { session_id }) =
-                        serde_json::from_str::<ServerMessage>(&text)
-                    {
-                        let _ = tx.send(GatewayEvent::Connected { session_id }).await;
-                        connected = true;
-                        break;
-                    }
-                }
-                Ok(Message::Close(_)) => {
-                    return Err(anyhow!("Connection closed before connected"));
-                }
-                Err(e) => {
-                    return Err(anyhow!("WebSocket error: {}", e));
-                }
-                _ => {}
-            }
-        }
-
-        if !connected {
-            return Err(anyhow!("Failed to receive connected message"));
-        }
-
-        // Send invoke message
-        let invoke_msg = ClientMessage::Invoke {
-            agent_id,
-            conversation_id: conversation_id.clone(),
-            message,
-        };
-        let json = serde_json::to_string(&invoke_msg)?;
-        write.send(Message::Text(json)).await?;
-
-        // Process incoming messages
-        while let Some(msg) = read.next().await {
-            match msg {
-                Ok(Message::Text(text)) => {
-                    if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
-                        let event = match server_msg {
-                            ServerMessage::Token { delta, .. } => {
-                                Some(GatewayEvent::Token { content: delta })
-                            }
-                            ServerMessage::Thinking { content, .. } => {
-                                Some(GatewayEvent::Thinking { content })
-                            }
-                            ServerMessage::ToolCall {
-                                tool_call_id,
-                                tool,
-                                args,
-                                ..
-                            } => Some(GatewayEvent::ToolCall {
-                                tool_call_id,
-                                tool,
-                                args,
-                            }),
-                            ServerMessage::ToolResult {
-                                tool_call_id,
-                                result,
-                                error,
-                                ..
-                            } => Some(GatewayEvent::ToolResult {
-                                tool_call_id,
-                                result,
-                                error,
-                            }),
-                            ServerMessage::Iteration { current, max, .. } => {
-                                Some(GatewayEvent::Iteration { current, max })
-                            }
-                            ServerMessage::TurnComplete { final_message, .. } => {
-                                Some(GatewayEvent::Done { final_message })
-                            }
-                            ServerMessage::AgentCompleted { result, .. } => {
-                                Some(GatewayEvent::Done {
-                                    final_message: result,
-                                })
-                            }
-                            ServerMessage::AgentStopped { .. } => Some(GatewayEvent::Done {
-                                final_message: None,
-                            }),
-                            ServerMessage::Error { code, message, .. } => {
-                                Some(GatewayEvent::Error { code, message })
-                            }
-                            _ => None,
-                        };
-
-                        if let Some(event) = event {
-                            let is_done = matches!(
-                                event,
-                                GatewayEvent::Done { .. } | GatewayEvent::Error { .. }
-                            );
-                            let _ = tx.send(event).await;
-                            if is_done {
-                                break;
-                            }
-                        }
-                    }
-                }
-                Ok(Message::Close(_)) => {
-                    break;
-                }
-                Err(e) => {
-                    let _ = tx
-                        .send(GatewayEvent::Error {
-                            code: None,
-                            message: e.to_string(),
-                        })
-                        .await;
-                    break;
-                }
-                _ => {}
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Stop an agent execution
+    /// Daemon uptime in seconds. Optional — older daemons may not include it.
+    /// Phase 2 reads this when rendering the header.
+    #[serde(default)]
     #[allow(dead_code)]
-    pub async fn stop(&self, _conversation_id: &str) -> Result<()> {
-        // This would need an active WebSocket connection
-        // For now, we'll just note that this needs the WS connection
-        tracing::warn!("Stop not implemented for standalone calls - use chat mode");
-        Ok(())
-    }
+    pub uptime: Option<u64>,
+}
 
-    /// Continue an agent execution
-    #[allow(dead_code)]
-    pub async fn continue_execution(
-        &self,
-        _conversation_id: &str,
-        _additional_iterations: u32,
-    ) -> Result<()> {
-        tracing::warn!("Continue not implemented for standalone calls - use chat mode");
-        Ok(())
-    }
+/// Shape of the `/api/chat/init` response (camelCase wire format).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatInit {
+    pub session_id: String,
+    pub conversation_id: String,
+    /// `true` when this call created the session, `false` if it was reused.
+    pub created: bool,
 }
