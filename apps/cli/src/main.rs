@@ -17,6 +17,7 @@
 mod client;
 mod config;
 mod events;
+mod slash;
 mod ui;
 
 use anyhow::{Context, Result};
@@ -100,14 +101,14 @@ async fn main() -> Result<()> {
     // One-shot mode and slash commands land in later phases.
     match mode {
         Mode::Interactive => {
-            crate::ui::run_interactive(chat, cfg.daemon_url.clone(), events)
+            crate::ui::run_interactive(chat, cfg.daemon_url.clone(), events, client.clone())
                 .await
                 .context("interactive REPL")?;
         }
         Mode::OneShot => {
             // Placeholder for one-shot mode (Phase 6 polish).
             eprintln!("zbot · one-shot mode not yet implemented; falling through to interactive");
-            crate::ui::run_interactive(chat, cfg.daemon_url.clone(), events)
+            crate::ui::run_interactive(chat, cfg.daemon_url.clone(), events, client.clone())
                 .await
                 .context("interactive REPL")?;
         }
