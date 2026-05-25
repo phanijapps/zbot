@@ -1,28 +1,34 @@
+# ============================================================================
+# CLI: `zbot` — lightweight streaming Claude-Code-style chat for the daemon
+# ============================================================================
+
 [package]
 name = "cli"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Zero Agent CLI with rich TUI interface"
+description = "z-Bot lightweight CLI (streaming chat, slash commands, daemon client)"
 
 [[bin]]
 name = "zbot"
 path = "src/main.rs"
 
 [dependencies]
-# Shared
-zero-core = { path = "../../framework/zero-core" }
+# Component-driven terminal UI (React/JSX-style; analogue of ink)
+iocraft = "0.8"
 
-# TUI framework
-ratatui = "0.29"
-crossterm = "0.28"
+# Markdown rendering for assistant responses
+pulldown-cmark = { version = "0.13", default-features = false }
 
-# Async runtime
+# Shared WS protocol types — keeps the CLI in lock-step with the daemon
+gateway-ws-protocol = { path = "../../gateway/gateway-ws-protocol" }
+
+# Async runtime + I/O
 tokio = { workspace = true }
 futures-util = "0.3"
 
-# HTTP/WebSocket client
+# HTTP + WebSocket clients
 reqwest = { workspace = true }
 tokio-tungstenite = "0.24"
 
@@ -35,7 +41,6 @@ clap = { version = "4", features = ["derive"] }
 
 # Error handling
 anyhow = { workspace = true }
-thiserror = "1.0"
 
 # Logging
 tracing = "0.1"
@@ -45,6 +50,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { workspace = true }
 uuid = { workspace = true }
 dirs = "5"
+toml = "0.8"
 
 [lints]
 workspace = true
