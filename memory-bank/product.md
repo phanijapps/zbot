@@ -115,8 +115,7 @@ The memory layer is z-Bot's cognitive system. Every session teaches it something
 A ward is both a persistent working directory **and** a delegatable specialist agent. The orchestrator can either spawn into an existing ward ("warm") or, when no ward matches the request, the planner builds a new one on demand ("cold"). Each ward carries its own doctrine, procedures, memory namespace, and optional per-ward LLM configuration.
 
 **What lives in a ward**
-- `AGENTS.md` — doctrine: scope, mandate, capabilities, out-of-scope rules
-- `ZBOT.md` — runtime hints (tech stack, build commands, conventions)
+- `AGENTS.md` — doctrine: scope, mandate, capabilities, out-of-scope rules, runtime hints (tech stack, build commands, conventions) — all in one file
 - `config.yaml` — per-ward LLM override (`provider` / `model`; null inherits orchestrator)
 - `memory-bank/ward.md` — curated rules (corrections, strategies, warnings)
 - `memory-bank/core_docs.md` — function signatures across the ward's code

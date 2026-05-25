@@ -108,8 +108,8 @@
 │  │   ├── .node_env/                   #   Shared Node tooling            │
 │  │   ├── scratch/                     #   Default ward for quick tasks   │
 │  │   └── {ward-name}/                 #   Domain-scoped specialist       │
-│  │       ├── AGENTS.md                #     Doctrine: scope + mandate    │
-│  │       ├── ZBOT.md                  #     Runtime hints (stack, build) │
+│  │       ├── AGENTS.md                #     Doctrine: scope + mandate +  │
+│  │       │                            #       runtime hints (no ZBOT.md) │
 │  │       ├── config.yaml              #     Per-ward LLM override        │
 │  │       ├── memory-bank/             #     Curated knowledge            │
 │  │       │   ├── ward.md              #       Rules (corrections/etc.)   │
@@ -624,7 +624,7 @@ FTS5 queries sanitized with OR-joined terms (raw user messages break FTS5 syntax
 
 ## Wards — Domain-Scoped Delegatable Agents
 
-Wards are simultaneously **persistent working directories** and **delegatable specialist agents**. Each ward has its own doctrine (`AGENTS.md`), runtime hints (`ZBOT.md`), optional per-ward LLM config (`config.yaml`), curated memory (`memory-bank/`), and project files.
+Wards are simultaneously **persistent working directories** and **delegatable specialist agents**. Each ward has its own doctrine (`AGENTS.md` — scope, mandate, runtime hints all in one file), optional per-ward LLM config (`config.yaml`), curated memory (`memory-bank/`), and project files. There is no separate `ZBOT.md`; the ward agent's system prompt is assembled from the global system-context shards plus the ward's `AGENTS.md` (see `gateway/gateway-execution/src/invoke/setup.rs::synthesize_ward_agent`).
 
 ### Lifecycle
 
