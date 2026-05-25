@@ -15,11 +15,8 @@ name = "zbot"
 path = "src/main.rs"
 
 [dependencies]
-# Component-driven terminal UI (React/JSX-style; analogue of ink)
-iocraft = "0.8"
-
-# Markdown rendering for assistant responses
-pulldown-cmark = { version = "0.13", default-features = false }
+# Readline-style input editing (history, arrow keys, multi-line)
+rustyline = { version = "14", default-features = false, features = ["with-file-history", "derive"] }
 
 # Shared WS protocol types — keeps the CLI in lock-step with the daemon
 gateway-ws-protocol = { path = "../../gateway/gateway-ws-protocol" }

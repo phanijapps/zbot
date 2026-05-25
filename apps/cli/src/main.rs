@@ -1,26 +1,26 @@
 //! `zbot` — lightweight streaming Claude-Code-style CLI for the z-Bot daemon.
 //!
-//! Architecture: this CLI is a thin front-end. All real work happens in the
-//! daemon. The CLI opens an HTTP + WebSocket connection and streams events.
+//! Architecture: this CLI is a thin front-end. The interactive mode uses
+//! `rustyline` for input editing + direct stdout streaming for output —
+//! no full-screen TUI framework. Every byte printed stays printed; no
+//! re-renders, no border math, no layout drift.
 //!
 //! Modes
 //! -----
-//! - `zbot`                                — interactive REPL (iocraft TUI)
+//! - `zbot`                                — interactive REPL (rustyline + stream)
 //! - `zbot "do X"`                         — one-shot, prints + exits
 //! - `cat file.md | zbot "summarise"`      — stdin is prepended to message
 //! - `cat file.md | zbot`                  — stdin is the whole message
 //! - `zbot --url http://desktop:18791`     — connect to a remote daemon
-//!
-//! Configuration precedence: `--url` > `ZBOT_URL` > `~/.config/zbot/cli.toml` > default.
 
 mod client;
 mod config;
 mod events;
 mod oneshot;
-mod render;
+mod repl;
 mod slash;
-mod theme;
-mod ui;
+mod stream;
+mod style;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -64,7 +64,6 @@ async fn main() -> Result<()> {
     let cfg = Config::resolve(args.url.clone()).context("resolve daemon URL")?;
     let client = DaemonClient::new(cfg.clone());
 
-    // Smoke test: surface a clear error if the daemon isn't reachable.
     client
         .health()
         .await
@@ -80,11 +79,10 @@ async fn main() -> Result<()> {
         .with_context(|| format!("ws connect to {}", cfg.websocket_url()))?;
 
     let color = use_color(args.no_color);
-    let mode = pick_mode(&args);
 
-    match mode {
+    match pick_mode(&args) {
         Mode::Interactive => {
-            crate::ui::run_interactive(chat, cfg.daemon_url.clone(), events, client.clone())
+            crate::repl::run(chat, cfg.daemon_url.clone(), events, client.clone(), color)
                 .await
                 .context("interactive REPL")?;
         }
@@ -106,11 +104,6 @@ enum Mode {
     OneShot,
 }
 
-/// Pick a mode based on args + TTY status:
-/// - explicit prompt argument → one-shot
-/// - stdin piped              → one-shot
-/// - stdout not a TTY         → one-shot (we'd crash iocraft otherwise)
-/// - otherwise                → interactive
 fn pick_mode(args: &Args) -> Mode {
     if args.prompt.is_some() {
         return Mode::OneShot;
@@ -124,8 +117,6 @@ fn pick_mode(args: &Args) -> Mode {
     Mode::Interactive
 }
 
-/// Compute color enablement: `--no-color` flag wins, else honor `$NO_COLOR`
-/// (any non-empty value), else only enable when stdout is a TTY.
 fn use_color(no_color_flag: bool) -> bool {
     if no_color_flag {
         return false;
