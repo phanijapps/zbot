@@ -1,15 +1,14 @@
 //! `zbot` — lightweight streaming Claude-Code-style CLI for the z-Bot daemon.
 //!
 //! Architecture: this CLI is a thin front-end. All real work happens in the
-//! daemon. The CLI opens an HTTP + WebSocket connection and renders the
-//! event stream via `iocraft` components.
+//! daemon. The CLI opens an HTTP + WebSocket connection and streams events.
 //!
 //! Modes
 //! -----
-//! - `zbot`                                — interactive REPL
-//! - `zbot "do X"`                         — one-shot, exits on completion
-//! - `zbot --session <id>`                 — resume a specific session
-//! - `cat file.md | zbot "summarise"`      — read stdin if not a TTY
+//! - `zbot`                                — interactive REPL (iocraft TUI)
+//! - `zbot "do X"`                         — one-shot, prints + exits
+//! - `cat file.md | zbot "summarise"`      — stdin is prepended to message
+//! - `cat file.md | zbot`                  — stdin is the whole message
 //! - `zbot --url http://desktop:18791`     — connect to a remote daemon
 //!
 //! Configuration precedence: `--url` > `ZBOT_URL` > `~/.config/zbot/cli.toml` > default.
@@ -17,6 +16,7 @@
 mod client;
 mod config;
 mod events;
+mod oneshot;
 mod slash;
 mod ui;
 
@@ -40,11 +40,16 @@ struct Args {
     #[arg(long, value_name = "URL")]
     url: Option<String>,
 
-    /// Resume a specific session by id.
+    /// Resume a specific session by id (interactive mode only).
     #[arg(long, value_name = "ID")]
     session: Option<String>,
 
-    /// One-shot prompt. When provided, sends and exits on completion.
+    /// Disable ANSI colors (also auto-disabled if $NO_COLOR is set or
+    /// stdout is not a terminal).
+    #[arg(long)]
+    no_color: bool,
+
+    /// One-shot prompt. When provided, sends and exits on turn completion.
     /// If stdin is not a TTY, its contents are prepended to this message.
     prompt: Option<String>,
 }
@@ -52,53 +57,29 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
-
     let args = Args::parse();
-    let cfg = Config::resolve(args.url).context("resolve daemon URL")?;
+
+    let cfg = Config::resolve(args.url.clone()).context("resolve daemon URL")?;
     let client = DaemonClient::new(cfg.clone());
 
-    // Phase 1 smoke test: hit /api/health and report.
-    let health = client
+    // Smoke test: surface a clear error if the daemon isn't reachable.
+    client
         .health()
         .await
         .with_context(|| format!("daemon unreachable at {}", cfg.daemon_url))?;
-    eprintln!(
-        "zbot · daemon {} · status={} · version={}",
-        cfg.daemon_url, health.status, health.version
-    );
 
-    // Determine mode (stub for Phase 2+).
-    let stdin_piped = !std::io::stdin().is_terminal();
-    let mode = match (args.prompt.as_deref(), stdin_piped) {
-        (Some(_), _) | (_, true) => Mode::OneShot,
-        _ => Mode::Interactive,
-    };
-    eprintln!("zbot · mode={:?} · session={:?}", mode, args.session);
-
-    // Phase 2 transport smoke test:
-    //   1. POST /api/chat/init → get sessionId + conversationId
-    //   2. Open WS to /ws
-    //   3. Subscribe to the conversation
-    //   4. Wait for the `Subscribed` ack and report it
-    //   5. Disconnect
-    //
-    // Phase 3+ will turn this into a full chat REPL with iocraft components.
     let chat = client
         .init_chat_session()
         .await
         .context("init chat session")?;
-    eprintln!(
-        "zbot · chat session={} conv={} created={}",
-        chat.session_id, chat.conversation_id, chat.created
-    );
 
     let events = EventStream::connect(&cfg.websocket_url())
         .await
         .with_context(|| format!("ws connect to {}", cfg.websocket_url()))?;
-    events.subscribe(&chat.conversation_id)?;
 
-    // Hand off to the interactive REPL (Phase 3).
-    // One-shot mode and slash commands land in later phases.
+    let color = use_color(args.no_color);
+    let mode = pick_mode(&args);
+
     match mode {
         Mode::Interactive => {
             crate::ui::run_interactive(chat, cfg.daemon_url.clone(), events, client.clone())
@@ -106,25 +87,61 @@ async fn main() -> Result<()> {
                 .context("interactive REPL")?;
         }
         Mode::OneShot => {
-            // Placeholder for one-shot mode (Phase 6 polish).
-            eprintln!("zbot · one-shot mode not yet implemented; falling through to interactive");
-            crate::ui::run_interactive(chat, cfg.daemon_url.clone(), events, client.clone())
+            let message = oneshot::compose_message(args.prompt.clone())
+                .context("compose user message from args + stdin")?;
+            oneshot::run_oneshot(chat, events, message, color)
                 .await
-                .context("interactive REPL")?;
+                .context("one-shot turn")?;
         }
     }
 
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum Mode {
     Interactive,
     OneShot,
 }
 
+/// Pick a mode based on args + TTY status:
+/// - explicit prompt argument → one-shot
+/// - stdin piped              → one-shot
+/// - stdout not a TTY         → one-shot (we'd crash iocraft otherwise)
+/// - otherwise                → interactive
+fn pick_mode(args: &Args) -> Mode {
+    if args.prompt.is_some() {
+        return Mode::OneShot;
+    }
+    if !std::io::stdin().is_terminal() {
+        return Mode::OneShot;
+    }
+    if !std::io::stdout().is_terminal() {
+        return Mode::OneShot;
+    }
+    Mode::Interactive
+}
+
+/// Compute color enablement: `--no-color` flag wins, else honor `$NO_COLOR`
+/// (any non-empty value), else only enable when stdout is a TTY.
+fn use_color(no_color_flag: bool) -> bool {
+    if no_color_flag {
+        return false;
+    }
+    if std::env::var_os("NO_COLOR")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    std::io::stdout().is_terminal()
+}
+
 fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
     let filter = EnvFilter::try_from_env("ZBOT_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
-    fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
+    fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
 }
