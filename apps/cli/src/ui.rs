@@ -75,43 +75,45 @@ fn App(props: &mut AppProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>>
     let mut should_exit = hooks.use_state(|| false);
     let mut system = hooks.use_context_mut::<SystemContext>();
 
-    // Drain the update channel into reactive state.
-    if let Some(mut rx) = props.update_rx.take() {
-        hooks.use_future(async move {
-            while let Some(update) = rx.recv().await {
-                match update {
-                    UiUpdate::Token(delta) => {
-                        let mut current = active_assistant.to_string();
-                        current.push_str(&delta);
-                        active_assistant.set(current);
-                        streaming.set(true);
-                    }
-                    UiUpdate::TurnComplete => {
-                        let final_text = active_assistant.to_string();
-                        if !final_text.is_empty() {
-                            let mut msgs = messages.read().clone();
-                            msgs.push(ChatMsg {
-                                kind: MessageKind::Assistant,
-                                content: final_text,
-                            });
-                            messages.set(msgs);
-                            active_assistant.set(String::new());
-                        }
-                        streaming.set(false);
-                    }
-                    UiUpdate::Error(msg) => {
+    // Always call use_future (rules of hooks: same order every render).
+    // `take()` returns Some on first render and None on re-renders; the
+    // future spawned on first render owns the only rx.
+    let rx_opt = props.update_rx.take();
+    hooks.use_future(async move {
+        let Some(mut rx) = rx_opt else { return; };
+        while let Some(update) = rx.recv().await {
+            match update {
+                UiUpdate::Token(delta) => {
+                    let mut current = active_assistant.to_string();
+                    current.push_str(&delta);
+                    active_assistant.set(current);
+                    streaming.set(true);
+                }
+                UiUpdate::TurnComplete => {
+                    let final_text = active_assistant.to_string();
+                    if !final_text.is_empty() {
                         let mut msgs = messages.read().clone();
                         msgs.push(ChatMsg {
-                            kind: MessageKind::System,
-                            content: format!("⚠ {msg}"),
+                            kind: MessageKind::Assistant,
+                            content: final_text,
                         });
                         messages.set(msgs);
-                        streaming.set(false);
+                        active_assistant.set(String::new());
                     }
+                    streaming.set(false);
+                }
+                UiUpdate::Error(msg) => {
+                    let mut msgs = messages.read().clone();
+                    msgs.push(ChatMsg {
+                        kind: MessageKind::System,
+                        content: format!("⚠ {msg}"),
+                    });
+                    messages.set(msgs);
+                    streaming.set(false);
                 }
             }
-        });
-    }
+        }
+    });
 
     // Keyboard: Enter sends, Ctrl+C / Ctrl+D quits.
     let action_tx = props.action_tx.clone();
