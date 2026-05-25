@@ -17,6 +17,7 @@
 mod client;
 mod config;
 mod events;
+mod ui;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -25,7 +26,6 @@ use std::io::IsTerminal;
 use crate::client::DaemonClient;
 use crate::config::Config;
 use crate::events::EventStream;
-use gateway_ws_protocol::ServerMessage;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -91,43 +91,28 @@ async fn main() -> Result<()> {
         chat.session_id, chat.conversation_id, chat.created
     );
 
-    let mut events = EventStream::connect(&cfg.websocket_url())
+    let events = EventStream::connect(&cfg.websocket_url())
         .await
         .with_context(|| format!("ws connect to {}", cfg.websocket_url()))?;
     events.subscribe(&chat.conversation_id)?;
 
-    // Drain events until we see the Subscribed ack (or 5s elapses).
-    // The daemon may emit `Connected` on initial handshake before the ack.
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            eprintln!("zbot · timeout waiting for Subscribed ack");
-            break;
+    // Hand off to the interactive REPL (Phase 3).
+    // One-shot mode and slash commands land in later phases.
+    match mode {
+        Mode::Interactive => {
+            crate::ui::run_interactive(chat, cfg.daemon_url.clone(), events)
+                .await
+                .context("interactive REPL")?;
         }
-        match tokio::time::timeout(remaining, events.recv()).await {
-            Ok(Some(ServerMessage::Subscribed { conversation_id, current_sequence, .. })) => {
-                eprintln!(
-                    "zbot · ws subscribed conv={} seq={}",
-                    conversation_id, current_sequence
-                );
-                break;
-            }
-            Ok(Some(other)) => {
-                tracing::debug!(event = ?other, "waiting for Subscribed; got intermediate event");
-            }
-            Ok(None) => {
-                eprintln!("zbot · ws closed before ack");
-                break;
-            }
-            Err(_) => {
-                eprintln!("zbot · timeout waiting for Subscribed ack");
-                break;
-            }
+        Mode::OneShot => {
+            // Placeholder for one-shot mode (Phase 6 polish).
+            eprintln!("zbot · one-shot mode not yet implemented; falling through to interactive");
+            crate::ui::run_interactive(chat, cfg.daemon_url.clone(), events)
+                .await
+                .context("interactive REPL")?;
         }
     }
 
-    // Phase 2 ends here. Phase 3 wires this transport into the iocraft UI.
     Ok(())
 }
 
