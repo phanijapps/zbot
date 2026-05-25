@@ -40,13 +40,23 @@
 │  │                      AGENT RUNTIME                                │    │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │    │
 │  │  │  Executor   │  │ LLM Client  │  │    Tool     │              │    │
-│  │  │   (loop)    │──│  (OpenAI    │  │  Registry   │              │    │
-│  │  │             │  │ compatible) │  │             │              │    │
-│  │  └──────┬──────┘  └─────────────┘  └──────┬──────┘              │    │
-│  │         │                                  │                     │    │
-│  │         │         ┌─────────────┐         │                     │    │
-│  │         └─────────│ MCP Manager │─────────┘                     │    │
-│  │                   └─────────────┘                               │    │
+│  │  │   (loop)    │──│  (per-task  │  │  Registry   │              │    │
+│  │  │  +stuck det │  │   routed)   │  │             │              │    │
+│  │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘              │    │
+│  │         │                │                │                     │    │
+│  │         │       ┌────────┴────────┐       │                     │    │
+│  │         └───────│  MCP / Plugins  │───────┘                     │    │
+│  │                 └─────────────────┘                             │    │
+│  │                                                                 │    │
+│  │  ┌──────────────────────────────────────────────────────────┐  │    │
+│  │  │           COGNITIVE SUBSTRATE                             │  │    │
+│  │  │ Wards (delegatable agents)  •  Ward Curator              │  │    │
+│  │  │ Memory Brain (facts, episodes, beliefs, procedures,      │  │    │
+│  │  │   knowledge graph, hierarchy, bi-temporal)               │  │    │
+│  │  │ Sleep-time pipeline (synth, beliefs, abstraction)        │  │    │
+│  │  │ Intent Analysis  •  Resource Indexer                     │  │    │
+│  │  │ Agent Pool (wait/kill/steer running subagents)           │  │    │
+│  │  └──────────────────────────────────────────────────────────┘  │    │
 │  └──────────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────┘
                                 │
@@ -93,11 +103,19 @@
 │  │   └── session_summaries.json       #   Distilled learnings            │
 │  ├── skills/{name}/                   # Vault-owned skill definitions    │
 │  │   └── SKILL.md                     #   Instructions + frontmatter     │
-│  ├── wards/                           # Code Wards (persistent dirs)     │
+│  ├── wards/                           # Wards (delegatable agents + dirs)│
 │  │   ├── .venv/                       #   Shared Python venv             │
+│  │   ├── .node_env/                   #   Shared Node tooling            │
 │  │   ├── scratch/                     #   Default ward for quick tasks   │
-│  │   └── {ward-name}/                 #   Agent-named project dirs       │
-│  │       └── AGENTS.md                #     Per-ward context             │
+│  │   └── {ward-name}/                 #   Domain-scoped specialist       │
+│  │       ├── AGENTS.md                #     Doctrine: scope + mandate +  │
+│  │       │                            #       runtime hints (no ZBOT.md) │
+│  │       ├── config.yaml              #     Per-ward LLM override        │
+│  │       ├── memory-bank/             #     Curated knowledge            │
+│  │       │   ├── ward.md              #       Rules (corrections/etc.)   │
+│  │       │   ├── core_docs.md         #       Function signatures        │
+│  │       │   └── structure.md         #       Directory tree             │
+│  │       └── (project files)          #     Code, reports, artifacts     │
 │  ├── plugins/                         # Node.js plugin directories       │
 │  │   ├── .example/                    #   Reference plugin               │
 │  │   └── {plugin-name}/                                                  │
@@ -290,6 +308,10 @@ Controls agent concurrency and first-time setup state. Stored in `settings.json`
       "maxTokens": 16384,
       "thinkingEnabled": true
     },
+    "distillation":   { "providerId": null, "model": null },
+    "curator":        { "providerId": null, "model": null },
+    "intentAnalysis": { "providerId": null, "model": null },
+    "sleepTime":      { "providerId": null, "model": null },
     "multimodal": {
       "providerId": null,
       "model": null,
@@ -310,10 +332,62 @@ Controls agent concurrency and first-time setup state. Stored in `settings.json`
 | `orchestrator.temperature` | number | `0.7` | Temperature (0-2) |
 | `orchestrator.maxTokens` | number | `16384` | Max output tokens (higher for thinking) |
 | `orchestrator.thinkingEnabled` | bool | `true` | Extended reasoning before delegating |
+| `distillation.{providerId,model}` | string\|null | `null` | Post-session fact extraction override |
+| `curator.{providerId,model}` | string\|null | `null` | Ward consolidation cycle override |
+| `intentAnalysis.{providerId,model}` | string\|null | `null` | Per-prompt routing classifier override |
+| `sleepTime.{providerId,model}` | string\|null | `null` | Memory-cycle pipeline override (synthesis, beliefs, abstraction, contradiction detection, verifier, handoff) |
 | `multimodal.providerId` | string\|null | `null` | Provider for default vision model |
 | `multimodal.model` | string\|null | `null` | Vision-capable model (e.g., GPT-4o, gemma4) |
 | `multimodal.temperature` | number | `0.3` | Temperature for analysis (lower = deterministic) |
 | `multimodal.maxTokens` | number | `4096` | Max output tokens for vision responses |
+
+All non-orchestrator slots inherit from `orchestrator` when their `providerId` / `model` are `null`. See **Per-Task LLM Routing** below for the resolution mechanics.
+
+### Per-Task LLM Routing
+
+Different stages of the agent loop have different cost / latency / capability tradeoffs. Each role routes through a 3-tier resolution chain:
+
+```
+   call site                                            chosen provider+model
+       │
+       ▼
+ LlmClientConfig::new(temp, tokens)                ┌────────────────────────┐
+   .with_task("sleep_time")  ───────────────►      │  per-task override     │
+                                                   │  (settings.execution.  │
+                                                   │   sleepTime/curator/   │
+                                                   │   intentAnalysis/...)  │
+                                                   └──────────┬─────────────┘
+                                                              │ none?
+                                                              ▼
+                                                   ┌────────────────────────┐
+                                                   │  orchestrator override │
+                                                   │  (settings.execution.  │
+                                                   │   orchestrator)        │
+                                                   └──────────┬─────────────┘
+                                                              │ none?
+                                                              ▼
+                                                   ┌────────────────────────┐
+                                                   │  provider default      │
+                                                   │  (providers.json)      │
+                                                   └────────────────────────┘
+```
+
+Mechanism:
+- `LlmClientConfig` carries an optional `task: Option<String>` tag, set via the `.with_task(...)` builder
+- `ProviderServiceLlmFactory::build_client` (in `gateway/src/memory_llm_factory.rs`) reads `ExecutionSettings` at call time and picks the right slot per-tag
+- Untagged callers (chat, recall) fall through to the orchestrator silently
+
+Currently-tagged tasks:
+
+| Tag | Call sites | Settings slot |
+|-----|-----------|---------------|
+| `sleep_time` | `synthesizer`, `belief_synthesizer`, `corrections_abstractor`, `verifier`, `pattern_extractor`, `conflict_resolver`, `llm_aggregate_entity`, `belief_contradiction_detector`, `handoff_writer` | `execution.sleepTime` |
+| `curator` | Phase C ward consolidation (`gateway/src/ward_curator.rs`) | `execution.curator` |
+| `intent_analysis` | Per-prompt classifier | `execution.intentAnalysis` |
+| `distillation` | `SessionDistiller` | `execution.distillation` |
+| `multimodal` | `multimodal_analyze` tool | `execution.multimodal` |
+
+Per-ward LLM config (`wards/{name}/config.yaml`) is a separate override that applies only when the ward is delegated to — it does not flow through the task tag.
 
 ### HTTP API Endpoints
 
@@ -483,19 +557,36 @@ Wizard renders outside the app shell (no sidebar). State managed via `useReducer
 
 The memory layer is z-Bot's cognitive system. Full documentation: [components/memory-layer/overview.md](components/memory-layer/overview.md). Backlog: [components/memory-layer/backlog.md](components/memory-layer/backlog.md).
 
-### Five Active Memory Loops
+### Memory Loops
 
 | Loop | When | What | Files |
 |------|------|------|-------|
-| System recall | First message | `recall_with_graph()` → facts + episodes + graph → system message | `runner.rs:642` |
-| Intent + memory | Before intent LLM | `recall_for_intent()` → corrections, strategies, episodes | `intent_analysis.rs:326` |
-| Subagent priming | Delegation spawn | `recall_for_delegation()` → corrections, skills, ward files | `spawn.rs:311` |
-| Mid-session | Every N turns | RecallHook → new relevant facts injected | `executor.rs` |
+| System recall | First message | `recall_with_graph()` → facts + episodes + graph → system message | `runner.rs` |
+| Intent + memory | Before intent LLM | `recall_for_intent()` → corrections, strategies, episodes | `intent_analysis.rs` |
+| Subagent priming | Delegation spawn | `recall_for_delegation()` → corrections, skills, ward files | `spawn.rs` |
+| Mid-session | Every N turns | `RecallHook` → new relevant facts injected | `executor.rs` |
 | Distillation | Session end | LLM extracts facts (verified), entities (normalized), relationships (deduped), episodes | `distillation.rs` |
+| Sleep-time pipeline | Background / on tick | Synthesis, belief synthesis, corrections abstraction, conflict resolution, pairwise entity verification, contradiction detection, handoff summarization | `gateway-memory/src/sleep/*.rs` |
+
+### Cognitive Layers
+
+The plain `memory_facts` table is the floor — additional layers add structure, time, and abstraction:
+
+| Layer | What it adds | Storage |
+|-------|--------------|---------|
+| Knowledge graph | Typed entities + relationships, 2-hop CTE expansion | `knowledge.db` |
+| Episodic memory | Goal / outcome / tools-used per session | `session_episodes` |
+| Bi-temporal facts | `valid_from` / `valid_to` columns; point-in-time recall, supersession writer | `memory_facts` columns |
+| Hierarchical memory (HiRAG / LeanRAG) | Cluster summaries; recall walks down from LCA cluster | `memory_hierarchy_*` tables |
+| Belief network | Multi-fact beliefs with confidence propagation + contradiction graph | `beliefs`, `belief_*` tables |
+| Procedures | Learned, named runbooks; dispatchable via `run_procedure` tool | `procedures` table |
+| Corrections abstractor | Recurring fixes promoted to high-priority rules | `memory_facts` (category=correction) |
+
+Hierarchy + LCA recall is feature-flagged via `execution.memory.hierarchy.enabled`.
 
 ### Subagent Tool Registry
 
-All subagents (planner, code-agent, research-agent, etc.) now have:
+All subagents (planner, code-agent, research-agent, etc.) carry:
 
 | Tool | Purpose |
 |------|---------|
@@ -503,18 +594,23 @@ All subagents (planner, code-agent, research-agent, etc.) now have:
 | WriteFileTool | Create/overwrite files |
 | EditFileTool | Find-and-replace edits |
 | LoadSkillTool | Load skill instructions |
-| **WardTool** | Enter ward → AGENTS.md context + ward-entry recall |
-| **MemoryTool** | recall/save_fact → access the brain |
+| **WardTool** | Enter ward → doctrine + ward-entry recall |
+| **MemoryTool** | recall / save_fact / graph |
+| **RunProcedureTool** | Replay a learned procedure |
 | **GrepTool** | Search files efficiently |
+| **WaitAgentTool / KillAgentTool** | Block on / cancel a running subagent (orchestrator only) |
 | RespondTool | Return result to parent |
 
 ### Recall Scoring
 
 ```
-score = (0.7 × vector + 0.3 × BM25) × category_weight × ward_affinity × temporal_decay × mention_boost × contradiction_penalty × predictive_boost
+score = (0.7 × vector + 0.3 × BM25)
+        × category_weight × ward_affinity × temporal_decay
+        × mention_boost × contradiction_penalty × predictive_boost
+        × entity_confidence (graph-ANN path)
 ```
 
-FTS5 queries sanitized with OR-joined terms (raw user messages break FTS5 syntax).
+FTS5 queries sanitized with OR-joined terms (raw user messages break FTS5 syntax). When hierarchy is enabled, recall is LCA-bounded — it walks the cluster tree down from the lowest-common-ancestor of seed entities and surfaces inter-cluster relations as a separate result band.
 
 ### Accuracy Layer
 
@@ -523,12 +619,43 @@ FTS5 queries sanitized with OR-joined terms (raw user messages break FTS5 syntax
 - **Entity normalization**: file basename matching, alias tracking in properties
 - **Relationship dedup**: unique index on (source_entity_id, target_entity_id, relationship_type)
 - **Failed episode warnings**: surface in recall as "Warnings — avoid these approaches" before successes
+- **Pairwise verifier (sleep-time)**: LLM adjudicates proposed entity merges; defaults to deny on any LLM failure
+- **Confidence-aware traversal**: graph-ANN recall weighs by entity confidence; contradicted facts are penalized
 
-### Ward Knowledge (auto-generated)
+## Wards — Domain-Scoped Delegatable Agents
 
-- `ward.md` — curated: max 5 corrections, 3 strategies, 2 warnings (deduped by word overlap)
-- `core_docs.md` — all `.py/.js/.ts/.rs` files with function signatures (recursive scan)
-- `structure.md` — directory tree
+Wards are simultaneously **persistent working directories** and **delegatable specialist agents**. Each ward has its own doctrine (`AGENTS.md` — scope, mandate, runtime hints all in one file), optional per-ward LLM config (`config.yaml`), curated memory (`memory-bank/`), and project files. There is no separate `ZBOT.md`; the ward agent's system prompt is assembled from the global system-context shards plus the ward's `AGENTS.md` (see `gateway/gateway-execution/src/invoke/setup.rs::synthesize_ward_agent`).
+
+### Lifecycle
+
+| Path | Trigger | What happens |
+|------|---------|--------------|
+| **Warm** | Intent analysis matches an existing ward | Orchestrator delegates directly |
+| **Cold** | No matching ward | Planner constructs doctrine + procedures, then runs |
+| **Graduation gate** | Ward telemetry threshold met (success rate, fact density) | Ward becomes routable from warm path |
+| **Out-of-scope re-route** | Request lands in wrong ward | Runtime re-delegates rather than letting mandate stretch |
+| **Anti-fragmentation** | Naming collision detected | Reject `maritime-tracking` / `maritime-vessel-tracking` style splits |
+
+### Ward Curator (autonomous self-improvement)
+
+| Phase | Trigger | What it does |
+|-------|---------|--------------|
+| **A — Telemetry** | Always-on, per session | Records success/failure, fact growth, recall hits per ward |
+| **B — Heuristic cleanup** | Weekly cron | Consolidates stale facts, prunes archive, dedupes |
+| **C — LLM consolidation** | Periodic | LLM pass merges redundant rules, sharpens doctrine, surfaces conflicts (routed via `execution.curator`) |
+
+The Curator's LLM model is independently configurable via the per-task routing chain — see **Per-Task LLM Routing** above.
+
+### Per-Ward LLM Config
+
+`wards/{name}/config.yaml`:
+
+```yaml
+provider: null   # null = inherit from orchestrator
+model: null      # null = provider default
+```
+
+A `non-null` value overrides the orchestrator for that ward only. This is the per-ward override; it does **not** flow through the `LlmClientConfig.task` chain.
 
 ## Crate Structure
 
@@ -1198,60 +1325,74 @@ CREATE TABLE embedding_cache (
 
 ### Cognitive Memory Architecture
 
-The memory system is a full cognitive pipeline: distill (post-session extraction), recall (tool-call based retrieval with priority scoring), and a knowledge graph with graph-driven expansion.
+The memory system is a full cognitive pipeline: distill (post-session extraction), recall (tool-call based retrieval with priority scoring), a knowledge graph with graph-driven expansion, and a background sleep-time pipeline that abstracts beliefs and resolves contradictions.
 
 ```
                     ┌─────────────────────────────────┐
-                    │      Embedding Provider          │
+                    │       Embedding Provider         │
                     │  (local fastembed / OpenAI /     │
                     │   Ollama / any compatible API)   │
-                    └──────────┬──────────────────────┘
+                    └──────────┬───────────────────────┘
                                │ vectors
-          ┌────────────────────┼────────────────────┐
-          ▼                    ▼                     ▼
-┌──────────────────┐ ┌─────────────────┐ ┌──────────────────┐
-│ Session Distiller │ │  Memory Indexer  │ │  Memory Recall   │
-│ (post-session)   │ │ (on fact write)  │ │ (tool-call based)│
-│ + health report  │ │                  │ │ + graph expansion│
-│ + provider fbk   │ │                  │ │ + priority engine│
-│ + episode extract│ │                  │ │ + nudges         │
-│ + strategy emerge│ │                  │ │                  │
-│ + failure cluster│ │                  │ │                  │
-│ + ward file sync │ │                  │ │                  │
-└────────┬─────────┘ └────────┬────────┘ └────────┬─────────┘
-         │                    │                    │
-         ▼                    ▼                    ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    conversations.db                           │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
-│  │ memory_facts │  │ memory_facts │  │ brute-force cosine │  │
-│  │ (structured) │  │ _fts (FTS5)  │  │ (in Rust, <10K)    │  │
-│  └─────────────┘  └──────────────┘  └────────────────────┘  │
-│                                                              │
-│  ┌───────────────────┐  ┌────────────────┐                   │
-│  │ distillation_runs │  │ session_episodes│                   │
-│  │ (health tracking) │  │ (episodic mem) │                   │
-│  └───────────────────┘  └────────────────┘                   │
-│  ┌───────────────────┐  ┌────────────────┐                   │
-│  │ recall_log        │  │ memory_facts   │                   │
-│  │ (audit trail)     │  │ _archive (decay)│                  │
-│  └───────────────────┘  └────────────────┘                   │
-│                                                              │
-│  Hybrid Search: 0.7 * vector_score + 0.3 * bm25_score       │
-│  × confidence × recency_decay × mention_boost                │
-│                                                              │
-│  Priority Engine (recall):                                    │
-│  category_weight × ward_affinity × temporal_decay             │
-│  correction 1.5x > strategy 1.4x > user 1.3x > domain 1.0x │
-└─────────────────────────────────────────────────────────────┘
+   ┌───────────────────────────┼──────────────────────────────┐
+   ▼                           ▼                              ▼
+┌──────────────────┐ ┌──────────────────┐ ┌──────────────────────────┐
+│ Session Distiller│ │  Memory Indexer  │ │  Memory Recall            │
+│ (post-session)   │ │ (on fact write)  │ │ (tool-call based)         │
+│ + health report  │ │ + vec0 index     │ │ + graph expansion         │
+│ + episode extract│ │                  │ │ + LCA-bounded hierarchy   │
+│ + strategy emerge│ │                  │ │ + priority engine         │
+│ + failure cluster│ │                  │ │ + confidence weighting    │
+│ + ward file sync │ │                  │ │ + point-in-time (valid_*)│
+└────────┬─────────┘ └────────┬─────────┘ └─────────────┬─────────────┘
+         │                    │                          │
+         ▼                    ▼                          ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                       conversations.db                                │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────────────┐  │
+│  │ memory_facts │  │ memory_facts │  │ vec0 ANN indexes           │  │
+│  │ (+ valid_from│  │ _fts (FTS5)  │  │ (entity names, fact texts) │  │
+│  │   valid_to)  │  │              │  │                            │  │
+│  └─────────────┘  └──────────────┘  └────────────────────────────┘  │
+│                                                                      │
+│  ┌──────────────────┐ ┌─────────────────┐ ┌─────────────────────┐  │
+│  │ session_episodes │ │ memory_hierarchy│ │ procedures           │  │
+│  │ (episodic mem)   │ │ (HiRAG/LeanRAG) │ │ (replayable runbooks)│  │
+│  └──────────────────┘ └─────────────────┘ └─────────────────────┘  │
+│                                                                      │
+│  ┌──────────────────┐ ┌─────────────────┐ ┌─────────────────────┐  │
+│  │ beliefs +        │ │ recall_log      │ │ memory_facts_archive│  │
+│  │ belief_contradict│ │ (audit trail)   │ │ (decay output)      │  │
+│  └──────────────────┘ └─────────────────┘ └─────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────┘
          │
          ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Knowledge Graph (services/knowledge-graph/)                 │
-│  198+ entities, 333+ relationships, cross-agent __global__   │
-│  GraphTraversal trait (SQLite CTE today, Neo4j future)       │
-│  2-hop BFS expansion via recursive CTE for recall            │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│ Knowledge Graph (services/knowledge-graph/ → knowledge.db)            │
+│ Entities + typed relationships, cross-agent __global__ namespace      │
+│ GraphTraversal trait (SQLite CTE today, Neo4j swappable)              │
+│ 2-hop BFS expansion via recursive CTE for recall                      │
+└──────────────────────────────────────────────────────────────────────┘
+         │
+         ▲    background tick     ┌────────────────────────────────────┐
+         └────────────────────────│   Sleep-Time Pipeline               │
+                                   │   (routed via execution.sleepTime) │
+                                   │ • Synthesizer (facts → beliefs)    │
+                                   │ • BeliefSynthesizer                │
+                                   │ • CorrectionsAbstractor            │
+                                   │ • PatternExtractor                 │
+                                   │ • ConflictResolver                 │
+                                   │ • PairwiseVerifier (entity merges) │
+                                   │ • BeliefContradictionDetector      │
+                                   │ • LlmAggregateEntity               │
+                                   │ • HandoffWriter (conv. summary)    │
+                                   └────────────────────────────────────┘
+
+Hybrid search:    0.7 * vector + 0.3 * bm25
+Recall priority:  category_weight × ward_affinity × temporal_decay
+                  × mention_boost × contradiction_penalty × predictive_boost
+                  × entity_confidence (graph-ANN path)
+Category weights: correction 1.5× > strategy 1.4× > user 1.3× > domain 1.0×
 ```
 
 #### Distillation Pipeline
