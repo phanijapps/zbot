@@ -79,12 +79,14 @@ pub use web::WebFetchTool;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolSettings {
-    /// Enable python tool (run Python scripts)
+    /// Deprecated: the `python` tool is no longer surfaced by the live
+    /// gateway registry or the optional factory. Run Python through `shell`.
     #[serde(default)]
     pub python: bool,
 
-    /// Enable web_fetch tool (HTTP requests).
-    /// Disabled by default as large responses can cause context explosion.
+    /// Deprecated: the `web_fetch` tool is no longer surfaced by the live
+    /// gateway registry or the optional factory. Use MCP/browser/search
+    /// integrations or explicit shell scripts instead.
     #[serde(default)]
     pub web_fetch: bool,
 
@@ -108,8 +110,9 @@ pub struct ToolSettings {
     #[serde(default)]
     pub file_tools: bool,
 
-    /// Enable the heavyweight todos tool (SQLite-like task persistence).
-    /// When false (default), the lightweight update_plan tool is used instead.
+    /// Deprecated: the heavyweight `todos` tool has been replaced by the
+    /// lightweight `update_plan` tool and is no longer surfaced by the live
+    /// gateway registry or the optional factory.
     #[serde(default)]
     pub todos: bool,
 
@@ -183,7 +186,10 @@ pub fn core_tools(
 
 /// Get optional tools based on settings.
 ///
-/// Includes file tools (read/write/edit/glob), todos, python, web_fetch, etc.
+/// Includes currently supported optional tools.
+///
+/// Deprecated optional toggles (`todos`, `python`, `web_fetch`) are accepted in
+/// `ToolSettings` for config compatibility but intentionally ignored here.
 #[must_use]
 pub fn optional_tools(
     fs: Arc<dyn FileSystemContext>,
@@ -197,19 +203,6 @@ pub fn optional_tools(
         tools.push(Arc::new(WriteTool::new(fs.clone())));
         tools.push(Arc::new(EditTool::new(fs.clone())));
         tools.push(Arc::new(GlobTool));
-    }
-
-    // Heavyweight todos (opt-in, replaced by update_plan in core)
-    if settings.todos {
-        tools.push(Arc::new(TodoTool::new()));
-    }
-
-    if settings.python {
-        tools.push(Arc::new(PythonTool::new(fs.clone())));
-    }
-
-    if settings.web_fetch {
-        tools.push(Arc::new(WebFetchTool::new()));
     }
 
     if settings.ui_tools {

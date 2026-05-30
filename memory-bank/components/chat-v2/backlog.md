@@ -42,7 +42,7 @@ Items not fixed in the initial Quick Chat ship but known gaps.
 
 **Fix:** in the executor's error path, emit a `GatewayEvent::Error { session_id, execution_id, message }` alongside (or instead of) the empty `turn_complete`. The UI already has an `error` case in the event mapper that dispatches `ERROR` action → `status="error"`. The pill should show a red/destructive variant.
 
-**Scope:** one-to-two call sites in `gateway/gateway-execution/src/runner.rs` (or wherever the crash-catch is). Plus one UI tweak to visibly render the error state (currently `status="error"` just disables the composer).
+**Scope:** one-to-two call sites in `gateway/gateway-execution/src/runner/invoke_bootstrap.rs` or `gateway/gateway-execution/src/runner/execution_stream.rs` depending on where the crash is caught. Plus one UI tweak to visibly render the error state (currently `status="error"` just disables the composer).
 
 ### B4. Status-pill error category / destructive-colour variant
 

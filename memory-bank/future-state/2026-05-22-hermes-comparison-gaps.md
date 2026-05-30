@@ -17,7 +17,7 @@ Hermes's marquee differentiator. A background **Curator** agent (`agent/curator.
 
 z-Bot has **procedure** distillation (auto-extracted from successful runs via the sleep-time `PatternExtractor` in `gateway-memory/src/sleep/`) but no curator agent triaging **skills**. Procedures and skills are not unified.
 
-Design work tracked separately: `2026-05-22-zbot-curator-design.md` (to follow).
+Design work is captured in `2026-05-23-ward-curator-spec.md`.
 
 ### 2. Remote / serverless execution backends
 

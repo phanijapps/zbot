@@ -43,9 +43,12 @@
 ### Tool Tiers (Core, Optional, Action) — Shell + Dedicated File Tools
 - **Core**: shell, write_file, edit_file, memory, ward, update_plan, set_session_title, execution_graph, list_skills, load_skill, grep — always available
 - **Action (3)**: respond, delegate_to_agent, list_agents — always available, drive agent behavior
-- **Optional**: read, write, edit, glob, todos, python, web_fetch, ui_tools, create_agent, introspection — configurable per agent
+- **Optional**: read, write, edit, glob, ui_tools, create_agent, introspection — configurable in the legacy optional factory. `todos`, `python`, and `web_fetch` are deprecated compatibility fields and no longer add tools.
 - File writes go through `write_file` (create) and `edit_file` (targeted edits). The `shell` tool rejects file-writing commands (`cat >`, heredocs, `Set-Content`, etc.) to force use of the dedicated tools.
-- Old standalone knowledge_graph tools (5) removed — replaced by unified `graph` action in memory tool
+- Old standalone knowledge_graph tools (5) removed. Current agent-facing graph
+  access is the separate `GraphQueryTool` when a `KnowledgeGraphStore` is
+  wired; memory recall also surfaces graph context automatically through
+  `MemoryRecall::recall_unified`.
 
 ### Memory: 4-Tier Hierarchy
 | Tier | Path | Purpose |
@@ -68,11 +71,11 @@ The agent — not the user — decides which ward to work in. System prompt inst
 ### Gateway Crate Decomposition (13 Crates)
 Gateway was a 73-file monolith (~15,675 LOC). Extracted into focused crates:
 - `gateway-events` — EventBus, GatewayEvent, HookContext
-- `gateway-database` — DatabaseManager, pool, schema, ConversationRepository
 - `gateway-templates` — Prompt assembly, shard injection
 - `gateway-connectors` — ConnectorRegistry, dispatch
 - `gateway-services` — AgentService, ProviderService, McpService, SkillService, SettingsService
-- `gateway-execution` — ExecutionRunner, delegation, lifecycle, streaming, BatchWriter
+- `gateway-memory` — recall, memory settings, sleep workers, belief/hierarchy logic
+- `gateway-execution` — ExecutionRunner, delegation, lifecycle, streaming, BatchWriter, SessionDistiller
 - `gateway-hooks` — Hook trait, HookRegistry, CliHook, CronHook
 - `gateway-cron` — CronJobConfig, CronService
 - `gateway-bus` — GatewayBus trait, SessionRequest, SessionHandle
@@ -96,15 +99,28 @@ ProviderService, McpService, and SettingsService use RwLock caches (providers.js
 ### AGENTS.md as Documentation Standard
 Every crate directory has an AGENTS.md describing what it does, its key files, and what it does NOT handle. These serve as both human documentation and AI context.
 
-### Memory Evolution: Brute-Force Cosine Over sqlite-vec
-**Problem**: Hybrid search needs vector similarity. sqlite-vec requires loading a native extension (.dll/.so) at runtime — platform-specific, tricky distribution.
-**Decision**: Compute cosine similarity in Rust. Load all embeddings from `embedding_cache` for the agent, compute similarity in-memory, take top-K.
-**Rationale**: For <10K facts, brute-force is ~2-5ms. No extension loading, no platform concerns, no ANN index needed. Revisit if facts exceed 100K.
+### Memory Evolution: sqlite-vec as the Similarity Index
+**Problem**: Hybrid search needs vector similarity across facts, graph entity
+names, ward wiki articles, procedures, and session episodes.
+**Decision**: Store vectors in sqlite-vec `vec0` partner tables in
+`knowledge.db`: `memory_facts_index`, `kg_name_index`,
+`wiki_articles_index`, `procedures_index`, and `session_episodes_index`.
+Facts and other base rows do not duplicate embedding BLOB columns.
+**Rationale**: A single vector mechanism keeps retrieval behavior consistent
+across memory layers. `KnowledgeDatabase` loads sqlite-vec at startup, and
+`EmbeddingService` reconciles vec table dimensions when the configured backend
+changes.
 
-### Memory Evolution: Local Embeddings as Default
+### Memory Evolution: Configurable Local/External Embeddings
 **Problem**: Embedding APIs cost money and require internet. Not all users have API keys configured.
-**Decision**: Default to `fastembed` crate with `all-MiniLM-L6-v2` (384 dimensions, ~100MB ONNX model). Local ONNX inference on CPU — zero API calls, zero cost, works offline.
-**Alternative**: OpenAI-compatible API (configurable per provider). User can switch to Ollama `nomic-embed-text` (768d) or OpenAI `text-embedding-3-small` (1536d) via `EmbeddingConfig`.
+**Decision**: `EmbeddingService` owns a live `EmbeddingClient` selected from
+settings. The built-in internal backend uses local fastembed/BGE-small
+384-dimensional embeddings; Ollama can be selected with model-specific
+dimensions. The unconfigured boot state uses a no-op client until the user
+chooses a backend.
+**Alternative**: OpenAI-compatible embedding clients exist at the runtime layer,
+but the gateway settings path currently wires internal or Ollama through
+`EmbeddingService`.
 
 ### Memory Evolution: Session Distillation Over Manual Memory
 **Problem**: Agents forget to save important facts. Users shouldn't have to remind them.
@@ -113,8 +129,12 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 **Safety**: Fire-and-forget (never blocks user), async spawn, only runs on sessions with sufficient signal (>10 messages).
 
 ### Memory Evolution: Hybrid Search Scoring
-**Formula**: `(0.7 × vector_cosine + 0.3 × BM25_score) × confidence × recency_decay × mention_boost`
-**Rationale**: Vector search handles semantic similarity ("preferred language" matches "coding in Rust"), FTS5 handles exact keyword matches ("SQLite" matches "SQLite"). Confidence, recency, and mention_count prevent stale or low-quality facts from dominating.
+**Formula**: FTS5 and sqlite-vec results are fused by Reciprocal Rank Fusion
+inside `MemoryRepository::search_memory_facts_hybrid`, then multiplied by
+confidence, recency, and mention-count boost.
+**Rationale**: RRF avoids forcing BM25 and cosine into the same numeric scale.
+Exact keyword-only hits and semantic-only hits can still rank, while facts that
+appear in both retrieval arms get a natural boost.
 
 ### Memory Evolution: Embedding Cache (Hash-Based Dedup)
 **Problem**: Re-embedding unchanged content wastes API calls or compute time.
@@ -124,9 +144,13 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 **Problem**: When context window is trimmed, the agent loses access to potentially important information.
 **Decision**: Before compaction, inject a `[MEMORY FLUSH]` system message warning the agent. Skip compaction for one turn to give the agent a chance to `save_fact`. On the next trigger, proceed with normal compaction.
 
-### Knowledge Graph: Unified in Memory Tool
+### Knowledge Graph: Trait-Routed Graph Tool and Recall Surface
 **Problem**: 5 standalone knowledge_graph tools cluttered the tool registry and duplicated the memory concept.
-**Decision**: Remove standalone tools. Add `graph` action to existing memory tool. Entities and relationships are automatically extracted during session distillation — no manual management needed. The `graph` action provides query access when needed.
+**Decision**: Remove the old standalone tool set. Graph context is surfaced
+automatically by `MemoryRecall::recall_unified`, and direct agent graph queries
+are provided by `GraphQueryTool` when the executor is wired with a
+`KnowledgeGraphStore`. Entities and relationships are automatically extracted
+during session distillation and ingestion.
 
 ### Memory UI: Cross-Agent View by Default
 **Problem**: Memory UI required selecting an agent first, showing "No memories found" even when memories existed.
@@ -173,7 +197,7 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 ### Intent Analysis: Autonomous Middleware (Not a Tool, Not Pre-Collected Arrays)
 **Problem**: Earlier versions tried two approaches that both failed: (1) a tool the agent was supposed to call (but it was never registered), and (2) pre-collecting all resources into arrays to pass to the LLM (wasted tokens on irrelevant resources).
 **Decision**: Intent analysis is an autonomous middleware that indexes resources into `memory_facts` with local embeddings, performs semantic search, and sends only top-N relevant resources to the LLM. Not a tool agents call. Not a full catalog dump.
-**Rationale**: Autonomous indexing + semantic search means the LLM only sees relevant resources (8 skills, 5 agents, 5 wards max). No wasted tokens. No registration issues. Middleware runs before the root agent's first LLM call — transparent and automatic. See `memory-bank/intent-analysis.md` for full documentation.
+**Rationale**: Autonomous indexing + semantic search means the LLM only sees relevant resources (8 skills, 5 agents, 5 wards max). No wasted tokens. No registration issues. Middleware runs before the root agent's first LLM call — transparent and automatic. See `memory-bank/components/intent-analysis/overview.md` for full documentation.
 
 ### Modular System Prompt Config (SOUL.md, OS.md, Overridable Shards)
 **Problem**: A single `INSTRUCTIONS.md` file mixed identity, platform commands, and behavior rules. No way to override individual shards without forking the embedded defaults.
@@ -204,6 +228,11 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 **Problem**: Optional tool toggles (python, webFetch, todos, fileTools, uiTools, createAgent) confused non-technical users. Most didn't work correctly — TS types referenced non-existent backend keys (`grep`, `glob`, `loadSkill`). The toggles gave a false sense of control.
 **Decision**: Remove the Optional Tools section from the Settings UI. Keep introspection enabled via `settings.json`. Backend `ToolSettings` struct unchanged — tools can still be enabled programmatically or via direct JSON editing. UI focuses on the two settings that actually matter: context protection (offload) and logging.
 **Rationale**: Simpler surface for non-technical users. The tools that matter (shell, write_file, edit_file, memory, ward) are always on. The deprecated toggles were rarely used and poorly implemented.
+
+### Deprecated Optional Tools: todos, python, web_fetch
+**Problem**: `todos`, `python`, and `web_fetch` were no longer registered by the live gateway executor but could still be surfaced by the legacy `optional_tools()` factory.
+**Decision**: Keep the settings/API fields for backward-compatible `settings.json` parsing, but ignore these three flags in `optional_tools()`. `todos` is replaced by `update_plan`; Python execution should go through `shell`; web access should use MCP/browser/search integrations or explicit scripts.
+**Rationale**: Makes the deprecation real without breaking existing settings payloads or public tool structs in `agent-tools`.
 
 ### Providers Page: Card Grid Over Split Panel
 **Problem**: The original split-panel layout (sidebar list + detail pane) was a developer tool pattern. No inline editing, no guided setup, no capability visibility. Non-technical users didn't know what to do.

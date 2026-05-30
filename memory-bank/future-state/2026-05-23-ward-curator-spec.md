@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-23
 **Goal:** Close gap #1 from `2026-05-22-hermes-comparison-gaps.md` by giving z-Bot an autonomous **ward** self-improvement loop — the substrate equivalent of Hermes's Curator. Hermes's "skill" is structurally a z-Bot ward; this spec applies the Curator pattern to the correct substrate.
-**Supersedes:** `2026-05-22-zbot-curator-design.md` (skill-framed first draft).
+**Supersedes:** the deleted 2026-05-22 skill-framed curator draft.
 
 ---
 

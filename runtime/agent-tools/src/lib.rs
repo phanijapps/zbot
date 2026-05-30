@@ -62,5 +62,11 @@ pub use tools::{
     optional_tools,
 };
 
+// Deprecated compatibility exports. These tools are no longer surfaced by the
+// live gateway registry or `optional_tools()`, but keeping the types reachable
+// avoids breaking old direct callers while the deprecation settles.
+#[doc(hidden)]
+pub use tools::{PythonTool, TodoTool, WebFetchTool};
+
 // Re-export from zero-core
 pub use zero_core::{FileSystemContext, Tool};

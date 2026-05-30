@@ -10,7 +10,8 @@
 ### Runner Integration
 | File | What |
 |------|------|
-| `gateway/gateway-execution/src/runner.rs` | `OnSessionReady` type alias, `invoke_with_callback()`, session gate (`has_intent_log`), `format_intent_injection` call, `index_resources` call, event emission, fallback handling |
+| `gateway/gateway-execution/src/runner/core.rs` | `OnSessionReady` type alias, `ExecutionRunner::invoke_with_callback()` orchestration entry |
+| `gateway/gateway-execution/src/runner/invoke_bootstrap.rs` | Session gate (`has_intent_log`), `index_resources` call, `format_intent_injection` call, intent events, fallback handling |
 
 ### Crate Exports
 | File | What |

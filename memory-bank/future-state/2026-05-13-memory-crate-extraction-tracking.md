@@ -319,10 +319,10 @@ This phase completes the truth-interval model for facts/entities/relationships a
 
 Each phase has a written plan that describes the *intent* of the change set. These are the authoritative specs to consult during extraction:
 
-- `docs/superpowers/plans/2026-05-12-reflective-memory-phase1-completion.md`
-- `docs/superpowers/plans/2026-05-12-recall-min-score-threshold.md`
-- `docs/superpowers/plans/2026-05-12-pattern-abstraction.md` *(Phase 2)*
-- `docs/superpowers/plans/2026-05-13-conflict-resolution.md` *(Phase 3)*
+- `memory-bank/components/memory-layer/implementation-plans/2026-05-12-reflective-memory-phase1-completion.md`
+- `memory-bank/components/memory-layer/implementation-plans/2026-05-12-recall-min-score-threshold.md`
+- `memory-bank/components/memory-layer/implementation-plans/2026-05-12-pattern-abstraction.md` *(Phase 2)*
+- `memory-bank/components/memory-layer/implementation-plans/2026-05-13-conflict-resolution.md` *(Phase 3)*
 - `memory-bank/future-state/2026-05-15-bitemporal-wiring-design.md` *(Phase 5 — bi-temporal wiring across all 4 sub-phases)*
 
 ---

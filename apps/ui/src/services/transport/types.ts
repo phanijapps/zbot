@@ -348,9 +348,9 @@ export interface McpTestResult {
 // ============================================================================
 
 export interface ToolSettings {
-  /** Enable python tool (run Python scripts) */
+  /** Deprecated: retained for old settings payloads; ignored by current tool registration */
   python: boolean;
-  /** Enable web_fetch tool (HTTP requests — large responses can cause context explosion) */
+  /** Deprecated: retained for old settings payloads; ignored by current tool registration */
   webFetch: boolean;
   /** Enable UI tools (request_input, show_content) */
   uiTools: boolean;
@@ -360,7 +360,7 @@ export interface ToolSettings {
   introspection: boolean;
   /** Enable file tools (read, write, edit, glob) as separate tools */
   fileTools: boolean;
-  /** Enable heavyweight todos tool (SQLite-like task persistence) */
+  /** Deprecated: replaced by update_plan; ignored by current tool registration */
   todos: boolean;
   /** Offload large tool results to filesystem instead of keeping in context */
   offloadLargeResults: boolean;

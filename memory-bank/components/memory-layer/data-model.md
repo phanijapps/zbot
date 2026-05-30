@@ -1,4 +1,4 @@
-# Memory Layer — v22 Data Model
+# Memory Layer — Current Data Model
 
 Every table across both SQLite databases, every column, every index and
 trigger. Copy-verbatim from
@@ -7,7 +7,7 @@ trigger. Copy-verbatim from
 time of writing — when in doubt, grep those files.
 
 Default location: `~/Documents/zbot/data/`. `SCHEMA_VERSION = 22` in
-`schema.rs` and `SCHEMA_VERSION = 24` in `knowledge_schema.rs`.
+`schema.rs` and `SCHEMA_VERSION = 31` in `knowledge_schema.rs`.
 
 ---
 
@@ -288,7 +288,7 @@ relationship_type)`.
 **Uniqueness:** `UNIQUE(normalized_form, entity_id)`.
 **Indexes:** `idx_aliases_normalized`, `idx_aliases_entity`.
 **Writes:** `store_entity` seeds one `source='extraction'` alias per new
-entity (`services/knowledge-graph/src/storage.rs:1798`); merges append
+entity (`stores/zero-stores-sqlite/src/kg/storage.rs`); merges append
 `source='merge'` aliases.
 
 ### `kg_episodes`
@@ -426,8 +426,8 @@ generic relationships.
 **Indexes:** `idx_facts_agent_scope`, `idx_facts_category`,
 `idx_facts_ward`, `idx_facts_epistemic`.
 **No `embedding` BLOB column** — the vec0 partner `memory_facts_index`
-holds the vectors. Asserted at
-`stores/zero-stores-sqlite/src/knowledge_schema.rs:655`.
+holds the vectors. Asserted in
+`stores/zero-stores-sqlite/src/knowledge_schema.rs`.
 **Writes/Reads:** `MemoryRepository` (`memory_repository.rs`).
 
 ### `memory_facts_fts` (virtual, FTS5)
@@ -443,7 +443,7 @@ triggers:
   the old row.
 - `memory_facts_au` — after update, FTS `'delete'` + re-insert.
 
-See `knowledge_schema.rs:350`.
+See `stores/zero-stores-sqlite/src/knowledge_schema.rs`.
 
 ### `memory_facts_archive`
 
@@ -561,8 +561,10 @@ Primary key: `(content_hash, model)`.
 
 ## vec0 virtual tables (knowledge.db)
 
-Created after `load_sqlite_vec` + base schema. All 384-dim `FLOAT[384]`,
-partner row pk matches base table id.
+Created after `load_sqlite_vec` + base schema. The internal embedding backend
+uses 384 dimensions by default; `initialize_vec_tables_with_dim` can create the
+same tables at the active embedding backend dimension. Partner row primary keys
+match base table ids.
 
 ```sql
 CREATE VIRTUAL TABLE kg_name_index        USING vec0(entity_id    TEXT PRIMARY KEY, name_embedding FLOAT[384]);
@@ -572,8 +574,8 @@ CREATE VIRTUAL TABLE procedures_index     USING vec0(procedure_id TEXT PRIMARY K
 CREATE VIRTUAL TABLE session_episodes_index USING vec0(episode_id TEXT PRIMARY KEY, embedding    FLOAT[384]);
 ```
 
-Kept consistent with their base tables by five `AFTER DELETE` triggers
-(`knowledge_schema.rs:315`):
+Kept consistent with their base tables by five `AFTER DELETE` triggers in
+`stores/zero-stores-sqlite/src/knowledge_schema.rs`:
 `trg_entities_delete_vec`, `trg_facts_delete_vec`,
 `trg_wiki_delete_vec`, `trg_procedures_delete_vec`,
 `trg_episodes_delete_vec`.

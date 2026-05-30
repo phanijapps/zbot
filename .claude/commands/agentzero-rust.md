@@ -26,23 +26,24 @@ apps/              # Entry points (zerod daemon)
 
 ```
 gateway/
+├── gateway-events/        # EventBus, GatewayEvent, HookContext
+├── gateway-templates/     # Prompt assembly
+├── gateway-connectors/    # Connector dispatch
+├── gateway-services/      # Agent, provider, MCP, skill, settings services
+├── gateway-memory/        # Recall, memory settings, sleep workers
+├── gateway-execution/     # ExecutionRunner, delegation, lifecycle, streaming
+├── gateway-hooks/         # Hook trait + CLI/Cron/Web hooks
+├── gateway-cron/          # Cron jobs
+├── gateway-bus/           # GatewayBus trait and session handles
+├── gateway-ws-protocol/   # WebSocket message protocol
 ├── src/
 │   ├── lib.rs              # Public exports
 │   ├── server.rs           # Server startup
-│   ├── state.rs            # AppState (shared state)
-│   ├── database/           # DB connection and schema
-│   │   ├── connection.rs   # DatabaseManager
-│   │   ├── repository.rs   # ConversationRepository
-│   │   └── schema.rs       # SQL schema initialization
-│   ├── events/             # Event bus
-│   ├── execution/          # Agent execution
-│   │   └── runner.rs       # ExecutionRunner
+│   ├── state/              # AppState + persistence wiring
 │   ├── http/               # HTTP endpoints
 │   ├── websocket/          # WebSocket handlers
-│   └── services/           # Gateway services
-│       ├── agents.rs       # AgentService
-│       ├── runtime.rs      # RuntimeService
-│       └── ...
+│   ├── services/           # RuntimeService shell integration
+│   └── bus/                # HttpGatewayBus adapter
 ```
 
 ## Shared State Pattern
@@ -54,8 +55,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub struct AppState {
-    pub db: Arc<DatabaseManager>,
-    pub conversation_repo: Arc<ConversationRepository>,
+    pub conversations: Arc<ConversationRepository>,
     pub event_bus: Arc<EventBus>,
     pub agent_service: Arc<AgentService>,
     // ... more services
@@ -64,7 +64,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(/* deps */) -> Self {
         Self {
-            db: Arc::new(DatabaseManager::new(/* ... */)),
+            conversations: Arc::new(ConversationRepository::new(db_manager.clone())),
             // ...
         }
     }
@@ -279,7 +279,7 @@ let session = self.state_service.create_session(
 
 ## Database Schema Pattern
 
-Define schema in `gateway/src/database/schema.rs`:
+Define conversation/session schema in `stores/zero-stores-sqlite/src/schema.rs`; knowledge graph schema lives in `stores/zero-stores-sqlite/src/knowledge_schema.rs`:
 
 ```rust
 pub fn initialize_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -387,7 +387,7 @@ mod tests {
 1. **Types**: Define in `types.rs` with Serialize/Deserialize
 2. **Repository**: Data access in `repository.rs`
 3. **Service**: Business logic in `service.rs`
-4. **Schema**: Database tables in `gateway/src/database/schema.rs`
+4. **Schema**: Database tables in `stores/zero-stores-sqlite/src/schema.rs` or `stores/zero-stores-sqlite/src/knowledge_schema.rs`
 5. **Integration**: Wire into `AppState` and relevant handlers
 6. **FK constraints**: Ensure parent records exist before children
 7. **Logging**: Add tracing with structured fields

@@ -1,4 +1,4 @@
-# Knowledge Graph — v22 Architecture
+# Knowledge Graph — Current Architecture
 
 ## Core concept
 
@@ -66,13 +66,13 @@ returned with the merge outcome for observability.
 
 A third stage — **LLM pairwise verify** — is defined as the
 `PairwiseVerifier` trait
-(`gateway/gateway-execution/src/sleep/compactor.rs:34`) but is not wired
+(`gateway/gateway-memory/src/sleep/compactor.rs`) but is not wired
 into the live resolver. It lives with the Compactor.
 
 ### Self-alias seeding
 
 Every new entity written via `store_entity`
-(`services/knowledge-graph/src/storage.rs:1713`) seeds one
+(`stores/zero-stores-sqlite/src/kg/storage.rs`) seeds one
 `kg_aliases` row:
 
 ```sql
@@ -84,12 +84,12 @@ INSERT OR IGNORE INTO kg_aliases (
 
 This means the next mention of the same surface form short-circuits the
 cascade at stage 1 — no embedding work needed. Merges append
-`source='merge'` aliases (`storage.rs:1684`).
+`source='merge'` aliases.
 
 ### Merge semantics
 
 `GraphStorage::merge_entity_into(loser_id, winner_id)`
-(`services/knowledge-graph/src/storage.rs:1416`) runs one transaction:
+(`stores/zero-stores-sqlite/src/kg/storage.rs`) runs one transaction:
 
 1. Drop would-be-duplicate relationships (`DELETE` any loser edge that
    would collide with an existing winner edge under the
@@ -113,14 +113,14 @@ audit-agnostic.
 
 ## Compactor (Phase 4)
 
-Source: `gateway/gateway-execution/src/sleep/compactor.rs`.
+Source: `gateway/gateway-memory/src/sleep/compactor.rs`.
 
 - Thresholds: `cosine ≥ 0.92` (default), `per_type_limit = 50`.
 - Scans five entity types: `Person`, `Organization`, `Location`,
   `Event`, `Concept`.
 - Duplicate candidates produced by
   `GraphStorage::find_duplicate_candidates(agent_id, type, cosine,
-  limit)` (storage.rs:1277). The query joins `kg_name_index`
+  limit)`. The query joins `kg_name_index`
   (self-join on distance) against `kg_entities`, filtering out
   `compressed_into IS NOT NULL` and `epistemic_class = 'archival'`.
 - Per pair:
@@ -136,12 +136,12 @@ merges_skipped_by_verifier }`.
 
 ## Pruner (Phase 4)
 
-Source: `gateway/gateway-execution/src/sleep/pruner.rs` +
+Source: `gateway/gateway-memory/src/sleep/pruner.rs` +
 `decay.rs`.
 
 - `DecayEngine::list_prune_candidates(agent_id)` runs
   `GraphStorage::list_orphan_old_candidates`
-  (`services/knowledge-graph/src/storage.rs:1560`):
+  (`stores/zero-stores-sqlite/src/kg/storage.rs`):
 
 ```sql
 SELECT e.id, e.name, e.entity_type, e.mention_count, e.last_seen_at
@@ -159,7 +159,7 @@ SELECT e.id, e.name, e.entity_type, e.mention_count, e.last_seen_at
 ```
 
 - `Pruner::prune` calls `GraphStorage::mark_pruned` on each candidate
-  (`storage.rs:1517`). In one transaction:
+  (`stores/zero-stores-sqlite/src/kg/storage.rs`). In one transaction:
 
   ```sql
   UPDATE kg_entities SET compressed_into = '__pruned__' WHERE id = ?
@@ -179,7 +179,7 @@ Reason string encoded on each prune audit row:
 Entities carry an optional 384-dim `Entity.name_embedding:
 Option<Vec<f32>>`. When `Some`, `store_entity` writes to the vec0
 partner in the same transaction
-(`services/knowledge-graph/src/storage.rs:1815`):
+(`stores/zero-stores-sqlite/src/kg/storage.rs`):
 
 ```rust
 if let Some(emb) = entity.name_embedding.as_ref() {
@@ -203,9 +203,9 @@ embeddings before handing the `ExtractedKnowledge` to
 - `graph_query` agent tool — `action ∈ {search, neighbors, context}`.
   Wires through `GraphService` to `GraphStorage::search_entities*`,
   `get_neighbors`, and traversal helpers in
-  `services/knowledge-graph/src/traversal.rs`.
+  `stores/zero-stores-sqlite/src/kg/traversal.rs`.
 - `GraphStorage::search_entities_by_name_embedding(emb, k, agent_id)`
-  (`storage.rs:416`) is the helper consumed by the recall adapter for
+  is the helper consumed by the recall adapter for
   unified recall (ANN over `kg_name_index`). Result: top-k entities by
   cosine, filtered by agent scope and `compressed_into IS NULL`.
 

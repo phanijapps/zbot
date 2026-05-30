@@ -19,7 +19,7 @@ The reference book is split across four layers, each implemented and live:
 
 A **bi-temporal model** runs through all four: every row records when a fact became true *in the world* (`valid_from`) and when it stopped being true (`valid_until`), separately from when it was written to the database. Point-in-time recall ("what did I believe in February?") falls out of that for free.
 
-A **hybrid recall pipeline** decides what the agent reads next: FTS5 keyword search + sqlite-vec cosine similarity, blended via reciprocal rank fusion, optionally pre-filtered by a Self-RAG retrieval gate, optionally diversity-reranked by MMR, optionally cross-encoder-reranked by `fastembed-rs`, then category-weighted and ward-boosted.
+A **hybrid recall pipeline** decides what the agent reads next: FTS5 keyword search + sqlite-vec cosine similarity, fused via reciprocal rank fusion, optionally pre-filtered by a Self-RAG retrieval gate, optionally diversity-reranked by MMR, then category-weighted and ward-boosted.
 
 An **hourly sleep cycle** runs maintenance: compaction, synthesis, pattern extraction, corrections abstraction, conflict resolution, confidence decay, orphan archival, pruning, belief synthesis, contradiction detection, event-driven belief propagation, and (opt-in) hierarchical aggregation.
 
@@ -82,7 +82,10 @@ Three paths write to memory:
 
 ### Ward scoping
 
-Every fact and entity carries a `partition_id` (the ward). Recall applies a `ward_affinity_boost = 1.3` multiplier when a candidate's ward matches the active session's ward. Global-scope rows (no partition) always surface. This is what keeps maritime-tracking conversations from pulling finance memory and vice versa.
+Every fact carries a `ward_id` and every belief carries a `partition_id`.
+Recall applies a `ward_affinity_boost = 1.3` multiplier when a candidate's ward
+matches the active session's ward. Global rows use `scope='global'` or
+`ward_id='__global__'` and remain visible across wards.
 
 ### Two views, one provenance chain
 
@@ -98,7 +101,7 @@ The Belief Network sits a layer above: beliefs are aggregates of facts about the
 
 Two SQLite databases live under the agent's data directory (`$XDG_DATA_HOME/agentzero/` on Linux, equivalent paths on macOS / Windows):
 
-**`knowledge.db`** — the live memory store. Schema version **30**. Tables:
+**`knowledge.db`** — the live memory store. Schema version **31**. Tables:
 
 | Table | Purpose |
 |---|---|
@@ -110,17 +113,20 @@ Two SQLite databases live under the agent's data directory (`$XDG_DATA_HOME/agen
 | `kg_episodes`, `session_episodes` | Provenance from conversations to entities and fragments |
 | `kg_beliefs` | Synthesized belief stances, with on-row embedding (since v30) |
 | `kg_belief_contradictions` | First-class contradiction records between belief pairs |
-| `compaction_log` | Audit trail for KG merges |
-| `goals`, `goal_progress` | Session-level goal tracker |
+| `kg_compactions` | Audit trail for KG merges/prunes |
+| `kg_goals` | Session/agent goal tracker |
 
-**`conversations.db`** — the daily log: chat history, separate file, separate concerns. The memory subsystem never touches it directly — it goes through the `ConversationStore` trait, which decouples memory from any specific chat backend.
+**`conversations.db`** — the daily log: chat history, execution state, recall
+log, and distillation run records. Memory code reaches it through repository or
+trait surfaces such as `ConversationStore`/`ConversationRepository`, while
+long-term memory rows stay in `knowledge.db`.
 
 ### Schema migration history
 
 | Version | What it added |
 |---|---|
 | v23 | Wiki FTS index |
-| v24 | Global-scope backfill (`partition_id IS NULL` semantics) |
+| v24 | Global-scope backfill for fact categories that should be visible across agents |
 | v25 | `memory_facts.valid_from` backfill |
 | v26 | `kg_relationships` bi-temporal columns |
 | v27 | `kg_beliefs` table |
@@ -329,7 +335,7 @@ inter_cluster_edges = relationships(is_inter_cluster=1, layer ∈ path layers,
                                     both endpoints ∈ path)
 ```
 
-Path entities surface as `ItemKind::HierEntity` items with content `[topic L{N}] {id}`. Inter-cluster relations surface as `ItemKind::HierRelation` items with content `[edge L{N}] {src} —[type]→ {tgt}`. Both go through the same RRF fusion + MMR rerank + min-score path as everything else, with `pattern`-slot category weight (`0.9` — conservative until empirical validation).
+Path entities surface as `ItemKind::HierEntity` items with content `[topic L{N}] {id}`. Inter-cluster relations surface as `ItemKind::HierRelation` items with content `[edge L{N}] {src} —[type]→ {tgt}`. Both go through the same RRF fusion, optional MMR rerank, and min-score path as everything else, with `pattern`-slot category weight (`0.9` — conservative until empirical validation).
 
 Three ways the LCA walk can degenerate, each handled cleanly:
 
@@ -359,7 +365,7 @@ The consumer formatter in `gateway-execution::recall::format_scored_items` rende
 3. Hybrid fact search per (sub)query:
      - FTS5 BM25-ranked match against memory_facts_fts.content
      - sqlite-vec cosine against memory_facts_index
-     - Blend via reciprocal rank fusion (vector_weight=0.7, bm25_weight=0.3)
+     - Fuse via reciprocal rank fusion
 4. Wiki search
 5. Procedural pattern search
 5a. Graph traversal expansion (max_hops=2, hop_decay=0.6, cap=5)
@@ -367,13 +373,10 @@ The consumer formatter in `gateway-execution::recall::format_scored_items` rende
 5c. (If Hierarchical memory enabled) compute_lca_path over top seed entities,
     plus inter-cluster relations along the LCA path
 6. Merge candidates into unified result set
-7. Rescore with category weights, contradiction penalty, supersession penalty,
-   ward affinity boost
+7. Apply category weights, confidence, recency, mention boost, and ward affinity
 8. (Optional) MMR diversity rerank (lambda=0.6, candidate_pool=30)
-9. (Optional) Cross-encoder rerank (fastembed-rs, BGE-reranker-base by default)
-10. (Optional) Intent router applies per-intent category-weight profile
-11. Min-score filter (min_score=0.3), sort by final score, truncate to max_facts=10
-12. Bi-temporal point-in-time filter (valid_from ≤ as_of AND valid_until > as_of)
+9. Min-score filter (min_score=0.3), sort by final score, truncate to max_facts=10
+10. Bi-temporal point-in-time filter (valid_from ≤ as_of AND valid_until > as_of)
 ```
 
 #### The query gate (Self-RAG)
@@ -400,17 +403,13 @@ Run in order on every candidate:
 6. **Min-score threshold** — drop anything below `min_score = 0.3`.
 7. **Sort by final score, truncate** — `max_facts = 10` rows survive; `max_recall_tokens = 3000` cap on formatted block size.
 
-### MMR diversity rerank — shipped
+### MMR diversity rerank — shipped, opt-in
 
-Maximal Marginal Relevance reranks the candidate pool to balance relevance against redundancy: `score(d) = λ × relevance(d) − (1−λ) × max_similarity(d, already_selected)`. Defaults: `lambda = 0.6`, `candidate_pool = 30`. Enabled by default. Where this helps: when a belief and one of its source facts both surface, MMR can demote the duplicate; when three near-identical facts about the same subject all match, MMR keeps the top one and bumps a different topic into the top-K.
-
-### Cross-encoder rerank — opt-in
-
-`execution.memory.rerank.enabled = true` loads a local cross-encoder model via `fastembed-rs` (default `BAAI/bge-reranker-base`, ~280MB). Higher quality top-K than MMR alone; adds latency and disk. The reranker runs after MMR — MMR diversifies, cross-encoder rescores the diversified set.
-
-### Intent router — opt-in
-
-`execution.memory.intentRouter.enabled = true` activates a kNN-based intent classifier that picks per-intent category-weight profiles. The classifier is seeded by `assets/intent_exemplars.json` (default exemplar bank covering coding, scheduling, factual lookup, personal-info, etc.) and adjustable from settings. `k = 5` nearest neighbours, `confidence_threshold = 0.55` to apply a profile. When disabled, default category weights are used universally.
+Maximal Marginal Relevance reranks the candidate pool to balance relevance
+against redundancy: `score(d) = λ × relevance(d) − (1−λ) × max_similarity(d,
+already_selected)`. It is controlled by `execution.memory.mmr.enabled` and is
+disabled by default. Defaults when enabled: `lambda = 0.6`, `candidate_pool =
+30`. It runs after RRF fusion and before final truncation.
 
 ### Sleep cycle workers
 
@@ -482,23 +481,9 @@ Two files own every knob. Both are optional — missing keys, missing files, and
       },
 
       "mmr": {
-        "enabled": true,
+        "enabled": false,
         "lambda": 0.6,
         "candidate_pool": 30
-      },
-
-      "rerank": {
-        "enabled": false,
-        "model_id": "BAAI/bge-reranker-base",
-        "candidate_pool": 20,
-        "top_k_after": 10,
-        "score_threshold": 0.0
-      },
-
-      "intentRouter": {
-        "enabled": false,
-        "k": 5,
-        "confidence_threshold": 0.55
       },
 
       "hierarchy": {
@@ -522,9 +507,7 @@ Two files own every knob. Both are optional — missing keys, missing files, and
 | `conflictResolverIntervalHours` | `24` | Throttle for `ConflictResolver` (LLM-judge contradicting schemas). `0` = every cycle. |
 | `queryGate` | disabled | Self-RAG retrieval gate. Failure-safe. ~200-800ms when enabled. |
 | `beliefNetwork` | disabled | B-1 synthesis + B-2 contradictions + B-3 propagation + B-4 recall surfacing. Queryable via `memory(action="belief"\|"contradictions")`. |
-| `mmr` | **enabled** | Diversity rerank. `lambda=0.6` balances relevance vs diversity. |
-| `rerank` | disabled | Cross-encoder rerank via `fastembed-rs`. ~280MB model download on first enable. |
-| `intentRouter` | disabled | kNN intent classifier picking per-intent category-weight profiles. |
+| `mmr` | disabled | Diversity rerank. `lambda=0.6` balances relevance vs diversity when enabled. |
 | `hierarchy` | disabled | H-3 builder + H-4 LCA recall. K-means clusters entities, LLM synthesises aggregate entities at higher layers, inter-cluster relations gated by λ > τ. Recall surfaces the LCA topical map alongside facts. |
 | `kgDecay` | `null` | KG decay tuning override; `null` = compiled defaults. |
 
@@ -536,7 +519,7 @@ Two files own every knob. Both are optional — missing keys, missing files, and
 | `min_score` | `0.3` | Noise floor |
 | `contradiction_penalty` | `0.7` | Rescore step 2 |
 | `ward_affinity_boost` | `1.3` | Matching-ward boost |
-| `vector_weight` / `bm25_weight` | `0.7` / `0.3` | RRF blend |
+| `vector_weight` / `bm25_weight` | `0.7` / `0.3` | Legacy config fields retained for compatibility; current fact fusion uses RRF |
 | `max_facts` | `10` | Recall top-K |
 | `max_recall_tokens` | `3000` | Hard ceiling on recall block size |
 | `graph_traversal.max_hops` | `2` | Expansion depth |
@@ -607,14 +590,13 @@ The reference book gets smaller, sharper, and more consistent with each cycle. R
 | Belief-derived-from-belief | Schema allows cascade depth 3 but effective depth is 1 today; reserved for future synthesis topology. |
 | Cross-ward belief routing | Beliefs are partition-scoped. A user fact ("vegetarian") could plausibly be ward-global; needs design. |
 | Hierarchical KG (HiRAG / LeanRAG) | Planned. See `memory-bank/future-state/` once design lands. |
-| Validation corpus | 10-run validation corpus across 4 tiers exists (`docs/memory-validation.md`). Continuous expansion would let weights be tuned empirically rather than heuristically. |
+| Validation corpus | A maintained validation corpus is still needed before weights can be tuned empirically rather than heuristically. |
 
 ### Where to look next
 
 - **Design doc** — `memory-bank/future-state/2026-05-15-belief-network-design.md` (Belief Network B-1 through B-6)
 - **Tracking doc** — `memory-bank/future-state/2026-05-13-memory-crate-extraction-tracking.md` (running log of memory-subsystem changes; paired with this file)
-- **Slide deck** — `docs/memory-slides.html` (the visual companion to this doc)
-- **Validation corpus** — `docs/memory-validation.md` (recall test scenarios across 4 tiers)
+- **Slide deck** — [`architecture-deck.html`](./architecture-deck.html) (the visual companion to this doc)
 - **Source** — `gateway/gateway-memory/src/` (memory subsystem), `stores/zero-stores-sqlite/src/knowledge_schema.rs` (schema), `gateway/src/http/beliefs.rs` (HTTP surface), `apps/ui/src/features/memory/` and `apps/ui/src/features/observatory/` (UI)
 
 ### Recap
@@ -622,7 +604,7 @@ The reference book gets smaller, sharper, and more consistent with each cycle. R
 - **Two views of memory** — flat fragments hold content; the knowledge graph holds shape. Both have confidence and a lifecycle. Beliefs sit a layer above, synthesised from fact groups.
 - **The agent reads in order** — handoff → goals → corrections → beliefs → handoff-recall → user-recall. Mid-session, recall fires every 5 turns.
 - **The agent writes via three paths** — implicit (distillation), explicit (`memory` tool), or human-curated (UI).
-- **Recall is hybrid** — FTS5 + sqlite-vec cosine, RRF-blended, rescored by category/contradiction/supersession/ward, optionally gated/MMR'd/reranked.
+- **Recall is hybrid** — FTS5 + sqlite-vec cosine, RRF-fused, rescored by category/contradiction/supersession/ward, optionally gated and MMR-reranked.
 - **The sleep cycle keeps the reference book honest** — compaction, synthesis, abstraction, conflict resolution, decay, belief synthesis, contradiction detection, propagation.
 - **Bi-temporal model** — every row records when it became true and when it stopped, separately from when it was written. Point-in-time recall falls out for free.
 

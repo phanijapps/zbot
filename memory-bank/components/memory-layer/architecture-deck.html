@@ -1,1443 +1,2035 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Memory Layer · v22 · Architecture</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory — How zbot Remembers</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,300;9..144,400;9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --paper:        #F3EEE4;
-    --paper-deep:   #E9E2D2;
-    --ink:          #1A1814;
-    --ink-muted:    #4F473B;
-    --pencil:       #8A7F6B;
-    --accent:       #005F5F;
-    --accent-dim:   #B9CDCB;
-    --retired:      #A53D2A;
-    --ok:           #3E6B3A;
-
-    --s-display: "Fraunces", "Times New Roman", serif;
-    --s-body:    "IBM Plex Sans", system-ui, sans-serif;
-    --s-mono:    "JetBrains Mono", ui-monospace, monospace;
+    --bg: #0c1118;
+    --bg-soft: #131a24;
+    --panel: #182231;
+    --ink: #e7ecf3;
+    --ink-dim: #8a97a9;
+    --ink-faint: #4a5468;
+    --rule: #233042;
+    --accent: #a3ff5c;          /* lime */
+    --accent-soft: #6fb83a;
+    --warn: #ff7a59;
+    --grid: rgba(163, 255, 92, 0.06);
   }
-
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  * { box-sizing: border-box; }
   html, body {
-    background: var(--paper);
+    margin: 0; padding: 0;
+    background: var(--bg);
     color: var(--ink);
-    font-family: var(--s-body);
+    font-family: 'Inter', system-ui, sans-serif;
     font-weight: 300;
-    font-size: 17px;
-    line-height: 1.55;
+    height: 100vh;
+    overflow: hidden;
     -webkit-font-smoothing: antialiased;
   }
   body {
     background-image:
-      radial-gradient(at 20% 0%, rgba(0, 95, 95, 0.025), transparent 50%),
-      radial-gradient(at 80% 100%, rgba(165, 61, 42, 0.02), transparent 50%),
-      linear-gradient(to right, rgba(26, 24, 20, 0.04) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(26, 24, 20, 0.04) 1px, transparent 1px);
-    background-size: 100% 100%, 100% 100%, 32px 32px, 32px 32px;
-    background-position: 0 0, 0 0, -1px -1px, -1px -1px;
-    scroll-snap-type: y mandatory;
-    overflow-y: scroll;
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 48px 48px;
+    background-position: -1px -1px;
+  }
+  .deck {
+    position: relative;
+    width: 100vw;
     height: 100vh;
   }
-
-  /* Noise/grain overlay */
-  body::before {
-    content: '';
-    position: fixed; inset: 0;
-    pointer-events: none;
-    z-index: 9999;
-    opacity: 0.35;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' /><feColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.09 0 0 0 0 0.08 0 0 0 0.06 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
-    mix-blend-mode: multiply;
-  }
-
-  /* --- slides --- */
   .slide {
-    scroll-snap-align: start;
-    scroll-snap-stop: always;
-    min-height: 100vh;
-    padding: 7vh clamp(3rem, 8vw, 7rem) 7vh;
-    position: relative;
-    display: flex; flex-direction: column;
-  }
-
-  /* slide label (top-left) */
-  .slide-label {
     position: absolute;
-    top: 2.5rem; left: clamp(3rem, 8vw, 7rem);
-    display: flex; gap: 1rem; align-items: baseline;
-    font-family: var(--s-mono);
-    font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase;
-    color: var(--pencil);
-  }
-  .slide-label .num {
-    color: var(--accent);
-    font-weight: 500;
-  }
-  .slide-label .title-tag {
-    padding-left: 1rem;
-    border-left: 1px solid var(--pencil);
-  }
-
-  /* eyebrow */
-  .eyebrow {
-    font-family: var(--s-mono);
-    font-size: 11px;
-    letter-spacing: 0.3em;
-    text-transform: uppercase;
-    color: var(--accent);
-    margin-bottom: 1.2rem;
-  }
-
-  h1, h2, h3 {
-    font-family: var(--s-display);
-    font-weight: 500;
-    line-height: 1.02;
-    letter-spacing: -0.02em;
-    font-variation-settings: "opsz" 144, "SOFT" 50, "WONK" 0;
-  }
-  h1 { font-size: clamp(3.5rem, 8vw, 7rem); font-weight: 400; }
-  h2 { font-size: clamp(2.2rem, 4.5vw, 3.8rem); font-weight: 500; }
-  h3 { font-size: clamp(1.1rem, 1.8vw, 1.5rem); font-weight: 600; letter-spacing: -0.01em; }
-
-  em { font-style: italic; color: var(--accent); font-weight: 400; }
-  strong { font-weight: 500; color: var(--ink); }
-  code {
-    font-family: var(--s-mono);
-    font-size: 0.88em;
-    background: rgba(0, 95, 95, 0.08);
-    padding: 0.12em 0.38em;
-    border-radius: 2px;
-  }
-
-  .mono { font-family: var(--s-mono); }
-  .muted { color: var(--ink-muted); }
-  .small { font-size: 13px; }
-  .line-after::after {
-    content: '';
-    display: block;
-    width: 3rem; height: 1px;
-    background: var(--ink);
-    margin-top: 2rem;
-  }
-
-  /* page number (bottom-right) */
-  .folio {
-    position: absolute;
-    right: clamp(3rem, 8vw, 7rem);
-    bottom: 2.5rem;
-    font-family: var(--s-mono);
-    font-size: 11px;
-    letter-spacing: 0.2em;
-    color: var(--pencil);
-  }
-  .folio strong { color: var(--accent); font-weight: 500; }
-
-  /* fixed progress rail (left) */
-  .rail {
-    position: fixed;
-    left: 2rem; top: 0; bottom: 0;
-    width: 2px;
-    background: rgba(26, 24, 20, 0.08);
-    z-index: 1000;
-  }
-  .rail-dots {
-    position: fixed;
-    left: 1.65rem; top: 50%;
-    transform: translateY(-50%);
-    display: flex; flex-direction: column; gap: 0.85rem;
-    z-index: 1001;
-  }
-  .rail-dot {
-    width: 9px; height: 9px;
-    border: 1px solid var(--pencil);
-    background: var(--paper);
-    border-radius: 50%;
-    cursor: pointer;
-    transition: all .3s ease;
-  }
-  .rail-dot.active {
-    background: var(--accent);
-    border-color: var(--accent);
-    transform: scale(1.3);
-  }
-  .rail-dot:hover { border-color: var(--accent); }
-
-  /* staggered reveal */
-  .reveal > * { opacity: 0; transform: translateY(14px); }
-  .slide.in-view .reveal > * {
-    animation: rise 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
-  }
-  .slide.in-view .reveal > *:nth-child(1) { animation-delay: 0.05s; }
-  .slide.in-view .reveal > *:nth-child(2) { animation-delay: 0.15s; }
-  .slide.in-view .reveal > *:nth-child(3) { animation-delay: 0.25s; }
-  .slide.in-view .reveal > *:nth-child(4) { animation-delay: 0.35s; }
-  .slide.in-view .reveal > *:nth-child(5) { animation-delay: 0.45s; }
-  .slide.in-view .reveal > *:nth-child(6) { animation-delay: 0.55s; }
-  .slide.in-view .reveal > *:nth-child(7) { animation-delay: 0.65s; }
-  @keyframes rise { to { opacity: 1; transform: translateY(0); } }
-
-  /* --- COVER --- */
-  .cover {
-    padding-top: 8vh;
-    justify-content: space-between;
-  }
-  .cover-top {
-    display: flex; justify-content: space-between; align-items: flex-start;
-    font-family: var(--s-mono);
-    font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase;
-    color: var(--pencil);
-  }
-  .cover h1 {
-    font-style: italic;
-    font-weight: 300;
-    font-variation-settings: "opsz" 144, "SOFT" 100, "WONK" 1;
-    letter-spacing: -0.04em;
-  }
-  .cover h1 em {
-    font-style: normal;
-    color: var(--accent);
-    font-weight: 500;
-  }
-  .cover-meta {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr 1fr;
-    gap: 2rem;
-    padding-top: 2rem;
-    border-top: 1px solid var(--ink);
-  }
-  .cover-meta div > span:first-child {
-    display: block;
-    font-family: var(--s-mono);
-    font-size: 10px;
-    letter-spacing: 0.25em;
-    text-transform: uppercase;
-    color: var(--pencil);
-    margin-bottom: 0.35rem;
-  }
-  .cover-meta strong {
-    font-family: var(--s-display);
-    font-size: 1.25rem;
-    font-weight: 400;
-    font-style: italic;
-  }
-
-  /* --- TWO-COLUMN LAYOUT --- */
-  .two-col {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: clamp(2rem, 5vw, 5rem);
-    align-items: start;
-    flex: 1;
-    padding-top: 3vh;
-  }
-  .two-col.align-center { align-items: center; }
-
-  .stat-row { display: flex; gap: 3rem; flex-wrap: wrap; margin-top: 2rem; }
-  .stat {
-    display: flex; flex-direction: column; gap: 0.2rem;
-  }
-  .stat .n {
-    font-family: var(--s-display);
-    font-style: italic;
-    font-size: 2.8rem;
-    font-weight: 400;
-    line-height: 1;
-    color: var(--accent);
-  }
-  .stat .n.retired { color: var(--retired); text-decoration: line-through; text-decoration-thickness: 1px; }
-  .stat .l {
-    font-family: var(--s-mono);
-    font-size: 10px;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
-    color: var(--pencil);
-  }
-
-  /* --- SCHEMATIC BOXES --- */
-  .schema-svg { width: 100%; height: auto; display: block; }
-  .schema-svg .node {
-    fill: var(--paper);
-    stroke: var(--ink);
-    stroke-width: 1.3;
-  }
-  .schema-svg .node-accent {
-    fill: var(--paper);
-    stroke: var(--accent);
-    stroke-width: 1.5;
-  }
-  .schema-svg .line {
-    stroke: var(--ink);
-    stroke-width: 1;
-    fill: none;
-  }
-  .schema-svg .line.accent { stroke: var(--accent); stroke-width: 1.4; }
-  .schema-svg .line.dashed { stroke-dasharray: 4 4; }
-  .schema-svg .label {
-    font-family: var(--s-mono);
-    font-size: 10px;
-    letter-spacing: 0.12em;
-    fill: var(--ink);
-    text-transform: uppercase;
-  }
-  .schema-svg .label-mini {
-    font-family: var(--s-mono);
-    font-size: 9px;
-    fill: var(--ink-muted);
-  }
-  .schema-svg .label-title {
-    font-family: var(--s-display);
-    font-size: 14px;
-    font-style: italic;
-    fill: var(--ink);
-    font-weight: 500;
-  }
-
-  /* self-drawing lines */
-  .draw-line {
-    stroke-dasharray: 1000;
-    stroke-dashoffset: 1000;
-  }
-  .slide.in-view .draw-line {
-    animation: draw 1.4s cubic-bezier(0.5, 0, 0.2, 1) forwards;
-    animation-delay: 0.4s;
-  }
-  @keyframes draw { to { stroke-dashoffset: 0; } }
-
-  /* pulse along path */
-  .pulse-path {
-    stroke: var(--accent);
-    stroke-width: 1.5;
-    fill: none;
-    stroke-dasharray: 6 180;
+    inset: 0;
+    padding: 64px 96px 96px;
+    display: none;
+    flex-direction: column;
     opacity: 0;
+    transition: opacity 300ms ease;
   }
-  .slide.in-view .pulse-path {
+  .slide.active {
+    display: flex;
     opacity: 1;
-    animation: pulse-along 3.2s linear infinite;
-    animation-delay: 1.8s;
   }
-  @keyframes pulse-along {
-    from { stroke-dashoffset: 186; }
-    to   { stroke-dashoffset: 0; }
+  .slide-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 32px;
+  }
+  .slide-tag .accent { color: var(--accent); }
+
+  /* counter + nav */
+  .counter {
+    position: fixed;
+    bottom: 24px;
+    right: 28px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--ink-dim);
+    z-index: 10;
+  }
+  .counter .sep { color: var(--ink-faint); margin: 0 6px; }
+  .counter .now { color: var(--accent); }
+  .nav-hint {
+    position: fixed;
+    bottom: 24px;
+    left: 28px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--ink-faint);
+    z-index: 10;
+  }
+  .nav-hint kbd {
+    display: inline-block;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 1px 6px;
+    margin: 0 2px;
+    color: var(--ink-dim);
+    background: var(--bg-soft);
+  }
+  .progress {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: transparent;
+    z-index: 11;
+  }
+  .progress > div {
+    height: 100%;
+    background: var(--accent);
+    width: 0;
+    transition: width 300ms ease;
   }
 
-  /* --- TABLES --- */
-  .tbl {
-    border-collapse: collapse;
-    width: 100%;
-    font-size: 14px;
-    font-family: var(--s-body);
+  /* title slides */
+  .title-slide {
+    justify-content: flex-end;
+    padding-bottom: 18vh;
   }
-  .tbl th {
-    text-align: left;
-    font-family: var(--s-mono);
-    font-size: 10px;
-    font-weight: 500;
+  .title-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
     letter-spacing: 0.2em;
     text-transform: uppercase;
-    color: var(--pencil);
-    padding: 0.5rem 1rem 0.5rem 0;
-    border-bottom: 1px solid var(--ink);
+    color: var(--accent);
+    margin-bottom: 18px;
   }
-  .tbl td {
-    padding: 0.7rem 1rem 0.7rem 0;
-    border-bottom: 1px solid rgba(26, 24, 20, 0.08);
-    vertical-align: top;
+  h1.title {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: clamp(64px, 11vw, 168px);
+    line-height: 0.95;
+    margin: 0 0 24px;
+    letter-spacing: -0.03em;
   }
-  .tbl td code { background: none; padding: 0; color: var(--accent); font-weight: 500; }
+  h1.title .accent { color: var(--accent); }
+  .title-sub {
+    font-family: 'Inter', sans-serif;
+    font-weight: 300;
+    font-size: clamp(20px, 2.1vw, 30px);
+    color: var(--ink-dim);
+    max-width: 880px;
+    line-height: 1.35;
+    margin: 0;
+  }
+  .title-meta {
+    margin-top: 36px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    color: var(--ink-faint);
+  }
+  .title-meta .dot { color: var(--accent); margin: 0 12px; }
 
-  /* lists */
-  .stripe {
-    list-style: none;
-  }
-  .stripe li {
-    padding: 0.55rem 0;
-    border-bottom: 1px dashed rgba(26, 24, 20, 0.18);
+  /* detail slides */
+  .detail-slide {
     display: grid;
-    grid-template-columns: 2.5rem 1fr;
-    gap: 1rem;
+    grid-template-rows: auto 1fr;
   }
-  .stripe li .i {
-    font-family: var(--s-mono);
+  .detail-head {
+    display: flex;
+    align-items: baseline;
+    gap: 24px;
+    margin-bottom: 36px;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 18px;
+  }
+  .detail-head .stamp {
+    font-family: 'JetBrains Mono', monospace;
     font-size: 11px;
     letter-spacing: 0.18em;
     color: var(--accent);
-    padding-top: 0.12em;
-  }
-
-  /* pills */
-  .pill {
-    display: inline-block;
-    font-family: var(--s-mono);
-    font-size: 10px;
-    letter-spacing: 0.15em;
     text-transform: uppercase;
-    padding: 0.3rem 0.6rem;
-    border: 1px solid currentColor;
-    border-radius: 1px;
-    margin-right: 0.3rem;
   }
-  .pill.ok { color: var(--ok); }
-  .pill.accent { color: var(--accent); }
-
-  /* code block */
-  pre {
-    font-family: var(--s-mono);
-    font-size: 12.5px;
-    line-height: 1.55;
-    background: rgba(26, 24, 20, 0.045);
-    border-left: 2px solid var(--accent);
-    padding: 1rem 1.2rem;
-    overflow-x: auto;
+  .detail-head h3 {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 500;
+    font-size: clamp(24px, 2.6vw, 38px);
+    margin: 0;
     color: var(--ink);
+    letter-spacing: -0.01em;
   }
-  pre .k { color: var(--accent); font-weight: 500; }
-  pre .s { color: var(--retired); }
-  pre .c { color: var(--pencil); font-style: italic; }
-
-  /* keyboard hint */
-  .hint {
-    position: fixed;
-    bottom: 1.5rem;
-    left: 50%; transform: translateX(-50%);
-    font-family: var(--s-mono);
-    font-size: 10px;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
-    color: var(--pencil);
-    opacity: 0.6;
-    pointer-events: none;
-  }
-  .hint kbd {
-    display: inline-block;
-    font-family: inherit;
-    font-size: 10px;
-    padding: 0.12rem 0.4rem;
-    border: 1px solid var(--pencil);
-    border-radius: 2px;
-    margin: 0 0.15rem;
-  }
-
-  /* perf dial */
-  .dials {
+  .split {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: clamp(1.5rem, 3vw, 3rem);
-    margin-top: 2rem;
+    grid-template-columns: 1.15fr 1fr;
+    gap: 56px;
+    align-items: start;
   }
-  .dial {
-    padding: 1.8rem;
-    border: 1px solid var(--ink);
-    background: var(--paper);
-    position: relative;
-  }
-  .dial::before {
-    content: '';
-    position: absolute;
-    top: -1px; left: -1px; right: -1px; bottom: -1px;
-    border: 1px solid var(--ink);
-    transform: translate(5px, 5px);
-    z-index: -1;
-    opacity: 0.25;
-  }
-  .dial-h {
-    font-family: var(--s-mono);
-    font-size: 10px;
-    letter-spacing: 0.24em;
-    text-transform: uppercase;
-    color: var(--pencil);
-    margin-bottom: 0.8rem;
-  }
-  .dial-v {
-    font-family: var(--s-display);
-    font-style: italic;
-    font-size: clamp(2.2rem, 4vw, 3.2rem);
-    font-weight: 400;
-    line-height: 1;
-    color: var(--accent);
-  }
-  .dial-v .unit {
-    font-size: 0.5em;
-    color: var(--pencil);
-    margin-left: 0.3em;
-    font-style: normal;
-  }
-  .dial-b {
-    margin-top: 0.8rem;
-    font-family: var(--s-mono);
-    font-size: 11px;
-    color: var(--ink-muted);
-  }
-  .dial-b .budget {
-    color: var(--ok);
-    font-weight: 500;
-  }
-  .dial-bar {
-    margin-top: 1.2rem;
-    height: 2px;
-    background: rgba(26, 24, 20, 0.1);
-    position: relative;
-  }
-  .dial-bar::after {
-    content: '';
-    position: absolute;
-    left: 0; top: 0; bottom: 0;
-    width: 0;
-    background: var(--accent);
-    transition: width 1.2s ease;
-  }
-  .slide.in-view .dial-bar::after {
-    width: var(--bar);
-  }
-
-  /* resolver cascade */
-  .cascade {
-    display: flex; flex-direction: column; gap: 0.8rem;
-    font-family: var(--s-mono);
-    font-size: 12px;
-  }
-  .cascade-step {
-    padding: 1rem 1.2rem;
-    border: 1px solid var(--ink);
-    background: var(--paper);
+  .split.flip { grid-template-columns: 1fr 1.15fr; }
+  .stack-vert {
     display: grid;
-    grid-template-columns: 2rem 1fr auto;
-    gap: 1rem;
-    align-items: center;
+    grid-template-rows: 1.1fr auto;
+    gap: 24px;
   }
-  .cascade-step.decision {
-    border-style: dashed;
-    border-color: var(--accent);
+  .caption {
+    font-size: 17px;
+    line-height: 1.6;
+    color: var(--ink);
+    font-weight: 300;
+    max-width: 560px;
   }
-  .cascade-step.exit {
-    background: rgba(62, 107, 58, 0.08);
-    border-color: var(--ok);
-  }
-  .cascade-step .n {
-    font-family: var(--s-display);
-    font-style: italic;
-    font-size: 1.4rem;
-    color: var(--accent);
-  }
-  .cascade-step .big {
-    font-family: var(--s-body);
+  .caption strong { color: var(--accent); font-weight: 500; }
+  .caption .mono {
+    font-family: 'JetBrains Mono', monospace;
     font-size: 14px;
-    font-weight: 500;
+    color: var(--ink-dim);
+    background: var(--bg-soft);
+    border: 1px solid var(--rule);
+    padding: 1px 6px;
+    border-radius: 2px;
   }
-  .cascade-step .d {
+  .callouts {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 18px;
+  }
+  .callouts li {
+    display: grid;
+    grid-template-columns: 36px 1fr;
+    gap: 14px;
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--ink);
+    font-weight: 300;
+  }
+  .callouts .idx {
+    font-family: 'JetBrains Mono', monospace;
     font-size: 11px;
-    color: var(--pencil);
-  }
-  .cascade-step .cost {
-    font-family: var(--s-mono);
-    font-size: 10px;
-    padding: 0.25rem 0.5rem;
-    border: 1px solid var(--accent);
     color: var(--accent);
     letter-spacing: 0.1em;
-    text-transform: uppercase;
+    padding-top: 3px;
   }
-  .cascade-arrow {
-    align-self: center;
-    justify-self: center;
-    font-family: var(--s-mono);
-    color: var(--pencil);
-    padding-left: 1rem;
-    font-size: 14px;
-  }
-
-  /* pipeline */
-  .pipeline {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 0.8rem;
-    margin-top: 2rem;
-    position: relative;
-  }
-  .pipeline-stage {
-    padding: 1rem;
-    border: 1px solid var(--ink);
-    background: var(--paper);
-    text-align: center;
-    position: relative;
-  }
-  .pipeline-stage.pulse {
-    animation: pulse-box 2.6s ease-in-out infinite;
-  }
-  @keyframes pulse-box {
-    0%, 100% { background: var(--paper); border-color: var(--ink); }
-    50%      { background: rgba(0, 95, 95, 0.08); border-color: var(--accent); }
-  }
-  .pipeline-stage .n {
-    font-family: var(--s-mono);
-    font-size: 9px;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
-    color: var(--pencil);
-    margin-bottom: 0.4rem;
-  }
-  .pipeline-stage .t {
-    font-family: var(--s-display);
-    font-style: italic;
-    font-size: 1rem;
-    font-weight: 500;
-  }
-  .pipeline-stage .d {
-    font-size: 11px;
-    color: var(--ink-muted);
-    margin-top: 0.3rem;
-    line-height: 1.3;
-  }
-
-  /* connector arrows between pipeline stages */
-  .pipeline-stage:not(:last-child)::after {
-    content: '→';
-    position: absolute;
-    right: -0.85rem; top: 50%;
-    transform: translateY(-50%);
-    color: var(--accent);
-    font-family: var(--s-mono);
-    font-size: 14px;
-    z-index: 2;
-    background: var(--paper);
-    padding: 0 2px;
-  }
-
-  /* phase cards (close slide) */
-  .phases {
-    display: grid;
-    grid-template-columns: repeat(6, 1fr);
-    gap: 0.7rem;
-    margin-top: 2rem;
-  }
-  .phase {
-    padding: 1rem 0.8rem;
-    border: 1px solid var(--ink);
-    background: var(--paper);
-    position: relative;
-  }
-  .phase .p-n {
-    font-family: var(--s-display);
-    font-style: italic;
-    font-weight: 400;
-    font-size: 1.5rem;
-    color: var(--accent);
-  }
-  .phase .p-t {
-    font-family: var(--s-mono);
-    font-size: 10px;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: var(--pencil);
-    margin: 0.35rem 0;
-  }
-  .phase .p-b {
+  .callouts .label {
+    font-family: 'JetBrains Mono', monospace;
     font-size: 12px;
-    line-height: 1.4;
+    color: var(--ink-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    display: block;
+    margin-bottom: 3px;
   }
-  .phase::after {
-    content: '✓';
+  .config-note {
+    margin-top: 28px;
+    padding: 14px 18px;
+    border-left: 2px solid var(--accent);
+    background: rgba(163, 255, 92, 0.04);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-dim);
+    line-height: 1.6;
+  }
+  .config-note .k { color: var(--accent); }
+
+  /* svg holders */
+  .svg-frame {
+    background: var(--bg-soft);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 24px;
+    position: relative;
+  }
+  .svg-frame::before {
+    content: attr(data-label);
     position: absolute;
-    top: 0.6rem; right: 0.8rem;
-    color: var(--ok);
-    font-size: 14px;
-    font-weight: 600;
+    top: 10px;
+    left: 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-faint);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .svg-frame svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    margin-top: 12px;
   }
 
-  /* responsive */
-  @media (max-width: 900px) {
-    .two-col, .dials, .pipeline, .phases {
-      grid-template-columns: 1fr;
-    }
-    .pipeline-stage:not(:last-child)::after {
-      content: '↓';
-      right: 50%; top: auto; bottom: -0.85rem;
-      transform: translateX(50%);
-    }
+  /* fragments slide grid */
+  .frag-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
+    margin-top: 12px;
   }
 
-  /* print / no-motion fallback */
-  @media (prefers-reduced-motion: reduce) {
-    * { animation-duration: 0s !important; transition-duration: 0s !important; }
-    .reveal > * { opacity: 1; transform: none; }
-    .draw-line { stroke-dashoffset: 0; }
+  /* recap timeline */
+  .timeline-wrap {
+    display: grid;
+    grid-template-rows: 1fr auto;
+    gap: 28px;
+    height: 100%;
+  }
+  .timeline-footer {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-faint);
+    border-top: 1px solid var(--rule);
+    padding-top: 16px;
+    letter-spacing: 0.04em;
+  }
+  .timeline-footer .accent { color: var(--accent); }
+
+  /* closing */
+  .closing {
+    justify-content: center;
+    align-items: stretch;
+  }
+  .closing-grid {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    gap: 80px;
+    align-items: center;
+    height: 100%;
+  }
+  .closing h2 {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: clamp(40px, 5.2vw, 76px);
+    line-height: 1.05;
+    margin: 0 0 24px;
+    letter-spacing: -0.02em;
+  }
+  .closing h2 .accent { color: var(--accent); }
+  .closing .sig {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-faint);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  /* rescore flow rows (new) */
+  .rescore-row {
+    display: grid;
+    grid-template-columns: 28px 200px 1fr 110px;
+    gap: 16px;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--rule);
+    font-family: 'Inter', sans-serif;
+  }
+  .rescore-row:last-child { border-bottom: none; }
+  .rescore-row .rstep {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-faint);
+    letter-spacing: 0.12em;
+  }
+  .rescore-row .rname {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--ink);
+    letter-spacing: 0.04em;
+  }
+  .rescore-row .rdesc {
+    font-size: 13px;
+    color: var(--ink-dim);
+    line-height: 1.45;
+  }
+  .rescore-row .rop {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-align: right;
+  }
+  .rescore-row.boost .rop { color: var(--accent); }
+  .rescore-row.drop  .rop { color: var(--warn); }
+  .rescore-row.boost .rname { color: var(--accent); }
+  .rescore-row.drop  .rname { color: var(--warn); }
+
+  /* responsive squeeze */
+  @media (max-width: 1100px) {
+    .slide { padding: 48px 56px 88px; }
+    .split, .split.flip { grid-template-columns: 1fr; gap: 32px; }
+    .closing-grid { grid-template-columns: 1fr; gap: 32px; }
+    .rescore-row { grid-template-columns: 24px 1fr 90px; }
+    .rescore-row .rdesc { display: none; }
   }
 </style>
 </head>
 <body>
+<div class="progress"><div id="progress-bar"></div></div>
+<div class="deck" id="deck">
 
-<aside class="rail" aria-hidden="true"></aside>
-<nav class="rail-dots" aria-label="slides">
-  <!-- filled by JS -->
-</nav>
+  <!-- ============= SLIDE 1 — TITLE ============= -->
+  <section class="slide title-slide active">
+    <div class="title-eyebrow">// agentzero / memory subsystem · schema v31</div>
+    <h1 class="title">How zbot<br>remembers<span class="accent">.</span></h1>
+    <p class="title-sub">flat fragments + knowledge graph + belief network + hierarchical memory + a recall pipeline that decides what the agent reads next</p>
+    <div class="title-meta">overview<span class="dot">●</span>agent interaction<span class="dot">●</span>technical architecture<span class="dot">●</span>remaining details</div>
+  </section>
 
-<div class="hint">
-  <kbd>↑</kbd><kbd>↓</kbd> navigate &nbsp;·&nbsp; <kbd>scroll</kbd>
-</div>
+  <!-- ============= SLIDE 2 — METAPHOR ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">01</span> &nbsp;/&nbsp; the metaphor</div>
+    <div class="split">
+      <div class="svg-frame" data-label="log vs reference book">
+        <svg viewBox="0 0 640 360" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round">
+          <!-- LEFT BOOK: daily log -->
+          <g transform="translate(40,60)" fill="none" stroke="#8a97a9" stroke-width="1.5">
+            <path d="M0,30 Q60,10 120,30 L120,210 Q60,190 0,210 Z" fill="#131a24"/>
+            <path d="M120,30 Q180,10 240,30 L240,210 Q180,190 120,210 Z" fill="#131a24"/>
+            <line x1="120" y1="30" x2="120" y2="210"/>
+            <g stroke="#4a5468" stroke-width="1">
+              <line x1="15" y1="60" x2="105" y2="55"/>
+              <line x1="15" y1="80" x2="105" y2="75"/>
+              <line x1="15" y1="100" x2="105" y2="95"/>
+              <line x1="15" y1="120" x2="105" y2="115"/>
+              <line x1="15" y1="140" x2="105" y2="135"/>
+              <line x1="15" y1="160" x2="105" y2="155"/>
+              <line x1="15" y1="180" x2="105" y2="175"/>
+              <line x1="135" y1="55" x2="225" y2="60"/>
+              <line x1="135" y1="75" x2="225" y2="80"/>
+              <line x1="135" y1="95" x2="225" y2="100"/>
+              <line x1="135" y1="115" x2="225" y2="120"/>
+              <line x1="135" y1="135" x2="225" y2="140"/>
+              <line x1="135" y1="155" x2="225" y2="160"/>
+              <line x1="135" y1="175" x2="225" y2="180"/>
+            </g>
+          </g>
+          <text x="160" y="305" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="12" fill="#8a97a9" letter-spacing="2">DAILY LOG</text>
+          <text x="160" y="325" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#4a5468">every line, in order</text>
 
-<!-- ========== 01 · COVER ========== -->
-<section class="slide cover" data-slide="1" data-title="Cover">
-  <div class="cover-top">
-    <span>memory-bank · components · memory-layer</span>
-    <span>v22 · schema</span>
-  </div>
+          <!-- RIGHT BOOK: reference -->
+          <g transform="translate(360,60)" fill="none" stroke="#a3ff5c" stroke-width="1.5">
+            <path d="M0,30 Q60,10 120,30 L120,210 Q60,190 0,210 Z" fill="#131a24"/>
+            <path d="M120,30 Q180,10 240,30 L240,210 Q180,190 120,210 Z" fill="#131a24"/>
+            <line x1="120" y1="30" x2="120" y2="210"/>
+            <g stroke="#a3ff5c" stroke-width="1.2">
+              <rect x="15" y="50" width="35" height="3"/>
+              <line x1="55" y1="51" x2="100" y2="51" stroke="#8a97a9"/>
+              <rect x="15" y="75" width="22" height="3"/>
+              <line x1="42" y1="76" x2="100" y2="76" stroke="#8a97a9"/>
+              <rect x="15" y="100" width="48" height="3"/>
+              <line x1="68" y1="101" x2="100" y2="101" stroke="#8a97a9"/>
+              <rect x="15" y="125" width="30" height="3"/>
+              <line x1="50" y1="126" x2="100" y2="126" stroke="#8a97a9"/>
+              <rect x="15" y="150" width="40" height="3"/>
+              <line x1="60" y1="151" x2="100" y2="151" stroke="#8a97a9"/>
+              <rect x="15" y="175" width="25" height="3"/>
+              <line x1="45" y1="176" x2="100" y2="176" stroke="#8a97a9"/>
 
-  <div class="reveal" style="margin-top: 5vh;">
-    <p class="eyebrow">An illustrated architecture · 2026-04-13</p>
-    <h1>The memory<br><em>layer</em>,<br>reconstructed.</h1>
-    <p style="max-width: 38rem; margin-top: 2rem; color: var(--ink-muted); font-size: 1.15rem; line-height: 1.6;">
-      A <em>goal-oriented</em> agent's long-term cognition —
-      rebuilt from first principles around streaming ingestion,
-      bitemporal provenance, and unified scored recall.
-    </p>
-  </div>
+              <rect x="135" y="50" width="20" height="3"/>
+              <line x1="160" y1="51" x2="225" y2="51" stroke="#8a97a9"/>
+              <rect x="135" y="80" width="45" height="3"/>
+              <line x1="185" y1="81" x2="225" y2="81" stroke="#8a97a9"/>
+              <rect x="135" y="110" width="32" height="3"/>
+              <line x1="172" y1="111" x2="225" y2="111" stroke="#8a97a9"/>
+              <rect x="135" y="140" width="50" height="3"/>
+              <line x1="190" y1="141" x2="225" y2="141" stroke="#8a97a9"/>
+              <rect x="135" y="170" width="28" height="3"/>
+              <line x1="168" y1="171" x2="225" y2="171" stroke="#8a97a9"/>
+            </g>
+            <path d="M240,55 L255,55 L255,75 L240,75" fill="#a3ff5c" stroke="none" opacity="0.7"/>
+            <path d="M240,95 L255,95 L255,115 L240,115" fill="#a3ff5c" stroke="none" opacity="0.4"/>
+            <path d="M240,135 L255,135 L255,155 L240,155" fill="#a3ff5c" stroke="none" opacity="0.55"/>
+          </g>
+          <text x="480" y="305" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="12" fill="#a3ff5c" letter-spacing="2">REFERENCE BOOK</text>
+          <text x="480" y="325" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#4a5468">distilled, indexed, looked up</text>
 
-  <div class="cover-meta reveal" style="margin-top: auto;">
-    <div><span>scope</span><strong>5 phases</strong></div>
-    <div><span>tests</span><strong>1,204 green</strong></div>
-    <div><span>resolver p95</span><strong>2.15 ms</strong></div>
-    <div><span>cold-boot · 10k</strong></span><strong>6.1 ms</strong></div>
-  </div>
-
-  <span class="folio"><strong>01</strong> / 10</span>
-</section>
-
-
-<!-- ========== 02 · THE PROBLEM ========== -->
-<section class="slide" data-slide="2" data-title="The problem">
-  <div class="slide-label">
-    <span class="num">02</span>
-    <span class="title-tag">The problem</span>
-  </div>
-
-  <div class="two-col align-center" style="flex:1;">
-    <div class="reveal">
-      <p class="eyebrow">Before</p>
-      <h2>The graph<br>
-        <span style="font-style:italic;">remembered</span>
-        almost<br>nothing.</h2>
-      <p style="margin-top: 1.5rem; max-width: 32rem;" class="muted">
-        561 entities and 28 relationships after months of use.
-        97% orphan ratio. Wards ingested but <em>never queried</em>.
-        Distillation fired at session-end only; books, PDFs, and
-        long conversations waited hours for extraction.
-      </p>
-
-      <div class="stat-row reveal">
-        <div class="stat">
-          <span class="n retired">561</span>
-          <span class="l">entities · v21</span>
-        </div>
-        <div class="stat">
-          <span class="n retired">28</span>
-          <span class="l">relationships</span>
-        </div>
-        <div class="stat">
-          <span class="n retired">97%</span>
-          <span class="l">orphan ratio</span>
-        </div>
+          <text x="320" y="155" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="14" fill="#4a5468">vs</text>
+        </svg>
+      </div>
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:32px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.1">A transcript is not memory.</h3>
+        <p class="caption">Every session is a <strong>page in the log</strong> — captured verbatim, exhaustive, inert.</p>
+        <p class="caption">Memory is the <strong>reference book</strong> the agent writes from those pages. It's smaller, curated, re-read at the start of every new session.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:15px;margin-top:24px"><span class="mono">conversations.db</span> = the log<br><span class="mono">knowledge.db</span> = the reference book</p>
       </div>
     </div>
+  </section>
 
-    <div class="reveal">
-      <svg class="schema-svg" viewBox="0 0 400 400" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-        <!-- scattered islands -->
-        <g>
-          <!-- central tiny cluster -->
-          <circle class="node-accent" cx="200" cy="200" r="28"/>
-          <circle class="node" cx="165" cy="175" r="10"/>
-          <circle class="node" cx="240" cy="185" r="10"/>
-          <circle class="node" cx="210" cy="240" r="10"/>
-          <circle class="node" cx="170" cy="225" r="10"/>
-          <line class="line accent" x1="200" y1="200" x2="165" y2="175"/>
-          <line class="line accent" x1="200" y1="200" x2="240" y2="185"/>
-          <line class="line accent" x1="200" y1="200" x2="210" y2="240"/>
-          <line class="line accent" x1="200" y1="200" x2="170" y2="225"/>
+  <!-- ============= SLIDE 3 — TWO VIEWS OF MEMORY ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">02</span> &nbsp;/&nbsp; two views of memory</div>
+    <div class="split">
+      <div class="svg-frame" data-label="fragments &amp; the graph">
+        <svg viewBox="0 0 680 420" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- LEFT: stack of fragment cards -->
+          <text x="120" y="34" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="2">FLAT FRAGMENTS</text>
+          <text x="120" y="50" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">memory_facts</text>
 
-          <!-- many orphans -->
-          <g style="opacity: 0.6;">
-            <circle class="node" cx="60" cy="80" r="6"/>
-            <circle class="node" cx="100" cy="60" r="6"/>
-            <circle class="node" cx="140" cy="90" r="6"/>
-            <circle class="node" cx="80" cy="120" r="6"/>
-            <circle class="node" cx="40" cy="170" r="6"/>
-            <circle class="node" cx="70" cy="240" r="6"/>
-            <circle class="node" cx="50" cy="310" r="6"/>
-            <circle class="node" cx="110" cy="330" r="6"/>
-            <circle class="node" cx="180" cy="350" r="6"/>
-            <circle class="node" cx="250" cy="340" r="6"/>
-            <circle class="node" cx="310" cy="300" r="6"/>
-            <circle class="node" cx="350" cy="250" r="6"/>
-            <circle class="node" cx="370" cy="180" r="6"/>
-            <circle class="node" cx="330" cy="110" r="6"/>
-            <circle class="node" cx="280" cy="70" r="6"/>
-            <circle class="node" cx="220" cy="50" r="6"/>
-            <circle class="node" cx="150" cy="290" r="6"/>
-            <circle class="node" cx="295" cy="170" r="6"/>
-            <circle class="node" cx="90" cy="280" r="6"/>
-            <circle class="node" cx="300" cy="220" r="6"/>
-            <circle class="node" cx="360" cy="340" r="6"/>
-            <circle class="node" cx="45" cy="130" r="6"/>
+          <g transform="translate(30,68)">
+            <rect width="180" height="56" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <rect width="4" height="56" fill="#a3ff5c" stroke="none"/>
+            <text x="14" y="20" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c" letter-spacing="1.2">CORRECTION</text>
+            <line x1="14" y1="28" x2="166" y2="28" stroke="#233042"/>
+            <text x="14" y="42" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">"sentence case in titles"</text>
+            <text x="14" y="52" font-family="JetBrains Mono, monospace" font-size="8" fill="#4a5468">conf 0.85 · w 1.5</text>
+          </g>
+          <g transform="translate(40,138)">
+            <rect width="180" height="56" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <rect width="4" height="56" fill="#a3ff5c" stroke="none"/>
+            <text x="14" y="20" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c" letter-spacing="1.2">SCHEMA</text>
+            <line x1="14" y1="28" x2="166" y2="28" stroke="#233042"/>
+            <text x="14" y="42" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">"prefer jittered backoff"</text>
+            <text x="14" y="52" font-family="JetBrains Mono, monospace" font-size="8" fill="#4a5468">conf 0.92 · w 1.6</text>
+          </g>
+          <g transform="translate(28,208)">
+            <rect width="180" height="56" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.3"/>
+            <rect width="4" height="56" fill="#8a97a9" stroke="none"/>
+            <text x="14" y="20" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9" letter-spacing="1.2">USER</text>
+            <line x1="14" y1="28" x2="166" y2="28" stroke="#233042"/>
+            <text x="14" y="42" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">"uses neovim + tmux"</text>
+            <text x="14" y="52" font-family="JetBrains Mono, monospace" font-size="8" fill="#4a5468">conf 0.96 · w 1.3</text>
+          </g>
+          <g transform="translate(44,278)">
+            <rect width="180" height="56" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.3"/>
+            <rect width="4" height="56" fill="#8a97a9" stroke="none"/>
+            <text x="14" y="20" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9" letter-spacing="1.2">STRATEGY</text>
+            <line x1="14" y1="28" x2="166" y2="28" stroke="#233042"/>
+            <text x="14" y="42" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">"retry deploys on timeout"</text>
+            <text x="14" y="52" font-family="JetBrains Mono, monospace" font-size="8" fill="#4a5468">conf 0.71 · w 1.4</text>
           </g>
 
-          <text x="200" y="395" text-anchor="middle" class="label">observed: apr 2026</text>
-        </g>
-      </svg>
+          <!-- divider -->
+          <line x1="260" y1="40" x2="260" y2="380" stroke="#233042" stroke-width="1" stroke-dasharray="3 6"/>
+          <text x="260" y="395" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="2">CONTENT  ↔  STRUCTURE</text>
+
+          <!-- RIGHT: knowledge graph -->
+          <text x="490" y="34" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="2">KNOWLEDGE GRAPH</text>
+          <text x="490" y="50" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">kg_entities + kg_relationships</text>
+
+          <!-- edges -->
+          <g stroke="#4a5468" stroke-width="1.2">
+            <line x1="380" y1="150" x2="490" y2="110"/>
+            <line x1="490" y1="110" x2="600" y2="180"/>
+            <line x1="380" y1="150" x2="420" y2="280"/>
+            <line x1="420" y1="280" x2="550" y2="310"/>
+            <line x1="550" y1="310" x2="600" y2="180"/>
+            <line x1="490" y1="110" x2="420" y2="280"/>
+          </g>
+
+          <!-- edge label -->
+          <text x="425" y="125" font-family="JetBrains Mono, monospace" font-size="8" fill="#a3ff5c" letter-spacing="1">affects</text>
+          <text x="545" y="150" font-family="JetBrains Mono, monospace" font-size="8" fill="#a3ff5c" letter-spacing="1">part-of</text>
+          <text x="478" y="305" font-family="JetBrains Mono, monospace" font-size="8" fill="#a3ff5c" letter-spacing="1">related-to</text>
+
+          <!-- nodes -->
+          <g font-family="JetBrains Mono, monospace" font-size="10" letter-spacing="1.2">
+            <circle cx="380" cy="150" r="28" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="380" y="148" text-anchor="middle" fill="#e7ecf3" font-size="10">postgres</text>
+            <text x="380" y="160" text-anchor="middle" fill="#a3ff5c" font-size="8">c 0.74</text>
+
+            <circle cx="490" cy="110" r="26" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="490" y="108" text-anchor="middle" fill="#e7ecf3" font-size="10">timeout</text>
+            <text x="490" y="120" text-anchor="middle" fill="#a3ff5c" font-size="8">c 0.81</text>
+
+            <circle cx="600" cy="180" r="28" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="600" y="178" text-anchor="middle" fill="#e7ecf3" font-size="10">service</text>
+            <text x="600" y="190" text-anchor="middle" fill="#a3ff5c" font-size="8">c 0.82</text>
+
+            <circle cx="420" cy="280" r="26" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="420" y="278" text-anchor="middle" fill="#e7ecf3" font-size="10">deploy</text>
+            <text x="420" y="290" text-anchor="middle" fill="#a3ff5c" font-size="8">c 0.69</text>
+
+            <circle cx="550" cy="310" r="26" fill="#131a24" stroke="#a3ff5c" stroke-width="2" opacity="0.45"/>
+            <circle cx="550" cy="310" r="32" fill="none" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3" opacity="0.5"/>
+            <text x="550" y="308" text-anchor="middle" fill="#e7ecf3" font-size="10" opacity="0.6">old-tag</text>
+            <text x="550" y="320" text-anchor="middle" fill="#a3ff5c" font-size="8">c 0.22 ↓</text>
+          </g>
+        </svg>
+      </div>
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:30px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.15">Two structures.<br>One memory.</h3>
+        <p class="caption"><strong>Flat fragments</strong> answer <em>"what should I remember about this?"</em> Self-contained notes with a category, content, confidence, embedding, and lifecycle.</p>
+        <p class="caption"><strong>The knowledge graph</strong> answers <em>"what is connected to what?"</em> Entities and typed edges, each with their own confidence and last-seen timestamp.</p>
+        <p class="caption">They're linked by <span class="mono">source_episode_ids</span> — provenance back to the conversation that produced both. Recall matches a fragment, then walks the graph outward to find related ones.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:18px"><strong style="color:var(--accent)">Fragments carry the content. The graph carries the shape.</strong></p>
+      </div>
     </div>
-  </div>
+  </section>
 
-  <span class="folio"><strong>02</strong> / 10</span>
-</section>
+  <!-- ============= SLIDE NEW — MEMORY ARCHITECTURE (how agents interact) ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">SECTION 2</span> &nbsp;/&nbsp; memory architecture &middot; how agents interact</div>
+    <div class="split">
+      <div class="svg-frame" data-label="agent &times; memory">
+        <svg viewBox="0 0 680 460" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- AGENT pill -->
+          <g>
+            <rect x="260" y="20" width="160" height="42" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <text x="340" y="46" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#a3ff5c" letter-spacing="2">AGENT</text>
+          </g>
 
+          <!-- READ ARROWS down -->
+          <g stroke="#a3ff5c" stroke-width="1.2" opacity="0.7">
+            <path d="M340 62 L340 90" marker-end="url(#arr)"/>
+          </g>
 
-<!-- ========== 03 · TWO-DB SPLIT ========== -->
-<section class="slide" data-slide="3" data-title="Storage split">
-  <div class="slide-label">
-    <span class="num">03</span>
-    <span class="title-tag">Storage</span>
-  </div>
+          <!-- SESSION-BOOTSTRAP READ block -->
+          <g transform="translate(40,100)">
+            <rect width="600" height="178" rx="3" fill="#131a24" stroke="#233042" stroke-width="1"/>
+            <text x="14" y="22" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="2">SESSION-BOOTSTRAP READ &middot; ordered, prepended to prompt</text>
 
-  <div class="reveal">
-    <p class="eyebrow">Principle I · separate lifecycles</p>
-    <h2>Two databases.<br>
-      <em>Different</em> cadences.</h2>
-    <p style="margin-top: 1rem; max-width: 48rem;" class="muted">
-      Ephemeral operational state is pruned aggressively.
-      Long-term memory is backed up, portable, vec-enabled.
-      Soft references cross the boundary — deleting a session
-      never erases what you learned.
-    </p>
-  </div>
+            <g font-family="JetBrains Mono, monospace" font-size="11" fill="#e7ecf3">
+              <rect x="14" y="36" width="160" height="28" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1"/>
+              <text x="22" y="54">1 &middot; ## Last Session</text>
 
-  <div class="reveal" style="margin-top: 3rem; flex:1;">
-    <svg class="schema-svg" viewBox="0 0 1000 420" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-      <!-- conversations.db -->
-      <g>
-        <rect class="node" x="40" y="60" width="420" height="320" rx="2"/>
-        <text x="60" y="94" class="label-title">conversations.db</text>
-        <text x="60" y="112" class="label-mini">— operational, wipe-safe, no extension —</text>
+              <rect x="180" y="36" width="120" height="28" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1"/>
+              <text x="188" y="54">2 &middot; ## Goals</text>
 
-        <g style="font-family: var(--s-mono); font-size: 11px; fill: var(--ink);">
-          <text x="60" y="145">sessions</text>
-          <text x="60" y="170">agent_executions</text>
-          <text x="60" y="195">messages</text>
-          <text x="60" y="220">artifacts</text>
-          <text x="60" y="245">execution_logs</text>
-          <text x="60" y="270">recall_log</text>
-          <text x="60" y="295">distillation_runs</text>
-          <text x="60" y="320">bridge_outbox</text>
-        </g>
+              <rect x="306" y="36" width="180" height="28" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1"/>
+              <text x="314" y="54">3 &middot; ## Corrections</text>
 
-        <text x="60" y="360" class="label-mini" style="fill: var(--pencil);">pruned nightly · plain SQLite</text>
-      </g>
+              <rect x="492" y="36" width="94" height="28" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1"/>
+              <text x="500" y="54" fill="#a3ff5c">4 &middot; Beliefs</text>
 
-      <!-- knowledge.db -->
-      <g>
-        <rect class="node-accent" x="540" y="60" width="420" height="320" rx="2"/>
-        <text x="560" y="94" class="label-title" style="fill: var(--accent);">knowledge.db</text>
-        <text x="560" y="112" class="label-mini">— long-term, portable, sqlite-vec —</text>
+              <rect x="14" y="74" width="280" height="28" rx="2" fill="#0c1118" stroke="#233042" stroke-width="1"/>
+              <text x="22" y="92" fill="#8a97a9">5 &middot; ## Context from Last Session</text>
 
-        <g style="font-family: var(--s-mono); font-size: 11px; fill: var(--ink);">
-          <text x="560" y="145">memory_facts</text>
-          <text x="560" y="170">ward_wiki_articles</text>
-          <text x="560" y="195">procedures</text>
-          <text x="560" y="220">session_episodes</text>
-          <text x="560" y="245">kg_entities  ·  kg_aliases</text>
-          <text x="560" y="270">kg_relationships</text>
-          <text x="560" y="295">kg_episodes + payloads</text>
-          <text x="560" y="320">kg_goals  ·  kg_compactions</text>
-        </g>
+              <rect x="300" y="74" width="286" height="28" rx="2" fill="#0c1118" stroke="#233042" stroke-width="1"/>
+              <text x="308" y="92" fill="#8a97a9">6 &middot; ## Recalled Context (user query)</text>
+            </g>
 
-        <text x="560" y="360" class="label-mini" style="fill: var(--accent);">5× vec0 virtual tables · WAL + r2d2 pool</text>
-      </g>
+            <text x="14" y="128" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="2">MID-SESSION PULSE</text>
+            <g font-family="Inter, sans-serif" font-size="11" fill="#8a97a9">
+              <text x="14" y="148">every 5 turns &middot; recall fires with latest exchange as query</text>
+              <text x="14" y="164">novelty &ge; 0.3 &rarr; new fragments inject; otherwise no-op</text>
+            </g>
+          </g>
 
-      <!-- soft reference arrow -->
-      <path class="line dashed draw-line" d="M 461 220 Q 500 220 539 220" stroke-dasharray="3 3"/>
-      <text x="500" y="210" text-anchor="middle" class="label-mini" style="font-size: 10px; fill: var(--pencil);">soft refs</text>
-    </svg>
-  </div>
+          <!-- WRITE ARROWS up -->
+          <g stroke="#a3ff5c" stroke-width="1.2" opacity="0.7">
+            <path d="M340 290 L340 320"/>
+          </g>
 
-  <span class="folio"><strong>03</strong> / 10</span>
-</section>
+          <!-- WRITE PATHS block -->
+          <g transform="translate(40,300)">
+            <rect width="600" height="140" rx="3" fill="#131a24" stroke="#233042" stroke-width="1"/>
+            <text x="14" y="22" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="2">WRITE PATHS</text>
 
+            <g transform="translate(14,36)">
+              <rect width="180" height="92" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1"/>
+              <text x="12" y="20" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">implicit</text>
+              <text x="12" y="38" font-family="Inter, sans-serif" font-size="11" fill="#e7ecf3">post-session distiller</text>
+              <text x="12" y="56" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">walks transcript, writes</text>
+              <text x="12" y="70" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">facts &middot; entities &middot; edges</text>
+              <text x="12" y="84" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">+ handoff at session end</text>
+            </g>
 
-<!-- ========== 04 · STREAMING INGESTION ========== -->
-<section class="slide" data-slide="4" data-title="Streaming ingestion">
-  <div class="slide-label">
-    <span class="num">04</span>
-    <span class="title-tag">Ingestion</span>
-  </div>
+            <g transform="translate(210,36)">
+              <rect width="180" height="92" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1"/>
+              <text x="12" y="20" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">explicit</text>
+              <text x="12" y="38" font-family="Inter, sans-serif" font-size="11" fill="#e7ecf3">memory(action=&hellip;)</text>
+              <text x="12" y="56" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">agent calls set | save_fact</text>
+              <text x="12" y="70" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">mid-session, durably</text>
+            </g>
 
-  <div class="reveal">
-    <p class="eyebrow">Principle II · never wait for end-of-session</p>
-    <h2>A book indexes<br>
-      <em>while you read.</em></h2>
-    <p style="margin-top: 1rem; max-width: 50rem;" class="muted">
-      <code>POST /api/graph/ingest</code> returns <strong>202 Accepted</strong> in under 100&nbsp;ms.
-      Work drains in the background through two workers; unrelated reads
-      stay responsive because SQLite runs in WAL mode and writes pool
-      through r2d2.
-    </p>
-  </div>
+            <g transform="translate(406,36)">
+              <rect width="180" height="92" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1"/>
+              <text x="12" y="20" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">human-curated</text>
+              <text x="12" y="38" font-family="Inter, sans-serif" font-size="11" fill="#e7ecf3">/memory + /observatory</text>
+              <text x="12" y="56" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">inspect &middot; edit &middot; supersede</text>
+              <text x="12" y="70" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">resolve contradictions</text>
+            </g>
+          </g>
 
-  <div class="pipeline reveal" style="margin-top: 3rem;">
-    <div class="pipeline-stage pulse">
-      <div class="n">01</div>
-      <div class="t">Chunker</div>
-      <div class="d">paragraph-aware · 1000 tok · 100 tok overlap</div>
-    </div>
-    <div class="pipeline-stage pulse">
-      <div class="n">02</div>
-      <div class="t">Episode</div>
-      <div class="d">content-hash dedup · pending status</div>
-    </div>
-    <div class="pipeline-stage pulse">
-      <div class="n">03</div>
-      <div class="t">Queue</div>
-      <div class="d">tokio mpsc · Notify fan-out · N workers</div>
-    </div>
-    <div class="pipeline-stage pulse">
-      <div class="n">04</div>
-      <div class="t">Extractor</div>
-      <div class="d">pass 1 entities → pass 2 relations</div>
-    </div>
-    <div class="pipeline-stage pulse">
-      <div class="n">05</div>
-      <div class="t">Resolver + Writer</div>
-      <div class="d">alias match · ANN · merge or create</div>
-    </div>
-  </div>
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#a3ff5c"/>
+            </marker>
+          </defs>
+        </svg>
+      </div>
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:28px;margin:0 0 18px;letter-spacing:-0.01em;line-height:1.15">What the agent sees, asks, and writes.</h3>
+        <p class="caption" style="font-size:15px;margin-bottom:18px">Three surfaces. The first runs automatically every session. The second is a single <span class="mono">memory</span> tool with six actions. The third is the human curator's UI.</p>
 
-  <div class="reveal" style="margin-top: 2.5rem; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2rem; font-size: 13.5px;">
-    <div>
-      <h3 style="margin-bottom: 0.4rem;">Non-blocking</h3>
-      <p class="muted">Work lives in the DB, not the channel. Worker restarts naturally recover in-flight pending episodes.</p>
-    </div>
-    <div>
-      <h3 style="margin-bottom: 0.4rem;">Backpressure</h3>
-      <p class="muted">Global queue depth &gt; 5,000 or per-source &gt; 500 → <code>429</code> with retry-after. Books never starve chat.</p>
-    </div>
-    <div>
-      <h3 style="margin-bottom: 0.4rem;">Verified</h3>
-      <p class="muted">500-chunk stress test: reader <span class="pill ok" style="font-size: 9px;">140µs p95</span> while ingestion drains.</p>
-    </div>
-  </div>
-
-  <span class="folio"><strong>04</strong> / 10</span>
-</section>
-
-
-<!-- ========== 05 · RESOLVER CASCADE ========== -->
-<section class="slide" data-slide="5" data-title="Resolver cascade">
-  <div class="slide-label">
-    <span class="num">05</span>
-    <span class="title-tag">Entity resolver</span>
-  </div>
-
-  <div class="two-col" style="flex:1;">
-    <div class="reveal">
-      <p class="eyebrow">Principle III · cheapest first</p>
-      <h2>Same entity,<br>
-        <em>any</em> spelling.</h2>
-      <p class="muted" style="margin-top: 1.2rem; max-width: 32rem;">
-        Every <code>store_entity</code> call seeds a self-alias row.
-        Every mention of the same surface form short-circuits at stage one.
-        Semantic variants fall through to vector ANN.
-        Write once, match forever.
-      </p>
-
-      <p style="margin-top: 2rem;" class="small muted">
-        <span class="pill accent" style="font-size: 9px;">p95 · 1000 entities</span>
-        <strong class="mono" style="color: var(--accent); font-weight: 500;">2.15&nbsp;ms</strong>
-        — budget was 20 ms.
-      </p>
-    </div>
-
-    <div class="reveal">
-      <div class="cascade">
-        <div class="cascade-step">
-          <div class="n">1</div>
-          <div>
-            <div class="big">Alias lookup</div>
-            <div class="d">SELECT entity_id FROM kg_aliases WHERE normalized_form = ?1</div>
-          </div>
-          <div class="cost">O(1) index</div>
+        <div class="config-note" style="margin-top:0">
+          <span style="color:var(--ink);font-weight:500">the <span class="k">memory</span> tool &middot; one tool, six actions</span>
         </div>
-        <div class="cascade-arrow">miss ↓</div>
+        <table style="width:100%;border-collapse:collapse;margin-top:12px;font-family:'JetBrains Mono',monospace;font-size:11px">
+          <tbody>
+            <tr><td style="padding:4px 12px 4px 0;color:#a3ff5c;width:120px">get</td><td style="padding:4px 0;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">look up a fragment by key</td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#a3ff5c">set</td><td style="padding:4px 0;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">write / update a fragment by key</td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#a3ff5c">save_fact</td><td style="padding:4px 0;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">write category-tagged fact + confidence</td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#a3ff5c">recall</td><td style="padding:4px 0;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">hybrid search; supports <span style="color:var(--ink-dim)" class="mono">as_of</span>, <span class="mono" style="color:var(--ink-dim)">ward</span></td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#a3ff5c">belief</td><td style="padding:4px 0;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">look up belief by subject (B-net only)</td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#a3ff5c">contradictions</td><td style="padding:4px 0;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">list unresolved pairs (B-net only)</td></tr>
+          </tbody>
+        </table>
 
-        <div class="cascade-step">
-          <div class="n">2</div>
-          <div>
-            <div class="big">Embedding ANN</div>
-            <div class="d">kg_name_index MATCH · cosine ≥ 0.87 · same type</div>
-          </div>
-          <div class="cost">sqlite-vec</div>
+        <p class="caption" style="font-size:13px;color:var(--ink-dim);margin-top:18px">Ward-scoped by <span class="mono">partition_id</span>. Recall applies a <span class="mono">&times;1.3</span> affinity boost when the candidate's ward matches the active session's ward, so a maritime-tracking conversation pulls maritime-tracking memory, not finance.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE NEW — TECHNICAL ARCHITECTURE (the layers) ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">SECTION 3</span> &nbsp;/&nbsp; technical architecture &middot; the layers</div>
+    <div class="split">
+      <div class="svg-frame" data-label="layered view">
+        <svg viewBox="0 0 680 480" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- UI LAYER -->
+          <g transform="translate(20,20)">
+            <text x="0" y="14" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="2">UI &middot; apps/ui</text>
+            <rect x="0" y="22" width="640" height="50" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1"/>
+            <g font-family="JetBrains Mono, monospace" font-size="11" fill="#e7ecf3">
+              <rect x="14" y="34" width="148" height="26" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="0.8"/>
+              <text x="22" y="51">/memory</text>
+              <text x="84" y="51" fill="#8a97a9" font-size="9">facts &middot; beliefs &middot; contras</text>
+
+              <rect x="174" y="34" width="148" height="26" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="0.8"/>
+              <text x="182" y="51">/observatory</text>
+              <text x="262" y="51" fill="#8a97a9" font-size="9">graph &middot; b-net strip</text>
+
+              <rect x="334" y="34" width="148" height="26" rx="2" fill="#0c1118" stroke="#233042" stroke-width="0.8"/>
+              <text x="342" y="51" fill="#8a97a9">settings</text>
+              <text x="402" y="51" fill="#4a5468" font-size="9">memory toggles</text>
+
+              <rect x="494" y="34" width="132" height="26" rx="2" fill="#0c1118" stroke="#233042" stroke-width="0.8"/>
+              <text x="502" y="51" fill="#8a97a9">slideover</text>
+              <text x="568" y="51" fill="#4a5468" font-size="9">b-net detail</text>
+            </g>
+          </g>
+
+          <!-- HTTP API LAYER -->
+          <g transform="translate(20,92)">
+            <text x="0" y="14" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="2">HTTP &middot; gateway/src/http</text>
+            <rect x="0" y="22" width="640" height="62" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1"/>
+            <g font-family="JetBrains Mono, monospace" font-size="10" fill="#e7ecf3">
+              <text x="14" y="40">/api/beliefs/&#123;agent_id&#125;</text>
+              <text x="14" y="56" fill="#8a97a9" font-size="9">list / detail / source-fact links</text>
+
+              <text x="220" y="40">/api/contradictions/*</text>
+              <text x="220" y="56" fill="#8a97a9" font-size="9">list &middot; POST /:id/resolve</text>
+
+              <text x="420" y="40">/api/belief-network/*</text>
+              <text x="420" y="56" fill="#8a97a9" font-size="9">stats &middot; activity</text>
+
+              <text x="14" y="74" fill="#4a5468" font-size="9">503 when execution.memory.beliefNetwork.enabled = false &middot; UI surfaces &laquo;enable in Settings&raquo; copy</text>
+            </g>
+          </g>
+
+          <!-- GATEWAY-MEMORY LAYER -->
+          <g transform="translate(20,176)">
+            <text x="0" y="14" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="2">CORE &middot; gateway/gateway-memory</text>
+            <rect x="0" y="22" width="640" height="138" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.2"/>
+
+            <!-- recall pipeline -->
+            <g font-family="JetBrains Mono, monospace" font-size="10">
+              <text x="14" y="42" fill="#a3ff5c" letter-spacing="1.2">RECALL PIPELINE</text>
+              <text x="14" y="58" fill="#e7ecf3" font-size="9">embed &rarr; (gate) &rarr; FTS5 + vec-cosine &rarr; RRF &rarr; merge w/ wiki+graph+belief &rarr; rescore &rarr; (MMR) &rarr; (rerank) &rarr; min-score &rarr; bi-temporal filter</text>
+            </g>
+
+            <line x1="14" y1="68" x2="626" y2="68" stroke="#233042" stroke-width="0.6"/>
+
+            <!-- sleep cycle -->
+            <g font-family="JetBrains Mono, monospace" font-size="9">
+              <text x="14" y="84" fill="#a3ff5c" letter-spacing="1.2" font-size="10">SLEEP CYCLE &middot; hourly (event-driven for propagation)</text>
+              <g fill="#e7ecf3">
+                <rect x="14" y="92" width="74" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="20" y="105">compactor</text>
+                <rect x="92" y="92" width="80" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="98" y="105">synthesizer</text>
+                <rect x="176" y="92" width="100" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="182" y="105">pattern-extract</text>
+                <rect x="280" y="92" width="110" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="286" y="105">corr-abstractor</text>
+                <rect x="394" y="92" width="100" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="400" y="105">conflict-resolv</text>
+                <rect x="498" y="92" width="60" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="504" y="105">decay</text>
+                <rect x="562" y="92" width="64" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="568" y="105">orph-arch</text>
+
+                <rect x="14" y="114" width="60" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="20" y="127">pruner</text>
+                <rect x="78" y="114" width="90" height="18" rx="2" fill="#0c1118" stroke="#a3ff5c"/>
+                <text x="84" y="127" fill="#a3ff5c">belief-synth</text>
+                <rect x="172" y="114" width="100" height="18" rx="2" fill="#0c1118" stroke="#a3ff5c"/>
+                <text x="178" y="127" fill="#a3ff5c">contra-detect</text>
+                <rect x="276" y="114" width="110" height="18" rx="2" fill="#0c1118" stroke="#a3ff5c"/>
+                <text x="282" y="127" fill="#a3ff5c">belief-propagator</text>
+                <rect x="390" y="114" width="70" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="396" y="127">verifier</text>
+                <rect x="464" y="114" width="90" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="470" y="127">b-net activity</text>
+              </g>
+            </g>
+          </g>
+
+          <!-- STORAGE LAYER -->
+          <g transform="translate(20,328)">
+            <text x="0" y="14" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="2">STORAGE &middot; SQLite &middot; schema v30</text>
+            <rect x="0" y="22" width="430" height="132" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1"/>
+            <text x="14" y="42" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">knowledge.db</text>
+            <g font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">
+              <text x="14" y="60">memory_facts</text>
+              <text x="14" y="74">memory_facts_fts (FTS5)</text>
+              <text x="14" y="88">memory_facts_index (sqlite-vec)</text>
+              <text x="14" y="102">kg_entities &middot; kg_relationships</text>
+              <text x="14" y="116">kg_episodes &middot; session_episodes</text>
+              <text x="220" y="60" fill="#a3ff5c">kg_beliefs</text>
+              <text x="220" y="74">  (+embedding @ v30)</text>
+              <text x="220" y="88" fill="#a3ff5c">kg_belief_contradictions</text>
+              <text x="220" y="102">compaction_log</text>
+              <text x="220" y="116">goals &middot; goal_progress</text>
+            </g>
+
+            <rect x="446" y="22" width="194" height="132" rx="3" fill="#131a24" stroke="#233042" stroke-width="1"/>
+            <text x="460" y="42" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">conversations.db</text>
+            <g font-family="Inter, sans-serif" font-size="10" fill="#4a5468">
+              <text x="460" y="62">daily log &middot; separate</text>
+              <text x="460" y="78">memory never touches</text>
+              <text x="460" y="94">directly &mdash; only via</text>
+              <text x="460" y="110">ConversationStore trait</text>
+            </g>
+
+            <text x="0" y="170" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.5">every row carries valid_from / valid_until &middot; point-in-time recall falls out for free</text>
+          </g>
+
+          <!-- arrows between layers -->
+          <g stroke="#a3ff5c" stroke-width="0.8" opacity="0.4">
+            <path d="M340 72 L340 92"/>
+            <path d="M340 156 L340 176"/>
+            <path d="M340 316 L340 328"/>
+          </g>
+        </svg>
+      </div>
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:28px;margin:0 0 18px;letter-spacing:-0.01em;line-height:1.15">Four layers. One memory.</h3>
+        <p class="caption" style="font-size:15px;margin-bottom:14px">UI talks to HTTP; HTTP talks to <span class="mono">gateway-memory</span>; <span class="mono">gateway-memory</span> owns the recall pipeline + sleep cycle and reads/writes SQLite. Every layer is replaceable; the storage trait decouples memory from any specific chat backend.</p>
+
+        <div class="config-note" style="margin-top:14px">
+          <span style="color:var(--ink);font-weight:500">what's new at v30</span>
         </div>
-        <div class="cascade-arrow">miss ↓</div>
+        <ul style="margin:10px 0 0 0;padding:0;list-style:none;font-family:'Inter',sans-serif;font-size:13px;color:var(--ink-dim);line-height:1.7">
+          <li><span class="mono" style="color:var(--accent)">v27</span> &nbsp;<span class="mono">kg_beliefs</span> &mdash; synthesised stances per subject</li>
+          <li><span class="mono" style="color:var(--accent)">v28</span> &nbsp;<span class="mono">kg_belief_contradictions</span> &mdash; first-class disagreement</li>
+          <li><span class="mono" style="color:var(--accent)">v29</span> &nbsp;<span class="mono">kg_beliefs.stale</span> &mdash; B-3 propagation flag</li>
+          <li><span class="mono" style="color:var(--accent)">v30</span> &nbsp;<span class="mono">kg_beliefs.embedding</span> &mdash; B-4 semantic recall</li>
+          <li><span class="mono" style="color:var(--ink-faint)">v26</span> &nbsp;<span class="mono">kg_relationships</span> bi-temporal columns</li>
+          <li><span class="mono" style="color:var(--ink-faint)">v25</span> &nbsp;<span class="mono">memory_facts.valid_from</span> backfill</li>
+        </ul>
 
-        <div class="cascade-step decision">
-          <div class="n">3</div>
-          <div>
-            <div class="big">LLM pairwise verify</div>
-            <div class="d">trait defined · wiring deferred · only on compactor side</div>
-          </div>
-          <div class="cost">off in v22</div>
-        </div>
-        <div class="cascade-arrow">miss ↓</div>
+        <p class="caption" style="font-size:13px;color:var(--ink-dim);margin-top:18px"><strong style="color:var(--accent)">Highlighted workers</strong> in the diagram are the Belief Network trio &mdash; synthesiser, contradiction detector, propagator. Propagator is event-driven; everything else runs on the hourly cycle.</p>
+      </div>
+    </div>
+  </section>
 
-        <div class="cascade-step exit">
-          <div class="n">—</div>
-          <div>
-            <div class="big">Create new entity</div>
-            <div class="d">insert + seed self-alias + populate kg_name_index</div>
-          </div>
-          <div class="cost" style="border-color: var(--ok); color: var(--ok);">fresh</div>
+  <!-- ============= SLIDE 4 — FRAGMENT TYPES ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">03</span> &nbsp;/&nbsp; fragment types</div>
+    <div class="split flip">
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:30px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.15">Every fragment<br>has a category.</h3>
+        <p class="caption">Categories control how aggressively recall promotes a fragment. They're applied as multipliers after raw search returns.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:15px;margin-top:8px">
+          <span class="mono">correction</span> — what the user told you to do<br>
+          <span class="mono">schema</span> — distilled rules from multiple corrections<br>
+          <span class="mono">strategy</span> — cross-session approaches that worked<br>
+          <span class="mono">user</span> — durable facts about the user<br>
+          <span class="mono">instruction</span> — durable directives, conventions<br>
+          <span class="mono">pattern</span> — abstracted tool-call sequences
+        </p>
+        <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px">Plus <span class="mono">domain</span>, <span class="mono">ward</span>, <span class="mono">skill</span>, <span class="mono">agent</span>, <span class="mono">handoff</span> — scope and sentinel categories.</p>
+        <p class="caption" style="font-size:14px;margin-top:14px">Each fragment is also in one of four lifecycle states: <strong>active</strong>, <strong>contradicted</strong>, <strong>superseded</strong>, <strong>archived</strong>.</p>
+      </div>
+      <div class="svg-frame" data-label="fragments / typed cards + weights">
+        <svg viewBox="0 0 560 580" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round">
+          <!-- card: correction -->
+          <g transform="translate(40,20) rotate(-3 130 60)">
+            <rect width="240" height="100" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <rect x="0" y="0" width="6" height="100" fill="#a3ff5c"/>
+            <text x="20" y="24" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="1.5">CORRECTION</text>
+            <text x="20" y="40" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">correction.5b2a</text>
+            <line x1="20" y1="50" x2="220" y2="50" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="70" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"Use sentence case in commit</text>
+            <text x="20" y="86" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">titles, not Title Case."</text>
+          </g>
+
+          <!-- card: schema -->
+          <g transform="translate(290,10) rotate(4 130 60)">
+            <rect width="240" height="100" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <rect x="0" y="0" width="6" height="100" fill="#a3ff5c"/>
+            <text x="20" y="24" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="1.5">SCHEMA</text>
+            <text x="20" y="40" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">schema.corrections.a3f8</text>
+            <line x1="20" y1="50" x2="220" y2="50" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="70" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"Sentence case everywhere.</text>
+            <text x="20" y="86" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">Subjects under 72 chars."</text>
+          </g>
+
+          <!-- card: strategy -->
+          <g transform="translate(20,140) rotate(2 130 60)">
+            <rect width="240" height="100" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <rect x="0" y="0" width="6" height="100" fill="#8a97a9"/>
+            <text x="20" y="24" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9" letter-spacing="1.5">STRATEGY</text>
+            <text x="20" y="40" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">strategy.deploy.7b40</text>
+            <line x1="20" y1="50" x2="220" y2="50" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="70" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"On postgres-timeout,</text>
+            <text x="20" y="86" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">use jittered exp. backoff."</text>
+          </g>
+
+          <!-- card: user -->
+          <g transform="translate(280,150) rotate(-2 130 60)">
+            <rect width="240" height="100" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <rect x="0" y="0" width="6" height="100" fill="#8a97a9"/>
+            <text x="20" y="24" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9" letter-spacing="1.5">USER</text>
+            <text x="20" y="40" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">user.phani.editor</text>
+            <line x1="20" y1="50" x2="220" y2="50" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="70" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"Uses neovim. Lives in tmux.</text>
+            <text x="20" y="86" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">Prefers ripgrep."</text>
+          </g>
+
+          <!-- card: instruction -->
+          <g transform="translate(40,260) rotate(-4 130 60)">
+            <rect width="240" height="100" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <rect x="0" y="0" width="6" height="100" fill="#8a97a9"/>
+            <text x="20" y="24" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9" letter-spacing="1.5">INSTRUCTION</text>
+            <text x="20" y="40" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">instr.repo.tests</text>
+            <line x1="20" y1="50" x2="220" y2="50" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="70" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"Run cargo fmt before any</text>
+            <text x="20" y="86" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">Rust commit on this repo."</text>
+          </g>
+
+          <!-- card: pattern -->
+          <g transform="translate(290,270) rotate(3 130 60)">
+            <rect width="240" height="100" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5" opacity="0.85"/>
+            <rect x="0" y="0" width="6" height="100" fill="#8a97a9"/>
+            <text x="20" y="24" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9" letter-spacing="1.5">PATTERN</text>
+            <text x="20" y="40" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468">pattern.search-edit.c2a1</text>
+            <line x1="20" y1="50" x2="220" y2="50" stroke="#233042" stroke-width="1"/>
+            <text x="20" y="70" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">"grep → read → edit → test"</text>
+            <text x="20" y="86" font-family="Inter, sans-serif" font-size="12" fill="#e7ecf3">across 8 sessions</text>
+          </g>
+
+          <!-- weight legend -->
+          <g transform="translate(40,400)">
+            <text x="0" y="0" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="1.8">CATEGORY WEIGHTS · HIGHEST → LOWEST</text>
+            <line x1="0" y1="10" x2="480" y2="10" stroke="#233042"/>
+
+            <text x="0"   y="32" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">schema</text>
+            <text x="120" y="32" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" text-anchor="end">1.6</text>
+            <text x="160" y="32" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">correction</text>
+            <text x="280" y="32" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" text-anchor="end">1.5</text>
+            <text x="320" y="32" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">strategy</text>
+            <text x="440" y="32" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" text-anchor="end">1.4</text>
+
+            <text x="0"   y="54" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">user</text>
+            <text x="120" y="54" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9" text-anchor="end">1.3</text>
+            <text x="160" y="54" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">instruction</text>
+            <text x="280" y="54" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9" text-anchor="end">1.2</text>
+            <text x="320" y="54" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">domain</text>
+            <text x="440" y="54" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9" text-anchor="end">1.0</text>
+
+            <text x="0"   y="76" font-family="JetBrains Mono, monospace" font-size="11" fill="#4a5468">pattern</text>
+            <text x="120" y="76" font-family="JetBrains Mono, monospace" font-size="11" fill="#4a5468" text-anchor="end">0.9</text>
+            <text x="160" y="76" font-family="JetBrains Mono, monospace" font-size="11" fill="#4a5468">ward</text>
+            <text x="280" y="76" font-family="JetBrains Mono, monospace" font-size="11" fill="#4a5468" text-anchor="end">0.8</text>
+            <text x="320" y="76" font-family="JetBrains Mono, monospace" font-size="11" fill="#4a5468">skill / agent</text>
+            <text x="440" y="76" font-family="JetBrains Mono, monospace" font-size="11" fill="#4a5468" text-anchor="end">0.7</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 5 — KNOWLEDGE GRAPH ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">04</span> &nbsp;/&nbsp; the knowledge graph</div>
+    <div class="split">
+      <div class="svg-frame" data-label="entities · relationships · decay">
+        <svg viewBox="0 0 660 460" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- edges -->
+          <g stroke="#4a5468" stroke-width="1.2">
+            <line x1="180" y1="120" x2="340" y2="80"/>
+            <line x1="340" y1="80" x2="500" y2="160"/>
+            <line x1="180" y1="120" x2="220" y2="280"/>
+            <line x1="220" y1="280" x2="380" y2="320"/>
+            <line x1="380" y1="320" x2="500" y2="160"/>
+            <line x1="340" y1="80" x2="380" y2="320"/>
+            <line x1="500" y1="160" x2="580" y2="290" stroke-dasharray="3 4"/>
+            <line x1="380" y1="320" x2="580" y2="290" stroke-dasharray="3 4"/>
+          </g>
+
+          <!-- edge confidence labels -->
+          <text x="255" y="92" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c" letter-spacing="1">affects · 0.71</text>
+          <text x="425" y="115" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c" letter-spacing="1">part-of · 0.66</text>
+          <text x="280" y="312" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c" letter-spacing="1">used-by · 0.58</text>
+
+          <!-- nodes -->
+          <g font-family="JetBrains Mono, monospace" font-size="10" letter-spacing="1.2">
+            <circle cx="180" cy="120" r="34" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="180" y="120" text-anchor="middle" dominant-baseline="central" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="600" fill="#a3ff5c">0.74</text>
+            <text x="180" y="170" text-anchor="middle" fill="#e7ecf3" font-size="11">postgres-timeout</text>
+            <text x="180" y="184" text-anchor="middle" fill="#a3ff5c" font-size="9">c 0.74 · m 6</text>
+
+            <circle cx="340" cy="80" r="32" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="340" y="80" text-anchor="middle" dominant-baseline="central" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="600" fill="#a3ff5c">0.82</text>
+            <text x="340" y="34" text-anchor="middle" fill="#e7ecf3" font-size="11">service-layer</text>
+            <text x="340" y="20" text-anchor="middle" fill="#a3ff5c" font-size="9">c 0.82 · m 12</text>
+
+            <circle cx="500" cy="160" r="30" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="500" y="160" text-anchor="middle" dominant-baseline="central" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="600" fill="#a3ff5c">0.69</text>
+            <text x="500" y="208" text-anchor="middle" fill="#e7ecf3" font-size="11">deploy-flow</text>
+            <text x="500" y="222" text-anchor="middle" fill="#a3ff5c" font-size="9">c 0.69 · m 4</text>
+
+            <circle cx="220" cy="280" r="30" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="220" y="280" text-anchor="middle" dominant-baseline="central" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="600" fill="#a3ff5c">0.78</text>
+            <text x="220" y="328" text-anchor="middle" fill="#e7ecf3" font-size="11">retry-policy</text>
+            <text x="220" y="342" text-anchor="middle" fill="#a3ff5c" font-size="9">c 0.78 · m 7</text>
+
+            <circle cx="380" cy="320" r="28" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="380" y="320" text-anchor="middle" dominant-baseline="central" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="600" fill="#a3ff5c">0.65</text>
+            <text x="380" y="366" text-anchor="middle" fill="#e7ecf3" font-size="11">backoff</text>
+            <text x="380" y="380" text-anchor="middle" fill="#a3ff5c" font-size="9">c 0.65 · m 5</text>
+
+            <!-- fading entity (decay) -->
+            <circle cx="580" cy="290" r="30" fill="#131a24" stroke="#a3ff5c" stroke-width="2" opacity="0.35"/>
+            <text x="580" y="290" text-anchor="middle" dominant-baseline="central" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="600" fill="#ff7a59" opacity="0.7">0.21</text>
+            <circle cx="580" cy="290" r="38" fill="none" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3" opacity="0.5"/>
+            <text x="580" y="345" text-anchor="middle" fill="#e7ecf3" font-size="11" opacity="0.6">old-strategy</text>
+            <text x="580" y="359" text-anchor="middle" fill="#a3ff5c" font-size="9" opacity="0.7">c 0.21 ↓ · 95d</text>
+          </g>
+
+          <!-- column layout for kg_entities row -->
+          <g transform="translate(40,380)">
+            <text x="0" y="0" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.8">KG_ENTITIES · COLUMN SCHEMA</text>
+            <line x1="0" y1="8" x2="580" y2="8" stroke="#233042"/>
+            <text x="0"   y="28" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">id</text>
+            <text x="40"  y="28" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">·</text>
+            <text x="55"  y="28" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">name</text>
+            <text x="105" y="28" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">·</text>
+            <text x="120" y="28" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">type</text>
+            <text x="165" y="28" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">·</text>
+            <text x="180" y="28" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c">confidence</text>
+            <text x="275" y="28" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">·</text>
+            <text x="290" y="28" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">mention_count</text>
+            <text x="408" y="28" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">·</text>
+            <text x="423" y="28" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c">last_seen_at</text>
+            <text x="525" y="28" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">·</text>
+            <text x="540" y="28" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">epistemic_class</text>
+          </g>
+        </svg>
+      </div>
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:28px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.15">Entities and edges,<br>each with their own life.</h3>
+        <p class="caption">Both ends of an edge and the edge itself carry independent <strong>confidence</strong> and <strong>last_seen_at</strong>. None is renewed on recall — only when the entity actually shows up in a new conversation.</p>
+        <p class="caption"><strong>Confidence decays</strong> exponentially against last_seen_at, with a default half-life of <span class="mono">90 days</span> for both entities and relationships. Floored at <span class="mono">min_confidence = 0.01</span>; rows touched within <span class="mono">24h</span> are skipped.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px"><strong>Contradiction propagation</strong> (MEM-001 Part A): when a <span class="mono">memory_facts.contradicted_by</span> is set, the entities and relationships that came from the same source episode get a multiplicative confidence hit (<span class="mono">× 0.9</span> by default, floored at <span class="mono">0.05</span>). The graph reacts to fact-level corrections without waiting for the time-decay half-life.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px">Orphan entities (no relationships, old last_seen_at) are flagged and archived. Archived rows are never deleted — just hidden from recall.</p>
+        <div class="config-note">
+          <span class="k">recall_config.json</span> &rarr; <span class="k">kg_decay</span><br>
+          <span class="k">entity_half_life_days: 90</span> &middot; <span class="k">relationship_half_life_days: 90</span> &middot; <span class="k">min_confidence: 0.01</span><br>
+          <span class="k">decay_factor: 0.9</span> &middot; <span class="k">min_floor: 0.05</span> &middot; <span class="k">lookback_hours: 24</span> &nbsp;<span style="color:var(--ink-dim)">// contradiction propagation</span>
         </div>
       </div>
     </div>
-  </div>
+  </section>
 
-  <span class="folio"><strong>05</strong> / 10</span>
-</section>
+  <!-- ============= SLIDE 6 — STORAGE ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">05</span> &nbsp;/&nbsp; storage</div>
+    <div class="split flip">
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:28px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.15">Two SQLite files<br>do all the work.</h3>
+        <p class="caption"><span class="mono">knowledge.db</span> is the <strong>reference book</strong>: typed fragments, KG entities and relationships, episode chains, compaction audit.</p>
+        <p class="caption"><span class="mono">conversations.db</span> is the <strong>daily log</strong>: chat history. Separate file, separate concerns — memory never touches it directly. It goes through the <span class="mono">ConversationStore</span> trait.</p>
+        <p class="caption">Embeddings live in their own <span class="mono">sqlite-vec</span> virtual table, joined to facts by <span class="mono">fact_id</span>. FTS5 indexes the same content for keyword search. The hybrid recall pipeline reads both.</p>
+        <div class="config-note">
+          stored under <span class="k">$XDG_DATA_HOME/agentzero/</span> on Linux<br>
+          equivalent paths on macOS / Windows
+        </div>
+      </div>
+      <div class="svg-frame" data-label="storage layout">
+        <svg viewBox="0 0 640 460" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- knowledge.db -->
+          <g>
+            <rect x="30" y="30" width="380" height="380" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="220" y="58" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="14" fill="#a3ff5c" letter-spacing="1.5">knowledge.db</text>
+            <text x="220" y="76" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#8a97a9" font-style="italic">the reference book</text>
+            <line x1="50" y1="88" x2="390" y2="88" stroke="#233042" stroke-width="1"/>
 
+            <rect x="50" y="100" width="340" height="68" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1.2"/>
+            <text x="62" y="120" font-family="JetBrains Mono, monospace" font-size="12" fill="#a3ff5c">memory_facts</text>
+            <text x="62" y="138" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">id · key · category · content · confidence</text>
+            <text x="62" y="152" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">superseded_by · contradicted_by · valid_until</text>
+            <text x="62" y="164" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">created_at · updated_at · agent_id · ward_id</text>
 
-<!-- ========== 06 · VEC0 & SIMILARITY ========== -->
-<section class="slide" data-slide="6" data-title="sqlite-vec">
-  <div class="slide-label">
-    <span class="num">06</span>
-    <span class="title-tag">One mechanism</span>
-  </div>
+            <rect x="50" y="178" width="340" height="50" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1.2" stroke-dasharray="3 3"/>
+            <text x="62" y="198" font-family="JetBrains Mono, monospace" font-size="12" fill="#a3ff5c">memory_facts_index</text>
+            <text x="62" y="216" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">sqlite-vec · fact_id · embedding[N]</text>
 
-  <div class="reveal">
-    <p class="eyebrow">Principle IV · stop writing cosine by hand</p>
-    <h2>Every similarity query<br>
-      goes through <em>one</em> index.</h2>
-    <p class="muted" style="margin-top: 1rem; max-width: 50rem;">
-      Phase 1b deleted six hand-rolled <code>cosine_similarity</code> functions and
-      replaced them with <code>sqlite-vec</code> <code>vec0</code> virtual tables — one per retrieval source.
-      Embeddings live <em>only</em> in their vec partner. No dual storage. No drift.
-    </p>
-  </div>
+            <rect x="50" y="238" width="340" height="40" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1.2" stroke-dasharray="3 3"/>
+            <text x="62" y="258" font-family="JetBrains Mono, monospace" font-size="12" fill="#a3ff5c">memory_facts_fts</text>
+            <text x="62" y="272" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">FTS5 · keyword search · trigger-synced</text>
 
-  <div class="reveal" style="margin-top: 3rem;">
-    <table class="tbl">
-      <thead>
-        <tr>
-          <th>vec0 index</th>
-          <th>partner table</th>
-          <th>dim</th>
-          <th>written on</th>
-          <th>queried by</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><code>kg_name_index</code></td>
-          <td>kg_entities</td>
-          <td>384</td>
-          <td>store_entity · name_embedding Some</td>
-          <td>resolver stage 2 · compactor</td>
-        </tr>
-        <tr>
-          <td><code>memory_facts_index</code></td>
-          <td>memory_facts</td>
-          <td>384</td>
-          <td>upsert_memory_fact · embedding Some</td>
-          <td>MemoryRepository::search_similar_facts</td>
-        </tr>
-        <tr>
-          <td><code>wiki_articles_index</code></td>
-          <td>ward_wiki_articles</td>
-          <td>384</td>
-          <td>upsert_article · embedding Some</td>
-          <td>WardWikiRepository::search_by_similarity</td>
-        </tr>
-        <tr>
-          <td><code>procedures_index</code></td>
-          <td>procedures</td>
-          <td>384</td>
-          <td>upsert_procedure · embedding Some</td>
-          <td>ProcedureRepository::search_by_similarity</td>
-        </tr>
-        <tr>
-          <td><code>session_episodes_index</code></td>
-          <td>session_episodes</td>
-          <td>384</td>
-          <td>upsert_episode · embedding Some</td>
-          <td>EpisodeRepository::search_by_similarity</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
+            <rect x="50" y="290" width="160" height="56" rx="2" fill="#0c1118" stroke="#8a97a9" stroke-width="1.2"/>
+            <text x="62" y="308" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">kg_entities</text>
+            <text x="62" y="324" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">name · confidence</text>
+            <text x="62" y="338" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">last_seen_at · evidence</text>
 
-  <div class="reveal" style="margin-top: 2rem;">
-    <pre><span class="c">// L2 normalized embeddings → cosine ≥ 0.87 ⇔ distance ≤ 0.26</span>
-<span class="k">SELECT</span> entity_id, distance <span class="k">FROM</span> kg_name_index
- <span class="k">WHERE</span> name_embedding <span class="k">MATCH</span> ?1
- <span class="k">ORDER BY</span> distance
- <span class="k">LIMIT</span> 10<span class="s">;</span></pre>
-  </div>
+            <rect x="220" y="290" width="170" height="56" rx="2" fill="#0c1118" stroke="#8a97a9" stroke-width="1.2"/>
+            <text x="232" y="308" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">kg_relationships</text>
+            <text x="232" y="324" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">source · target · type</text>
+            <text x="232" y="338" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">confidence · last_seen_at</text>
 
-  <span class="folio"><strong>06</strong> / 10</span>
-</section>
+            <rect x="50" y="356" width="160" height="40" rx="2" fill="#0c1118" stroke="#8a97a9" stroke-width="1.2"/>
+            <text x="62" y="374" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">kg_episodes</text>
+            <text x="62" y="388" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">session_episodes</text>
 
+            <rect x="220" y="356" width="170" height="40" rx="2" fill="#0c1118" stroke="#8a97a9" stroke-width="1.2"/>
+            <text x="232" y="374" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">compaction_log</text>
+            <text x="232" y="388" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">audit trail · merge events</text>
 
-<!-- ========== 07 · UNIFIED RECALL ========== -->
-<section class="slide" data-slide="7" data-title="Unified recall">
-  <div class="slide-label">
-    <span class="num">07</span>
-    <span class="title-tag">Recall</span>
-  </div>
+            <path d="M205,168 C260,168 260,178 220,178" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 2"/>
+            <text x="245" y="173" font-family="JetBrains Mono, monospace" font-size="8" fill="#a3ff5c">fact_id</text>
+          </g>
 
-  <div class="reveal">
-    <p class="eyebrow">Principle V · compete, don't append</p>
-    <h2>Five sources.<br>
-      <em>One</em> scored pool.</h2>
-    <p class="muted" style="margin-top: 1rem; max-width: 50rem;">
-      Facts, wiki articles, procedures, graph neighborhoods,
-      and active goals all project to <code>ScoredItem</code> and merge via
-      <em>Reciprocal Rank Fusion</em> — <code>k = 60</code>, same item across lists
-      naturally rises.
-    </p>
-  </div>
+          <!-- conversations.db -->
+          <g>
+            <rect x="440" y="30" width="180" height="380" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="530" y="58" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#8a97a9" letter-spacing="1.5">conversations.db</text>
+            <text x="530" y="76" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#4a5468" font-style="italic">the daily log</text>
+            <line x1="460" y1="88" x2="600" y2="88" stroke="#233042" stroke-width="1"/>
 
-  <div class="reveal" style="margin-top: 3rem; flex: 1;">
-    <svg class="schema-svg" viewBox="0 0 1000 380" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-      <!-- five source columns -->
-      <g style="font-family: var(--s-mono); font-size: 11px;">
-        <rect class="node" x="40"  y="40" width="140" height="100" rx="2"/>
-        <text x="110" y="72" text-anchor="middle" class="label-title" style="font-size: 13px;">Fact</text>
-        <text x="110" y="92" text-anchor="middle" class="label-mini">memory_facts</text>
-        <text x="110" y="108" text-anchor="middle" class="label-mini">hybrid FTS + vec</text>
+            <rect x="460" y="100" width="140" height="56" rx="2" fill="#0c1118" stroke="#8a97a9" stroke-width="1.2"/>
+            <text x="470" y="120" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">sessions</text>
+            <text x="470" y="136" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">id · started · ended</text>
+            <text x="470" y="148" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">status · agent_id</text>
 
-        <rect class="node" x="200" y="40" width="140" height="100" rx="2"/>
-        <text x="270" y="72" text-anchor="middle" class="label-title" style="font-size: 13px;">Wiki</text>
-        <text x="270" y="92" text-anchor="middle" class="label-mini">ward articles</text>
-        <text x="270" y="108" text-anchor="middle" class="label-mini">ANN ward-scoped</text>
+            <rect x="460" y="170" width="140" height="56" rx="2" fill="#0c1118" stroke="#8a97a9" stroke-width="1.2"/>
+            <text x="470" y="190" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">messages</text>
+            <text x="470" y="206" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">role · content</text>
+            <text x="470" y="218" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">tool_calls · turn_idx</text>
 
-        <rect class="node" x="360" y="40" width="140" height="100" rx="2"/>
-        <text x="430" y="72" text-anchor="middle" class="label-title" style="font-size: 13px;">Procedure</text>
-        <text x="430" y="92" text-anchor="middle" class="label-mini">learned workflows</text>
-        <text x="430" y="108" text-anchor="middle" class="label-mini">ANN · success ≥ 2</text>
+            <text x="530" y="270" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#4a5468" font-style="italic">read only by</text>
+            <text x="530" y="284" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#8a97a9">ConversationStore</text>
+            <text x="530" y="298" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#4a5468" font-style="italic">trait</text>
 
-        <rect class="node" x="520" y="40" width="140" height="100" rx="2"/>
-        <text x="590" y="72" text-anchor="middle" class="label-title" style="font-size: 13px;">GraphNode</text>
-        <text x="590" y="92" text-anchor="middle" class="label-mini">kg_entities</text>
-        <text x="590" y="108" text-anchor="middle" class="label-mini">ANN · 1-hop context</text>
+            <text x="530" y="370" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#4a5468" font-style="italic">handoff writer reads</text>
+            <text x="530" y="384" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#4a5468" font-style="italic">at session end</text>
+          </g>
 
-        <rect class="node-accent" x="680" y="40" width="140" height="100" rx="2"/>
-        <text x="750" y="72" text-anchor="middle" class="label-title" style="font-size: 13px; fill: var(--accent);">Goal</text>
-        <text x="750" y="92" text-anchor="middle" class="label-mini">active intents</text>
-        <text x="750" y="108" text-anchor="middle" class="label-mini">unfilled slots</text>
-      </g>
-
-      <!-- lines to RRF -->
-      <g>
-        <path class="line draw-line" d="M 110 141 L 500 220"/>
-        <path class="line draw-line" d="M 270 141 L 500 220"/>
-        <path class="line draw-line" d="M 430 141 L 500 220"/>
-        <path class="line draw-line" d="M 590 141 L 500 220"/>
-        <path class="line draw-line" d="M 750 141 L 500 220"/>
-      </g>
-
-      <!-- RRF box -->
-      <rect class="node-accent" x="380" y="220" width="240" height="60" rx="2" style="stroke-width: 2;"/>
-      <text x="500" y="244" text-anchor="middle" class="label-title" style="font-size: 15px; fill: var(--accent);">Reciprocal Rank Fusion</text>
-      <text x="500" y="264" text-anchor="middle" class="label-mini" style="fill: var(--pencil);">intent-boost · 1.3× when slots match</text>
-
-      <!-- output -->
-      <path class="line accent draw-line" d="M 500 281 L 500 330" marker-end="none"/>
-      <rect class="node" x="360" y="330" width="280" height="40" rx="2"/>
-      <text x="500" y="356" text-anchor="middle" class="label">Vec&lt;ScoredItem&gt; → system message</text>
-
-      <!-- pulse -->
-      <path class="pulse-path" d="M 110 141 L 500 220 L 500 330"/>
-      <path class="pulse-path" d="M 270 141 L 500 220 L 500 330" style="animation-delay: 2.2s;"/>
-      <path class="pulse-path" d="M 750 141 L 500 220 L 500 330" style="animation-delay: 1.2s;"/>
-    </svg>
-  </div>
-
-  <span class="folio"><strong>07</strong> / 10</span>
-</section>
-
-
-<!-- ========== 08 · SLEEP-TIME WORKER ========== -->
-<section class="slide" data-slide="8" data-title="Sleep-time worker">
-  <div class="slide-label">
-    <span class="num">08</span>
-    <span class="title-tag">Sleep-time</span>
-  </div>
-
-  <div class="two-col" style="flex: 1;">
-    <div class="reveal">
-      <p class="eyebrow">Principle VI · never hard-delete</p>
-      <h2>The graph<br>
-        stays <em>lean</em>,<br>
-        <em>forever</em>.</h2>
-      <p class="muted" style="margin-top: 1rem; max-width: 32rem;">
-        Hourly <code>tokio</code> task or on-demand via
-        <code>POST /api/memory/consolidate</code>.
-        Every op records to <code>kg_compactions</code>.
-        Archival entities (<code>epistemic_class = 'archival'</code>) are
-        exempt — <em>historical facts never decay</em>.
-      </p>
-
-      <p style="margin-top: 1.5rem; font-size: 13px;" class="muted">
-        Soft-delete via <code>compressed_into = '__pruned__'</code> sentinel.
-        Every recall query filters <code>compressed_into IS NULL</code>.
-        Nothing is ever gone.
-      </p>
+          <text x="320" y="436" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="1.2">facts ↔ embeddings: joined by fact_id · separate row, same key</text>
+        </svg>
+      </div>
     </div>
+  </section>
 
-    <div class="reveal">
-      <ul class="stripe" style="margin-top: 0;">
-        <li>
-          <span class="i">op·1</span>
-          <div>
-            <strong>Compactor</strong><br>
-            <span class="muted small">
-              find_duplicate_candidates(cosine ≥ 0.92, same type) → merge_entity_into
-            </span>
+  <!-- ============= SLIDE 6 — BI-TEMPORAL MEMORY ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">06</span> &nbsp;/&nbsp; bi-temporal memory</div>
+    <div class="detail-head" style="border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:30px;">
+      <span class="stamp">truth-intervals</span>
+      <h3>Every fact knows when it was true.</h3>
+    </div>
+    <div class="split">
+      <div>
+        <p class="caption">Every fragment and relationship records a <strong>truth-interval</strong>, not a single timestamp.</p>
+        <p class="caption"><span class="mono">valid_from</span> — when the fact became true in the world.<br><span class="mono">valid_until</span> — when it stopped being true (<span class="mono">NULL</span> = still true).</p>
+        <p class="caption">Distinct from <span class="mono">created_at</span> (when the row hit disk). The split lets the agent answer historical questions correctly when the world changes.</p>
+        <div class="config-note">
+          <strong style="color:var(--accent)">point-in-time recall:</strong><br>
+          <span class="mono">memory recall(query, as_of="2026-02-15")</span><br>
+          filters: <span class="mono">valid_from &le; as_of &lt; valid_until</span>
+        </div>
+        <p class="caption" style="margin-top:18px;font-size:13px;color:var(--ink-dim)">Default recall uses <span class="mono">Utc::now()</span> as the cutoff — so facts whose interval ended are correctly excluded from "what's true now" queries.</p>
+      </div>
+      <div>
+        <div class="config-note" style="margin-top:0">
+          <span style="color:var(--ink);font-weight:500">worked example · employment history</span>
+        </div>
+        <pre style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-dim);background:var(--bg-soft);border:1px solid var(--rule);border-radius:3px;padding:16px;margin-top:14px;line-height:1.65;white-space:pre-wrap"><span style="color:var(--accent)">2026-01-15</span>  user: "I work at Anthropic."
+  → fact A:  <span class="k">valid_from</span> = 2026-01-15
+              <span class="k">valid_until</span> = NULL
+
+<span style="color:var(--accent)">2026-04-01</span>  user: "I just joined OpenAI."
+  → fact B:  <span class="k">valid_from</span> = 2026-04-01
+              <span class="k">valid_until</span> = NULL
+
+<span style="color:var(--ink-faint)">[conflict-resolver runs]</span>
+  → fact A:  <span class="k">valid_until</span> = 2026-04-01
+              <span class="k">superseded_by</span> = B.id</pre>
+        <p class="caption" style="margin-top:18px;font-size:13px"><strong style="color:var(--accent)">The transition records when the world changed</strong> — not when the resolver happened to run. Loser's <span class="mono">valid_until</span> = winner's <span class="mono">created_at</span>. Continuous timeline, no gap, no overlap.</p>
+        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)">Months later: <em>"What was my role at Anthropic?"</em><br>→ recall with <span class="mono">as_of = 2026-02-15</span> → returns fact A. Currently? Returns nothing useful.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 7 — QUERY GATE (Self-RAG) ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">07</span> &nbsp;/&nbsp; the query gate (Self-RAG)</div>
+    <div class="detail-head" style="border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:30px;">
+      <span class="stamp">opt-in · before hybrid search</span>
+      <h3>Multi-topic queries get split before they dilute.</h3>
+    </div>
+    <div class="split">
+      <div>
+        <p class="caption">A small LLM call <strong>before</strong> the hybrid search returns one of three decisions:</p>
+        <table style="width:100%;border-collapse:collapse;margin-top:14px;font-family:'JetBrains Mono',monospace;font-size:11px">
+          <thead>
+            <tr style="border-bottom:1px solid var(--rule)">
+              <th style="text-align:left;padding:6px 10px 6px 0;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">DECISION</th>
+              <th style="text-align:left;padding:6px 0 6px 10px;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">WHAT RECALL DOES</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">Skip</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Small talk or self-contained. Hybrid search skipped. Corrections still always-inject.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">Direct(q)</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Clean single-topic query — possibly reformulated for clarity.</td>
+            </tr>
+            <tr>
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">Split([…])</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Multiple topics. Run hybrid search per subquery, dedup-merge results.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="caption" style="margin-top:18px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">Failure-safe.</strong> LLM error, timeout, or malformed JSON falls back to <span class="mono">Direct(raw_input)</span>. The gate never blocks recall.</p>
+        <div class="config-note" style="margin-top:18px">
+          opt-in: <span class="k">execution.memory.queryGate.enabled = true</span><br>
+          adds ~200-800ms when enabled
+        </div>
+      </div>
+      <div>
+        <div class="config-note" style="margin-top:0">
+          <span style="color:var(--ink);font-weight:500">worked example · noisy multi-topic query</span>
+        </div>
+        <pre style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-dim);background:var(--bg-soft);border:1px solid var(--rule);border-radius:3px;padding:16px;margin-top:14px;line-height:1.65;white-space:pre-wrap"><span style="color:var(--ink-faint)">user:</span> "I'm hosting dinner. Where do
+I live, what are my dietary
+restrictions, and which
+restaurants near me can
+accommodate everyone?"
+
+<span style="color:var(--ink-faint)">gate:</span> <span style="color:var(--accent)">Split([</span>
+  "user location address",
+  "user dietary restrictions allergies",
+  "saved restaurants near user location"
+<span style="color:var(--accent)">])</span>
+
+<span style="color:var(--ink-faint)">each subquery runs a focused
+hybrid search · results merge
+by fact_id · then MMR / rerank /
+intent routing as usual</span></pre>
+        <p class="caption" style="margin-top:18px;font-size:13px"><strong style="color:var(--accent)">Without the gate</strong>: single embedding dominated by "restaurants" — <span class="mono">user.location</span> (conf 1.0) gets crowded out at the embedding-similarity stage.</p>
+        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong>With the gate</strong>: each subquery has a clean semantic signal; <span class="mono">user.location</span> surfaces cleanly for the first subquery.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 8 — THE BELIEF NETWORK ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">08</span> &nbsp;/&nbsp; the belief network</div>
+    <div class="detail-head" style="border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:30px;">
+      <span class="stamp">opt-in · sleep-time</span>
+      <h3>From a pile of facts to a reasoned stance.</h3>
+    </div>
+    <div class="split">
+      <div>
+        <div class="config-note" style="margin-top:0">
+          <span style="color:var(--ink);font-weight:500">phase B-1 · belief synthesis</span>
+        </div>
+        <p class="caption" style="margin-top:14px">A sleep-time worker groups facts by <span class="mono">(partition_id, subject)</span> and produces a single <strong>belief</strong> per group: synthesized content, derived confidence, source-fact provenance, bi-temporal interval.</p>
+        <p class="caption" style="margin-top:10px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">Critical optimization:</strong> 95%+ of subjects have only one fact. Single-fact subjects <strong>short-circuit</strong> — no LLM call, just <span class="mono">content = fact.content</span> with recency-weighted confidence. Across 709 production facts, that's ~15 LLM calls per cycle, not 709.</p>
+        <pre style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-dim);background:var(--bg-soft);border:1px solid var(--rule);border-radius:3px;padding:14px;margin-top:14px;line-height:1.55;white-space:pre-wrap"><span style="color:var(--ink-faint)">multi-fact subject:</span> user.employment
+  fact F1: "Anthropic"  (2026-01-15)
+  fact F2: "OpenAI"     (2026-04-01)
+       ↓ <span style="color:var(--accent)">LLM synthesizer</span>
+belief B: "User works at OpenAI"
+       <span class="k">source_fact_ids</span>=[F1, F2]
+       <span class="k">confidence</span>=recency-weighted avg
+       <span class="k">reasoning</span>="2026-04-01 supersedes earlier"</pre>
+      </div>
+      <div>
+        <div class="config-note" style="margin-top:0">
+          <span style="color:var(--ink);font-weight:500">phase B-2 · contradiction detection</span>
+        </div>
+        <p class="caption" style="margin-top:14px">A second worker scopes pairs to <strong>topical neighborhoods</strong> by subject prefix (default depth 1 — <span class="mono">user.dietary.vegetarian</span> and <span class="mono">user.family.wife</span> both group under <span class="mono">user</span>). Within each neighborhood, an LLM judge classifies each unevaluated pair.</p>
+        <table style="width:100%;border-collapse:collapse;margin-top:12px;font-family:'JetBrains Mono',monospace;font-size:11px">
+          <thead>
+            <tr style="border-bottom:1px solid var(--rule)">
+              <th style="text-align:left;padding:6px 10px 6px 0;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">DECISION</th>
+              <th style="text-align:left;padding:6px 0 6px 10px;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">EFFECT</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:5px 10px 5px 0;color:var(--accent);vertical-align:top">logical</td>
+              <td style="padding:5px 0 5px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">cannot both be true. Row inserted.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:5px 10px 5px 0;color:var(--accent);vertical-align:top">tension</td>
+              <td style="padding:5px 0 5px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">context-dependent. Row inserted.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:5px 10px 5px 0;color:var(--accent);vertical-align:top">compatible</td>
+              <td style="padding:5px 0 5px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">consistent. Logged only.</td>
+            </tr>
+            <tr>
+              <td style="padding:5px 10px 5px 0;color:var(--accent);vertical-align:top">duplicate</td>
+              <td style="padding:5px 0 5px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">canonicalization signal. Logged.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong>Budget cap</strong> per cycle (default 20 LLM calls). Pairs are processed largest-neighborhood first. Already-evaluated pairs skip.</p>
+        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">B-3 propagation</strong> closes the loop: when a fact is superseded or decays below <span class="mono">factConfidenceDropThreshold</span> (default 0.3), dependent beliefs respond inline — sole-source beliefs retract; multi-source mark stale + re-synthesize next cycle. Event-driven, not polling.</p>
+        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">B-4 recall integration</strong> surfaces beliefs in the agent's context window. Embeddings stored as BLOB on row (no vec0 table — belief count is bounded). New <span class="mono">ItemKind::Belief</span>, category weight <span class="mono">1.5</span> (conservative; reconsider post-validation). Rendered as <span class="mono">## Active Beliefs</span> distinct from <span class="mono">## Recalled Context</span>. <strong style="color:var(--accent)">B-5</strong> (Memory tab: Beliefs / Contradictions sub-tabs + resolver) and <strong style="color:var(--accent)">B-6</strong> (Observatory: totals strip + details slideover with worker cards, activity feed, propagation chain) are now shipped.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 9 — RECALL: FINDING CANDIDATES ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">09</span> &nbsp;/&nbsp; recall — finding candidates</div>
+    <div class="stack-vert">
+      <div class="svg-frame" data-label="query → embed → hybrid search → RRF blend">
+        <svg viewBox="0 0 1100 280" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <g font-family="JetBrains Mono, monospace" font-size="10" letter-spacing="1.2">
+            <!-- 1 query -->
+            <rect x="20" y="100" width="120" height="60" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="80" y="120" text-anchor="middle" fill="#a3ff5c" font-size="9">[1] QUERY</text>
+            <text x="80" y="138" text-anchor="middle" fill="#e7ecf3" font-size="10">user message</text>
+            <text x="80" y="152" text-anchor="middle" fill="#4a5468" font-size="8">or synthetic</text>
+
+            <path d="M140,130 L170,130" stroke="#a3ff5c" stroke-width="1.5"/>
+            <path d="M163,124 L173,130 L163,136" stroke="#a3ff5c" stroke-width="1.5"/>
+
+            <!-- 2 embed -->
+            <rect x="170" y="100" width="120" height="60" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="230" y="120" text-anchor="middle" fill="#a3ff5c" font-size="9">[2] EMBED</text>
+            <text x="230" y="138" text-anchor="middle" fill="#e7ecf3" font-size="10">→ vector</text>
+            <text x="230" y="152" text-anchor="middle" fill="#4a5468" font-size="8">degrades to FTS-only</text>
+
+            <path d="M290,130 L320,130" stroke="#a3ff5c" stroke-width="1.5"/>
+            <path d="M313,124 L323,130 L313,136" stroke="#a3ff5c" stroke-width="1.5"/>
+
+            <!-- 3 hybrid: two parallel paths -->
+            <rect x="320" y="40" width="200" height="60" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <text x="420" y="60" text-anchor="middle" fill="#a3ff5c" font-size="9">[3a] FTS5 KEYWORD</text>
+            <text x="420" y="78" text-anchor="middle" fill="#e7ecf3" font-size="10" letter-spacing="0">BM25 · memory_facts_fts</text>
+            <text x="420" y="92" text-anchor="middle" fill="#4a5468" font-size="8">bm25_weight = 0.3</text>
+
+            <rect x="320" y="160" width="200" height="60" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <text x="420" y="180" text-anchor="middle" fill="#a3ff5c" font-size="9">[3b] VECTOR COSINE</text>
+            <text x="420" y="198" text-anchor="middle" fill="#e7ecf3" font-size="10" letter-spacing="0">memory_facts_index · vec</text>
+            <text x="420" y="212" text-anchor="middle" fill="#4a5468" font-size="8">vector_weight = 0.7</text>
+
+            <!-- merge arrows -->
+            <path d="M520,70 Q570,90 590,120" stroke="#a3ff5c" stroke-width="1.5"/>
+            <path d="M584,124 L592,118 L596,128" stroke="#a3ff5c" stroke-width="1.5"/>
+            <path d="M520,190 Q570,170 590,140" stroke="#a3ff5c" stroke-width="1.5"/>
+            <path d="M584,144 L592,138 L596,148" stroke="#a3ff5c" stroke-width="1.5"/>
+
+            <!-- 4 RRF -->
+            <rect x="600" y="100" width="160" height="60" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="680" y="120" text-anchor="middle" fill="#a3ff5c" font-size="9">[4] RRF BLEND</text>
+            <text x="680" y="138" text-anchor="middle" fill="#e7ecf3" font-size="10">reciprocal rank fusion</text>
+            <text x="680" y="152" text-anchor="middle" fill="#4a5468" font-size="8">rank-based · scale-agnostic</text>
+
+            <path d="M760,130 L800,130" stroke="#a3ff5c" stroke-width="1.5"/>
+            <path d="M793,124 L803,130 L793,136" stroke="#a3ff5c" stroke-width="1.5"/>
+
+            <!-- 5 candidates -->
+            <rect x="800" y="80" width="260" height="100" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="930" y="100" text-anchor="middle" fill="#a3ff5c" font-size="9">[5] RAW CANDIDATES</text>
+            <line x1="815" y1="108" x2="1045" y2="108" stroke="#233042"/>
+            <text x="815" y="124" fill="#e7ecf3" font-size="10">ScoredFact · ScoredFact · ScoredFact</text>
+            <text x="815" y="138" fill="#e7ecf3" font-size="10">ScoredFact · ScoredFact · ScoredFact</text>
+            <text x="815" y="154" fill="#e7ecf3" font-size="10">…  (typically limit × 2)</text>
+            <text x="815" y="170" fill="#4a5468" font-size="9">→ next stage: rescore</text>
+          </g>
+
+          <!-- footnote -->
+          <text x="20" y="248" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.2">[!] HYBRID SEARCH</text>
+          <text x="20" y="264" font-family="Inter, sans-serif" font-size="11" fill="#8a97a9">two queries fire in parallel; RRF merges them by rank, so neither score scale dominates.</text>
+        </svg>
+      </div>
+      <div class="config-note" style="margin-top:0">
+        <span class="k">recall_config.json</span> &mdash; <span class="k">vector_weight: 0.7</span> &middot; <span class="k">bm25_weight: 0.3</span> &middot;
+        candidates returned: <span class="k">limit × 2</span> &middot; rescore is where the actual top-K is picked.
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE 8 — RESCORE ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">10</span> &nbsp;/&nbsp; rescore — adjusting the scores</div>
+    <div class="split">
+      <div>
+        <div class="svg-frame" data-label="rescore steps" style="padding:6px 0">
+          <svg viewBox="0 0 40 8" style="display:none"></svg>
+          <div style="margin-top:24px">
+            <div class="rescore-row boost">
+              <span class="rstep">[1]</span>
+              <span class="rname">CATEGORY WEIGHT</span>
+              <span class="rdesc">schema 1.6 / correction 1.5 / strategy 1.4 …</span>
+              <span class="rop">× weight</span>
+            </div>
+            <div class="rescore-row drop">
+              <span class="rstep">[2]</span>
+              <span class="rname">CONTRADICTION PENALTY</span>
+              <span class="rdesc">contradicted_by is set</span>
+              <span class="rop">× 0.7</span>
+            </div>
+            <div class="rescore-row drop">
+              <span class="rstep">[3]</span>
+              <span class="rname">TEMPORAL DECAY</span>
+              <span class="rdesc">valid_until set · class-aware</span>
+              <span class="rop">× 0.1–0.3</span>
+            </div>
+            <div class="rescore-row boost">
+              <span class="rstep">[4]</span>
+              <span class="rname">WARD AFFINITY</span>
+              <span class="rdesc">candidate's ward matches active ward</span>
+              <span class="rop">× 1.3</span>
+            </div>
+            <div class="rescore-row drop">
+              <span class="rstep">[5]</span>
+              <span class="rname">SUPERSESSION FILTER</span>
+              <span class="rdesc">superseded_by is set</span>
+              <span class="rop">DROP</span>
+            </div>
+            <div class="rescore-row drop">
+              <span class="rstep">[6]</span>
+              <span class="rname">MIN-SCORE FLOOR</span>
+              <span class="rdesc">noise gate · keeps short queries clean</span>
+              <span class="rop">DROP &lt; 0.3</span>
+            </div>
+            <div class="rescore-row boost">
+              <span class="rstep">[7]</span>
+              <span class="rname">SORT &amp; TRUNCATE</span>
+              <span class="rdesc">top-K by final score</span>
+              <span class="rop">max_facts 10</span>
+            </div>
           </div>
-        </li>
-        <li>
-          <span class="i">op·2</span>
-          <div>
-            <strong>DecayEngine</strong><br>
-            <span class="muted small">
-              orphan + age &gt; 30d + mention_count low → prune candidate
-            </span>
-          </div>
-        </li>
-        <li>
-          <span class="i">op·3</span>
-          <div>
-            <strong>Pruner</strong><br>
-            <span class="muted small">
-              mark_pruned · remove from kg_name_index · write audit
-            </span>
-          </div>
-        </li>
-        <li>
-          <span class="i">op·4</span>
-          <div>
-            <strong>Cross-session synthesis</strong>
-            <span class="pill" style="color: var(--pencil); font-size: 9px; margin-left: 0.5rem;">deferred</span><br>
-            <span class="muted small">
-              strong-subgraph LLM summarization → strategy facts — Phase 6
-            </span>
-          </div>
-        </li>
-      </ul>
+        </div>
+      </div>
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:28px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.15">Raw scores meet<br>opinionated rules.</h3>
+        <p class="caption">Rescore runs client-side after SQL returns. Category preference, contradiction penalty, supersession exclusion, and the noise floor all live here — not buried in a SQL view.</p>
+        <p class="caption"><strong>Schemas outrank corrections</strong> because they're distilled. Skill and agent indices sit at the bottom because they exist for lookup, not for behavior shaping.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px">Lime steps multiply scores upward; coral steps demote or drop. A separate <span class="mono">max_recall_tokens = 3000</span> cap limits the total size of the formatted block.</p>
+        <div class="config-note">
+          <span class="k">recall_config.json</span> &mdash; every multiplier tunable.<br>
+          <span class="k">min_score: 0.3</span> &middot; <span class="k">contradiction_penalty: 0.7</span> &middot; <span class="k">ward_affinity_boost: 1.3</span> &middot; <span class="k">max_facts: 10</span>
+        </div>
+      </div>
     </div>
-  </div>
+  </section>
 
-  <span class="folio"><strong>08</strong> / 10</span>
-</section>
+  <!-- ============= SLIDE 9 — GRAPH TRAVERSAL ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">11</span> &nbsp;/&nbsp; graph traversal</div>
+    <div class="split">
+      <div class="svg-frame" data-label="top-K → walk graph · 2 hops · decay 0.6">
+        <svg viewBox="0 0 700 460" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- LEFT: top-K facts column -->
+          <text x="80" y="40" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.8">TOP-K FACTS</text>
+          <g>
+            <rect x="20" y="60" width="120" height="46" rx="2" fill="#131a24" stroke="#a3ff5c" stroke-width="1.3"/>
+            <rect x="20" y="60" width="3" height="46" fill="#a3ff5c"/>
+            <text x="30" y="78" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c" letter-spacing="1">SCHEMA · a3f8</text>
+            <line x1="30" y1="84" x2="130" y2="84" stroke="#233042"/>
+            <text x="30" y="98" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">score 0.88</text>
 
+            <rect x="20" y="116" width="120" height="46" rx="2" fill="#131a24" stroke="#a3ff5c" stroke-width="1.3"/>
+            <rect x="20" y="116" width="3" height="46" fill="#a3ff5c"/>
+            <text x="30" y="134" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c" letter-spacing="1">CORRECTION · 5b2a</text>
+            <line x1="30" y1="140" x2="130" y2="140" stroke="#233042"/>
+            <text x="30" y="154" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">score 0.71</text>
 
-<!-- ========== 09 · PERFORMANCE ========== -->
-<section class="slide" data-slide="9" data-title="Baseline">
-  <div class="slide-label">
-    <span class="num">09</span>
-    <span class="title-tag">Baseline</span>
-  </div>
+            <rect x="20" y="172" width="120" height="46" rx="2" fill="#131a24" stroke="#8a97a9" stroke-width="1.3"/>
+            <rect x="20" y="172" width="3" height="46" fill="#8a97a9"/>
+            <text x="30" y="190" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9" letter-spacing="1">STRATEGY · 7b40</text>
+            <line x1="30" y1="196" x2="130" y2="196" stroke="#233042"/>
+            <text x="30" y="210" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">score 0.62</text>
+          </g>
+          <text x="80" y="240" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#4a5468" font-style="italic">source_episode_ids</text>
 
-  <div class="reveal">
-    <p class="eyebrow">The numbers · 2026-04-13</p>
-    <h2>Three budgets, three<br>
-      orders of magnitude <em>under</em>.</h2>
-    <p class="muted" style="margin-top: 1rem; max-width: 48rem;">
-      Every benchmark lives as a real test that asserts its budget.
-      CI rerunning the suite is the perf-regression guard.
-    </p>
-  </div>
+          <!-- arrow into graph -->
+          <path d="M148,140 L210,140" stroke="#a3ff5c" stroke-width="1.5"/>
+          <path d="M203,134 L213,140 L203,146" stroke="#a3ff5c" stroke-width="1.5"/>
+          <text x="180" y="130" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c" letter-spacing="1">walk</text>
 
-  <div class="dials reveal">
-    <div class="dial" style="--bar: 11%;">
-      <div class="dial-h">Resolver</div>
-      <div class="dial-v">2.15 <span class="unit">ms · p95</span></div>
-      <div class="dial-b">budget <span class="budget">&lt; 20 ms</span> · 9.3× headroom</div>
-      <div class="dial-bar"></div>
-      <div class="small muted" style="margin-top: 0.8rem;">1,000 entities · 100 resolutions</div>
+          <!-- RIGHT: graph with concentric rings -->
+          <!-- seed entity (filled center) -->
+          <circle cx="380" cy="220" r="100" fill="none" stroke="#233042" stroke-width="1" stroke-dasharray="2 4"/>
+          <circle cx="380" cy="220" r="180" fill="none" stroke="#233042" stroke-width="1" stroke-dasharray="2 4"/>
+
+          <text x="380" y="35" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.8">KNOWLEDGE GRAPH</text>
+
+          <!-- seed entity -->
+          <g>
+            <circle cx="380" cy="220" r="30" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="380" y="218" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#e7ecf3">seed</text>
+            <text x="380" y="232" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">1.00×</text>
+          </g>
+
+          <!-- hop 1 entities (3) -->
+          <g stroke="#a3ff5c" stroke-width="1.2">
+            <line x1="380" y1="220" x2="295" y2="170"/>
+            <line x1="380" y1="220" x2="465" y2="170"/>
+            <line x1="380" y1="220" x2="380" y2="320"/>
+          </g>
+          <g>
+            <circle cx="295" cy="170" r="26" fill="#131a24" stroke="#a3ff5c" stroke-width="1.6"/>
+            <text x="295" y="170" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#e7ecf3">hop-1a</text>
+            <text x="295" y="182" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">0.60×</text>
+
+            <circle cx="465" cy="170" r="26" fill="#131a24" stroke="#a3ff5c" stroke-width="1.6"/>
+            <text x="465" y="170" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#e7ecf3">hop-1b</text>
+            <text x="465" y="182" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">0.60×</text>
+
+            <circle cx="380" cy="320" r="26" fill="#131a24" stroke="#a3ff5c" stroke-width="1.6"/>
+            <text x="380" y="320" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#e7ecf3">hop-1c</text>
+            <text x="380" y="332" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">0.60×</text>
+          </g>
+
+          <!-- hop 2 entities (faded) -->
+          <g stroke="#a3ff5c" stroke-width="1" stroke-dasharray="3 3" opacity="0.6">
+            <line x1="295" y1="170" x2="220" y2="110"/>
+            <line x1="465" y1="170" x2="555" y2="120"/>
+            <line x1="380" y1="320" x2="450" y2="395"/>
+          </g>
+          <g opacity="0.7">
+            <circle cx="220" cy="110" r="22" fill="#131a24" stroke="#a3ff5c" stroke-width="1.3"/>
+            <text x="220" y="110" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#e7ecf3">hop-2</text>
+            <text x="220" y="122" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">0.36×</text>
+
+            <circle cx="555" cy="120" r="22" fill="#131a24" stroke="#a3ff5c" stroke-width="1.3"/>
+            <text x="555" y="120" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#e7ecf3">hop-2</text>
+            <text x="555" y="132" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">0.36×</text>
+
+            <circle cx="450" cy="395" r="22" fill="#131a24" stroke="#a3ff5c" stroke-width="1.3"/>
+            <text x="450" y="395" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#e7ecf3">hop-2</text>
+            <text x="450" y="407" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">0.36×</text>
+          </g>
+
+          <!-- ring labels -->
+          <text x="600" y="220" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.5">HOP 1 · 0.6×</text>
+          <text x="600" y="400" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.5">HOP 2 · 0.36×</text>
+
+          <!-- footnote -->
+          <text x="350" y="442" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.4">MAX_HOPS = 2 · HOP_DECAY = 0.6 · MAX_GRAPH_FACTS = 5</text>
+        </svg>
+      </div>
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:28px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.15">After rescore,<br>walk the graph.</h3>
+        <p class="caption">For each top fragment, follow <span class="mono">source_episode_ids</span> to the entities it referenced. From those, walk outward along <span class="mono">kg_relationships</span>.</p>
+        <p class="caption">Each hop multiplies relevance by <span class="mono">hop_decay = 0.6</span>. Direct neighbors weigh 0.6×; two hops out weigh 0.36×. Capped at <span class="mono">max_graph_facts = 5</span>.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px">A query about commit hygiene matches one correction; the traversal pulls in <em>git workflow</em>, <em>code review</em>, <em>release process</em> — even though none of those words appeared in the query.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px"><strong>Hit weighting (MEM-001 Part B-1):</strong> graph-ANN hits below <span class="mono">min_kg_confidence = 0.1</span> are dropped, and surviving hits get their score multiplied by <span class="mono">kg_entities.confidence</span>. So when contradiction propagation (Part A) decays a contradicted entity, recall actually downweights it — high-confidence entities at the same cosine outrank low-confidence ones.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px"><strong>Edge weighting (MEM-001 Part B-2):</strong> the actual hop-walk also honours edge confidence. The recursive CTE skips relationships below <span class="mono">min_kg_confidence</span>, multiplies an <span class="mono">edge_confidence_product</span> along each path, and scores each reachable entity as <span class="mono">hop_decay^hop × edge_confidence_product × entity_confidence</span>. Shortest-hop wins on dedup; ties go to the higher-confidence path. MEM-001 fully closed.</p>
+        <div class="config-note">
+          <span class="k">recall_config.json</span> &rarr; <span class="k">graph_traversal</span><br>
+          <span class="k">max_hops: 2</span> &middot; <span class="k">hop_decay: 0.6</span> &middot; <span class="k">max_graph_facts: 5</span> &middot; <span class="k">min_kg_confidence: 0.1</span>
+        </div>
+      </div>
     </div>
+  </section>
 
-    <div class="dial" style="--bar: 0.07%;">
-      <div class="dial-h">Reader under load</div>
-      <div class="dial-v">140 <span class="unit">µs · p95</span></div>
-      <div class="dial-b">budget <span class="budget">&lt; 200 ms</span> · 1400× headroom</div>
-      <div class="dial-bar"></div>
-      <div class="small muted" style="margin-top: 0.8rem;">500 chunks draining · WAL + pool</div>
+  <!-- ============= SLIDE 10 — SESSION LIFECYCLE ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">12</span> &nbsp;/&nbsp; session lifecycle</div>
+    <div class="stack-vert">
+      <div class="svg-frame" data-label="memory wraps every session">
+        <svg viewBox="0 0 1100 360" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <line x1="50" y1="180" x2="1050" y2="180" stroke="#233042" stroke-width="2"/>
+
+          <line x1="50" y1="100" x2="50" y2="260" stroke="#a3ff5c" stroke-width="2"/>
+          <text x="50" y="92" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="1.5">SESSION START</text>
+          <line x1="1050" y1="100" x2="1050" y2="260" stroke="#a3ff5c" stroke-width="2"/>
+          <text x="1050" y="92" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c" letter-spacing="1.5">SESSION END</text>
+
+          <!-- bootstrap (left, READ) -->
+          <g>
+            <rect x="70" y="120" width="220" height="120" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <text x="180" y="140" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">bootstrap reads memory</text>
+            <line x1="80" y1="148" x2="280" y2="148" stroke="#233042"/>
+            <text x="80" y="164" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">[1]</text>
+            <text x="100" y="164" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">## Last Session (handoff)</text>
+            <text x="80" y="180" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">[2]</text>
+            <text x="100" y="180" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">## Active Goals</text>
+            <text x="80" y="196" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">[3]</text>
+            <text x="100" y="196" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">## Active Corrections</text>
+            <text x="80" y="212" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">[4]</text>
+            <text x="100" y="212" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">## Context from Last Session</text>
+            <text x="80" y="228" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">[5]</text>
+            <text x="100" y="228" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">user-query recall</text>
+          </g>
+          <text x="180" y="260" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.5">READ — ORDER MATTERS · EARLIER WINS</text>
+
+          <!-- conversation middle -->
+          <g>
+            <rect x="310" y="140" width="520" height="80" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.2"/>
+            <text x="570" y="162" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#8a97a9" font-style="italic">user turns · tool calls · assistant responses</text>
+            <g fill="#a3ff5c">
+              <circle cx="340" cy="200" r="3"/>
+              <circle cx="385" cy="200" r="3"/>
+              <circle cx="430" cy="200" r="3"/>
+              <circle cx="475" cy="200" r="3"/>
+              <circle cx="520" cy="200" r="3"/>
+              <circle cx="565" cy="200" r="3"/>
+              <circle cx="610" cy="200" r="3"/>
+              <circle cx="655" cy="200" r="3"/>
+              <circle cx="700" cy="200" r="3"/>
+              <circle cx="745" cy="200" r="3"/>
+              <circle cx="790" cy="200" r="3"/>
+            </g>
+            <g>
+              <circle cx="475" cy="200" r="8" fill="none" stroke="#a3ff5c" stroke-width="1.5"/>
+              <circle cx="700" cy="200" r="8" fill="none" stroke="#a3ff5c" stroke-width="1.5"/>
+              <line x1="475" y1="208" x2="475" y2="240" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+              <line x1="700" y1="208" x2="700" y2="240" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+              <text x="475" y="256" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">recall</text>
+              <text x="700" y="256" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">recall</text>
+            </g>
+          </g>
+          <text x="570" y="282" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.5">MID-SESSION RECALL EVERY 5 TURNS · NOVELTY &gt; 0.3 INJECTED</text>
+
+          <!-- handoff writer (right, WRITE) -->
+          <g>
+            <rect x="850" y="120" width="190" height="120" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <text x="945" y="140" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">HandoffWriter</text>
+            <line x1="860" y1="148" x2="1030" y2="148" stroke="#233042"/>
+            <text x="860" y="166" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">read transcript</text>
+            <text x="860" y="184" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">LLM compact + tool names</text>
+            <text x="860" y="202" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">write handoff.latest</text>
+            <text x="860" y="220" font-family="Inter, sans-serif" font-size="10" fill="#e7ecf3">write handoff.{session_id}</text>
+          </g>
+          <text x="945" y="260" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.5">WRITE — FRAGMENT FOR NEXT SESSION</text>
+
+          <!-- arrow: handoff feeds next session -->
+          <path d="M945,240 C945,310 180,310 180,260" stroke="#a3ff5c" stroke-width="1.2" stroke-dasharray="3 4"/>
+          <path d="M184,253 L178,261 L187,266" stroke="#a3ff5c" stroke-width="1.2" fill="none"/>
+          <text x="570" y="330" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.5">the loop closes — what's written becomes what's read</text>
+        </svg>
+      </div>
+      <div class="config-note" style="margin-top:0">
+        <span class="k">ward-scoped:</span> the handoff block is skipped if the previous session was in a different ward · prevents bleed-through.<br>
+        <span class="k">always-on injection:</span> active corrections + active goals don't rely on recall — they're pulled directly, every session.
+      </div>
     </div>
+  </section>
 
-    <div class="dial" style="--bar: 0.06%;">
-      <div class="dial-h">Cold-boot · 10k</div>
-      <div class="dial-v">6.1 <span class="unit">ms</span></div>
-      <div class="dial-b">budget <span class="budget">&lt; 10 s</span> · 1640× headroom</div>
-      <div class="dial-bar"></div>
-      <div class="small muted" style="margin-top: 0.8rem;">schema init + pool + first query</div>
+  <!-- ============= SLIDE 11 — BACKGROUND MAINTENANCE ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">13</span> &nbsp;/&nbsp; background maintenance</div>
+    <div class="split">
+      <div class="svg-frame" data-label="hourly worker · 8 components">
+        <svg viewBox="0 0 580 460" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- center -->
+          <circle cx="290" cy="230" r="60" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+          <circle cx="290" cy="230" r="50" fill="none" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 4" opacity="0.5"/>
+          <text x="290" y="226" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#a3ff5c" letter-spacing="1.5">SleepOps</text>
+          <text x="290" y="244" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">every 1h</text>
+          <text x="290" y="258" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#4a5468">SleepTimeWorker</text>
+
+          <!-- [1] Compactor (top) -->
+          <g>
+            <rect x="220" y="20" width="140" height="56" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <text x="232" y="38" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[1] Compactor</text>
+            <text x="232" y="54" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">merges near-dup KG</text>
+            <text x="232" y="68" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">entities (LLM judge)</text>
+          </g>
+          <line x1="290" y1="76" x2="290" y2="170" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- [2] Synthesizer (top-right) -->
+          <g>
+            <rect x="420" y="80" width="150" height="56" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <text x="432" y="98" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[2] Synthesizer</text>
+            <text x="432" y="114" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">co-occurrence →</text>
+            <text x="432" y="128" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">strategy fragment</text>
+          </g>
+          <line x1="420" y1="135" x2="340" y2="190" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- [3] PatternExtractor (right) -->
+          <g>
+            <rect x="420" y="170" width="150" height="56" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <text x="432" y="188" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[3] PatternExtractor</text>
+            <text x="432" y="204" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">tool-call sequences →</text>
+            <text x="432" y="218" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">procedural patterns</text>
+          </g>
+          <line x1="420" y1="198" x2="350" y2="220" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- [4] OrphanArchiver (bottom-right) -->
+          <g>
+            <rect x="420" y="260" width="150" height="56" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="432" y="278" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[4] OrphanArchiver</text>
+            <text x="432" y="294" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">archives lonely KG</text>
+            <text x="432" y="308" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">entities (no LLM)</text>
+          </g>
+          <line x1="420" y1="288" x2="350" y2="250" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- [5] CorrectionsAbstractor -->
+          <g>
+            <rect x="320" y="350" width="180" height="56" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="332" y="368" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[5] CorrectionsAbstractor</text>
+            <text x="332" y="384" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">3+ corrections → schema</text>
+            <text x="332" y="398" font-family="JetBrains Mono, monospace" font-size="9" fill="#ff7a59">throttled · 24h default</text>
+          </g>
+          <line x1="350" y1="350" x2="320" y2="280" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- [6] ConflictResolver -->
+          <g>
+            <rect x="80" y="350" width="180" height="56" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="92" y="368" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[6] ConflictResolver</text>
+            <text x="92" y="384" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">schema pair → judge → supersede</text>
+            <text x="92" y="398" font-family="JetBrains Mono, monospace" font-size="9" fill="#ff7a59">throttled · 24h default</text>
+          </g>
+          <line x1="230" y1="350" x2="260" y2="280" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- [7] DecayEngine -->
+          <g>
+            <rect x="10" y="260" width="150" height="56" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="22" y="278" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[7] DecayEngine</text>
+            <text x="22" y="294" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">KG entity + relation</text>
+            <text x="22" y="308" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">confidence decay</text>
+          </g>
+          <line x1="160" y1="288" x2="230" y2="250" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- [8] Pruner -->
+          <g>
+            <rect x="10" y="170" width="150" height="56" rx="3" fill="#131a24" stroke="#8a97a9" stroke-width="1.5"/>
+            <text x="22" y="188" font-family="JetBrains Mono, monospace" font-size="10" fill="#a3ff5c" letter-spacing="1.2">[8] Pruner</text>
+            <text x="22" y="204" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">soft-delete entities</text>
+            <text x="22" y="218" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">below floor</text>
+          </g>
+          <line x1="160" y1="198" x2="230" y2="220" stroke="#a3ff5c" stroke-width="1" stroke-dasharray="2 3"/>
+
+          <!-- footnote -->
+          <text x="290" y="436" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.2">EACH JOB IS INDEPENDENT · LLM JOBS THROTTLE TO BOUND TOKEN SPEND</text>
+        </svg>
+      </div>
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:26px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.15">Eight jobs,<br>each does one thing.</h3>
+        <p class="caption">An hourly worker runs the cycle. <strong>Jobs are independent</strong> — one failing doesn't stop the others.</p>
+        <p class="caption">The <strong>LLM-using jobs</strong> have their own throttles so the cycle doesn't burn tokens on jobs that have no new material to chew on. Default cadence: <span class="mono">24h</span> for Compactor, Synthesizer, PatternExtractor, CorrectionsAbstractor, and ConflictResolver.</p>
+        <p class="caption">The cheap mechanical jobs — <strong>DecayEngine</strong>, <strong>OrphanArchiver</strong>, <strong>Pruner</strong> — run every cycle. Decay touches <span class="mono">last_seen_at</span>; orphan check + prune walks the result.</p>
+        <div class="config-note">
+          <span class="k">settings.json</span> &rarr; <span class="k">execution.memory</span><br>
+          <span class="k">correctionsAbstractorIntervalHours</span> · default 24<br>
+          <span class="k">conflictResolverIntervalHours</span> · default 24
+        </div>
+      </div>
     </div>
-  </div>
+  </section>
 
-  <p class="reveal muted small" style="margin-top: 3rem; max-width: 38rem;">
-    The memory layer is not the bottleneck in any realistic workload.
-    Network round-trips and LLM inference dominate every end-to-end latency.
-    At least <strong>100× data growth</strong> fits within these budgets.
-  </p>
-
-  <span class="folio"><strong>09</strong> / 10</span>
-</section>
-
-
-<!-- ========== 10 · CLOSE ========== -->
-<section class="slide" data-slide="10" data-title="Shipped">
-  <div class="slide-label">
-    <span class="num">10</span>
-    <span class="title-tag">Shipped</span>
-  </div>
-
-  <div class="reveal">
-    <p class="eyebrow">v22 · delivered</p>
-    <h2>Six phases,<br>
-      <em>one</em> foundation.</h2>
-  </div>
-
-  <div class="phases reveal">
-    <div class="phase">
-      <div class="p-n">1a</div>
-      <div class="p-t">infra</div>
-      <div class="p-b">two-DB split · sqlite-vec · v22 schema</div>
+  <!-- ============= SLIDE 12 — CONFIGURABILITY ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">14</span> &nbsp;/&nbsp; configurability</div>
+    <div class="detail-head" style="border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:36px;">
+      <span class="stamp">two files</span>
+      <h3>Every knob exposed. Sane defaults.</h3>
     </div>
-    <div class="phase">
-      <div class="p-n">1b</div>
-      <div class="p-t">repos</div>
-      <div class="p-b">migrated to knowledge.db · cosine deleted</div>
-    </div>
-    <div class="phase">
-      <div class="p-n">1c</div>
-      <div class="p-t">resolver</div>
-      <div class="p-b">alias-first · ANN · 2 ms p95 @ 1k</div>
-    </div>
-    <div class="phase">
-      <div class="p-n">2</div>
-      <div class="p-t">streaming</div>
-      <div class="p-b">chunker · queue · two-pass LLM · 202 Accepted</div>
-    </div>
-    <div class="phase">
-      <div class="p-n">3</div>
-      <div class="p-t">unified recall</div>
-      <div class="p-b">ScoredItem · RRF · goals · intent-boost</div>
-    </div>
-    <div class="phase">
-      <div class="p-n">4 · 5</div>
-      <div class="p-t">ops + docs</div>
-      <div class="p-b">compactor · pruner · stats · perf baseline</div>
-    </div>
-  </div>
+    <div class="split">
+      <div>
+        <div class="config-note" style="margin-top:0">
+          <span class="k">settings.json</span> → <span class="k">execution.memory</span><br>
+          <span style="color:var(--ink);font-weight:500">background-job throttles</span>
+        </div>
+        <pre style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-dim);background:var(--bg-soft);border:1px solid var(--rule);border-radius:3px;padding:16px;margin-top:14px;line-height:1.55;white-space:pre-wrap">{
+  "execution": {
+    "memory": {
+      "<span class="k">correctionsAbstractorIntervalHours</span>": 24,
+      "<span class="k">conflictResolverIntervalHours</span>": 24,
 
-  <div class="reveal" style="margin-top: 4rem; display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: end;">
-    <div>
-      <h3 style="margin-bottom: 0.8rem;">What's next, deliberately</h3>
-      <p class="muted small">
-        Cross-session synthesis · LLM pairwise verifier · Observatory memory tab ·
-        Full legacy-recall retirement · architecture SVG.
-        None blocking daily use.
-      </p>
+      "<span class="k">queryGate</span>": { "enabled": false },
+      "<span class="k">beliefNetwork</span>": { "enabled": false, "intervalHours": 24, "neighborhoodPrefixDepth": 1, "contradictionBudgetPerCycle": 20, "factConfidenceDropThreshold": 0.3 },
+      "<span class="k">mmr</span>": { "enabled": true, "lambda": 0.6 },
+      "<span class="k">rerank</span>": { "enabled": false },
+      "<span class="k">intentRouter</span>": { "enabled": false }
+    }
+  }
+}</pre>
+        <table style="width:100%;border-collapse:collapse;margin-top:14px;font-family:'JetBrains Mono',monospace;font-size:11px">
+          <thead>
+            <tr style="border-bottom:1px solid var(--rule)">
+              <th style="text-align:left;padding:6px 10px 6px 0;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">BLOCK</th>
+              <th style="text-align:left;padding:6px 0 6px 10px;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">WHAT IT DOES</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">throttles</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">CorrectionsAbstractor + ConflictResolver cadence. <span class="mono">0</span> = every cycle.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">queryGate</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Self-RAG. LLM call before hybrid search returns <span class="mono">Skip</span> / <span class="mono">Direct</span> / <span class="mono">Split</span>. Fixes multi-topic dilution.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">beliefNetwork</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Belief synthesis (B-1) + contradiction detection (B-2) + confidence propagation (B-3). <span class="mono">factConfidenceDropThreshold</span> controls when fact-decay fires belief invalidation. Sole-source beliefs retract; multi-source mark stale + re-synthesize.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">mmr</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Maximal Marginal Relevance diversity rerank. <span class="mono">lambda</span> trades relevance vs diversity.</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">rerank</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">Cross-encoder reranker (BGE) via fastembed-rs. Higher quality, adds latency + ~280MB on disk.</td>
+            </tr>
+            <tr>
+              <td style="padding:6px 10px 6px 0;color:var(--accent);vertical-align:top">intentRouter</td>
+              <td style="padding:6px 0 6px 10px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">kNN intent classifier picks per-intent category-weight profiles.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">Partial files deep-merge</strong> with defaults — user values win per key. Missing blocks fall through to compiled defaults.</p>
+      </div>
+      <div>
+        <div class="config-note" style="margin-top:0">
+          <span class="k">config/recall_config.json</span><br>
+          <span style="color:var(--ink);font-weight:500">recall &amp; rescore pipeline tuning</span>
+        </div>
+        <table style="width:100%;border-collapse:collapse;margin-top:14px;font-family:'JetBrains Mono',monospace;font-size:11px">
+          <thead>
+            <tr style="border-bottom:1px solid var(--rule)">
+              <th style="text-align:left;padding:8px 12px 8px 0;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">KNOB</th>
+              <th style="text-align:right;padding:8px 12px;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">DEFAULT</th>
+              <th style="text-align:left;padding:8px 0 8px 12px;color:var(--ink-faint);letter-spacing:0.1em;font-weight:500">CONTROLS</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:8px 12px 8px 0;color:var(--accent)">category_weights.schema</td>
+              <td style="text-align:right;padding:8px 12px;color:var(--ink)">1.6</td>
+              <td style="padding:8px 0 8px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">distilled rules outrank raw</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:8px 12px 8px 0;color:var(--accent)">min_score</td>
+              <td style="text-align:right;padding:8px 12px;color:var(--ink)">0.3</td>
+              <td style="padding:8px 0 8px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">noise floor for rescore</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:8px 12px 8px 0;color:var(--accent)">contradiction_penalty</td>
+              <td style="text-align:right;padding:8px 12px;color:var(--ink)">0.7</td>
+              <td style="padding:8px 0 8px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">contradicted-fact multiplier</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:8px 12px 8px 0;color:var(--accent)">ward_affinity_boost</td>
+              <td style="text-align:right;padding:8px 12px;color:var(--ink)">1.3</td>
+              <td style="padding:8px 0 8px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">in-ward facts boosted</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:8px 12px 8px 0;color:var(--accent)">vector_weight / bm25_weight</td>
+              <td style="text-align:right;padding:8px 12px;color:var(--ink)">0.7 / 0.3</td>
+              <td style="padding:8px 0 8px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">RRF blend ratio</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:8px 12px 8px 0;color:var(--accent)">max_facts / max_recall_tokens</td>
+              <td style="text-align:right;padding:8px 12px;color:var(--ink)">10 / 3000</td>
+              <td style="padding:8px 0 8px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">top-K + token ceiling</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:8px 12px 8px 0;color:var(--accent)">graph_traversal.max_hops</td>
+              <td style="text-align:right;padding:8px 12px;color:var(--ink)">2</td>
+              <td style="padding:8px 0 8px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">expansion depth</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:8px 12px 8px 0;color:var(--accent)">graph_traversal.hop_decay</td>
+              <td style="text-align:right;padding:8px 12px;color:var(--ink)">0.6</td>
+              <td style="padding:8px 0 8px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">per-hop relevance decay</td>
+            </tr>
+            <tr style="border-bottom:1px solid #1c2535">
+              <td style="padding:8px 12px 8px 0;color:var(--accent)">kg_decay.entity_half_life_days</td>
+              <td style="text-align:right;padding:8px 12px;color:var(--ink)">90</td>
+              <td style="padding:8px 0 8px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">KG entity confidence half-life</td>
+            </tr>
+            <tr>
+              <td style="padding:8px 12px 8px 0;color:var(--accent)">mid_session_recall.every_n_turns</td>
+              <td style="text-align:right;padding:8px 12px;color:var(--ink)">5</td>
+              <td style="padding:8px 0 8px 12px;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px;font-weight:300">how often recall refires mid-chat</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
-    <div style="text-align: right;">
-      <p class="mono small muted" style="line-height: 1.8;">
-        spec · <code style="background:none;padding:0;">docs/superpowers/specs/2026-04-12-memory-layer-redesign-design.md</code><br>
-        plans · <code style="background:none;padding:0;">docs/superpowers/plans/2026-04-12-memory-v2-phase-*.md</code><br>
-        baseline · <code style="background:none;padding:0;">docs/memory-v2-performance-baseline.md</code><br>
-        reference · <code style="background:none;padding:0;">memory-bank/components/memory-layer/*.md</code>
-      </p>
+  </section>
+
+  <!-- ============= SLIDE 13 — THE CLOSED LOOP ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">15</span> &nbsp;/&nbsp; the closed loop</div>
+    <div class="split">
+      <div class="svg-frame" data-label="correction → schema → conflict → retire">
+        <svg viewBox="0 0 540 540" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <circle cx="270" cy="270" r="190" fill="none" stroke="#233042" stroke-width="1" stroke-dasharray="3 5"/>
+
+          <!-- 1: USER GIVES CORRECTION (top) -->
+          <g>
+            <circle cx="270" cy="70" r="32" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="270" y="68" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">[1]</text>
+            <text x="270" y="84" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">user</text>
+            <text x="270" y="20" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#e7ecf3" letter-spacing="1">USER CORRECTS</text>
+            <text x="270" y="36" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">"use sentence case in commits"</text>
+          </g>
+
+          <path d="M310,90 Q400,130 430,210" stroke="#a3ff5c" stroke-width="1.5"/>
+          <path d="M424,204 L432,212 L424,219" stroke="#a3ff5c" stroke-width="1.5"/>
+
+          <!-- 2: FACT STORED (right) -->
+          <g>
+            <circle cx="450" cy="240" r="32" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="450" y="238" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">[2]</text>
+            <text x="450" y="254" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">store</text>
+            <text x="510" y="220" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="11" fill="#e7ecf3" letter-spacing="1">FACT WRITTEN</text>
+            <text x="510" y="236" text-anchor="end" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">correction.5b2a</text>
+            <text x="510" y="252" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468">weight 1.5</text>
+          </g>
+
+          <path d="M448,275 Q430,360 400,395" stroke="#a3ff5c" stroke-width="1.5"/>
+          <path d="M393,389 L399,397 L407,392" stroke="#a3ff5c" stroke-width="1.5"/>
+
+          <!-- 3: RECALLED NEXT SESSION (bottom-right) -->
+          <g>
+            <circle cx="370" cy="430" r="32" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="370" y="428" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">[3]</text>
+            <text x="370" y="444" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">recall</text>
+            <text x="430" y="412" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="11" fill="#e7ecf3" letter-spacing="1">SURFACES</text>
+            <text x="430" y="448" text-anchor="end" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">next session, always-on</text>
+            <text x="430" y="464" text-anchor="end" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">+ recall-matched</text>
+          </g>
+
+          <path d="M338,442 Q260,470 200,442" stroke="#a3ff5c" stroke-width="1.5"/>
+          <path d="M206,449 L198,442 L206,435" stroke="#a3ff5c" stroke-width="1.5"/>
+
+          <!-- 4: ACCUMULATES (bottom-left) -->
+          <g>
+            <circle cx="170" cy="430" r="32" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="170" y="428" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">[4]</text>
+            <text x="170" y="444" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">N ≥ 3</text>
+            <text x="110" y="412" text-anchor="start" font-family="JetBrains Mono, monospace" font-size="11" fill="#e7ecf3" letter-spacing="1">SIMILAR PILE UP</text>
+            <text x="110" y="448" text-anchor="start" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">3+ corrections same theme</text>
+            <text x="110" y="464" text-anchor="start" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">over days or weeks</text>
+          </g>
+
+          <path d="M140,395 Q110,360 90,275" stroke="#a3ff5c" stroke-width="1.5"/>
+          <path d="M84,282 L92,275 L97,283" stroke="#a3ff5c" stroke-width="1.5"/>
+
+          <!-- 5: CorrectionsAbstractor (left) -->
+          <g>
+            <circle cx="90" cy="240" r="32" fill="#131a24" stroke="#a3ff5c" stroke-width="2"/>
+            <text x="90" y="238" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">[5]</text>
+            <text x="90" y="254" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">abstract</text>
+            <text x="30" y="220" text-anchor="start" font-family="JetBrains Mono, monospace" font-size="11" fill="#e7ecf3" letter-spacing="1">PROMOTED</text>
+            <text x="30" y="236" text-anchor="start" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9" font-style="italic">schema.corrections.*</text>
+            <text x="30" y="252" text-anchor="start" font-family="JetBrains Mono, monospace" font-size="9" fill="#a3ff5c">weight 1.6 — outranks!</text>
+          </g>
+
+          <path d="M115,210 Q170,130 230,90" stroke="#a3ff5c" stroke-width="1.5"/>
+          <path d="M224,84 L232,90 L227,99" stroke="#a3ff5c" stroke-width="1.5"/>
+
+          <!-- center text -->
+          <g>
+            <text x="270" y="262" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#a3ff5c" letter-spacing="1.8">CLOSED LOOP</text>
+            <text x="270" y="280" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#8a97a9" font-style="italic">smarter at what to remember</text>
+          </g>
+
+          <!-- branch: contradicting → ConflictResolver retires -->
+          <g>
+            <rect x="190" y="318" width="160" height="48" rx="3" fill="#0c1118" stroke="#ff7a59" stroke-width="1.2" stroke-dasharray="3 3"/>
+            <text x="270" y="336" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#ff7a59" letter-spacing="1.2">[6] CONFLICT?</text>
+            <text x="270" y="352" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">ConflictResolver retires loser</text>
+          </g>
+          <path d="M90,272 Q150,310 195,340" stroke="#ff7a59" stroke-width="1" stroke-dasharray="2 3"/>
+        </svg>
+      </div>
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:28px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.15">From correction<br>to distilled rule.</h3>
+        <p class="caption">A single user correction enters the system. The next session sees it in <span class="mono">## Active Corrections</span> regardless of whether anyone queried for it.</p>
+        <p class="caption">Across multiple sessions it accumulates with siblings. The <strong>CorrectionsAbstractor</strong> distills 3+ corrections that share a theme into a single <span class="mono">schema</span> fragment with weight <strong>1.6</strong> — which outranks the raw 1.5 corrections.</p>
+        <p class="caption">If two distilled rules ever disagree, the <strong>ConflictResolver</strong> finds the pair by cosine similarity, asks an LLM judge, picks the higher-confidence winner. The loser gets <span class="mono">superseded_by</span> set and disappears from recall.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:24px"><strong style="color:var(--accent)">Raw feedback becomes principles · principles get arbitrated · stale ones disappear.</strong> No one curated this notebook by hand.</p>
+      </div>
     </div>
-  </div>
+  </section>
 
-  <span class="folio"><strong>10</strong> / 10</span>
-</section>
+</div>
 
+<div class="nav-hint"><kbd>←</kbd><kbd>→</kbd> or click to advance</div>
+<div class="counter"><span class="now" id="counter-now">01</span><span class="sep">/</span><span id="counter-tot">13</span></div>
 
 <script>
-  // build rail dots
-  const slides = document.querySelectorAll('.slide');
-  const dots = document.querySelector('.rail-dots');
-  slides.forEach((s, i) => {
-    const d = document.createElement('a');
-    d.className = 'rail-dot';
-    d.title = s.dataset.title || `Slide ${i + 1}`;
-    d.addEventListener('click', e => {
-      e.preventDefault();
-      s.scrollIntoView({ behavior: 'smooth' });
-    });
-    dots.appendChild(d);
-  });
+(function () {
+  var slides = document.querySelectorAll('.slide');
+  var total = slides.length;
+  var idx = 0;
 
-  // observe slides for in-view animations + active dot
-  const railDots = document.querySelectorAll('.rail-dot');
-  const io = new IntersectionObserver(
-    entries => {
-      entries.forEach(e => {
-        if (e.isIntersecting) {
-          e.target.classList.add('in-view');
-          const idx = +e.target.dataset.slide - 1;
-          railDots.forEach((d, i) => d.classList.toggle('active', i === idx));
-        }
-      });
-    },
-    { threshold: 0.5 }
-  );
-  slides.forEach(s => io.observe(s));
+  var counterNow = document.getElementById('counter-now');
+  var counterTot = document.getElementById('counter-tot');
+  var progressBar = document.getElementById('progress-bar');
+  counterTot.textContent = String(total).padStart(2, '0');
 
-  // keyboard navigation
-  function currentSlide() {
-    const y = window.scrollY + window.innerHeight / 2;
-    let best = slides[0], bestD = Infinity;
-    slides.forEach(s => {
-      const c = s.offsetTop + s.offsetHeight / 2;
-      if (Math.abs(c - y) < bestD) { bestD = Math.abs(c - y); best = s; }
+  function pad(n) { return String(n).padStart(2, '0'); }
+
+  function render() {
+    slides.forEach(function (s, i) {
+      if (i === idx) s.classList.add('active');
+      else s.classList.remove('active');
     });
-    return best;
+    counterNow.textContent = pad(idx + 1);
+    progressBar.style.width = ((idx + 1) / total * 100) + '%';
   }
-  document.addEventListener('keydown', e => {
-    if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') {
+
+  function go(delta) {
+    idx = Math.max(0, Math.min(total - 1, idx + delta));
+    render();
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
       e.preventDefault();
-      const cur = currentSlide();
-      const next = cur.nextElementSibling;
-      if (next && next.classList.contains('slide')) next.scrollIntoView({ behavior: 'smooth' });
-    } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'PageUp') {
+      go(1);
+    } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
       e.preventDefault();
-      const cur = currentSlide();
-      const prev = cur.previousElementSibling;
-      if (prev && prev.classList.contains('slide')) prev.scrollIntoView({ behavior: 'smooth' });
+      go(-1);
     } else if (e.key === 'Home') {
-      e.preventDefault();
-      slides[0].scrollIntoView({ behavior: 'smooth' });
+      idx = 0; render();
     } else if (e.key === 'End') {
-      e.preventDefault();
-      slides[slides.length - 1].scrollIntoView({ behavior: 'smooth' });
+      idx = total - 1; render();
     }
   });
 
-  // hide hint after first interaction
-  let hinted = false;
-  function hideHint() {
-    if (hinted) return;
-    hinted = true;
-    document.querySelector('.hint').style.opacity = 0;
-  }
-  window.addEventListener('scroll', hideHint, { once: true });
-  document.addEventListener('keydown', hideHint, { once: true });
-</script>
+  document.body.addEventListener('click', function (e) {
+    if (e.target.closest('.counter') || e.target.closest('.nav-hint')) return;
+    go(1);
+  });
 
+  render();
+})();
+</script>
 </body>
 </html>

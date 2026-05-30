@@ -76,9 +76,10 @@
 │  │   └── wards/                       #   Per-language ward index configs│
 │  │       └── *.yaml                                                      │
 │  ├── data/                            # SQLite databases                  │
-│  │   ├── conversations.db             #   Conversations, messages,       │
-│  │   │                                #   memory_facts, embedding_cache  │
-│  │   └── knowledge.db                 #   Knowledge graph + vec0 indexes │
+│  │   ├── conversations.db             #   Sessions, messages, logs,      │
+│  │   │                                #   recall_log, distillation_runs  │
+│  │   └── knowledge.db                 #   Facts, KG, wiki, procedures,   │
+│  │                                    #   episodes, embeddings, vec0     │
 │  ├── logs/                            # Daemon log files (when enabled)  │
 │  │   └── zerod.YYYY-MM-DD.log         #   Rolling log files (see note)   │
 │  ├── agents/{name}/                   # Agent configurations             │
@@ -481,17 +482,17 @@ Wizard renders outside the app shell (no sidebar). State managed via `useReducer
 
 ## Memory Brain
 
-The memory layer is z-Bot's cognitive system. Full documentation: [components/memory-layer/overview.md](components/memory-layer/overview.md). Backlog: [components/memory-layer/backlog.md](components/memory-layer/backlog.md).
+The memory layer is z-Bot's cognitive system. Full documentation: [components/memory-layer/overview.md](components/memory-layer/overview.md).
 
 ### Five Active Memory Loops
 
 | Loop | When | What | Files |
 |------|------|------|-------|
-| System recall | First message | `recall_with_graph()` → facts + episodes + graph → system message | `runner.rs:642` |
-| Intent + memory | Before intent LLM | `recall_for_intent()` → corrections, strategies, episodes | `intent_analysis.rs:326` |
-| Subagent priming | Delegation spawn | `recall_for_delegation()` → corrections, skills, ward files | `spawn.rs:311` |
-| Mid-session | Every N turns | RecallHook → new relevant facts injected | `executor.rs` |
-| Distillation | Session end | LLM extracts facts (verified), entities (normalized), relationships (deduped), episodes | `distillation.rs` |
+| System recall | First message | `MemoryRecall::recall_unified()` → facts + wiki + procedures + episodes + graph + goals + optional beliefs → system context | `gateway/gateway-memory/src/recall/mod.rs` |
+| Intent + resources | Before intent LLM | Intent middleware indexes/searches skills, agents, and wards through `MemoryFactStore` | `gateway/gateway-execution/src/middleware/intent_analysis.rs` |
+| Subagent priming | Delegation spawn | Fact store + ward context are passed into delegated executors | `gateway/gateway-execution/src/delegation/spawn.rs` |
+| Mid-session | Every N turns | Configured recall re-runs and injects novel context | `gateway/gateway-execution/src/runner/*` |
+| Distillation | Session end | LLM extracts facts, entities, relationships, episodes, and procedures | `gateway/gateway-execution/src/distillation.rs` |
 
 ### Subagent Tool Registry
 
@@ -511,7 +512,7 @@ All subagents (planner, code-agent, research-agent, etc.) now have:
 ### Recall Scoring
 
 ```
-score = (0.7 × vector + 0.3 × BM25) × category_weight × ward_affinity × temporal_decay × mention_boost × contradiction_penalty × predictive_boost
+score = RRF(FTS5 rank, sqlite-vec rank) × confidence × recency × mention_boost
 ```
 
 FTS5 queries sanitized with OR-joined terms (raw user messages break FTS5 syntax).
@@ -590,11 +591,11 @@ Network layer, decomposed into focused crates:
 ```
 gateway/
 ├── gateway-events/      # EventBus, GatewayEvent, HookContext
-├── gateway-database/    # DatabaseManager, pool, schema, ConversationRepository
 ├── gateway-templates/   # Prompt assembly, shard injection
 ├── gateway-connectors/  # ConnectorRegistry, dispatch (Discord, Telegram, Slack)
 ├── gateway-services/    # AgentService, ProviderService, ModelRegistry, McpService, SkillService, SettingsService
-├── gateway-execution/   # ExecutionRunner, delegation, lifecycle, streaming, BatchWriter, SessionDistiller (health, episodes, strategies, failure clustering, ward sync), MemoryRecall (priority engine, graph expansion, nudges)
+├── gateway-memory/      # Recall, memory settings, sleep workers, belief/hierarchy logic
+├── gateway-execution/   # ExecutionRunner, delegation, lifecycle, streaming, BatchWriter, SessionDistiller
 ├── gateway-hooks/       # Hook trait, HookRegistry, CliHook, CronHook
 ├── gateway-cron/        # CronJobConfig, CronService
 ├── gateway-bus/         # GatewayBus trait, SessionRequest, SessionHandle
@@ -1160,28 +1161,41 @@ CREATE TABLE messages (
 
 ### memory_facts
 Structured facts extracted from sessions (distillation) or saved manually by the agent.
-Deduplication via UNIQUE(agent_id, scope, key) — repeated saves update content and bump mention_count.
+Facts live in `knowledge.db`, not `conversations.db`. Deduplication uses
+`UNIQUE(agent_id, scope, ward_id, key)` — repeated saves update content and
+bump `mention_count`.
 
 ```sql
 CREATE TABLE memory_facts (
     id TEXT PRIMARY KEY,                         -- fact-{uuid}
     session_id TEXT,                              -- which session produced this (NULL if manual)
     agent_id TEXT NOT NULL,
-    scope TEXT NOT NULL DEFAULT 'agent',          -- shared / agent / ward
-    category TEXT NOT NULL,                       -- preference, decision, pattern, entity, instruction, correction
+    scope TEXT NOT NULL,                          -- agent / global / session
+    category TEXT NOT NULL,                       -- user, domain, pattern, instruction, correction, ctx, ...
     key TEXT NOT NULL,                            -- dedup key: "user.preferred_language"
     content TEXT NOT NULL,                        -- 1-2 sentence fact
     confidence REAL NOT NULL DEFAULT 0.8,         -- 0.0-1.0
     mention_count INTEGER NOT NULL DEFAULT 1,
     source_summary TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    source_episode_id TEXT,
+    source_ref TEXT,
+    ward_id TEXT NOT NULL DEFAULT '__global__',
+    epistemic_class TEXT NOT NULL DEFAULT 'current',
+    contradicted_by TEXT,
+    valid_from TEXT,
+    valid_until TEXT,
+    superseded_by TEXT,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
     expires_at TEXT,                              -- optional TTL
-    UNIQUE(agent_id, scope, key)
+    UNIQUE(agent_id, scope, ward_id, key)
 );
 ```
 
-FTS5 virtual table `memory_facts_fts` auto-synced via INSERT/UPDATE/DELETE triggers.
+FTS5 virtual table `memory_facts_fts` is auto-synced via INSERT/UPDATE/DELETE
+triggers. Embeddings are not stored on `memory_facts`; `memory_facts_index`
+is the sqlite-vec partner table keyed by `fact_id`.
 
 ### embedding_cache
 Hash-based dedup for embeddings. Prevents re-embedding unchanged content.
@@ -1198,7 +1212,11 @@ CREATE TABLE embedding_cache (
 
 ### Cognitive Memory Architecture
 
-The memory system is a full cognitive pipeline: distill (post-session extraction), recall (tool-call based retrieval with priority scoring), and a knowledge graph with graph-driven expansion.
+The memory system is a full cognitive pipeline: distill (post-session extraction),
+recall (tool-call and system-level retrieval), vector-backed facts, and a
+knowledge graph with graph-driven expansion. The code is trait-routed: runtime
+tools call `MemoryFactStore`, while the current production adapter is
+`GatewayMemoryFactStore` over `MemoryRepository` and `knowledge.db`.
 
 ```
                     ┌─────────────────────────────────┐
@@ -1222,27 +1240,26 @@ The memory system is a full cognitive pipeline: distill (post-session extraction
          │                    │                    │
          ▼                    ▼                    ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    conversations.db                           │
+│                      knowledge.db                            │
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
-│  │ memory_facts │  │ memory_facts │  │ brute-force cosine │  │
-│  │ (structured) │  │ _fts (FTS5)  │  │ (in Rust, <10K)    │  │
+│  │ memory_facts │  │ memory_facts │  │ memory_facts_index │  │
+│  │ (structured) │  │ _fts (FTS5)  │  │ sqlite-vec cosine  │  │
 │  └─────────────┘  └──────────────┘  └────────────────────┘  │
 │                                                              │
 │  ┌───────────────────┐  ┌────────────────┐                   │
-│  │ distillation_runs │  │ session_episodes│                   │
-│  │ (health tracking) │  │ (episodic mem) │                   │
+│  │ kg_entities/rels  │  │ session_episodes│                   │
+│  │ + kg_name_index   │  │ + vec0 index   │                   │
 │  └───────────────────┘  └────────────────┘                   │
 │  ┌───────────────────┐  ┌────────────────┐                   │
-│  │ recall_log        │  │ memory_facts   │                   │
-│  │ (audit trail)     │  │ _archive (decay)│                  │
+│  │ ward wiki         │  │ procedures     │                   │
+│  │ + vec0 index      │  │ + vec0 index   │                   │
 │  └───────────────────┘  └────────────────┘                   │
 │                                                              │
-│  Hybrid Search: 0.7 * vector_score + 0.3 * bm25_score       │
+│  Hybrid facts: FTS5 + sqlite-vec fused by RRF                │
 │  × confidence × recency_decay × mention_boost                │
 │                                                              │
-│  Priority Engine (recall):                                    │
-│  category_weight × ward_affinity × temporal_decay             │
-│  correction 1.5x > strategy 1.4x > user 1.3x > domain 1.0x │
+│  Unified recall: facts + wiki + procedures + graph + goals   │
+│  + episodes + optional beliefs, fused by RRF and optional MMR│
 └─────────────────────────────────────────────────────────────┘
          │
          ▼
@@ -1267,7 +1284,10 @@ Post-session LLM extraction with:
 
 #### Recall Architecture
 
-Recall is **tool-call based** — the agent explicitly calls `memory recall` (not hidden injection). This makes recall visible, debuggable, and learnable.
+Recall has both system-level and tool-call paths. `MemoryRecall::recall_unified`
+builds the context injected at bootstrap/mid-session. The `memory` tool's
+`recall` action exposes agent-initiated fact recall with optional `as_of`
+point-in-time filtering. Both route through the same store abstractions.
 
 **Priority scoring**: Each recalled fact is scored by:
 1. **Category weight**: correction (1.5x) > strategy (1.4x) > user preference (1.3x) > domain (1.0x)
@@ -1276,7 +1296,10 @@ Recall is **tool-call based** — the agent explicitly calls `memory recall` (no
 4. **Contradiction penalty**: facts flagged by `contradicted_by` are penalized
 5. **Predictive recall**: success-correlated facts bubble up from historical recall_log
 
-**Graph-driven expansion**: After initial fact retrieval, a 2-hop BFS via SQLite recursive CTE expands through the knowledge graph. Related entities within `max_hops` (configurable) are included with `hop_decay` attenuation.
+**Graph-driven expansion**: Unified recall runs ANN over `kg_name_index`, then
+optionally traverses weighted relationships from the top seeds. Hierarchical
+memory also computes LCA paths over `kg_entities.parent_cluster_id` when the
+hierarchy exists.
 
 **Corrections as rules**: Top correction facts are always injected first, formatted as "NEVER do X" / "ALWAYS do Y" rules. Filtered by query relevance.
 
@@ -1301,10 +1324,13 @@ Temporal decay moves old facts past their category half-life to `memory_facts_ar
 - `runtime/agent-runtime/src/llm/embedding.rs` — EmbeddingClient trait, EmbeddingConfig
 - `runtime/agent-runtime/src/llm/openai_embedding.rs` — OpenAI-compatible embedding client
 - `runtime/agent-runtime/src/llm/local_embedding.rs` — fastembed local client (default)
-- `gateway/gateway-database/src/memory_repository.rs` — MemoryFact CRUD, hybrid search, embedding cache
-- `gateway/gateway-execution/src/distillation.rs` — SessionDistiller (health reporting, episode extraction, strategy emergence, failure clustering, ward file sync)
-- `gateway/gateway-execution/src/recall.rs` — MemoryRecall (priority engine, graph expansion, corrections as rules, nudges)
-- `runtime/agent-tools/src/tools/memory.rs` — save_fact, recall, graph actions
+- `stores/zero-stores-traits/src/memory_facts.rs` — MemoryFactStore trait surface
+- `stores/zero-stores-sqlite/src/memory_fact_store.rs` — GatewayMemoryFactStore adapter
+- `stores/zero-stores-sqlite/src/memory_repository.rs` — MemoryFact CRUD, hybrid search, embedding cache
+- `stores/zero-stores-sqlite/src/knowledge_schema.rs` — knowledge.db schema and vec0 tables
+- `gateway/gateway-memory/src/recall/mod.rs` — MemoryRecall unified retrieval
+- `gateway/gateway-execution/src/distillation.rs` — SessionDistiller
+- `runtime/agent-tools/src/tools/memory.rs` — KV memory, save_fact, recall, ctx, belief, contradiction actions
 - `config/recall_config.json` — recall tuning: weights, decay, graph traversal, predictive recall
 
 ### distillation_runs
@@ -1428,44 +1454,44 @@ CREATE INDEX idx_messages_session_created ON messages(session_id, created_at);
 
 ## Built-in Tools
 
-### Core Tools
+The current tool architecture is documented in
+[`components/tools/overview.md`](components/tools/overview.md). The live gateway
+path builds the registry manually in
+`gateway/gateway-execution/src/invoke/executor.rs`; the `agent-tools`
+`core_tools()` and `optional_tools()` factories remain useful crate-level
+helpers but are not the live source of truth.
 
-| Tool | Description | Permissions |
-|------|-------------|-------------|
-| `shell` | Primary execution — commands and scripts (file writes rejected — use write_file / edit_file) | Dangerous |
-| `write_file` | Create new files inside the active ward | Dangerous |
-| `edit_file` | Targeted find-and-replace edits on existing files | Dangerous |
-| `memory` | Persistent KV store + save_fact + recall + graph | Safe |
-| `ward` | Manage code wards (use, list, create, info) | Safe |
-| `update_plan` | Lightweight task checklist | Safe |
-| `set_session_title` | Set a human-readable session title | Safe |
-| `execution_graph` | DAG workflow engine for multi-step orchestration | Safe |
-| `list_skills` | List available skills | Safe |
-| `load_skill` | Load skill instructions | Safe |
-| `grep` | Search file contents | Safe |
+### Root Agent Registry
 
-### Action Tools (Always Enabled)
+Root is the orchestrator. In non-chat mode it runs in single-action mode, so
+only the first model tool call in a turn executes.
 
-| Tool | Description | Permissions |
-|------|-------------|-------------|
-| `respond` | Send response to user | Safe |
-| `delegate_to_agent` | Delegate task to subagent | Safe |
-| `list_agents` | List available agents | Safe |
+Always registered: `shell`, `memory`, `ward`, `update_plan`,
+`set_session_title`, `grep`, `respond`, `delegate_to_agent`,
+`multimodal_analyze`.
 
-### Optional Tools (Configurable)
+Conditionally registered: `run_procedure`, `steer_agent`, `wait_agent`,
+`kill_agent`, `graph_query`, `ingest`, `goal`, `read`, `glob`,
+`query_resource`.
 
-| Tool | Description | Permissions |
-|------|-------------|-------------|
-| `read` | Read file contents | Safe |
-| `write` | Write content to file | Moderate |
-| `edit` | Edit file contents | Moderate |
-| `glob` | Find files by pattern | Safe |
-| `todos` | Heavyweight task persistence (SQLite) | Safe |
-| `python` | Execute Python code | Dangerous |
-| `web_fetch` | Fetch web content | Moderate |
-| `ui_tools` | UI manipulation tools | Moderate |
-| `create_agent` | Create new agents | Moderate |
-| `introspection` | Agent introspection (list_tools, list_mcps) | Safe |
+### Delegated Agent Registry
+
+Delegated agents perform specialist work and return through `respond`.
+
+Always registered: `shell`, `write_file`, `edit_file`, `load_skill`,
+`list_skills`, `list_mcps`, `grep`, `ward`, `memory`, `respond`,
+`multimodal_analyze`.
+
+Conditionally registered: `graph_query`, `ingest`, `goal`.
+
+### Tool Settings
+
+`ToolSettings` is stored under `tools` in `{data_dir}/settings.json`. The
+Settings UI currently exposes only result offload controls. Optional tool
+toggles remain in backend settings and API types; in the live gateway registry
+only `fileTools` currently changes root registration (`read`, `glob`).
+`todos`, `python`, and `webFetch` are deprecated compatibility fields and are
+ignored by both the live registry and `optional_tools()`.
 
 ## Resource Indexing System
 
@@ -1554,7 +1580,7 @@ When `load_skill` or agent loading fails:
 
 ## Intent Analysis System
 
-Intent analysis is an **autonomous pre-execution middleware** — not a tool agents call. It indexes resources into `memory_facts` with local embeddings (fastembed), performs semantic search, sends only top-N relevant resources to a single LLM call, and injects the result as a `## Intent Analysis` section into the system prompt. See `memory-bank/intent-analysis.md` for full documentation.
+Intent analysis is an **autonomous pre-execution middleware** — not a tool agents call. It indexes resources into `memory_facts` with local embeddings (fastembed), performs semantic search, sends only top-N relevant resources to a single LLM call, and injects the result as a `## Intent Analysis` section into the system prompt. See `memory-bank/components/intent-analysis/overview.md` for full documentation.
 
 Implementation: `gateway/gateway-execution/src/middleware/intent_analysis.rs`
 
@@ -1994,7 +2020,7 @@ Implementation: `apps/ui/src/features/mission-control/`
 
 Abstract graph backend — SQLite recursive CTE today, Neo4j tomorrow. The trait provides `expand_from_entity(entity_id, max_hops)` for recall graph expansion and `find_related(entity_ids, relationship_types)` for targeted traversal.
 
-Implementation: `services/knowledge-graph/src/traversal.rs`
+Implementation: `stores/zero-stores-sqlite/src/kg/traversal.rs`
 
 ### New CLI Commands
 
@@ -2022,10 +2048,10 @@ Typical daemon (`zbotd`) memory usage: **~150 MB** at idle after first request.
 
 | Setting | Value | File | Impact |
 |---------|-------|------|--------|
-| SQLite `cache_size` | `-8000` (8 MB) | `gateway/gateway-database/src/pool.rs` | Per-connection page cache. Multiply by pool size. |
-| Pool `max_size` | `8` | `gateway/gateway-database/src/pool.rs` | Number of SQLite connections kept open. |
+| SQLite `cache_size` | adaptive | `stores/zero-stores-sqlite/src/system_profile.rs` | Per-connection page cache. Multiply by pool size. |
+| Pool `max_size` | adaptive | `stores/zero-stores-sqlite/src/system_profile.rs` | Number of SQLite connections kept open. |
 | Embedding model | `AllMiniLmL6V2` | `runtime/agent-runtime/src/llm/embedding.rs` | ~100 MB ONNX model. Switch to provider-based embeddings (`EmbeddingConfig::Provider`) to eliminate. |
-| BatchWriter flush | `100ms` | `gateway/gateway-database/src/batch_writer.rs` | Batches inserts; small buffer (~KB). |
+| BatchWriter flush | `100ms` | `gateway/gateway-execution/src/invoke/batch_writer.rs` | Batches inserts; small buffer (~KB). |
 | BridgeRegistry | Unbounded `HashMap` | `gateway/gateway-bridge/src/registry.rs` | Grows with connected workers; negligible at typical scale. |
 
 ### Optimization Levers
@@ -2034,4 +2060,3 @@ Typical daemon (`zbotd`) memory usage: **~150 MB** at idle after first request.
 - **Reduce pool size**: Lower `max_size` to 4 — saves ~32 MB (trades throughput under load)
 - **Reduce cache_size**: Set `PRAGMA cache_size = -4000` — saves ~4 MB per connection
 - **Lazy model loading**: Defer fastembed init until first `recall`/`save_fact` — saves startup RAM if memory features unused
-

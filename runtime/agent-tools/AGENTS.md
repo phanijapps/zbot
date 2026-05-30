@@ -19,12 +19,12 @@ cargo test -p agent-tools      # 25 tests
 | `execution/session_title.rs` | `SetSessionTitleTool` |
 | `execution/update_plan.rs` | `UpdatePlanTool` — lightweight task checklist |
 | `execution/graph.rs` | `ExecutionGraphTool` — DAG workflow engine |
-| `execution/todos.rs` | `TodoTool` (optional) |
+| `execution/todos.rs` | `TodoTool` (deprecated; replaced by `update_plan`) |
 | `file.rs` | `ReadTool`, `WriteTool`, `EditTool` (optional file-tools group) |
 | `search.rs` | `GrepTool`, `GlobTool` |
 | `ward.rs` | `WardTool` — ward use/list/create/info; emits `WardChanged` |
 | `memory.rs` | `MemoryTool` — persistent key-value (shared/agent/ward scopes) |
-| `web.rs` | `WebFetchTool` (optional) |
+| `web.rs` | `WebFetchTool` (deprecated; not surfaced by current registries) |
 | `graph_query.rs` | `GraphQueryTool` — query knowledge graph entities/relationships |
 | `goal.rs` | `GoalTool` — agent intent lifecycle |
 | `ingest.rs` | `IngestTool` — enqueue text for background extraction |
@@ -45,7 +45,10 @@ pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool
 ```
 
 Core tools are always enabled. Optional tools depend on `ToolSettings` boolean flags:
-`file_tools`, `todos`, `python`, `web_fetch`, `ui_tools`, `create_agent`, `introspection`.
+`file_tools`, `ui_tools`, `create_agent`, `introspection`.
+
+Deprecated compatibility flags are accepted but ignored by `optional_tools()`:
+`todos`, `python`, `web_fetch`.
 
 ## Security / Guards
 

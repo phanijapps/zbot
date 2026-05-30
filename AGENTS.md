@@ -2,6 +2,13 @@
 
 z-Bot is a multipurpose AI agent that lives on the desktop and connects to any OpenAI-compatible API.
 
+## Product Context
+
+- Read `memory-bank/product-context.md` for vision, principles, target users, and differentiators.
+- Read the "Technology Stack" section in `memory-bank/architecture.md` before making architecture or dependency decisions.
+- Read `memory-bank/architecture.md` and `memory-bank/decisions.md` for system boundaries and prior design choices.
+- Read `apps/ui/ARCHITECTURE.md` before UI changes or new UI components/styles.
+
 ## Workspace Layout
 
 ```
@@ -50,6 +57,39 @@ npm run daemon:watch   # Run daemon, hot-reload on code changes
 npm run dev            # React UI on port 3000 (from apps/ui/)
 ```
 
+## Development Patterns
+
+- Plans should include concrete data models and file paths, not only prose.
+- Implement layer-by-layer in dependency order: `framework/` → `runtime/` → `services/` → `gateway/` → `apps/`.
+- After Rust changes, run `cargo check --workspace`; after TypeScript changes, run `npm run build` from `apps/ui/`.
+- Read before writing: check existing patterns and avoid duplicating functionality.
+- Follow adjacent code patterns for error handling, naming, async, and test structure.
+
+## Coding Discipline
+
+- State assumptions explicitly when the task is ambiguous.
+- Keep changes surgical: touch only files needed for the request and leave unrelated cleanup alone.
+- Prefer the minimum code that solves the problem; do not add speculative abstractions or configuration.
+- Match local style even when another style would also be valid.
+- Remove imports, variables, functions, and files made unused by your own changes.
+- Define verifiable success criteria for non-trivial changes and loop until they are checked.
+
+## Quality Rules
+
+- Rust: run `cargo fmt --all` and keep `cargo clippy --all-targets -- -D warnings` clean.
+- Rust production code should not use `unwrap()`; prefer `?`, `unwrap_or`, `unwrap_or_else`, `unwrap_or_default`, or explicit errors.
+- TypeScript/React: prefer accessible primitives; non-button click targets need keyboard handling and roles.
+- TypeScript/React: use `Number.parseInt()` / `Number.parseFloat()` and avoid rendering numeric `0` through `&&`.
+- Keep function cognitive complexity under 15 where practical; extract helpers for large branches, long closures, and large components.
+- Secrets, API keys, tokens, and passwords must never be committed.
+- For security-sensitive randomness, use cryptographic APIs, not `Math.random()`.
+
+## Codex Assets
+
+- Project skills live in `.codex/skills/`.
+- Reusable command prompts migrated from Claude live in `.codex/prompts/`.
+- Detailed quality rules migrated from Claude live in `.codex/rules/`.
+
 ## Key Ports
 
 | Port  | Protocol  | Purpose              |
@@ -73,5 +113,3 @@ agentzero/
 ├── connectors.json       # External connectors
 └── cron_jobs.json        # Scheduled tasks
 ```
-
-Also see `CLAUDE.md` for behavioral guidelines and development patterns.

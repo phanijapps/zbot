@@ -29,7 +29,7 @@ cargo run -p daemon -- --data-dir ~/.agentzero
 **CLI Options:**
 - `--static-dir` — Path to React dashboard dist/ directory
 - `--port` / `--http-port` — HTTP port (default: 18791)
-- `--ws-port` — WebSocket port (default: 18790)
+- `--ws-port` — legacy standalone WebSocket port (default: 18790); current clients use `/ws` on the HTTP port unless legacy mode is enabled
 - `--data-dir` — Data directory / vault (default: `~/Documents/agentzero`)
 - `--log-dir` — Enable file logging
 - `--no-dashboard` — Disable static file serving

@@ -13,7 +13,7 @@ zbotd
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `--port` / `--http-port` | 18791 | HTTP port |
-| `--ws-port` | 18790 | WebSocket port |
+| `--ws-port` | 18790 | Legacy standalone WebSocket port; current clients use `/ws` on the HTTP port unless legacy mode is enabled |
 | `--data-dir` | `~/Documents/agentzero` | Data directory (vault) |
 | `--config` | — | Optional YAML config file |
 | `--static-dir` | — | Serve React dashboard from this path |

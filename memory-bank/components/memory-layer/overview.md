@@ -1,4 +1,4 @@
-# Memory Layer — v22 Overview
+# Memory Layer — Current Overview
 
 ## Purpose
 
@@ -22,10 +22,10 @@ long-term durability:
   ingestion episodes + payloads, embedding cache). `sqlite-vec` loaded;
   contains all five `vec0` virtual tables. Portable — back it up without
   touching `conversations.db`.
-  Schema: `stores/zero-stores-sqlite/src/knowledge_schema.rs:25`.
+  Schema: `stores/zero-stores-sqlite/src/knowledge_schema.rs`.
 
 `conversations.db` is at schema version 22 and `knowledge.db` is at schema
-version 24 (`SCHEMA_VERSION` constants in the same files).
+version 31 (`SCHEMA_VERSION` constants in the same files).
 `knowledge_schema.rs` is applied idempotently on daemon boot: there
 are no migrations, only `CREATE TABLE IF NOT EXISTS`. Routing to
 `KnowledgeDatabase` vs the conversations pool is enforced by the repository
@@ -37,9 +37,9 @@ layer.
 Atomic propositions keyed by `(agent_id, scope, ward_id, key)`. Stored in
 `memory_facts` with an FTS5 shadow (`memory_facts_fts`) kept in sync via
 three triggers, and embeddings in the `memory_facts_index` vec0 table.
-Hybrid recall = BM25 (FTS) + cosine (vec0) merged per configured weights
+Hybrid recall = FTS5 + sqlite-vec cosine fused by Reciprocal Rank Fusion
 (`MemoryRepository::search_memory_facts_hybrid`,
-`stores/zero-stores-sqlite/src/memory_repository.rs:893`).
+`stores/zero-stores-sqlite/src/memory_repository.rs`).
 Contradicted facts are tombstoned via `contradicted_by`/`superseded_by`;
 archival facts are copied to `memory_facts_archive` by
 `MemoryRepository::archive_fact`.
@@ -65,27 +65,27 @@ counters, and `avg_duration_ms`/`avg_token_cost` for cost-aware
 selection. Backed by `procedures` + `procedures_index` (vec0),
 `ProcedureRepository::search_by_similarity`.
 
-### Layer 4 — Goals (Phase 3, new in v22)
+### Layer 4 — Goals
 Intent lifecycle with slot tracking: `kg_goals(state, slots,
 filled_slots, parent_goal_id)`. Active goals drive intent-boost in
 recall (1.3× multiplier when a recalled item's content contains an
 unfilled slot name). See `GoalRepository::list_active`
 (`stores/zero-stores-sqlite/src/goal_repository.rs:102`) and
 `scored_item::intent_boost`
-(`gateway/gateway-execution/src/recall/scored_item.rs:81`).
+(`gateway/gateway-memory/src/recall/scored_item.rs`).
 
-### Layer 5 — Sleep-time maintenance (Phase 4, new in v22)
+### Layer 5 — Sleep-time maintenance
 Hourly tokio task: `Compactor` → `DecayEngine` → `Pruner`. Runs
 per-agent, emits one `run_id` per cycle, records every merge and prune
 in `kg_compactions`. See `SleepTimeWorker::start`
-(`gateway/gateway-execution/src/sleep/worker.rs:28`).
+(`gateway/gateway-memory/src/sleep/worker.rs`).
 
 ## sqlite-vec: one similarity mechanism
 
 Every vector search goes through a `vec0` virtual table. No hand-rolled
 cosine loops in the recall path, no BLOB columns duplicating embeddings
-on base rows (see the structural assertion at
-`stores/zero-stores-sqlite/src/knowledge_schema.rs:655`). The five vec0
+on base rows (see the structural assertion in
+`stores/zero-stores-sqlite/src/knowledge_schema.rs`). The five vec0
 tables, all 384-dim:
 
 | Table | Partner table |
@@ -96,9 +96,9 @@ tables, all 384-dim:
 | `procedures_index` | `procedures` |
 | `session_episodes_index` | `session_episodes` |
 
-Five `AFTER DELETE` triggers
-(`stores/zero-stores-sqlite/src/knowledge_schema.rs:368`) keep vec0 in
-lockstep with the base rows.
+Five `AFTER DELETE` triggers in
+`stores/zero-stores-sqlite/src/knowledge_schema.rs` keep vec0 in lockstep with
+the base rows.
 
 ## Streaming ingestion pipeline
 
@@ -134,18 +134,20 @@ enqueue. Violations return `Err` → HTTP 429.
 ## Unified scored recall
 
 `MemoryRecall::recall_unified`
-(`gateway/gateway-execution/src/recall/mod.rs:826`) pulls from five
+(`gateway/gateway-memory/src/recall/mod.rs`) pulls from multiple
 sources, adapts each row into `ScoredItem` (`recall/adapters.rs`), applies
 `intent_boost` against active goals, and fuses the ranked lists via
 Reciprocal Rank Fusion (`k = 60.0`,
 `recall/scored_item.rs:41`):
 
-1. Facts — `MemoryRepository::search_memory_facts_hybrid` (BM25 + cosine)
+1. Facts — `MemoryRepository::search_memory_facts_hybrid` (FTS5 + sqlite-vec cosine)
 2. Wiki — `WikiRepository::search_by_similarity` (ward-scoped)
 3. Procedures — `ProcedureRepository::search_by_similarity`
 4. Graph — `GraphStorage::search_entities_by_name_embedding` (ANN via
    `kg_name_index`)
-5. Goals — projected directly from `GoalRepository::list_active`
+5. Episodes — previous ward/session continuity
+6. Goals — projected directly from active goal state
+7. Optional beliefs and hierarchical graph items when those stores are wired
 
 Missing subsystems are silently skipped — the caller gets whatever
 sources are wired.
@@ -184,8 +186,7 @@ Wired in `gateway/src/http/memory.rs`.
 ## Performance (baseline)
 
 All three Phase 4 budgets met by ≥1000× margin on a consumer-grade dev
-box. Full numbers in
-`docs/memory-v2-performance-baseline.md`:
+box. Full numbers are preserved in [`performance.md`](./performance.md):
 
 - Resolver p95: **2.15 ms** vs 20 ms budget (9.3× under).
 - Reader p95 under ingest load: **140 µs** vs 200 ms budget (1400× under).
@@ -193,9 +194,15 @@ box. Full numbers in
 
 ## Further reading
 
-- [`data-model.md`](./data-model.md) — full v22 schema, table by table.
+- [`data-model.md`](./data-model.md) — current schema, table by table.
 - [`knowledge-graph.md`](./knowledge-graph.md) — resolver cascade,
   compactor, pruner, merge semantics.
-- [`backlog.md`](./backlog.md) — known gaps and deferred work.
-- `docs/superpowers/specs/2026-04-12-memory-layer-redesign-design.md` —
-  umbrella design spec (trust the code when the spec diverges).
+- [`explainer.md`](./explainer.md) — reader-friendly explanation of how z-Bot
+  remembers and how agents interact with memory.
+- [`self-improvement.md`](./self-improvement.md) — operator guidance for the
+  self-improving memory loops.
+- [`performance.md`](./performance.md) — historical memory-v2 baseline numbers.
+- [`architecture-deck.html`](./architecture-deck.html) — visual architecture
+  deck for the memory subsystem.
+- [`implementation-plans/`](./implementation-plans/) — historical plans
+  consolidated from the old docs tree.

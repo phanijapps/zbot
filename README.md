@@ -183,8 +183,8 @@ If you'd rather keep the daemon loopback-only, toggle **Expose to LAN** off in S
 │  │   ├── SOUL.md          # Root agent personality      │
 │  │   └── INSTRUCTIONS.md  # Root agent instructions     │
 │  ├── data/                                              │
-│  │   ├── conversations.db # Sessions, messages, memory  │
-│  │   └── knowledge.db     # Entities & relationships    │
+│  │   ├── conversations.db # Sessions, messages, logs    │
+│  │   └── knowledge.db     # Facts, graph, vectors       │
 │  ├── agents/{name}/       # Agent configurations        │
 │  ├── skills/{name}/       # Skill definitions           │
 │  ├── wards/{name}/        # Persistent project dirs     │

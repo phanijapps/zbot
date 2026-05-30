@@ -4,7 +4,7 @@
 
 use crate::state::AppState;
 use agent_tools::ToolSettings;
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{Json, extract::State, http::StatusCode};
 use gateway_services::{ExecutionSettings, LogSettings};
 use serde::{Deserialize, Serialize};
 
@@ -45,8 +45,12 @@ pub async fn get_tool_settings(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateToolSettingsRequest {
+    /// Deprecated: accepted for backward-compatible settings payloads but ignored
+    /// by current live tool registration and `optional_tools`.
     #[serde(default)]
     pub python: bool,
+    /// Deprecated: accepted for backward-compatible settings payloads but ignored
+    /// by current live tool registration and `optional_tools`.
     #[serde(default)]
     pub web_fetch: bool,
     #[serde(default)]
@@ -57,6 +61,8 @@ pub struct UpdateToolSettingsRequest {
     pub introspection: bool,
     #[serde(default)]
     pub file_tools: bool,
+    /// Deprecated: accepted for backward-compatible settings payloads but ignored
+    /// by current live tool registration and `optional_tools`.
     #[serde(default)]
     pub todos: bool,
     #[serde(default)]
@@ -468,7 +474,7 @@ pub async fn update_network_settings(
                     data: None,
                     error: Some(e),
                 }),
-            ))
+            ));
         }
     };
     current.network = new_cfg.clone();

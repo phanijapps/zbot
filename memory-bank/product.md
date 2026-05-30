@@ -186,7 +186,7 @@ Cron-based scheduling for automated agent invocations. Define recurring tasks th
    - Smart recall: inject relevant facts at session start
    - Pre-compaction memory flush: save facts before context trim
    - Knowledge graph integration: entity/relationship extraction during distillation
-   - Old standalone knowledge_graph tools removed (5 tools → unified `graph` action in memory tool)
+   - Old standalone knowledge_graph tools removed; graph context now surfaces through recall, with direct graph queries via `GraphQueryTool`
    - 620+ tests across all crates
 
 ### Planned

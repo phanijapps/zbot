@@ -57,15 +57,17 @@ Built-in tools organized into core (always registered) and optional (configurabl
 | Tool | Setting flag | Description |
 |------|-------------|-------------|
 | `read`, `write`, `edit`, `glob` | `file_tools` | Additional file operations |
-| `todo` | `todos` | Heavy todo list (legacy, replaced by update_plan) |
-| `python` | `python` | Execute Python code |
-| `web_fetch` | `web_fetch` | HTTP requests |
+| `todos` | `todos` | Deprecated; replaced by `update_plan` and ignored by `optional_tools()` |
+| `python` | `python` | Deprecated; run Python through `shell`; ignored by `optional_tools()` |
+| `web_fetch` | `web_fetch` | Deprecated; use MCP/browser/search integrations or scripts; ignored by `optional_tools()` |
 | `request_input`, `show_content` | `ui_tools` | Request user input / show content |
 | `create_agent` | `create_agent` | Create new agents |
 | `list_tools`, `list_mcps` | `introspection` | Agent introspection |
 | `multimodal_analyze` | always | Vision fallback (always in optional set) |
 
-Key registration functions: `core_tools()`, `optional_tools()`, `builtin_tools_with_fs()`
+Key registration functions: `core_tools()`, `optional_tools()`, `builtin_tools_with_fs()`.
+The `todos`, `python`, and `web_fetch` settings are retained for config
+compatibility but no longer add tools.
 
 ## Orchestration & Delegation
 

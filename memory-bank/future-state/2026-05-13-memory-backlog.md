@@ -185,7 +185,7 @@ None blocking. Best paired with Phase D (LLM factory) since that's when the abst
 
 ## How to use this backlog
 
-- **Triggering an item** — when its trigger condition occurs, lift it into a fresh plan under `docs/superpowers/plans/` using the standard plan structure.
+- **Triggering an item** — when its trigger condition occurs, lift it into a fresh plan under `memory-bank/components/memory-layer/implementation-plans/` using the standard plan structure.
 - **Adding items** — append below, use the next `MEM-NNN` number, keep the same fields: Status / Severity / Trigger / Scope / Files affected / Effort / Dependencies.
 - **Closing items** — mark Status as `done — commit <SHA>` and stop tracking. Don't delete; the history is useful.
 - **Don't pre-schedule** — none of these are calendar-driven. Wait for the trigger.
