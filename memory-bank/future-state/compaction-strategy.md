@@ -125,14 +125,14 @@ Five layers, bottom-up in per-turn order. Each layer names the Anthropic or indu
 - **Why non-negotiable**: when all else fails we still need tail compression, but rationed — Anthropic's own probe shows 0/3 quantitative facts survive summarization, so Layer 1 carries what Layer 3 drops.
 
 ### Layer 4 — Durable memory surface
-- **What it is**: a file-backed `/memories/<agent_id>/*.md` tree that agents read at session start and write to at session close; the outbox for facts that must outlive compaction.
+- **What it is**: `knowledge.db`, the durable source of truth for facts, KG data, wiki articles, procedures, episodes, patterns, embeddings, and compaction audit data.
 - **Mechanism**:
-  - **Read**: at session start, inject as a synthetic system message after Layer 0.
-  - **Write**: the `memory.write` tool mutates markdown files; `distillation.rs` runs a session-close pass that extracts facts and appends to the memory surface.
+  - **Read**: recall paths query `knowledge.db` through `MemoryFactStore`, `MemoryRecall`, KG, episode, procedure, and related store traits.
+  - **Write**: tools, distillation, ingestion, and sleep-cycle hygiene write through the existing store/repository abstractions backed by `knowledge.db`.
 - **Preserves**: facts that must survive every other layer's forgetting.
-- **Discards**: nothing — it's the outbox, not the filter.
-- **Corresponds to**: Anthropic memory tool + Claude Code CLAUDE.md hybrid.
-- **Why non-negotiable**: the research is unanimous that this must be a **file surface** (pointer-stable, diff-visible, user-editable), not an opaque KV store. Without it, whatever Layer 3 drops is irrecoverable.
+- **Discards**: nothing by default; sleep-cycle pruning/compaction must be audited and verifier-gated where entity merges are possible.
+- **Corresponds to**: AgentZero's existing database-backed memory layer, not a markdown mirror or replacement.
+- **Why non-negotiable**: durable memory has one authoritative store. Adding a second markdown source of truth would split recall, compaction, and audit semantics.
 
 ---
 
@@ -171,13 +171,11 @@ Five layers, bottom-up in per-turn order. Each layer names the Anthropic or indu
   - 4-char heuristic goes.
 
 ### Layer 4 — durable memory surface
-- **New module**: `gateway/gateway-execution/src/memory_surface/` with `{store.rs, reader.rs, distiller.rs}`.
-- **Backing store**: vault filesystem via `gateway_services::VaultPaths`. Memories live at `<vault>/memories/<agent_id>/*.md`.
-- **Adapter**: `runtime/agent-tools/src/tools/memory.rs` becomes a thin adapter over the file tree.
-  - `memory.recall` → grep + embed over the file tree.
-  - `memory.write` → markdown file mutation.
-- **Session-close distillation**: lives in existing `gateway/gateway-execution/src/distillation.rs`. Extend it to write to the memory surface.
-- **Sleep compactor demotion**: `gateway/gateway-execution/src/sleep/compactor.rs` is scoped to "graph hygiene over the memory surface." It no longer runs a parallel forgetting policy against live conversation state.
+- **Existing source of truth**: `knowledge.db` via the zero-stores repositories and traits.
+- **Adapter**: `runtime/agent-tools/src/tools/memory.rs` remains a tool-facing API over the database-backed memory layer.
+- **Session-close distillation**: lives in existing `gateway/gateway-execution/src/distillation.rs` and writes durable facts through `MemoryFactStore`.
+- **Sleep compactor scope**: `gateway/gateway-memory/src/sleep/compactor.rs` is scoped to durable KG hygiene. It no longer represents a parallel forgetting policy against live conversation state.
+- **Verifier status**: the normal `gateway-memory` service construction wires `LlmPairwiseVerifier`; verifier-enabled compaction must fail closed when either entity record is unavailable.
 
 ### Pipeline ordering
 Enforce in `runtime/agent-runtime/src/middleware/pipeline.rs` setup (not by convention):
@@ -222,20 +220,20 @@ Three phases, each independently shippable. Honest sizing in engineer-days.
 - No message in the tape is ever double-summarized (anti-recursion test).
 
 ### Phase 3 — Durability (7-10 days)
-**Ships**: Layer 4 and retirement of duplicate forgetting policies.
+**Ships**: Layer 4 hardening and retirement of duplicate forgetting policies.
 
-- New `memory_surface/` module with file-backed store.
-- `MemoryTool` re-fronted as a thin adapter over the file tree.
-- `distillation.rs` wired to write memories at session close.
-- Sleep compactor demoted to graph hygiene over the memory surface; hardcoded constants moved to YAML or DB config.
-- Wire the `PairwiseVerifier` or replace cosine-only merge with name-embedding + edit-distance gate.
+- `knowledge.db` remains the durable source of truth; no markdown memory mirror.
+- `MemoryTool` remains an adapter over the database-backed memory layer.
+- `distillation.rs` continues to write durable memories through existing store abstractions.
+- Sleep compactor remains durable KG hygiene only; hardcoded constants can move to YAML or DB config later.
+- `PairwiseVerifier` is wired in the normal service path; verifier-enabled compaction fails closed if entity records are unavailable.
 
-**If skipped**: facts that Layer 3 drops are irrecoverable; the sleep compactor keeps running a forgetting policy uncoordinated with the runtime one.
+**If skipped**: facts that Layer 3 drops are recoverable only when already saved to `knowledge.db`; unsafe sleep compaction can still create false durable KG merges.
 
 **Acceptance**:
 - Session N+1 can recall a named fact written by session N via `memory.recall` without re-running any tool calls from session N.
-- The memory file tree diffs cleanly under `git`.
-- Sleep compactor no longer touches rows referenced by any active session (assertable via the live-session index).
+- No new markdown memory source of truth is added.
+- Verifier-enabled sleep compaction skips a candidate when either entity record cannot be loaded.
 
 ---
 
@@ -246,9 +244,9 @@ Things currently in the codebase that must be removed or deprecated when this la
 1. **4-char-per-token heuristic** (`token_counter.rs:17-24`). Every eviction currently fires at the wrong threshold. Gone in Phase 1.
 2. **`summarization.rs`'s 8k trigger contract**. It fires regardless of what `context_editing` did. Replaced in Phase 2 by "only if Layer 2 couldn't free enough."
 3. **Recursive self-summarization**. No code path should ever summarize a message whose content starts with the summary prefix. Enforce with a message flag, not a string sniff.
-4. **`sleep/compactor.rs`'s role as a forgetting policy over live state**. It stays, scoped to the memory surface; runtime owns live-tape forgetting. This removes the "two uncoordinated compactors" failure mode and specifically the `defect_ward_routing_fragmentation` bug pattern.
-5. **Hardcoded cosine 0.92 and unwired `PairwiseVerifier`** (`compactor.rs:17, 34-37`). Either wire the verifier or switch to name-embedding + edit-distance gate. Don't ship the half-built version.
-6. **Opaque KV `MemoryEntry` as the primary memory surface** (`runtime/agent-tools/src/tools/memory.rs:44`). Keep the struct as a cache row over the file tree; the file tree is the source of truth.
+4. **`sleep/compactor.rs`'s role as a forgetting policy over live state**. It stays, scoped to durable KG hygiene; runtime owns live-tape forgetting. This removes the "two uncoordinated compactors" failure mode and specifically the `defect_ward_routing_fragmentation` bug pattern.
+5. **Cosine-only entity merging** (`compactor.rs`). The normal service path wires `PairwiseVerifier`; verifier-enabled compaction must skip merges when adjudication cannot run.
+6. **Any replacement durable memory surface**. `knowledge.db` is the source of truth; markdown files may be documentation or export artifacts, not primary memory.
 7. **Implicit "summarize before clearing" middleware order**. Enforced in `pipeline.rs` setup, not by convention: `ContextEditing → PlanBlock → Summarization`.
 
 ---
@@ -259,7 +257,7 @@ Codified so future contributors can point at the doc instead of rediscovering:
 
 1. **No char-per-token heuristics for budget decisions.** Real tokenizer or no decision.
 2. **No unsupervised self-summarization.** Summarization must have a bounded schema or be ruthlessly restricted to prose tails.
-3. **No two forgetting policies over the same tape.** Runtime middleware owns live state; sleep cycle owns durable memory surface. The boundary is load-bearing.
+3. **No two forgetting policies over the same tape.** Runtime middleware owns live state; sleep cycle owns durable `knowledge.db` hygiene. The boundary is load-bearing.
 4. **No cosine-only entity merging.** Add a type+name guard, require LLM-judge confirmation above a similarity threshold, or accept slightly more duplicate entities. False merges are more expensive than fragmentation.
 5. **No orphaning of `tool_use` / `tool_result` pairs.** Eviction and summarization must preserve atomic groups.
 6. **No compaction of the stable prefix.** Layer 0 is immutable for the session.
@@ -275,9 +273,9 @@ Codified so future contributors can point at the doc instead of rediscovering:
 The research converges unanimously on runtime. Two independent compactors with different thresholds, different notions of "stale," and different transactional envelopes is exactly the anti-pattern both surveys flagged, and it's the root cause of the ward-routing-fragmentation defect we have today.
 
 ### The commitment
-**Runtime middleware owns all forgetting over the live conversation tape. The sleep cycle owns hygiene over the durable memory surface only, and never reaches into an active session.**
+**Runtime middleware owns all forgetting over the live conversation tape. The sleep cycle owns hygiene over durable `knowledge.db` memory only, and never reaches into an active session.**
 
-This is irreversible. Layer 1 (plan block) is what survives runtime forgetting. Layer 4 (memory surface) is what survives session boundaries. Sleep-cycle operations on live tape would violate both contracts. If we pick the other shape (sleep cycle as authoritative), Layer 1 has no meaning and Layer 4 has to fight the sleep worker for write ordering.
+This is irreversible. Layer 1 (plan block) is what survives runtime forgetting. Layer 4 (`knowledge.db`) is what survives session boundaries. Sleep-cycle operations on live tape would violate both contracts. If we pick the other shape (sleep cycle as authoritative), Layer 1 has no meaning and Layer 4 has to fight the sleep worker for write ordering.
 
 Every later engineering decision in this document assumes this commitment. Make the call before writing a line of code.
 
