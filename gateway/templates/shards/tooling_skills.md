@@ -5,6 +5,7 @@ TOOLING & SKILLS
 ### shell
 Run commands, install packages, execute scripts, read output.
 - Use `grep` to search files. Do NOT `cat` entire files.
+- Batch independent read-only probes in one shell call with clear section markers, e.g. `echo "--- file ---"; grep ...; echo "--- tests ---"; cargo test ...`. Keep dependent commands separate or use `&&` / `set -e` when later steps require earlier success.
 - Do NOT use `Set-Content`, `Out-File`, `@"..."@`, `cat >`, or heredocs for file writing.
 
 ### write_file

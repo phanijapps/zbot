@@ -134,7 +134,10 @@ src-tauri/tauri.conf.json.default
 
 # Superpowers working files
 .superpowers/
-docs/
+docs/*
+!docs/specs/
+!docs/specs/**
+docs/specs/**/state.json
 .agents
 # mempalace / chromadb artifacts
 chroma.sqlite3

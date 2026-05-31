@@ -282,6 +282,27 @@ impl OpenAiClient {
         body_obj
     }
 
+    /// Build the streaming variant of the chat-completions request body.
+    ///
+    /// Streaming must share the same base body as non-streaming requests so
+    /// model-visible prompt caching invariants stay identical across both
+    /// transport modes. Only transport-level streaming fields are added here.
+    fn build_streaming_request_body(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Option<Value>,
+    ) -> Value {
+        let mut body_obj = self.build_request_body(messages, tools);
+        if let Some(obj) = body_obj.as_object_mut() {
+            obj.insert("stream".to_string(), json!(true));
+            obj.insert(
+                "stream_options".to_string(),
+                json!({ "include_usage": true }),
+            );
+        }
+        body_obj
+    }
+
     /// Make a non-streaming request to the API
     async fn make_request(&self, body: Value) -> Result<Value, LlmError> {
         let url = format!("{}/chat/completions", self.config.base_url);
@@ -425,15 +446,7 @@ impl LlmClient for OpenAiClient {
 
         let url = format!("{}/chat/completions", self.config.base_url);
 
-        let mut body_obj = self.build_request_body(messages, tools);
-        // Enable streaming with usage reporting
-        if let Some(obj) = body_obj.as_object_mut() {
-            obj.insert("stream".to_string(), json!(true));
-            obj.insert(
-                "stream_options".to_string(),
-                json!({ "include_usage": true }),
-            );
-        }
+        let body_obj = self.build_streaming_request_body(messages, tools);
 
         tracing::debug!("Making streaming POST request to: {}", url);
 
@@ -843,6 +856,68 @@ mod tests {
         ])
     }
 
+    fn ordered_fixture_messages() -> Vec<ChatMessage> {
+        vec![
+            ChatMessage::system("system-prefix".to_string()),
+            ChatMessage::system("stable-shard".to_string()),
+            ChatMessage::user("first user turn".to_string()),
+            ChatMessage::assistant("first assistant turn".to_string()),
+            ChatMessage::user("second user turn".to_string()),
+        ]
+    }
+
+    fn ordered_fixture_tools() -> Value {
+        json!([
+            {
+                "type": "function",
+                "function": {
+                    "name": "alpha_tool",
+                    "description": "First tool",
+                    "parameters": {"type": "object", "properties": {}}
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "beta_tool",
+                    "description": "Second tool",
+                    "parameters": {"type": "object", "properties": {}}
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "gamma_tool",
+                    "description": "Third tool",
+                    "parameters": {"type": "object", "properties": {}}
+                }
+            }
+        ])
+    }
+
+    fn value_has_key(value: &Value, key: &str) -> bool {
+        match value {
+            Value::Object(map) => {
+                map.contains_key(key) || map.values().any(|child| value_has_key(child, key))
+            }
+            Value::Array(items) => items.iter().any(|child| value_has_key(child, key)),
+            _ => false,
+        }
+    }
+
+    fn value_has_string_containing(value: &Value, needle: &str) -> bool {
+        match value {
+            Value::String(s) => s.contains(needle),
+            Value::Object(map) => map
+                .values()
+                .any(|child| value_has_string_containing(child, needle)),
+            Value::Array(items) => items
+                .iter()
+                .any(|child| value_has_string_containing(child, needle)),
+            _ => false,
+        }
+    }
+
     #[test]
     fn request_body_is_byte_stable_across_identical_calls() {
         let client = test_client();
@@ -869,6 +944,104 @@ mod tests {
         let a_bytes = serde_json::to_vec(&a).expect("serialize a");
         let b_bytes = serde_json::to_vec(&b).expect("serialize b");
         assert_eq!(a_bytes, b_bytes);
+    }
+
+    #[test]
+    fn request_body_does_not_emit_explicit_cache_control() {
+        let client = test_client();
+        let body = client.build_request_body(fixture_messages(), Some(fixture_tools()));
+
+        assert!(
+            !value_has_key(&body, "cache_control"),
+            "OpenAI-compatible requests rely on automatic prompt caching and must not emit Anthropic cache_control fields"
+        );
+    }
+
+    #[test]
+    fn request_body_preserves_message_and_tool_order() {
+        let client = test_client();
+        let body =
+            client.build_request_body(ordered_fixture_messages(), Some(ordered_fixture_tools()));
+
+        let roles_and_text: Vec<(String, String)> = body["messages"]
+            .as_array()
+            .expect("messages array")
+            .iter()
+            .map(|msg| {
+                let role = msg["role"].as_str().expect("role").to_string();
+                let text = msg["content"].as_str().expect("text content").to_string();
+                (role, text)
+            })
+            .collect();
+        assert_eq!(
+            roles_and_text,
+            vec![
+                ("system".to_string(), "system-prefix".to_string()),
+                ("system".to_string(), "stable-shard".to_string()),
+                ("user".to_string(), "first user turn".to_string()),
+                ("assistant".to_string(), "first assistant turn".to_string()),
+                ("user".to_string(), "second user turn".to_string()),
+            ]
+        );
+
+        let tool_names: Vec<String> = body["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .map(|tool| {
+                tool["function"]["name"]
+                    .as_str()
+                    .expect("tool name")
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(tool_names, vec!["alpha_tool", "beta_tool", "gamma_tool"]);
+    }
+
+    #[test]
+    fn request_body_has_no_generated_volatile_fields() {
+        let client = test_client();
+        let body = client.build_request_body(fixture_messages(), Some(fixture_tools()));
+
+        for key in [
+            "timestamp",
+            "created_at",
+            "request_id",
+            "uuid",
+            "debug_marker",
+        ] {
+            assert!(
+                !value_has_key(&body, key),
+                "request body must not include volatile key `{key}` before the stable prompt prefix"
+            );
+        }
+        assert!(
+            !value_has_string_containing(&body, "debug_marker"),
+            "request body must not include volatile debug markers in string values"
+        );
+    }
+
+    #[test]
+    fn streaming_request_body_extends_same_base_body_only_with_stream_fields() {
+        let client = test_client();
+        let base = client.build_request_body(fixture_messages(), Some(fixture_tools()));
+        let mut streaming =
+            client.build_streaming_request_body(fixture_messages(), Some(fixture_tools()));
+
+        assert_eq!(streaming["stream"], json!(true));
+        assert_eq!(
+            streaming["stream_options"],
+            json!({ "include_usage": true })
+        );
+
+        let streaming_obj = streaming.as_object_mut().expect("streaming body object");
+        streaming_obj.insert("stream".to_string(), json!(false));
+        streaming_obj.remove("stream_options");
+
+        assert_eq!(
+            streaming, base,
+            "streaming requests must share the non-streaming base body except for transport-only stream fields"
+        );
     }
 
     #[test]

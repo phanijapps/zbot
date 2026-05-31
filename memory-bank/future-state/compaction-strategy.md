@@ -1,7 +1,7 @@
 # Compaction Strategy for AgentZero
 
-**Status**: future-state proposal, not yet implemented
-**Last updated**: 2026-04-23
+**Status**: partial implementation — Layer 0 is implemented for OpenAI-compatible automatic prompt caching; explicit Anthropic cache-control breakpoints remain out of scope for the current provider path.
+**Last updated**: 2026-05-31
 **Audience**: maintainers and engineers implementing against this plan
 
 ---
@@ -92,10 +92,10 @@ Five layers, bottom-up in per-turn order. Each layer names the Anthropic or indu
 
 ### Layer 0 — Stable prefix with cache breakpoints
 - **What it is**: the system prompt, tool schemas, and agent persona. Never rewritten after session start.
-- **Mechanism**: one `cache_control: {type: "ephemeral"}` breakpoint at the tail of the stable prefix, and another on the plan block (Layer 1).
+- **Mechanism**: for OpenAI-compatible providers, deterministic request construction keeps the stable prefix byte-stable so provider-side automatic prompt caching can reuse it. Anthropic-native `cache_control: {type: "ephemeral"}` breakpoints are a provider-specific variant, not part of the current OpenAI-compatible contract.
 - **Preserves**: deterministic prefix bytes.
 - **Discards**: nothing.
-- **Corresponds to**: Anthropic prompt caching.
+- **Corresponds to**: OpenAI-compatible automatic prompt caching; Anthropic prompt caching when/if a native Anthropic provider path is introduced.
 - **Why non-negotiable**: without this, every efficiency gain of layers 2-4 is swamped by re-billing the prefix on every call. Cache TTL dropped to 5 min in early 2026, so this is more load-bearing than it was.
 
 ### Layer 1 — Pinned scratchpad (the plan block)
@@ -140,8 +140,9 @@ Five layers, bottom-up in per-turn order. Each layer names the Anthropic or indu
 
 ### Layer 0 — cache breakpoints
 - **Extends**: `runtime/agent-runtime/src/llm/client.rs` and provider impls (`openai.rs`, `non_streaming.rs`).
-- **Work**: request builder emits `cache_control: {type: "ephemeral"}` on the last stable-prefix block and on the plan block.
-- **New modules**: none.
+- **Implemented for OpenAI-compatible clients**: `OpenAiClient::build_request_body` keeps request construction deterministic, preserves caller-provided message/tool order, avoids per-call model-visible noise, and parses provider-reported cache-hit telemetry.
+- **Out of scope for the current provider path**: emitting Anthropic-specific `cache_control` breakpoint fields.
+- **Contract spec**: `docs/specs/openai-prompt-cache-contract/spec.md`.
 
 ### Layer 1 — plan block middleware
 - **New**: `runtime/agent-runtime/src/middleware/plan_block.rs` implementing `PreProcessMiddleware`.
@@ -195,7 +196,7 @@ Three phases, each independently shippable. Honest sizing in engineer-days.
 **Ships**: Layers 0 and 2.
 
 - Real tokenizer in `token_counter.rs` (tiktoken + Anthropic count endpoint + tokenizers crate).
-- Prompt-cache breakpoints in `LlmClient` and each provider's request builder.
+- Prompt-cache compatibility in `LlmClient` and each provider's request builder. For OpenAI-compatible clients, this means byte-stable automatic-cache request construction and telemetry, not explicit `cache_control` breakpoints.
 - Flip `ContextEditingMiddleware` to enabled-by-default with `keep_tool_results: 3` and real-tokenizer-derived trigger.
 
 **If skipped**: every later layer fires at the wrong threshold, and every request re-bills the prefix. Phase 2 blocks on the real tokenizer.
