@@ -158,6 +158,18 @@ impl MiddlewarePipeline {
         self.event_handlers.len()
     }
 
+    /// Get names of all pre-process middleware in configured order.
+    #[must_use]
+    pub fn pre_processor_names(&self) -> Vec<&'static str> {
+        self.pre_processors.iter().map(|m| m.name()).collect()
+    }
+
+    /// Get names of all event handlers in configured order.
+    #[must_use]
+    pub fn event_handler_names(&self) -> Vec<&'static str> {
+        self.event_handlers.iter().map(|m| m.name()).collect()
+    }
+
     /// Get names of all enabled pre-process middleware
     #[must_use]
     pub fn enabled_pre_processors(&self) -> Vec<&'static str> {
@@ -240,6 +252,28 @@ mod tests {
             .add_pre_processor(disabled);
 
         assert_eq!(pipeline.enabled_pre_processors().len(), 1);
+    }
+
+    #[test]
+    fn pre_processor_names_include_disabled_in_order() {
+        let enabled = Box::new(MockPreProcessor {
+            enabled: true,
+            name: "context_editing",
+        }) as Box<dyn PreProcessMiddleware>;
+        let disabled = Box::new(MockPreProcessor {
+            enabled: false,
+            name: "summarization",
+        }) as Box<dyn PreProcessMiddleware>;
+
+        let pipeline = MiddlewarePipeline::new()
+            .add_pre_processor(enabled)
+            .add_pre_processor(disabled);
+
+        assert_eq!(
+            pipeline.pre_processor_names(),
+            vec!["context_editing", "summarization"]
+        );
+        assert_eq!(pipeline.enabled_pre_processors(), vec!["context_editing"]);
     }
 
     // ----------------------------------------------------------------------
@@ -512,7 +546,119 @@ mod tests {
             }) as Box<dyn EventMiddleware>,
         ]);
         assert_eq!(pipeline.event_handler_count(), 2);
+        assert_eq!(pipeline.event_handler_names(), vec!["on", "off"]);
         assert_eq!(pipeline.enabled_event_handlers(), vec!["on"]);
+    }
+
+    #[tokio::test]
+    async fn runtime_context_controller_clears_tools_then_injects_plan_block() {
+        use crate::middleware::config::ContextEditingConfig;
+        use crate::middleware::{ContextEditingMiddleware, PlanBlockMiddleware};
+        use crate::types::ToolCall;
+        use serde_json::json;
+        use zero_core::types::Part;
+
+        let tool_calls = vec![
+            ToolCall::new(
+                "call_1".to_string(),
+                "read_file".to_string(),
+                json!({"path": "old.rs"}),
+            ),
+            ToolCall::new(
+                "call_2".to_string(),
+                "read_file".to_string(),
+                json!({"path": "recent.rs"}),
+            ),
+        ];
+        let messages = vec![
+            ChatMessage::system("base system".to_string()),
+            ChatMessage::user("old user prose".to_string()),
+            ChatMessage::assistant("old assistant prose should survive".to_string()),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: vec![Part::Text {
+                    text: String::new(),
+                }],
+                tool_calls: Some(tool_calls),
+                tool_call_id: None,
+                is_summary: false,
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: vec![Part::Text {
+                    text: "old tool body that should be cleared".repeat(20),
+                }],
+                tool_calls: None,
+                tool_call_id: Some("call_1".to_string()),
+                is_summary: false,
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: vec![Part::Text {
+                    text: "recent tool body".to_string(),
+                }],
+                tool_calls: None,
+                tool_call_id: Some("call_2".to_string()),
+                is_summary: false,
+            },
+            ChatMessage::user("current user".to_string()),
+        ];
+
+        let pipeline = MiddlewarePipeline::new()
+            .add_pre_processor(Box::new(ContextEditingMiddleware::new(
+                ContextEditingConfig {
+                    enabled: true,
+                    trigger_tokens: 1,
+                    keep_tool_results: 1,
+                    min_reclaim: 0,
+                    clear_tool_inputs: true,
+                    placeholder: "[cleared]".to_string(),
+                    ..Default::default()
+                },
+            )))
+            .add_pre_processor(Box::new(PlanBlockMiddleware::new()));
+        let ctx = make_ctx().with_plan_state(Some(json!({
+            "plan": [{"step": "keep the current task visible", "status": "in_progress"}]
+        })));
+
+        let mut events = Vec::new();
+        let out = pipeline
+            .process_messages(messages, &ctx, |event| events.push(event))
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(out[0].text_content(), "base system");
+        assert_eq!(out[1].role, "system");
+        assert!(out[1].is_summary);
+        assert!(out[1]
+            .text_content()
+            .contains("keep the current task visible"));
+        assert!(out
+            .iter()
+            .any(|m| m.text_content() == "old assistant prose should survive"));
+        assert!(out.iter().any(|m| {
+            m.role == "tool"
+                && m.tool_call_id.as_deref() == Some("call_1")
+                && m.text_content() == "[cleared]"
+        }));
+        assert!(out.iter().any(|m| {
+            m.role == "tool"
+                && m.tool_call_id.as_deref() == Some("call_2")
+                && m.text_content() == "recent tool body"
+        }));
+        let assistant_with_tools = out
+            .iter()
+            .find(|m| m.role == "assistant" && m.tool_calls.is_some())
+            .expect("assistant tool-call message remains paired");
+        let ids: Vec<_> = assistant_with_tools
+            .tool_calls
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|tc| tc.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["call_1", "call_2"]);
     }
 
     #[test]

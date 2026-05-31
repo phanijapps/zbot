@@ -25,6 +25,7 @@ use zero_core::types::Part;
 /// Pure pattern matching — no LLM call.
 ///
 /// Format: `[Turn N: tool1(file1), tool2(file2)]` or `[Turn N: <truncated reasoning>]`
+#[cfg(test)]
 pub(crate) fn compress_assistant_message(msg: &ChatMessage, turn_number: usize) -> String {
     if let Some(ref tool_calls) = msg.tool_calls {
         let summaries: Vec<String> = tool_calls
@@ -52,6 +53,7 @@ pub(crate) fn compress_assistant_message(msg: &ChatMessage, turn_number: usize) 
 /// Extract a file path from tool call arguments.
 ///
 /// Looks for common keys: "path", "`file_path`", "file", "filename".
+#[cfg(test)]
 pub(crate) fn extract_file_path(args: &serde_json::Value) -> Option<String> {
     let path_keys = ["path", "file_path", "file", "filename"];
     if let Some(obj) = args.as_object() {
@@ -72,6 +74,7 @@ pub(crate) fn extract_file_path(args: &serde_json::Value) -> Option<String> {
 /// one-line summaries. Recent messages are left intact.
 ///
 /// `keep_recent` is the number of messages from the end to preserve unchanged.
+#[cfg(test)]
 pub(crate) fn compress_old_assistant_messages(messages: &mut [ChatMessage], keep_recent: usize) {
     let total = messages.len();
     if total <= keep_recent {
@@ -433,10 +436,6 @@ impl PreProcessMiddleware for ContextEditingMiddleware {
             &context.execution_state,
         );
 
-        // Compress old assistant messages to one-line summaries
-        let keep_recent = (self.config.keep_tool_results + 1) * 3;
-        compress_old_assistant_messages(&mut modified_messages, keep_recent);
-
         // Log the context editing action
         if unloaded_skills.is_empty() {
             tracing::info!(
@@ -610,6 +609,81 @@ mod tests {
         assert_eq!(messages[2].text_content(), "[cleared]");
         // Check that the second tool result was NOT cleared
         assert_eq!(messages[3].text_content(), "2");
+    }
+
+    #[tokio::test]
+    async fn process_clears_tool_results_without_compressing_assistant_prose() {
+        let config = ContextEditingConfig {
+            enabled: true,
+            trigger_tokens: 1,
+            keep_tool_results: 1,
+            min_reclaim: 0,
+            clear_tool_inputs: false,
+            exclude_tools: vec![],
+            placeholder: "[cleared]".to_string(),
+            ..Default::default()
+        };
+        let middleware = ContextEditingMiddleware::new(config);
+        let messages = vec![
+            ChatMessage::user("Please inspect two files.".to_string()),
+            ChatMessage::assistant(
+                "I will inspect the first file and then compare it with the second.".to_string(),
+            ),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: vec![Part::Text {
+                    text: String::new(),
+                }],
+                tool_calls: Some(vec![
+                    ToolCall::new(
+                        "call_1".to_string(),
+                        "read_file".to_string(),
+                        json!({"path": "src/old.rs"}),
+                    ),
+                    ToolCall::new(
+                        "call_2".to_string(),
+                        "read_file".to_string(),
+                        json!({"path": "src/recent.rs"}),
+                    ),
+                ]),
+                tool_call_id: None,
+                is_summary: false,
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: vec![Part::Text {
+                    text: "old file contents".repeat(50),
+                }],
+                tool_calls: None,
+                tool_call_id: Some("call_1".to_string()),
+                is_summary: false,
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: vec![Part::Text {
+                    text: "recent file contents".to_string(),
+                }],
+                tool_calls: None,
+                tool_call_id: Some("call_2".to_string()),
+                is_summary: false,
+            },
+        ];
+        let ctx = make_ctx("gpt-4o-mini");
+
+        let effect = middleware.process(messages, &ctx).await.unwrap();
+
+        match effect {
+            MiddlewareEffect::EmitAndModify { messages, .. } => {
+                assert_eq!(
+                    messages[1].text_content(),
+                    "I will inspect the first file and then compare it with the second."
+                );
+                assert!(!messages[1].is_summary);
+                assert_eq!(messages[3].text_content(), "[cleared]");
+                assert_eq!(messages[4].text_content(), "recent file contents");
+            }
+            other => panic!("expected EmitAndModify, got {other:?}"),
+        }
     }
 
     #[test]

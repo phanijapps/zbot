@@ -41,6 +41,7 @@ pub mod traits;
 pub use config::{
     ContextEditingConfig, KeepPolicy, MiddlewareConfig, SummarizationConfig, TriggerCondition,
 };
+#[cfg(test)]
 pub(crate) use context_editing::compress_old_assistant_messages;
 pub use context_editing::ContextEditingMiddleware;
 pub use pipeline::MiddlewarePipeline;

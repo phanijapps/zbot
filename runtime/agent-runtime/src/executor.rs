@@ -23,7 +23,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::context_management::{compact_messages, sanitize_messages, truncate_tool_result};
+use crate::context_management::{sanitize_messages, truncate_tool_result};
 use crate::llm::client::StreamChunk;
 use crate::llm::LlmClient;
 use crate::mcp::McpManager;
@@ -147,11 +147,10 @@ pub struct ExecutorConfig {
     pub extension_size: u32,
 
     /// Context window size for the model in tokens.
-    /// When cumulative tokens exceed 80% of this, auto-compaction triggers.
-    /// Set to 0 to disable compaction.
+    /// Set to 0 to disable context-budget warnings.
     pub context_window_tokens: u64,
 
-    /// Percentage of context window at which to inject a pre-compaction memory flush warning.
+    /// Percentage of context window at which to inject a context memory flush warning.
     /// Default: 80. Chat mode sets this to 70 so the nudge fires before the middleware prunes.
     pub compaction_warn_pct: u64,
 
@@ -695,9 +694,9 @@ impl AgentExecutor {
                 }
             }
 
-            // Token-budget auto-compaction trigger.
+            // Token-budget warning trigger.
             // Compares the CURRENT prompt size (as measured by the provider on
-            // the prompt we just sent) against 80% of the context window.
+            // the prompt we just sent) against the configured context window.
             // `total_tokens_in` is billing-only here — it grows across turns
             // and would spuriously trip the trigger on long tool loops.
             //
@@ -709,11 +708,11 @@ impl AgentExecutor {
                 last_compaction_check_msg_count = current_messages.len();
                 let warn_threshold =
                     (self.config.context_window_tokens * self.config.compaction_warn_pct) / 100;
-                let compact_threshold = (self.config.context_window_tokens * 80) / 100;
+                let prune_threshold = (self.config.context_window_tokens * 80) / 100;
                 if current_prompt_tokens > warn_threshold {
-                    // Pre-compaction memory flush: inject a nudge to save important facts
-                    // before context is trimmed. The agent can use save_fact on the next
-                    // turn before the old messages disappear.
+                    // Context memory flush: inject a nudge to save important facts
+                    // before middleware pruning. The agent can use save_fact on the
+                    // next turn before the old messages disappear.
                     if !compaction_warned {
                         current_messages.push(ChatMessage::system(
                             "[system] Context is getting full. Save important facts with \
@@ -724,24 +723,17 @@ impl AgentExecutor {
                         tracing::info!(
                             current_prompt_tokens = current_prompt_tokens,
                             warn_threshold = warn_threshold,
-                            "Pre-compaction memory flush warning injected"
+                            "Context memory flush warning injected"
                         );
-                        // Skip actual compaction this iteration — give agent one turn to save
+                        // Give the agent one turn to save facts before middleware pruning.
                         continue;
                     }
 
-                    // Actual compaction triggers at 80% regardless of warn threshold
-                    if current_prompt_tokens > compact_threshold {
-                        let before = current_messages.len();
-                        current_messages = compact_messages(current_messages);
-                        tracing::info!(
-                            current_prompt_tokens = current_prompt_tokens,
-                            compact_threshold = compact_threshold,
-                            messages_before = before,
-                            messages_after = current_messages.len(),
-                            "Context compacted"
-                        );
-                    }
+                    tracing::debug!(
+                        current_prompt_tokens = current_prompt_tokens,
+                        prune_threshold = prune_threshold,
+                        "Context threshold exceeded; runtime middleware owns pruning"
+                    );
                 }
             }
 
@@ -931,8 +923,8 @@ impl AgentExecutor {
             if let Some(usage) = &response.usage {
                 total_tokens_in += u64::from(usage.prompt_tokens);
                 total_tokens_out += u64::from(usage.completion_tokens);
-                // Single-response prompt size — the provider's authoritative
-                // measurement of the tape we just sent. Drives compaction.
+                // Single-response prompt size: the provider's authoritative
+                // measurement of the tape we just sent. Drives context warnings.
                 current_prompt_tokens = u64::from(usage.prompt_tokens);
 
                 on_event(StreamEvent::TokenUpdate {
