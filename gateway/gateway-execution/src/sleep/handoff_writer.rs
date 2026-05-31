@@ -28,6 +28,7 @@ pub const HANDOFF_AGENT_SENTINEL: &str = "__handoff__";
 pub const HANDOFF_CATEGORY: &str = "handoff";
 pub const HANDOFF_SCOPE: &str = "global";
 pub const HANDOFF_WARD: &str = "__global__";
+pub const HANDOFF_CTX_OWNER: &str = "root";
 
 /// Stored JSON shape for each `handoff.*` fact in the DB.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,16 +72,46 @@ pub async fn read_handoff_block(
     fact_store: &Arc<dyn zero_stores::MemoryFactStore>,
     current_ward: Option<&str>,
 ) -> Option<String> {
-    let fact = fact_store
-        .get_fact_by_key(
-            HANDOFF_AGENT_SENTINEL,
-            HANDOFF_SCOPE,
-            HANDOFF_WARD,
-            "handoff.latest",
-        )
-        .await
-        .ok()??;
-    let entry: HandoffEntry = serde_json::from_str(&fact.content).ok()?;
+    let mut ctx_wards = Vec::new();
+    if let Some(ward) = current_ward {
+        ctx_wards.push(ward);
+    }
+    if !ctx_wards.contains(&HANDOFF_WARD) {
+        ctx_wards.push(HANDOFF_WARD);
+    }
+
+    let mut entry_json = None;
+    for ward in ctx_wards {
+        entry_json = fact_store
+            .get_ctx_fact(ward, "handoff.latest")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| {
+                v.get("content")
+                    .and_then(|c| c.as_str())
+                    .map(str::to_string)
+            });
+        if entry_json.is_some() {
+            break;
+        }
+    }
+
+    let entry_json = if let Some(ctx) = entry_json {
+        ctx
+    } else {
+        let fact = fact_store
+            .get_fact_by_key(
+                HANDOFF_AGENT_SENTINEL,
+                HANDOFF_SCOPE,
+                HANDOFF_WARD,
+                "handoff.latest",
+            )
+            .await
+            .ok()??;
+        fact.content
+    };
+    let entry: HandoffEntry = serde_json::from_str(&entry_json).ok()?;
     let completed_at = entry.completed_at.parse::<DateTime<Utc>>().ok()?;
     if (Utc::now() - completed_at).num_days() > HANDOFF_MAX_AGE_DAYS {
         return None;
@@ -96,7 +127,7 @@ pub async fn read_handoff_block(
         "## Last Session  ({date} · ward: {ward} · {turns} turns)\n\
          {summary}\n\n\
          Corrections active: {corrections} · Goals: {goals}\n\
-         Full context: memory(action=get_fact, key=handoff.{sid})\n\
+         Full context: memory(action=get_fact, key=ctx.{sid}.handoff)\n\
          Last intent:  memory(action=get_fact, key={intent_key})",
         date = date_str,
         ward = entry.ward_id,
@@ -270,30 +301,63 @@ impl HandoffWriter {
 
     async fn persist(&self, session_id: &str, entry: &HandoffEntry) -> Result<(), String> {
         let json = serde_json::to_string(entry).map_err(|e| format!("serialize entry: {e}"))?;
+        let ctx_ward = if entry.ward_id.trim().is_empty() {
+            HANDOFF_WARD
+        } else {
+            entry.ward_id.as_str()
+        };
         self.fact_store
-            .save_fact(
-                HANDOFF_AGENT_SENTINEL,
-                HANDOFF_CATEGORY,
+            .save_ctx_fact(
+                session_id,
+                ctx_ward,
                 "handoff.latest",
                 &json,
-                1.0,
-                Some(session_id),
-                None, // valid_from: defaults to Utc::now() in store impl
+                HANDOFF_CTX_OWNER,
+                true,
             )
             .await
             .map_err(|e| format!("save handoff.latest: {e}"))?;
         self.fact_store
-            .save_fact(
-                HANDOFF_AGENT_SENTINEL,
-                HANDOFF_CATEGORY,
+            .save_ctx_fact(
+                session_id,
+                ctx_ward,
                 &format!("handoff.{session_id}"),
                 &json,
-                1.0,
-                Some(session_id),
-                None, // valid_from: defaults to Utc::now() in store impl
+                HANDOFF_CTX_OWNER,
+                true,
             )
             .await
             .map_err(|e| format!("save handoff.{session_id}: {e}"))?;
+        self.fact_store
+            .save_ctx_fact(
+                session_id,
+                ctx_ward,
+                &format!("ctx.{session_id}.handoff"),
+                &json,
+                HANDOFF_CTX_OWNER,
+                true,
+            )
+            .await
+            .map_err(|e| format!("save ctx.{session_id}.handoff: {e}"))?;
+        if ctx_ward != HANDOFF_WARD {
+            self.fact_store
+                .save_ctx_fact(
+                    session_id,
+                    HANDOFF_WARD,
+                    "handoff.latest",
+                    &json,
+                    HANDOFF_CTX_OWNER,
+                    true,
+                )
+                .await
+                .map_err(|e| format!("save global handoff.latest: {e}"))?;
+        }
+        tracing::info!(
+            session_id,
+            handoff_ctx_saved = true,
+            ward = %ctx_ward,
+            "handoff: saved full payload through ctx storage"
+        );
         Ok(())
     }
 }
@@ -367,6 +431,8 @@ mod tests {
     #[derive(Default)]
     struct MockFactStore {
         facts: Mutex<HashMap<String, String>>,
+        ctx_facts: Mutex<HashMap<String, String>>,
+        save_fact_calls: Mutex<u32>,
         corrections: Mutex<Vec<String>>,
     }
 
@@ -375,10 +441,19 @@ mod tests {
             Arc::new(Self::default())
         }
         fn get(&self, key: &str) -> Option<String> {
-            self.facts.lock().unwrap().get(key).cloned()
+            self.ctx_facts
+                .lock()
+                .unwrap()
+                .get(key)
+                .cloned()
+                .or_else(|| self.facts.lock().unwrap().get(key).cloned())
         }
         fn contains(&self, key: &str) -> bool {
-            self.facts.lock().unwrap().contains_key(key)
+            self.ctx_facts.lock().unwrap().contains_key(key)
+                || self.facts.lock().unwrap().contains_key(key)
+        }
+        fn save_fact_call_count(&self) -> u32 {
+            *self.save_fact_calls.lock().unwrap()
         }
     }
 
@@ -394,6 +469,7 @@ mod tests {
             _session_id: Option<&str>,
             _valid_from: Option<chrono::DateTime<chrono::Utc>>,
         ) -> Result<serde_json::Value, String> {
+            *self.save_fact_calls.lock().unwrap() += 1;
             self.facts
                 .lock()
                 .unwrap()
@@ -443,6 +519,39 @@ mod tests {
                 source_episode_id: None,
                 source_ref: None,
             }))
+        }
+
+        async fn get_ctx_fact(
+            &self,
+            _ward_id: &str,
+            key: &str,
+        ) -> Result<Option<serde_json::Value>, String> {
+            Ok(self.ctx_facts.lock().unwrap().get(key).map(|content| {
+                serde_json::json!({
+                    "found": true,
+                    "key": key,
+                    "content": content,
+                    "owner": HANDOFF_CTX_OWNER,
+                    "session_id": "mock-session",
+                    "pinned": true,
+                })
+            }))
+        }
+
+        async fn save_ctx_fact(
+            &self,
+            _session_id: &str,
+            _ward_id: &str,
+            key: &str,
+            content: &str,
+            _owner: &str,
+            _pinned: bool,
+        ) -> Result<serde_json::Value, String> {
+            self.ctx_facts
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), content.to_string());
+            Ok(serde_json::json!({"ok": true, "action": "save_ctx_fact"}))
         }
 
         async fn get_facts_by_category(
@@ -616,7 +725,7 @@ mod tests {
         assert!(block.contains("memory-ward"));
         assert!(block.contains("Corrections active: 3"));
         assert!(block.contains("Goals: 2"));
-        assert!(block.contains("handoff.sess-abc"));
+        assert!(block.contains("ctx.sess-abc.handoff"));
     }
 
     // ---- Test 6: read_handoff_block returns None for stale entry ----
@@ -760,12 +869,45 @@ mod tests {
             store.contains("handoff.sess-xyz"),
             "handoff.sess-xyz missing"
         );
+        assert!(
+            store.contains("ctx.sess-xyz.handoff"),
+            "ctx.sess-xyz.handoff missing"
+        );
 
         let latest: HandoffEntry =
             serde_json::from_str(&store.get("handoff.latest").unwrap()).unwrap();
         let archived: HandoffEntry =
             serde_json::from_str(&store.get("handoff.sess-xyz").unwrap()).unwrap();
         assert_eq!(latest.summary, archived.summary);
+        assert_eq!(
+            store.save_fact_call_count(),
+            0,
+            "full handoff JSON must not be written as a semantic fact"
+        );
+    }
+
+    #[tokio::test]
+    async fn writes_oversized_handoff_payload_through_ctx_storage() {
+        let store = MockFactStore::new();
+        let writer = make_writer(MockLlm::ok(&"long summary ".repeat(120)), store.clone());
+
+        writer
+            .write_with_messages("sess-long", "agent-root", "my-ward", sample_messages(4))
+            .await
+            .unwrap();
+
+        let latest = store.get("handoff.latest").expect("handoff.latest missing");
+        assert!(
+            latest.chars().count() > 800,
+            "test must exercise payloads over the normal semantic fact cap"
+        );
+        assert!(store.contains("handoff.sess-long"));
+        assert!(store.contains("ctx.sess-long.handoff"));
+        assert_eq!(
+            store.save_fact_call_count(),
+            0,
+            "oversized handoff payload must avoid save_fact"
+        );
     }
 
     // ---- Test 3: failure_is_silent ----
