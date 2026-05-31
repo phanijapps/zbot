@@ -11,8 +11,8 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use knowledge_graph::{Entity, EntityType};
-use zero_stores::types::EntityId;
 use zero_stores::KnowledgeGraphStore;
+use zero_stores::types::EntityId;
 use zero_stores_traits::CompactionStore;
 
 /// Default cosine threshold for considering two entities near-duplicates.
@@ -160,11 +160,18 @@ impl Compactor {
         if let Some(verifier) = &self.verifier {
             let a = entities.iter().find(|e| e.id == a_id);
             let b = entities.iter().find(|e| e.id == b_id);
-            if let (Some(a), Some(b)) = (a, b) {
-                if !verifier.should_merge(a, b).await {
-                    stats.merges_skipped_by_verifier += 1;
-                    return;
-                }
+            let (Some(a), Some(b)) = (a, b) else {
+                stats.merges_skipped_by_verifier += 1;
+                tracing::warn!(
+                    candidate_a = %a_id,
+                    candidate_b = %b_id,
+                    "compactor verifier skipped merge because candidate entity data was unavailable"
+                );
+                return;
+            };
+            if !verifier.should_merge(a, b).await {
+                stats.merges_skipped_by_verifier += 1;
+                return;
             }
         }
 
@@ -228,6 +235,7 @@ fn pick_loser_winner(entities: &[Entity], a: &str, b: &str) -> (String, String) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use gateway_services::VaultPaths;
     use knowledge_graph::{Entity, EntityType, ExtractedKnowledge};
     use std::sync::Arc;
@@ -235,6 +243,15 @@ mod tests {
     use zero_stores_sqlite::{
         CompactionRepository, GatewayCompactionStore, KnowledgeDatabase, SqliteKgStore,
     };
+
+    struct FixedVerifier(bool);
+
+    #[async_trait]
+    impl PairwiseVerifier for FixedVerifier {
+        async fn should_merge(&self, _a: &Entity, _b: &Entity) -> bool {
+            self.0
+        }
+    }
 
     fn setup() -> (
         tempfile::TempDir,
@@ -316,5 +333,66 @@ mod tests {
         let rows = repo.list_run(run_id).expect("list run");
         assert!(!rows.is_empty(), "kg_compactions should have a merge row");
         assert_eq!(rows[0].operation, "merge");
+    }
+
+    #[tokio::test]
+    async fn verifier_enabled_skips_merge_when_candidate_entity_is_missing() {
+        let (_tmp, graph, repo) = setup();
+        let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(graph));
+        let compaction_store: Arc<dyn CompactionStore> =
+            Arc::new(GatewayCompactionStore::new(repo));
+        let compactor = Compactor::new(
+            kg_store,
+            compaction_store,
+            Some(Arc::new(FixedVerifier(true))),
+        );
+        let mut stats = CompactionStats::default();
+
+        compactor
+            .process_pair(
+                "run-missing-entity",
+                &[],
+                "missing-a".to_string(),
+                "missing-b".to_string(),
+                0.99,
+                &mut stats,
+            )
+            .await;
+
+        assert_eq!(stats.merges_performed, 0);
+        assert_eq!(stats.merges_skipped_by_verifier, 1);
+    }
+
+    #[tokio::test]
+    async fn verifier_rejection_skips_merge_and_updates_stats() {
+        let (_tmp, graph, repo) = setup();
+        let kg_store: Arc<dyn KnowledgeGraphStore> = Arc::new(SqliteKgStore::new(graph));
+        let compaction_store: Arc<dyn CompactionStore> =
+            Arc::new(GatewayCompactionStore::new(repo));
+        let compactor = Compactor::new(
+            kg_store,
+            compaction_store,
+            Some(Arc::new(FixedVerifier(false))),
+        );
+        let agent_id = "agent-verify";
+        let entities = vec![
+            Entity::new(agent_id.to_string(), EntityType::Person, "A".to_string()),
+            Entity::new(agent_id.to_string(), EntityType::Person, "B".to_string()),
+        ];
+        let mut stats = CompactionStats::default();
+
+        compactor
+            .process_pair(
+                "run-reject",
+                &entities,
+                entities[0].id.clone(),
+                entities[1].id.clone(),
+                0.99,
+                &mut stats,
+            )
+            .await;
+
+        assert_eq!(stats.merges_performed, 0);
+        assert_eq!(stats.merges_skipped_by_verifier, 1);
     }
 }

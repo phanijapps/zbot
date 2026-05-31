@@ -4,8 +4,9 @@
 
 use agent_runtime::{
     AgentExecutor, ContextEditingConfig, ContextEditingMiddleware, DelegateTool, ExecutorConfig,
-    LlmConfig, McpManager, MiddlewarePipeline, OpenAiClient, PlanBlockMiddleware, RespondTool,
-    RetryPolicy, RetryingLlmClient, ToolCallDecision, ToolRegistry,
+    KeepPolicy, LlmClient, LlmConfig, McpManager, MiddlewarePipeline, OpenAiClient,
+    PlanBlockMiddleware, RespondTool, RetryPolicy, RetryingLlmClient, SummarizationConfig,
+    SummarizationMiddleware, ToolCallDecision, ToolRegistry, TriggerCondition,
 };
 use agent_tools::{
     EditFileTool,
@@ -60,6 +61,68 @@ use crate::config::GatewayFileSystem;
 /// changing the public signature.
 pub fn resolve_thinking_flag(user_flag: bool, _model: &str) -> bool {
     user_flag
+}
+
+fn build_runtime_middleware_pipeline(
+    context_window_tokens: u64,
+    chat_mode: bool,
+    summary_client: Option<Arc<dyn LlmClient>>,
+) -> Arc<MiddlewarePipeline> {
+    let pipeline = MiddlewarePipeline::new();
+    let mut trigger_tokens = None;
+    let pipeline = if context_window_tokens > 0 {
+        let (trigger_pct, keep_results) = if chat_mode {
+            (80, 5) // Chat: 80% trigger, keep 5 recent tool results
+        } else {
+            (70, 8) // Deep: 70% trigger, keep 8 recent tool results
+        };
+        let threshold = (context_window_tokens as usize * trigger_pct) / 100;
+        trigger_tokens = Some(threshold);
+        pipeline.add_pre_processor(Box::new(ContextEditingMiddleware::new(
+            ContextEditingConfig {
+                enabled: true,
+                trigger_tokens: threshold,
+                keep_tool_results: keep_results,
+                min_reclaim: 500,
+                clear_tool_inputs: true,
+                cascade_unload: true,
+                skill_aware_placeholders: true,
+                ..Default::default()
+            },
+        )))
+    } else {
+        pipeline
+    };
+
+    // Layer 1 (pinned plan anchor) runs AFTER context editing so
+    // tool-result clearing happens first on the raw tape, then
+    // the fresh plan block is re-inserted at a stable slot
+    // behind the system prompt. The block's `is_summary = true`
+    // flag keeps it out of any future summarization pass.
+    let pipeline = pipeline.add_pre_processor(Box::new(PlanBlockMiddleware::new()));
+
+    if let (Some(client), Some(threshold)) = (summary_client, trigger_tokens) {
+        let pipeline = pipeline.add_pre_processor(Box::new(SummarizationMiddleware::new(
+            SummarizationConfig {
+                enabled: true,
+                trigger: TriggerCondition {
+                    tokens: Some(threshold),
+                    messages: None,
+                    fraction: None,
+                },
+                keep: KeepPolicy {
+                    messages: Some(if chat_mode { 20 } else { 30 }),
+                    tokens: None,
+                    fraction: None,
+                },
+                ..SummarizationConfig::default()
+            },
+            client,
+        )));
+        return Arc::new(pipeline);
+    }
+
+    Arc::new(pipeline)
 }
 
 // ============================================================================
@@ -452,43 +515,12 @@ impl ExecutorBuilder {
         });
         executor_config.mcps = agent.mcps.clone();
 
-        // Create middleware pipeline with context editing
-        // Must be after context_window_tokens is resolved (above)
-        // Chat mode: trigger later (80%) but keep fewer results — conversations are long-running
-        // Deep mode: trigger earlier (70%) and keep more results — tasks need full context
-        let middleware_pipeline = {
-            let pipeline = MiddlewarePipeline::new();
-            let pipeline = if executor_config.context_window_tokens > 0 {
-                let (trigger_pct, keep_results) = if self.chat_mode {
-                    (80, 5) // Chat: 80% trigger, keep 5 recent tool results
-                } else {
-                    (70, 8) // Deep: 70% trigger, keep 8 recent tool results
-                };
-                pipeline.add_pre_processor(Box::new(ContextEditingMiddleware::new(
-                    ContextEditingConfig {
-                        enabled: true,
-                        trigger_tokens: (executor_config.context_window_tokens as usize
-                            * trigger_pct)
-                            / 100,
-                        keep_tool_results: keep_results,
-                        min_reclaim: 500,
-                        clear_tool_inputs: true,
-                        cascade_unload: true,
-                        skill_aware_placeholders: true,
-                        ..Default::default()
-                    },
-                )))
-            } else {
-                pipeline
-            };
-            // Layer 1 (pinned plan anchor) runs AFTER context editing so
-            // tool-result clearing happens first on the raw tape, then
-            // the fresh plan block is re-inserted at a stable slot
-            // behind the system prompt. The block's `is_summary = true`
-            // flag keeps it out of any future compaction pass.
-            let pipeline = pipeline.add_pre_processor(Box::new(PlanBlockMiddleware::new()));
-            Arc::new(pipeline)
-        };
+        // Create middleware pipeline after context_window_tokens is resolved.
+        let middleware_pipeline = build_runtime_middleware_pipeline(
+            executor_config.context_window_tokens,
+            self.chat_mode,
+            Some(llm_client.clone()),
+        );
 
         // Root is an orchestrator — enforce single action per turn (except chat mode)
         if !self.is_delegated && !self.chat_mode {
@@ -758,5 +790,73 @@ pub async fn collect_skills_summary(skill_service: &SkillService) -> Vec<serde_j
             })
             .collect(),
         Err(_) => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_runtime::llm::{ChatResponse, LlmError, StreamCallback};
+    use async_trait::async_trait;
+    use serde_json::Value;
+
+    struct StubSummaryClient;
+
+    #[async_trait]
+    impl LlmClient for StubSummaryClient {
+        fn model(&self) -> &str {
+            "stub"
+        }
+
+        fn provider(&self) -> &str {
+            "stub"
+        }
+
+        async fn chat(
+            &self,
+            _messages: Vec<agent_runtime::ChatMessage>,
+            _tools: Option<Value>,
+        ) -> Result<ChatResponse, LlmError> {
+            Ok(ChatResponse {
+                content: "summary".to_string(),
+                tool_calls: None,
+                reasoning: None,
+                usage: None,
+            })
+        }
+
+        async fn chat_stream(
+            &self,
+            messages: Vec<agent_runtime::ChatMessage>,
+            tools: Option<Value>,
+            _callback: StreamCallback,
+        ) -> Result<ChatResponse, LlmError> {
+            self.chat(messages, tools).await
+        }
+    }
+
+    #[test]
+    fn runtime_middleware_order_keeps_context_editing_before_plan_block() {
+        let pipeline = build_runtime_middleware_pipeline(100_000, true, None);
+        assert_eq!(
+            pipeline.pre_processor_names(),
+            vec!["context_editing", "plan_block"]
+        );
+    }
+
+    #[test]
+    fn runtime_middleware_order_puts_enabled_summarization_after_plan_block() {
+        let summary_client = Arc::new(StubSummaryClient);
+        let pipeline = build_runtime_middleware_pipeline(100_000, true, Some(summary_client));
+        assert_eq!(
+            pipeline.pre_processor_names(),
+            vec!["context_editing", "plan_block", "summarization"]
+        );
+    }
+
+    #[test]
+    fn runtime_middleware_order_keeps_plan_block_when_context_window_unknown() {
+        let pipeline = build_runtime_middleware_pipeline(0, false, None);
+        assert_eq!(pipeline.pre_processor_names(), vec!["plan_block"]);
     }
 }
