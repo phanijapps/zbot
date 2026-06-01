@@ -121,6 +121,26 @@ For MSVC builds (recommended), you must build on Windows.
 
 ## Release Artifacts
 
+## Cutting a Release
+
+Use the CalVer release helper from a clean branch:
+
+```bash
+scripts/release.sh --dry-run
+scripts/release.sh
+```
+
+By default it generates `vYYYY.M.D` with no zero padding, updates the Rust
+workspace version and UI package version, prepends `CHANGELOG.md`, commits the
+release bump, creates an annotated tag, and pushes the branch plus tag. To cut
+a specific version:
+
+```bash
+scripts/release.sh --version v2026.6.1
+```
+
+Pushing the tag triggers `.github/workflows/release.yml`.
+
 ### Directory Structure
 
 ```

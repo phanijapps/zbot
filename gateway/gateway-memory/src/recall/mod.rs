@@ -29,8 +29,11 @@ pub use scored_item::{intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, S
 use std::sync::Arc;
 
 use crate::{MmrConfig, RecallConfig};
-use agent_runtime::llm::embedding::EmbeddingClient;
+use agent_runtime::llm::embedding::{EmbeddingClient, EmbeddingError};
 use zero_stores_domain::{MemoryFact, Procedure, ScoredFact};
+
+const MAX_RECALL_EMBED_QUERY_CHARS: usize = 500;
+const RETRY_RECALL_EMBED_QUERY_CHARS: usize = 384;
 
 /// Retrieves relevant memory facts for injection at session start.
 ///
@@ -463,6 +466,7 @@ impl MemoryRecall {
                                         session_id: None,
                                         ward_id: None,
                                     },
+                                    route_hint: None,
                                 }
                             })
                             .collect();
@@ -532,6 +536,7 @@ impl MemoryRecall {
                                     session_id: None,
                                     ward_id: None,
                                 },
+                                route_hint: None,
                             };
                             best_by_id
                                 .entry(h.entity_id.0)
@@ -583,6 +588,13 @@ impl MemoryRecall {
                     session_id: None,
                     ward_id: ward_id.map(String::from),
                 },
+                route_hint: ward_id.map(|ward| {
+                    zero_stores_domain::RouteHint::new(
+                        ward.to_string(),
+                        zero_stores_domain::RouteSourceKind::Goal,
+                    )
+                    .with_memory_id(g.id.clone())
+                }),
             })
             .collect();
 
@@ -838,15 +850,48 @@ impl MemoryRecall {
     /// Embed a query string for vector search.
     async fn embed_query(&self, text: &str) -> Option<Vec<f32>> {
         let client = self.embedding_client.as_ref()?;
+        let attempts = recall_embedding_queries(text);
+        if attempts
+            .first()
+            .is_some_and(|embedding_text| embedding_text.chars().count() < text.chars().count())
+        {
+            tracing::warn!(
+                recall_embed_input_too_long = true,
+                original_chars = text.chars().count(),
+                bounded_chars = attempts[0].chars().count(),
+                max_chars = MAX_RECALL_EMBED_QUERY_CHARS,
+                "Recall embedding input exceeded hygiene cap; embedding bounded query"
+            );
+        }
 
-        match client.embed(&[text]).await {
-            Ok(mut embeddings) if !embeddings.is_empty() => Some(embeddings.remove(0)),
-            Ok(_) => None,
-            Err(e) => {
-                tracing::warn!("Failed to embed query for recall: {}", e);
-                None
+        for (attempt_idx, embedding_text) in attempts.iter().enumerate() {
+            match client.embed(&[embedding_text.as_str()]).await {
+                Ok(mut embeddings) if !embeddings.is_empty() => return Some(embeddings.remove(0)),
+                Ok(_) => return None,
+                Err(e)
+                    if attempt_idx == 0
+                        && attempts.len() > 1
+                        && is_embedding_context_length_error(&e) =>
+                {
+                    tracing::warn!(
+                        recall_embed_retry_context_too_long = true,
+                        error = %e,
+                        retry_chars = attempts[1].chars().count(),
+                        "Recall embedding provider rejected bounded query; retrying smaller query"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        recall_embed_failed = true,
+                        error = %e,
+                        "Failed to embed query for recall; continuing with lexical recall"
+                    );
+                    return None;
+                }
             }
         }
+
+        None
     }
 
     /// Run one hybrid search call against the trait-routed memory store.
@@ -914,6 +959,36 @@ impl MemoryRecall {
     }
 }
 
+fn recall_embedding_queries(text: &str) -> Vec<String> {
+    let primary = bounded_recall_embedding_query(text, MAX_RECALL_EMBED_QUERY_CHARS);
+    let retry = bounded_recall_embedding_query(text, RETRY_RECALL_EMBED_QUERY_CHARS);
+    if primary == retry {
+        vec![primary]
+    } else {
+        vec![primary, retry]
+    }
+}
+
+fn bounded_recall_embedding_query(text: &str, max_chars: usize) -> String {
+    let compact = compact_recall_embedding_query(text);
+    if compact.chars().count() <= max_chars {
+        return compact;
+    }
+    compact.chars().take(max_chars).collect()
+}
+
+fn compact_recall_embedding_query(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn is_embedding_context_length_error(error: &EmbeddingError) -> bool {
+    let msg = error.to_string().to_ascii_lowercase();
+    (msg.contains("input length") && msg.contains("context length"))
+        || msg.contains("maximum context")
+        || msg.contains("too many tokens")
+        || msg.contains("context window")
+}
+
 /// Apply class-aware penalty to a scored fact based on its epistemic class
 /// and whether it has been superseded (`superseded_by` set).
 ///
@@ -977,6 +1052,7 @@ mod tests {
                 session_id: None,
                 ward_id: None,
             },
+            route_hint: None,
         }
     }
 
@@ -1132,6 +1208,14 @@ mod tests {
             !results.iter().any(|i| i.id == "low"),
             "chess procedures should be suppressed"
         );
+    }
+
+    #[test]
+    fn bounded_recall_embedding_query_caps_oversized_input() {
+        let long = "x".repeat(MAX_RECALL_EMBED_QUERY_CHARS + 500);
+        let bounded = bounded_recall_embedding_query(&long, MAX_RECALL_EMBED_QUERY_CHARS);
+
+        assert_eq!(bounded.chars().count(), MAX_RECALL_EMBED_QUERY_CHARS);
     }
 
     #[test]
@@ -1326,6 +1410,134 @@ mod tests {
         fn model_name(&self) -> String {
             "test".to_string()
         }
+    }
+
+    struct LengthCheckingEmbed {
+        max_chars: usize,
+        seen: Mutex<Vec<usize>>,
+    }
+
+    impl LengthCheckingEmbed {
+        fn new(max_chars: usize) -> Arc<Self> {
+            Arc::new(Self {
+                max_chars,
+                seen: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn seen_lengths(&self) -> Vec<usize> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl EmbeddingClient for LengthCheckingEmbed {
+        async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            for text in texts {
+                let chars = text.chars().count();
+                self.seen.lock().unwrap().push(chars);
+                if chars > self.max_chars {
+                    return Err(EmbeddingError::ApiError(format!(
+                        "input length exceeds context length: {chars}"
+                    )));
+                }
+            }
+            Ok(texts.iter().map(|_| vec![1.0_f32, 0.0, 0.0]).collect())
+        }
+
+        fn dimensions(&self) -> usize {
+            3
+        }
+
+        fn model_name(&self) -> String {
+            "length-checking".to_string()
+        }
+    }
+
+    struct FailingEmbed;
+
+    #[async_trait]
+    impl EmbeddingClient for FailingEmbed {
+        async fn embed(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            Err(EmbeddingError::ApiError(
+                "input length exceeds context length".to_string(),
+            ))
+        }
+
+        fn dimensions(&self) -> usize {
+            384
+        }
+
+        fn model_name(&self) -> String {
+            "failing".to_string()
+        }
+    }
+
+    #[tokio::test]
+    async fn recall_unified_bounds_query_before_embedding_provider_call() {
+        let embed = LengthCheckingEmbed::new(MAX_RECALL_EMBED_QUERY_CHARS);
+        let embed_dyn: Arc<dyn EmbeddingClient> = embed.clone();
+        let recall = MemoryRecall::new(Some(embed_dyn), Arc::new(RecallConfig::default()));
+
+        let long_query = "memory hygiene ".repeat(400);
+        let _ = recall
+            .recall_unified("agent", &long_query, None, &[], 5)
+            .await
+            .unwrap();
+
+        let seen = embed.seen_lengths();
+        assert_eq!(seen, vec![MAX_RECALL_EMBED_QUERY_CHARS]);
+    }
+
+    #[tokio::test]
+    async fn recall_unified_retries_smaller_query_after_provider_context_error() {
+        let embed = LengthCheckingEmbed::new(RETRY_RECALL_EMBED_QUERY_CHARS);
+        let embed_dyn: Arc<dyn EmbeddingClient> = embed.clone();
+        let recall = MemoryRecall::new(Some(embed_dyn), Arc::new(RecallConfig::default()));
+
+        let long_query = "memory hygiene ".repeat(400);
+        let _ = recall
+            .recall_unified("agent", &long_query, None, &[], 5)
+            .await
+            .unwrap();
+
+        let seen = embed.seen_lengths();
+        assert_eq!(
+            seen,
+            vec![MAX_RECALL_EMBED_QUERY_CHARS, RETRY_RECALL_EMBED_QUERY_CHARS]
+        );
+    }
+
+    #[tokio::test]
+    async fn recall_unified_keeps_fts_results_when_embedding_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = make_memory_store_with_embedder(&tmp, Arc::new(DirectionalEmbed)).await;
+        store
+            .save_fact(
+                "agent",
+                "domain",
+                "memory.hygiene",
+                "memory hygiene guard should still be found by lexical recall",
+                0.95,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let mut recall = MemoryRecall::new(Some(Arc::new(FailingEmbed)), relaxed_recall_config());
+        recall.set_memory_store(store);
+
+        let out = recall
+            .recall_unified("agent", "memory hygiene guard", None, &[], 10)
+            .await
+            .unwrap();
+
+        assert!(
+            out.iter().any(|item| item.id == "fact:memory.hygiene"
+                || item.content.contains("memory hygiene guard")),
+            "FTS result should survive embedding failure: {out:?}"
+        );
     }
 
     /// In-memory belief store that returns a fixed list from

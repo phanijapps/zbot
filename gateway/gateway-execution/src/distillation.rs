@@ -597,6 +597,8 @@ impl SessionDistiller {
         // Phase E6c: trait-routed. Block is a no-op when kg_store
         // isn't wired (defensive — production composition always
         // wires it).
+        let mut kg_relationships_stored = 0_i32;
+        let mut kg_relationships_dropped = 0_i32;
         if self.kg_store.is_some() {
             // Build entity map for relationship resolution
             let mut entity_map: std::collections::HashMap<String, String> =
@@ -621,10 +623,13 @@ impl SessionDistiller {
                             ee.name.clone(),
                         );
                         entity.properties = ee.properties.clone();
-                        entity_map.insert(ee.name.clone(), entity.id.clone());
-
-                        if let Err(e) = self.store_knowledge_one_entity(agent_id, entity).await {
-                            tracing::warn!(entity = %ee.name, error = %e, "Failed to store entity");
+                        match self.store_knowledge_one_entity(agent_id, entity).await {
+                            Ok(id) => {
+                                entity_map.insert(ee.name.clone(), id);
+                            }
+                            Err(e) => {
+                                tracing::warn!(entity = %ee.name, error = %e, "Failed to store entity");
+                            }
                         }
                     }
                 }
@@ -648,6 +653,16 @@ impl SessionDistiller {
                 let target_id = self
                     .resolve_relationship_endpoint(agent_id, &er.target, &mut entity_map)
                     .await;
+                let (Some(source_id), Some(target_id)) = (source_id, target_id) else {
+                    kg_relationships_dropped += 1;
+                    tracing::warn!(
+                        source = %er.source,
+                        target = %er.target,
+                        kg_relationship_dropped = true,
+                        "Dropped relationship because one or both endpoints were not persisted"
+                    );
+                    continue;
+                };
 
                 let relationship = Relationship::new(
                     agent_id.to_string(),
@@ -664,7 +679,16 @@ impl SessionDistiller {
                         source = %er.source, target = %er.target,
                         error = %e, "Failed to store relationship"
                     );
+                } else {
+                    kg_relationships_stored += 1;
                 }
+            }
+            if kg_relationships_dropped > 0 {
+                tracing::warn!(
+                    kg_relationship_dropped_count = kg_relationships_dropped,
+                    kg_relationship_stored_count = kg_relationships_stored,
+                    "Distillation dropped relationships with unresolved endpoints"
+                );
             }
         }
 
@@ -716,7 +740,7 @@ impl SessionDistiller {
             session_id,
             response.facts.len() as i32,
             response.entities.len() as i32,
-            response.relationships.len() as i32,
+            kg_relationships_stored,
             episode_created,
             duration_ms,
         )
@@ -1526,19 +1550,15 @@ impl SessionDistiller {
         &self,
         agent_id: &str,
         entity: Entity,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let store = self
             .kg_store
             .as_ref()
             .ok_or_else(|| "no kg store wired".to_string())?;
-        let knowledge = zero_stores::ExtractedKnowledge {
-            entities: vec![entity],
-            relationships: vec![],
-        };
         store
-            .store_knowledge(agent_id, knowledge)
+            .upsert_entity(agent_id, entity)
             .await
-            .map(|_| ())
+            .map(|id| id.0)
             .map_err(|e| e.to_string())
     }
 
@@ -1552,12 +1572,8 @@ impl SessionDistiller {
             .kg_store
             .as_ref()
             .ok_or_else(|| "no kg store wired".to_string())?;
-        let knowledge = zero_stores::ExtractedKnowledge {
-            entities: vec![],
-            relationships: vec![rel],
-        };
         store
-            .store_knowledge(agent_id, knowledge)
+            .upsert_relationship(agent_id, rel)
             .await
             .map(|_| ())
             .map_err(|e| e.to_string())
@@ -1566,20 +1582,21 @@ impl SessionDistiller {
     /// Resolve a relationship endpoint (source/target name) to a real
     /// entity id. Lookup order: cached `entity_map` -> trait
     /// `find_entity_by_name` -> auto-create a stub of type `custom("unknown")`
-    /// so the FK constraint on `relationship` is satisfied. Never fails;
-    /// stub-insert errors are logged but the stub id is still returned.
+    /// so the FK constraint on `relationship` is satisfied. Returns `None`
+    /// when a stub cannot be persisted; callers must drop the relationship
+    /// instead of writing an FK-invalid edge.
     async fn resolve_relationship_endpoint(
         &self,
         agent_id: &str,
         name: &str,
         entity_map: &mut std::collections::HashMap<String, String>,
-    ) -> String {
+    ) -> Option<String> {
         if let Some(id) = entity_map.get(name) {
-            return id.clone();
+            return Some(id.clone());
         }
         if let Some(existing_id) = self.find_entity_by_name(agent_id, name).await {
             entity_map.insert(name.to_string(), existing_id.clone());
-            return existing_id;
+            return Some(existing_id);
         }
         // Nothing found — create a stub so the relationship can be persisted.
         let stub = Entity::new(
@@ -1587,25 +1604,29 @@ impl SessionDistiller {
             EntityType::Custom("unknown".to_string()),
             name.to_string(),
         );
-        let stub_id = stub.id.clone();
-        if let Err(e) = self
-            .store_knowledge_one_entity(agent_id, stub.clone())
-            .await
-        {
+        if let Err(e) = self.store_knowledge_one_entity(agent_id, stub).await {
             tracing::warn!(
                 name = %name,
                 error = %e,
                 "Failed to auto-create stub entity for relationship endpoint"
             );
-        } else {
+            None
+        } else if let Some(stub_id) = self.find_entity_by_name(agent_id, name).await {
             tracing::debug!(
                 name = %name,
                 id = %stub_id,
                 "Auto-created stub entity for undeclared relationship endpoint"
             );
+            entity_map.insert(name.to_string(), stub_id.clone());
+            Some(stub_id)
+        } else {
+            tracing::warn!(
+                name = %name,
+                kg_relationship_dropped = true,
+                "Auto-created stub entity could not be resolved after persistence"
+            );
+            None
         }
-        entity_map.insert(name.to_string(), stub_id.clone());
-        stub_id
     }
 
     // =========================================================================
@@ -1725,27 +1746,31 @@ fn resolve_relationship_endpoint(
     agent_id: &str,
     name: &str,
     entity_map: &mut std::collections::HashMap<String, String>,
-) -> String {
+) -> Option<String> {
     if let Some(id) = entity_map.get(name) {
-        return id.clone();
+        return Some(id.clone());
     }
     if let Ok(Some(existing_id)) = graph.find_entity_by_name(agent_id, name) {
         entity_map.insert(name.to_string(), existing_id.clone());
-        return existing_id;
+        return Some(existing_id);
     }
     let stub = Entity::new(
         agent_id.to_string(),
         EntityType::Custom("unknown".to_string()),
         name.to_string(),
     );
-    let stub_id = stub.id.clone();
     let knowledge = knowledge_graph::types::ExtractedKnowledge {
         entities: vec![stub],
         relationships: vec![],
     };
-    let _ = graph.store_knowledge(agent_id, knowledge);
+    if graph.store_knowledge(agent_id, knowledge).is_err() {
+        return None;
+    }
+    let Ok(Some(stub_id)) = graph.find_entity_by_name(agent_id, name) else {
+        return None;
+    };
     entity_map.insert(name.to_string(), stub_id.clone());
-    stub_id
+    Some(stub_id)
 }
 
 /// Canonicalize a relationship extracted by the LLM — fix common direction
@@ -2240,7 +2265,7 @@ mod tests {
             map.insert("India".to_string(), "entity-india-id-42".to_string());
 
             let id = resolve_relationship_endpoint(&graph, "agent-x", "India", &mut map);
-            assert_eq!(id, "entity-india-id-42");
+            assert_eq!(id.as_deref(), Some("entity-india-id-42"));
             // No new map key — hit was a read.
             assert_eq!(map.len(), 1);
         }
@@ -2267,7 +2292,11 @@ mod tests {
 
             let mut map = HashMap::new();
             let id = resolve_relationship_endpoint(&graph, "agent-x", "India", &mut map);
-            assert_eq!(id, existing_id, "must reuse the pre-existing entity id");
+            assert_eq!(
+                id.as_deref(),
+                Some(existing_id.as_str()),
+                "must reuse the pre-existing entity id"
+            );
             // Cached into the map so subsequent endpoints in the same turn
             // don't re-query the DB for the same name.
             assert_eq!(map.get("India"), Some(&existing_id));
@@ -2279,6 +2308,7 @@ mod tests {
             let mut map = HashMap::new();
 
             let id = resolve_relationship_endpoint(&graph, "agent-x", "Oil", &mut map);
+            let id = id.expect("stub should be persisted and resolved");
             assert!(!id.is_empty());
             // The stub is persisted — find_entity_by_name must now return it.
             let looked_up = graph.find_entity_by_name("agent-x", "Oil").unwrap();
