@@ -4,7 +4,7 @@
 
 use crate::state::AppState;
 use agent_tools::ToolSettings;
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{extract::State, http::StatusCode, Json};
 use gateway_services::{ExecutionSettings, LogSettings};
 use serde::{Deserialize, Serialize};
 
