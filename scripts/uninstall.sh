@@ -4,7 +4,8 @@
 #
 # Removes (current install + legacy `agentzero` artifacts):
 #   - systemd unit (zbot.service or agentzero.service)
-#   - binary at ~/.local/bin/zbotd (or zerod)
+#   - binaries at ~/.local/bin/zbotd and ~/.local/bin/zbot
+#     (plus legacy zerod/zero)
 #   - UI dist at ~/.local/share/zbot/ (or agentzero/)
 #
 # Preserves:
@@ -54,7 +55,7 @@ for svc in zbot agentzero; do
 done
 
 # Binary cleanup — current and legacy names.
-for bin in zbotd zerod; do
+for bin in zbotd zbot zerod zero; do
     BIN_FILE="${HOME}/.local/bin/${bin}"
     if [[ -f "${BIN_FILE}" ]]; then
         note "  → removing ${BIN_FILE}"

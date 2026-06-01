@@ -8,10 +8,12 @@ z-Bot consists of two distributable components:
 
 | Component | Binary Name | Description |
 |-----------|-------------|-------------|
-| **Daemon** | `zbotd` | HTTP/WebSocket server + static files |
+| **Daemon** | `zbotd` | HTTP/WebSocket server + packaged static files |
 | **CLI** | `zbot` | Terminal UI client |
 
-The web UI is embedded in the daemon binary at compile time.
+The release archive includes the built web UI under `dist/`; Linux service
+installers start `zbotd` with `--static-dir` pointing at the installed dist
+directory.
 
 ---
 
@@ -29,7 +31,7 @@ The web UI is embedded in the daemon binary at compile time.
 |----------|--------------|
 | **Windows** | Visual Studio Build Tools (MSVC), Windows SDK |
 | **macOS** | Xcode Command Line Tools (`xcode-select --install`) |
-| **Linux** | `build-essential`, `pkg-config`, `libssl-dev` |
+| **Linux** | `build-essential`, `pkg-config` |
 
 ---
 
@@ -43,7 +45,7 @@ npm install
 npm run build
 ```
 
-This creates `apps/ui/dist/` with static files.
+This creates the repository-root `dist/` directory with static files.
 
 ### 2. Build Backend (Debug)
 
@@ -138,6 +140,7 @@ Each archive contains:
 zbot-{version}/
 ├── zbotd              # Daemon binary
 ├── zbot               # CLI binary
+├── dist/              # Built dashboard assets
 ├── README.md
 ├── LICENSE
 └── VERSION
@@ -166,6 +169,7 @@ build_package() {
     cp target/release/zbot "$DIST_DIR/$archive_name/"
 
     # Copy docs
+    cp -r dist "$DIST_DIR/$archive_name/"
     cp README.md "$DIST_DIR/$archive_name/"
     cp LICENSE "$DIST_DIR/$archive_name/"
     echo "$VERSION" > "$DIST_DIR/$archive_name/VERSION"

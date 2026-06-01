@@ -53,7 +53,7 @@ lazy_static = { workspace = true }
 base64 = { workspace = true }
 dirs = "5.0"
 sha2 = "0.10"
-fastembed = "4"
+fastembed = { version = "4", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries"] }
 
 # Tokenization — real tokenizer for middleware token counting
 tiktoken-rs = { workspace = true }

@@ -42,13 +42,14 @@ clap = { version = "4", features = ["derive"] }
 # Utilities
 dirs = "5"
 
-# Allocator — jemalloc returns freed memory to OS aggressively,
-# preventing RSS bloat from ONNX model load/unload cycles.
-tikv-jemallocator = "0.6"
-
 [[bin]]
 name = "zbotd"
 path = "src/main.rs"
 
 [lints]
 workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# Allocator — jemalloc returns freed memory to OS aggressively,
+# preventing RSS bloat from ONNX model load/unload cycles.
+tikv-jemallocator = "0.6"

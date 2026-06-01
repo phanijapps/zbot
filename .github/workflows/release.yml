@@ -7,14 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g., 0.1.0)'
+        description: 'Version tag to release, e.g. v2026.6.1'
         required: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Build frontend once, share with all platform builds
   build-frontend:
     runs-on: ubuntu-latest
     steps:
@@ -28,18 +27,17 @@ jobs:
           cache-dependency-path: apps/ui/package-lock.json
 
       - name: Install dependencies
-        run: cd apps/ui && npm ci
+        run: npm ci --prefix apps/ui
 
-      - name: Build
-        run: cd apps/ui && npm run build
+      - name: Build dashboard
+        run: npm run build --prefix apps/ui
 
-      - name: Upload dist
+      - name: Upload dashboard dist
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-dist
-          path: apps/ui/dist/
+          name: dashboard-dist
+          path: dist/
 
-  # Linux builds
   build-linux:
     needs: build-frontend
     runs-on: ubuntu-latest
@@ -48,19 +46,22 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             archive: linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            archive: linux-aarch64
+            linker: aarch64-linux-gnu-gcc
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev
+          sudo apt-get install -y pkg-config gcc-aarch64-linux-gnu
 
-      - name: Download frontend
+      - name: Download dashboard dist
         uses: actions/download-artifact@v4
         with:
-          name: frontend-dist
-          path: apps/ui/dist/
+          name: dashboard-dist
+          path: dist/
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -71,30 +72,36 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
         run: cargo build --release -p daemon -p cli --target ${{ matrix.target }}
 
       - name: Prepare release package
         run: |
-          mkdir -p package
-          cp target/${{ matrix.target }}/release/zerod package/
-          cp target/${{ matrix.target }}/release/zero package/
-          cp README.md package/ 2>/dev/null || echo "README not found"
-          cp LICENSE package/ 2>/dev/null || echo "LICENSE not found"
-          echo "${{ github.event.inputs.version || github.ref_name }}" > package/VERSION
-          chmod +x package/zerod package/zero
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          ROOT="zbot-${VERSION}"
+          mkdir -p "package/${ROOT}/dist"
+          cp "target/${{ matrix.target }}/release/zbotd" "package/${ROOT}/"
+          cp "target/${{ matrix.target }}/release/zbot" "package/${ROOT}/"
+          cp -R dist/. "package/${ROOT}/dist/"
+          cp README.md "package/${ROOT}/"
+          cp LICENSE "package/${ROOT}/"
+          echo "${VERSION}" > "package/${ROOT}/VERSION"
+          chmod +x "package/${ROOT}/zbotd" "package/${ROOT}/zbot"
 
       - name: Create archive
         run: |
-          VERSION=${{ github.event.inputs.version || github.ref_name }}
-          tar -czvf agentzero-${VERSION}-${{ matrix.archive }}.tar.gz -C package .
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          tar -czf "zbot-${VERSION}-${{ matrix.archive }}.tar.gz" -C package "zbot-${VERSION}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: agentzero-${{ matrix.archive }}
-          path: agentzero-*.tar.gz
+          name: zbot-${{ matrix.archive }}
+          path: zbot-*.tar.gz
 
-  # macOS builds (Intel and Apple Silicon)
   build-macos:
     needs: build-frontend
     runs-on: macos-latest
@@ -108,11 +115,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download frontend
+      - name: Download dashboard dist
         uses: actions/download-artifact@v4
         with:
-          name: frontend-dist
-          path: apps/ui/dist/
+          name: dashboard-dist
+          path: dist/
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -127,26 +134,30 @@ jobs:
 
       - name: Prepare release package
         run: |
-          mkdir -p package
-          cp target/${{ matrix.target }}/release/zerod package/
-          cp target/${{ matrix.target }}/release/zero package/
-          cp README.md package/ 2>/dev/null || echo "README not found"
-          cp LICENSE package/ 2>/dev/null || echo "LICENSE not found"
-          echo "${{ github.event.inputs.version || github.ref_name }}" > package/VERSION
-          chmod +x package/zerod package/zero
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          ROOT="zbot-${VERSION}"
+          mkdir -p "package/${ROOT}/dist"
+          cp "target/${{ matrix.target }}/release/zbotd" "package/${ROOT}/"
+          cp "target/${{ matrix.target }}/release/zbot" "package/${ROOT}/"
+          cp -R dist/. "package/${ROOT}/dist/"
+          cp README.md "package/${ROOT}/"
+          cp LICENSE "package/${ROOT}/"
+          echo "${VERSION}" > "package/${ROOT}/VERSION"
+          chmod +x "package/${ROOT}/zbotd" "package/${ROOT}/zbot"
 
       - name: Create archive
         run: |
-          VERSION=${{ github.event.inputs.version || github.ref_name }}
-          tar -czvf agentzero-${VERSION}-${{ matrix.archive }}.tar.gz -C package .
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          tar -czf "zbot-${VERSION}-${{ matrix.archive }}.tar.gz" -C package "zbot-${VERSION}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: agentzero-${{ matrix.archive }}
-          path: agentzero-*.tar.gz
+          name: zbot-${{ matrix.archive }}
+          path: zbot-*.tar.gz
 
-  # Windows build
   build-windows:
     needs: build-frontend
     runs-on: windows-latest
@@ -158,11 +169,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download frontend
+      - name: Download dashboard dist
         uses: actions/download-artifact@v4
         with:
-          name: frontend-dist
-          path: apps/ui/dist/
+          name: dashboard-dist
+          path: dist/
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -178,26 +189,29 @@ jobs:
       - name: Prepare release package
         shell: bash
         run: |
-          mkdir -p package
-          cp target/${{ matrix.target }}/release/zerod.exe package/
-          cp target/${{ matrix.target }}/release/zero.exe package/
-          cp README.md package/ 2>/dev/null || echo "README not found"
-          cp LICENSE package/ 2>/dev/null || echo "LICENSE not found"
-          echo "${{ github.event.inputs.version || github.ref_name }}" > package/VERSION
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          ROOT="zbot-${VERSION}"
+          mkdir -p "package/${ROOT}/dist"
+          cp "target/${{ matrix.target }}/release/zbotd.exe" "package/${ROOT}/"
+          cp "target/${{ matrix.target }}/release/zbot.exe" "package/${ROOT}/"
+          cp -R dist/. "package/${ROOT}/dist/"
+          cp README.md "package/${ROOT}/"
+          cp LICENSE "package/${ROOT}/"
+          echo "${VERSION}" > "package/${ROOT}/VERSION"
 
       - name: Create archive
-        shell: bash
+        shell: pwsh
         run: |
-          VERSION=${{ github.event.inputs.version || github.ref_name }}
-          cd package && 7z a -tzip ../agentzero-${VERSION}-${{ matrix.archive }}.zip .
+          $version = "${{ github.event.inputs.version || github.ref_name }}"
+          Compress-Archive -Path "package/zbot-$version" -DestinationPath "zbot-$version-${{ matrix.archive }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: agentzero-${{ matrix.archive }}
-          path: agentzero-*.zip
+          name: zbot-${{ matrix.archive }}
+          path: zbot-*.zip
 
-  # Create GitHub Release with all artifacts
   create-release:
     needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
@@ -206,31 +220,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download Linux artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: agentzero-linux-*
-          path: artifacts/
-          merge-multiple: true
-
-      - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: agentzero-macos-*
-          path: artifacts/
-          merge-multiple: true
-
-      - name: Download Windows artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: agentzero-windows-*
+          pattern: zbot-*
           path: artifacts/
           merge-multiple: true
 
       - name: Generate checksums
         run: |
+          set -euo pipefail
           cd artifacts
-          sha256sum * > checksums.sha256
+          sha256sum zbot-* > checksums.sha256
 
       - name: List artifacts
         run: ls -la artifacts/
@@ -238,29 +239,32 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          name: AgentZero ${{ github.event.inputs.version || github.ref_name }}
+          tag_name: ${{ github.event.inputs.version || github.ref_name }}
+          name: zbot ${{ github.event.inputs.version || github.ref_name }}
           body: |
-            ## AgentZero ${{ github.event.inputs.version || github.ref_name }}
+            ## zbot ${{ github.event.inputs.version || github.ref_name }}
+
+            ### Install
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/phanijapps/zbot/main/scripts/install-release.sh | bash
+            ```
+
+            ```powershell
+            irm https://raw.githubusercontent.com/phanijapps/zbot/main/scripts/install.ps1 | iex
+            ```
 
             ### Downloads
 
-            | Platform | Architecture | Download |
-            |----------|-------------|----------|
-            | Linux | x86_64 | `agentzero-*-linux-x86_64.tar.gz` |
-            | macOS | Intel | `agentzero-*-macos-x86_64.tar.gz` |
-            | macOS | Apple Silicon | `agentzero-*-macos-aarch64.tar.gz` |
-            | Windows | x86_64 | `agentzero-*-windows-x86_64.zip` |
+            | Platform | Architecture | Artifact |
+            | --- | --- | --- |
+            | Linux | x86_64 | `zbot-*-linux-x86_64.tar.gz` |
+            | Linux | ARM64 | `zbot-*-linux-aarch64.tar.gz` |
+            | macOS | Intel | `zbot-*-macos-x86_64.tar.gz` |
+            | macOS | Apple Silicon | `zbot-*-macos-aarch64.tar.gz` |
+            | Windows | x86_64 | `zbot-*-windows-x86_64.zip` |
 
-            ### Quick Start
-
-            ```bash
-            # Extract and run
-            tar -xzf agentzero-*-linux-x86_64.tar.gz
-            ./zerod
-            # Open http://localhost:18791
-            ```
-
-            See [PUBLISHING.md](docs/PUBLISHING.md) for detailed installation instructions.
+            Verify downloads with `checksums.sha256`.
           files: artifacts/*
           generate_release_notes: true
           draft: false
