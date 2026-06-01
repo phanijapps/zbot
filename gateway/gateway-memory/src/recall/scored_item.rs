@@ -7,6 +7,7 @@
 //! contributions.
 
 use std::collections::HashMap;
+use zero_stores_domain::RouteHint;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ItemKind {
@@ -54,6 +55,7 @@ pub struct ScoredItem {
     pub content: String,
     pub score: f64,
     pub provenance: Provenance,
+    pub route_hint: Option<RouteHint>,
 }
 
 /// Reciprocal Rank Fusion. For each input list, rank r (1-indexed) contributes
@@ -135,6 +137,7 @@ mod tests {
                 session_id: None,
                 ward_id: None,
             },
+            route_hint: None,
         }
     }
 

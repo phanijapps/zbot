@@ -22,7 +22,9 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use serde_json::{json, Value};
-use zero_stores_domain::{MemoryFact, Procedure, SessionEpisode, WikiArticle};
+use zero_stores_domain::{
+    MemoryFact, Procedure, RouteHint, RouteSourceKind, SessionEpisode, WikiArticle,
+};
 
 /// Classify a timestamp into a human-meaningful recency bucket relative to `now`.
 /// Returns one of: "today", "last_7_days", "historical".
@@ -110,6 +112,10 @@ fn stamp(mut value: Value, now: DateTime<Utc>, anchor: Option<&str>) -> Value {
     value
 }
 
+fn route_hint_value(hint: RouteHint) -> Value {
+    serde_json::to_value(hint).unwrap_or_else(|_| Value::Null)
+}
+
 fn first_non_empty_line(s: &str) -> Option<String> {
     s.lines()
         .map(str::trim)
@@ -146,6 +152,10 @@ fn store_unavailable(what: &str) -> HandlerError {
 
 fn fact_to_value(fact: MemoryFact, now: DateTime<Utc>) -> Value {
     let updated = fact.updated_at.clone();
+    let route_hint = RouteHint::new(fact.ward_id.clone(), RouteSourceKind::Fact)
+        .with_memory_id(fact.id.clone())
+        .with_session_id(fact.session_id.clone())
+        .with_source_path(fact.source_ref.clone());
     let body = json!({
         "id": fact.id,
         "session_id": fact.session_id,
@@ -161,12 +171,15 @@ fn fact_to_value(fact: MemoryFact, now: DateTime<Utc>) -> Value {
         "updated_at": fact.updated_at,
         "pinned": fact.pinned,
         "epistemic_class": fact.epistemic_class,
+        "route_hint": route_hint_value(route_hint),
     });
     stamp(body, now, Some(&updated))
 }
 
 fn wiki_to_value(article: WikiArticle, now: DateTime<Utc>) -> Value {
     let updated = article.updated_at.clone();
+    let route_hint = RouteHint::new(article.ward_id.clone(), RouteSourceKind::WikiArticle)
+        .with_memory_id(article.id.clone());
     let body = json!({
         "id": article.id,
         "ward_id": article.ward_id,
@@ -177,6 +190,7 @@ fn wiki_to_value(article: WikiArticle, now: DateTime<Utc>) -> Value {
         "version": article.version,
         "created_at": article.created_at,
         "updated_at": article.updated_at,
+        "route_hint": route_hint_value(route_hint),
     });
     stamp(body, now, Some(&updated))
 }
@@ -188,6 +202,16 @@ fn procedure_to_value(proc: Procedure, now: DateTime<Utc>) -> Value {
         .last_used
         .clone()
         .unwrap_or_else(|| proc.created_at.clone());
+    let route_hint = proc
+        .ward_id
+        .as_ref()
+        .map(|ward| {
+            route_hint_value(
+                RouteHint::new(ward.clone(), RouteSourceKind::Procedure)
+                    .with_memory_id(proc.id.clone()),
+            )
+        })
+        .unwrap_or(Value::Null);
     let body = json!({
         "id": proc.id,
         "agent_id": proc.agent_id,
@@ -201,12 +225,16 @@ fn procedure_to_value(proc: Procedure, now: DateTime<Utc>) -> Value {
         "last_used": proc.last_used,
         "created_at": proc.created_at,
         "updated_at": proc.updated_at,
+        "route_hint": route_hint,
     });
     stamp(body, now, Some(&anchor))
 }
 
 fn episode_to_value(ep: SessionEpisode, now: DateTime<Utc>) -> Value {
     let created = ep.created_at.clone();
+    let route_hint = RouteHint::new(ep.ward_id.clone(), RouteSourceKind::Episode)
+        .with_memory_id(ep.id.clone())
+        .with_session_id(Some(ep.session_id.clone()));
     let body = json!({
         "id": ep.id,
         "session_id": ep.session_id,
@@ -218,6 +246,7 @@ fn episode_to_value(ep: SessionEpisode, now: DateTime<Utc>) -> Value {
         "key_learnings": ep.key_learnings,
         "token_cost": ep.token_cost,
         "created_at": ep.created_at,
+        "route_hint": route_hint_value(route_hint),
     });
     stamp(body, now, Some(&created))
 }
@@ -520,6 +549,9 @@ mod helpers_tests {
         let v = fact_to_value(fact, now);
         assert_eq!(v["age_bucket"], "today");
         assert_eq!(v["agent_id"], "root");
+        assert_eq!(v["route_hint"]["ward_id"], "lab");
+        assert_eq!(v["route_hint"]["source_kind"], "fact");
+        assert_eq!(v["route_hint"]["memory_id"], "f1");
     }
 
     #[test]
@@ -527,6 +559,8 @@ mod helpers_tests {
         let v = wiki_to_value(make_wiki("title", "body"), now_anchor());
         assert_eq!(v["age_bucket"], "historical");
         assert_eq!(v["title"], "title");
+        assert_eq!(v["route_hint"]["ward_id"], "lab");
+        assert_eq!(v["route_hint"]["source_kind"], "wiki_article");
     }
 
     #[test]
@@ -552,6 +586,9 @@ mod helpers_tests {
         };
         let v = procedure_to_value(proc, now);
         assert_eq!(v["age_bucket"], "today");
+        assert_eq!(v["route_hint"]["ward_id"], "lab");
+        assert_eq!(v["route_hint"]["source_kind"], "procedure");
+        assert_eq!(v["route_hint"]["memory_id"], "p1");
     }
 
     #[test]
@@ -577,6 +614,8 @@ mod helpers_tests {
         };
         let v = procedure_to_value(proc, now);
         assert_eq!(v["age_bucket"], "today");
+        assert_eq!(v["route_hint"]["ward_id"], "lab");
+        assert_eq!(v["route_hint"]["source_kind"], "procedure");
     }
 
     #[test]
@@ -598,6 +637,9 @@ mod helpers_tests {
         let v = episode_to_value(ep, now);
         assert_eq!(v["age_bucket"], "last_7_days");
         assert_eq!(v["task_summary"], "fixed bug");
+        assert_eq!(v["route_hint"]["ward_id"], "lab");
+        assert_eq!(v["route_hint"]["source_kind"], "episode");
+        assert_eq!(v["route_hint"]["session_id"], "s1");
     }
 
     #[test]

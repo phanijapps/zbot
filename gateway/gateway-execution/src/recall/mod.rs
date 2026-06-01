@@ -107,6 +107,7 @@ mod tests {
                 session_id: None,
                 ward_id: None,
             },
+            route_hint: None,
         }
     }
 
