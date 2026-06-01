@@ -142,6 +142,7 @@ impl SleepTimeWorker {
 pub struct CycleStats {
     pub candidates_considered: u64,
     pub merges_performed: u64,
+    pub merges_skipped_by_verifier: u64,
     pub synthesis_facts_inserted: u64,
     pub synthesis_facts_bumped: u64,
     pub patterns_inserted: u64,
@@ -188,6 +189,7 @@ async fn run_cycle(
     let compaction_stats = compactor.run(&run_id, agent_id).await;
     stats.candidates_considered = compaction_stats.candidates_considered;
     stats.merges_performed = compaction_stats.merges_performed;
+    stats.merges_skipped_by_verifier = compaction_stats.merges_skipped_by_verifier;
 
     // Hierarchical memory (Phase H-3) — runs immediately after the
     // Compactor so it doesn't cluster near-duplicate noise. Opt-in;
@@ -363,6 +365,7 @@ async fn run_cycle(
         %run_id,
         candidates_considered = stats.candidates_considered,
         merges = stats.merges_performed,
+        merges_skipped_by_verifier = stats.merges_skipped_by_verifier,
         synthesis_inserted = stats.synthesis_facts_inserted,
         synthesis_bumped = stats.synthesis_facts_bumped,
         patterns_inserted = stats.patterns_inserted,
@@ -404,9 +407,9 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::tempdir;
     use zero_stores::KnowledgeGraphStore;
+    use zero_stores_sqlite::SqliteKgStore;
     use zero_stores_sqlite::kg::storage::GraphStorage;
     use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
-    use zero_stores_sqlite::SqliteKgStore;
     use zero_stores_sqlite::{
         CompactionRepository, DatabaseManager, KnowledgeDatabase, MemoryRepository,
         ProcedureRepository,
@@ -512,6 +515,7 @@ mod tests {
         )
         .await;
         assert_eq!(stats.merges_performed, 0);
+        assert_eq!(stats.merges_skipped_by_verifier, 0);
         assert_eq!(stats.synthesis_facts_inserted, 0);
         assert_eq!(stats.patterns_inserted, 0);
     }

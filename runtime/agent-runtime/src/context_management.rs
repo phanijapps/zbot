@@ -5,11 +5,11 @@
 
 use serde_json::{json, Value};
 use std::collections::HashSet;
-use zero_core::types::Part;
 
 use crate::types::ChatMessage;
 
 /// Extract key info (file paths, URLs) from a tool result for restorable compression.
+#[cfg(test)]
 fn extract_key_info(content: &str) -> String {
     let mut info = Vec::new();
 
@@ -47,7 +47,10 @@ fn extract_key_info(content: &str) -> String {
 /// 1. Compress old assistant messages to one-liners (preserving tool names and file paths)
 /// 2. Clear old tool result content (replace with placeholder, preserve file paths)
 /// 3. Only drop messages if still over budget after compression
+#[cfg(test)]
 pub(crate) fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    use zero_core::types::Part;
+
     const KEEP_RECENT: usize = 20;
 
     if messages.len() <= KEEP_RECENT + 2 {
