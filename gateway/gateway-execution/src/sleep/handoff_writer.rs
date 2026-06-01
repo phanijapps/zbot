@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use gateway_memory::{LlmClientConfig, MemoryLlmFactory};
 use serde::{Deserialize, Serialize};
-use zero_stores_domain::Message;
+use zero_stores_domain::{Message, RouteHint, RouteSourceKind};
 use zero_stores_traits::ConversationStore;
 
 pub const HANDOFF_MAX_AGE_DAYS: i64 = 7;
@@ -42,6 +42,8 @@ pub struct HandoffEntry {
     pub open_task_count: u32,
     pub correction_count: u32,
     pub turns: u32,
+    #[serde(default)]
+    pub route_hints: Vec<RouteHint>,
 }
 
 /// Input passed to the LLM for summarisation.
@@ -49,6 +51,7 @@ pub struct HandoffEntry {
 pub struct HandoffInput {
     pub messages: Vec<ChatMessage>,
     pub ward_id: String,
+    pub route_hints: Vec<RouteHint>,
 }
 
 /// Mockable LLM interface for generating 3-5 sentence handoff summaries.
@@ -123,9 +126,11 @@ pub async fn read_handoff_block(
         }
     }
     let date_str = completed_at.format("%Y-%m-%d").to_string();
+    let pointer_block = format_route_pointer_block(&entry.route_hints);
     Some(format!(
         "## Last Session  ({date} · ward: {ward} · {turns} turns)\n\
          {summary}\n\n\
+         {pointers}\
          Corrections active: {corrections} · Goals: {goals}\n\
          Full context: memory(action=get_fact, key=ctx.{sid}.handoff)\n\
          Last intent:  memory(action=get_fact, key={intent_key})",
@@ -133,6 +138,7 @@ pub async fn read_handoff_block(
         ward = entry.ward_id,
         turns = entry.turns,
         summary = entry.summary,
+        pointers = pointer_block,
         corrections = entry.correction_count,
         goals = entry.goal_count,
         sid = entry.session_id,
@@ -191,16 +197,20 @@ impl HandoffLlm for LlmHandoffWriter {
             .build_client(LlmClientConfig::new(0.2, 256))
             .await?;
         let conversation = format_conversation_for_summary(&input.messages);
+        let pointers = format_route_pointer_block(&input.route_hints);
         let prompt = format!(
             "Summarize this conversation in 3-5 sentences. Cover:\n\
              - What was accomplished\n\
              - What was left incomplete or in progress\n\
              - What the user seemed most focused on or interested in next\n\n\
              Be specific. Do not use filler phrases like 'the user and assistant discussed'.\n\
-             Use past tense. Write for an agent reading this at the start of the NEXT session.\n\n\
+             Use past tense. Write for an agent reading this at the start of the NEXT session.\n\
+             Preserve the meaning of any pointer lines, but do not restate every pointer in prose.\n\n\
              Ward: {ward}\n\n\
+             {pointers}\
              Conversation:\n{conversation}",
             ward = input.ward_id,
+            pointers = pointers,
             conversation = conversation,
         );
         let messages = vec![
@@ -281,6 +291,7 @@ impl HandoffWriter {
             .unwrap_or_default()
             .len() as u32;
         let input = HandoffInput {
+            route_hints: collect_route_hints(session_id, ward_id, &messages),
             messages,
             ward_id: ward_id.to_string(),
         };
@@ -295,6 +306,7 @@ impl HandoffWriter {
             open_task_count: 0,
             correction_count,
             turns,
+            route_hints: input.route_hints,
         };
         self.persist(session_id, &entry).await
     }
@@ -359,6 +371,200 @@ impl HandoffWriter {
             "handoff: saved full payload through ctx storage"
         );
         Ok(())
+    }
+}
+
+fn format_route_pointer_block(route_hints: &[RouteHint]) -> String {
+    if route_hints.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("Pointers:\n");
+    for hint in route_hints.iter().take(8) {
+        let kind = serde_json::to_value(&hint.source_kind)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_else(|| "source".to_string());
+        out.push_str(&format!("- {kind} in ward `{}`", hint.ward_id));
+        if let Some(path) = hint.source_path.as_deref() {
+            out.push_str(&format!(" at `{path}`"));
+        }
+        if let Some(exec) = hint.execution_id.as_deref() {
+            out.push_str(&format!(" (execution `{exec}`)"));
+        } else if let Some(session) = hint.session_id.as_deref() {
+            out.push_str(&format!(" (session `{session}`)"));
+        }
+        out.push('\n');
+    }
+    out.push('\n');
+    out
+}
+
+fn collect_route_hints(
+    session_id: &str,
+    fallback_ward: &str,
+    messages: &[ChatMessage],
+) -> Vec<RouteHint> {
+    let mut hints = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for message in messages {
+        if let Some(calls) = message.tool_calls.as_ref() {
+            for call in calls {
+                collect_tool_call_route_hints(
+                    session_id,
+                    fallback_ward,
+                    call,
+                    &mut hints,
+                    &mut seen,
+                );
+            }
+        }
+        collect_json_text_route_hints(
+            session_id,
+            fallback_ward,
+            &message.text_content(),
+            &mut hints,
+            &mut seen,
+        );
+    }
+
+    hints
+}
+
+fn collect_tool_call_route_hints(
+    session_id: &str,
+    fallback_ward: &str,
+    call: &agent_runtime::types::ToolCall,
+    hints: &mut Vec<RouteHint>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    if call.name == "delegate_to_agent" {
+        if let Some(agent_id) = call.arguments.get("agent_id").and_then(|v| v.as_str()) {
+            if let Some(ward) = agent_id.strip_prefix("ward:") {
+                push_route_hint(
+                    RouteHint::new(ward.to_string(), RouteSourceKind::Episode)
+                        .with_session_id(Some(session_id.to_string())),
+                    hints,
+                    seen,
+                );
+            }
+        }
+    }
+
+    if call.name == "respond" {
+        collect_artifact_paths_from_value(session_id, fallback_ward, &call.arguments, hints, seen);
+    }
+}
+
+fn collect_json_text_route_hints(
+    session_id: &str,
+    fallback_ward: &str,
+    text: &str,
+    hints: &mut Vec<RouteHint>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text.trim()) else {
+        return;
+    };
+    collect_route_hints_from_value(session_id, fallback_ward, &value, hints, seen);
+}
+
+fn collect_route_hints_from_value(
+    session_id: &str,
+    fallback_ward: &str,
+    value: &serde_json::Value,
+    hints: &mut Vec<RouteHint>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(agent_id) = map.get("agent_id").and_then(|v| v.as_str()) {
+                if let Some(ward) = agent_id.strip_prefix("ward:") {
+                    let execution_id = map
+                        .get("execution_id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                    push_route_hint(
+                        RouteHint::new(ward.to_string(), RouteSourceKind::Episode)
+                            .with_session_id(Some(session_id.to_string()))
+                            .with_execution_id(execution_id),
+                        hints,
+                        seen,
+                    );
+                }
+            }
+            collect_artifact_paths_from_value(session_id, fallback_ward, value, hints, seen);
+            for child in map.values() {
+                collect_route_hints_from_value(session_id, fallback_ward, child, hints, seen);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                collect_route_hints_from_value(session_id, fallback_ward, child, hints, seen);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_artifact_paths_from_value(
+    session_id: &str,
+    fallback_ward: &str,
+    value: &serde_json::Value,
+    hints: &mut Vec<RouteHint>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            let path = map
+                .get("path")
+                .or_else(|| map.get("file_path"))
+                .and_then(|v| v.as_str())
+                .and_then(|p| safe_ward_relative_path(p, fallback_ward));
+            if let Some(path) = path {
+                push_route_hint(
+                    RouteHint::new(fallback_ward.to_string(), RouteSourceKind::Artifact)
+                        .with_session_id(Some(session_id.to_string()))
+                        .with_source_path(Some(path)),
+                    hints,
+                    seen,
+                );
+            }
+            for child in map.values() {
+                collect_artifact_paths_from_value(session_id, fallback_ward, child, hints, seen);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                collect_artifact_paths_from_value(session_id, fallback_ward, child, hints, seen);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn safe_ward_relative_path(path: &str, ward: &str) -> Option<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed.starts_with('/') {
+        return Some(trimmed.to_string());
+    }
+    let marker = format!("/wards/{ward}/");
+    trimmed
+        .find(&marker)
+        .map(|idx| trimmed[(idx + marker.len())..].to_string())
+}
+
+fn push_route_hint(
+    hint: RouteHint,
+    hints: &mut Vec<RouteHint>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    let key = serde_json::to_string(&hint).unwrap_or_default();
+    if seen.insert(key) {
+        hints.push(hint);
     }
 }
 
@@ -679,6 +885,7 @@ mod tests {
             open_task_count: 0,
             correction_count: 0,
             turns: 5,
+            route_hints: Vec::new(),
         };
         assert!(
             !should_inject(&stale),
@@ -710,6 +917,9 @@ mod tests {
             open_task_count: 0,
             correction_count: 3,
             turns: 10,
+            route_hints: vec![RouteHint::new("memory-ward", RouteSourceKind::Artifact)
+                .with_source_path(Some("output/report.html".to_string()))
+                .with_session_id(Some("sess-abc".to_string()))],
         };
         store.facts.lock().unwrap().insert(
             "handoff.latest".to_string(),
@@ -726,6 +936,8 @@ mod tests {
         assert!(block.contains("Corrections active: 3"));
         assert!(block.contains("Goals: 2"));
         assert!(block.contains("ctx.sess-abc.handoff"));
+        assert!(block.contains("Pointers:"));
+        assert!(block.contains("output/report.html"));
     }
 
     // ---- Test 6: read_handoff_block returns None for stale entry ----
@@ -743,6 +955,7 @@ mod tests {
             open_task_count: 0,
             correction_count: 0,
             turns: 5,
+            route_hints: Vec::new(),
         };
         store.facts.lock().unwrap().insert(
             "handoff.latest".to_string(),
@@ -776,6 +989,7 @@ mod tests {
             open_task_count: 0,
             correction_count: 0,
             turns: 3,
+            route_hints: Vec::new(),
         };
         store.facts.lock().unwrap().insert(
             "handoff.latest".to_string(),
@@ -953,6 +1167,73 @@ mod tests {
         let raw = store.get("handoff.latest").unwrap();
         let entry: HandoffEntry = serde_json::from_str(&raw).unwrap();
         assert_eq!(entry.correction_count, 2);
+    }
+
+    #[tokio::test]
+    async fn write_with_messages_preserves_ward_execution_and_artifact_pointers() {
+        use agent_runtime::ToolCall;
+
+        let store = MockFactStore::new();
+        let writer = make_writer(MockLlm::ok("Summary."), store.clone());
+
+        let mut delegate_call = ChatMessage::assistant("Delegating.".to_string());
+        delegate_call.tool_calls = Some(vec![ToolCall {
+            id: "call-1".to_string(),
+            name: "delegate_to_agent".to_string(),
+            arguments: serde_json::json!({
+                "agent_id": "ward:financial-analysis",
+                "task": "analyze AMD",
+                "wait_for_result": true
+            }),
+        }]);
+        let delegate_result = ChatMessage::tool_result(
+            "call-1".to_string(),
+            serde_json::json!({
+                "agent_id": "ward:financial-analysis",
+                "execution_id": "exec-ward-1",
+                "status": "delegated"
+            })
+            .to_string(),
+        );
+        let mut respond_call = ChatMessage::assistant("Responding.".to_string());
+        respond_call.tool_calls = Some(vec![ToolCall {
+            id: "call-2".to_string(),
+            name: "respond".to_string(),
+            arguments: serde_json::json!({
+                "artifacts": [
+                    {"label": "Report", "path": "output/amd-peer-valuation.html"}
+                ],
+                "message": "done"
+            }),
+        }]);
+
+        writer
+            .write_with_messages(
+                "sess-route",
+                "root",
+                "financial-analysis",
+                vec![
+                    ChatMessage::user("analyze AMD".to_string()),
+                    delegate_call,
+                    delegate_result,
+                    respond_call,
+                ],
+            )
+            .await
+            .unwrap();
+
+        let raw = store.get("handoff.latest").expect("handoff.latest missing");
+        let entry: HandoffEntry = serde_json::from_str(&raw).unwrap();
+        assert!(entry.route_hints.iter().any(|hint| {
+            hint.ward_id == "financial-analysis"
+                && hint.source_kind == RouteSourceKind::Episode
+                && hint.execution_id.as_deref() == Some("exec-ward-1")
+        }));
+        assert!(entry.route_hints.iter().any(|hint| {
+            hint.ward_id == "financial-analysis"
+                && hint.source_kind == RouteSourceKind::Artifact
+                && hint.source_path.as_deref() == Some("output/amd-peer-valuation.html")
+        }));
     }
 
     // ---- messages_to_chat_format conversion ----

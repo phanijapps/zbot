@@ -466,6 +466,7 @@ impl MemoryRecall {
                                         session_id: None,
                                         ward_id: None,
                                     },
+                                    route_hint: None,
                                 }
                             })
                             .collect();
@@ -535,6 +536,7 @@ impl MemoryRecall {
                                     session_id: None,
                                     ward_id: None,
                                 },
+                                route_hint: None,
                             };
                             best_by_id
                                 .entry(h.entity_id.0)
@@ -586,6 +588,13 @@ impl MemoryRecall {
                     session_id: None,
                     ward_id: ward_id.map(String::from),
                 },
+                route_hint: ward_id.map(|ward| {
+                    zero_stores_domain::RouteHint::new(
+                        ward.to_string(),
+                        zero_stores_domain::RouteSourceKind::Goal,
+                    )
+                    .with_memory_id(g.id.clone())
+                }),
             })
             .collect();
 
@@ -1043,6 +1052,7 @@ mod tests {
                 session_id: None,
                 ward_id: None,
             },
+            route_hint: None,
         }
     }
 

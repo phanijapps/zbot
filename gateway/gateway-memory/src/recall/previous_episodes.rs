@@ -10,6 +10,7 @@
 
 use crate::recall::scored_item::{ItemKind, Provenance, ScoredItem};
 use std::sync::Arc;
+use zero_stores_domain::{RouteHint, RouteSourceKind};
 use zero_stores_traits::{EpisodeStore, SessionEpisode};
 
 /// Adapter that projects a ward's recent successful/partial episodes into
@@ -64,6 +65,11 @@ pub fn episode_to_item(ep: &SessionEpisode, rank: usize) -> ScoredItem {
             session_id: Some(ep.session_id.clone()),
             ward_id: Some(ep.ward_id.clone()),
         },
+        route_hint: Some(
+            RouteHint::new(ep.ward_id.clone(), RouteSourceKind::Episode)
+                .with_memory_id(ep.id.clone())
+                .with_session_id(Some(ep.session_id.clone())),
+        ),
     }
 }
 
