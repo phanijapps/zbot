@@ -71,7 +71,28 @@ Each subagent works in isolation with its own conversation, tools, and context. 
 - **Rust 1.93+** with cargo
 - An LLM API key (OpenAI, Anthropic, etc.)
 
-### Install & Run
+### Install Release
+
+Linux and macOS install from GitHub Releases:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/phanijapps/zbot/main/scripts/install-release.sh | bash
+```
+
+Windows installs with PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/phanijapps/zbot/main/scripts/install.ps1 | iex
+```
+
+Both installers download prebuilt release artifacts, verify
+`checksums.sha256`, and install `zbotd` plus `zbot`. For a pinned version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/phanijapps/zbot/main/scripts/install-release.sh | bash -s -- --version v2026.5.3
+```
+
+### Develop From Source
 
 ```bash
 # Clone the repository
@@ -97,14 +118,15 @@ cargo run -p daemon --release -- --static-dir ./dist
 # Open http://localhost:18791
 ```
 
-## Install on Raspberry Pi (or any Linux box)
+## Source Install on Raspberry Pi (or any Linux box)
 
-Run z-bot as an auto-starting user-account daemon, no `sudo` required.
+For development or unsupported release targets, build z-bot locally and run it
+as an auto-starting user-account daemon, no `sudo` required.
 
 ```bash
 git clone https://github.com/phanijapps/zbot.git
 cd zbot
-./scripts/install.sh
+./scripts/install-from-source.sh
 ```
 
 The script:
@@ -117,7 +139,7 @@ To upgrade after pulling new code:
 
 ```bash
 git pull
-./scripts/install.sh
+./scripts/install-from-source.sh
 ```
 
 The same script handles fresh installs and upgrades — your `~/Documents/zbot/` data directory is never touched.
