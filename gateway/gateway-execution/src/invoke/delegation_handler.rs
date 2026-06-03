@@ -6,7 +6,7 @@ use execution_state::{AgentExecution, DelegationType};
 
 use super::event_logging::log_delegation;
 use super::stream_context::StreamContext;
-use crate::delegation::DelegationRequest;
+use crate::delegation::{DelegationMode, DelegationRequest};
 
 /// Handle a delegation event by creating the execution synchronously and sending a request.
 ///
@@ -23,6 +23,7 @@ pub fn handle_delegation(
     output_schema: &Option<serde_json::Value>,
     skills: &[String],
     complexity: &Option<String>,
+    mode: &Option<String>,
     parallel: bool,
     child_execution_id: Option<&str>,
 ) {
@@ -115,6 +116,21 @@ pub fn handle_delegation(
         tracing::warn!("Failed to register delegation synchronously: {}", e);
     }
 
+    let parsed_mode = match mode {
+        Some(value) => match value.parse::<DelegationMode>() {
+            Ok(mode) => Some(mode),
+            Err(e) => {
+                tracing::warn!(
+                    mode = %value,
+                    error = %e,
+                    "Ignoring invalid delegation mode from runtime action"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
     // Send request with pre-created execution_id
     let _ = ctx.delegation_tx.send(DelegationRequest {
         parent_agent_id: ctx.agent_id.clone(),
@@ -124,6 +140,7 @@ pub fn handle_delegation(
         child_agent_id: child_agent.to_string(),
         child_execution_id,
         task: task.to_string(),
+        mode: parsed_mode,
         context: context.clone(),
         max_iterations,
         output_schema: output_schema.clone(),

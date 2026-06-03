@@ -4,6 +4,130 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::str::FromStr;
+
+/// Execution posture for a delegated child agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegationMode {
+    /// Exact-output standalone artifact work; write first, verify, return paths.
+    DirectArtifact,
+    /// Fill missing or empty ward doctrine and memory-bank files.
+    WardHygiene,
+    /// Implementation work that depends on existing ward context.
+    WardBackedBuild,
+    /// Execute a planned/spec step with acceptance criteria.
+    StepExecutor,
+}
+
+impl DelegationMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DirectArtifact => "direct_artifact",
+            Self::WardHygiene => "ward_hygiene",
+            Self::WardBackedBuild => "ward_backed_build",
+            Self::StepExecutor => "step_executor",
+        }
+    }
+
+    pub fn as_state_value(self) -> serde_json::Value {
+        serde_json::Value::String(self.as_str().to_string())
+    }
+}
+
+impl FromStr for DelegationMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "direct_artifact" => Ok(Self::DirectArtifact),
+            "ward_hygiene" => Ok(Self::WardHygiene),
+            "ward_backed_build" => Ok(Self::WardBackedBuild),
+            "step_executor" => Ok(Self::StepExecutor),
+            other => Err(format!("unknown delegation mode '{other}'")),
+        }
+    }
+}
+
+/// Resolve a child delegation's execution posture.
+///
+/// Explicit caller intent wins. Inference is intentionally conservative:
+/// ambiguous implementation work uses ward-backed context instead of the lean
+/// direct-artifact path.
+pub fn infer_delegation_mode(
+    child_agent_id: &str,
+    task: &str,
+    explicit_mode: Option<DelegationMode>,
+) -> DelegationMode {
+    if let Some(mode) = explicit_mode {
+        return mode;
+    }
+
+    let lower = task.to_lowercase();
+
+    if looks_like_step_executor(&lower) {
+        return DelegationMode::StepExecutor;
+    }
+    if looks_like_ward_hygiene(&lower) {
+        return DelegationMode::WardHygiene;
+    }
+    if looks_like_direct_artifact(child_agent_id, &lower) {
+        return DelegationMode::DirectArtifact;
+    }
+
+    DelegationMode::WardBackedBuild
+}
+
+fn looks_like_step_executor(task_lower: &str) -> bool {
+    (task_lower.contains("## goal")
+        && (task_lower.contains("## acceptance") || task_lower.contains("acceptance criteria")))
+        || task_lower.contains("steps/step")
+        || task_lower.contains("step_")
+}
+
+fn looks_like_ward_hygiene(task_lower: &str) -> bool {
+    task_lower.contains("ward_hygiene")
+        || task_lower.contains("ward hygiene")
+        || (task_lower.contains("agents.md")
+            && task_lower.contains("memory-bank")
+            && (task_lower.contains("fill")
+                || task_lower.contains("missing")
+                || task_lower.contains("empty")
+                || task_lower.contains("stale")
+                || task_lower.contains("update")))
+}
+
+fn looks_like_direct_artifact(child_agent_id: &str, task_lower: &str) -> bool {
+    let builder_like = child_agent_id == "builder-agent"
+        || child_agent_id.contains("builder")
+        || child_agent_id.contains("code");
+    if !builder_like {
+        return false;
+    }
+
+    let exact_output = task_lower.contains("create a single file")
+        || task_lower.contains("single file:")
+        || task_lower.contains("exact output")
+        || task_lower.contains("exact path")
+        || task_lower.contains("write_file to create")
+        || task_lower.contains("create `")
+        || task_lower.contains("create ");
+    let self_contained = task_lower.contains("self-contained")
+        || task_lower.contains("no dependencies")
+        || task_lower.contains("no build step")
+        || task_lower.contains("all html")
+        || task_lower.contains("standalone");
+    let artifact_path = task_lower.contains(".html")
+        || task_lower.contains(".css")
+        || task_lower.contains(".js")
+        || task_lower.contains(".md")
+        || task_lower.contains(".json")
+        || task_lower.contains(".wav")
+        || task_lower.contains(".ogg")
+        || task_lower.contains(".txt");
+
+    artifact_path && (self_contained || exact_output)
+}
 
 // ============================================================================
 // DELEGATION REQUEST
@@ -38,6 +162,8 @@ pub struct DelegationRequest {
     pub child_execution_id: String,
     /// Task description for the child agent
     pub task: String,
+    /// Optional explicit execution posture for the child agent.
+    pub mode: Option<DelegationMode>,
     /// Optional context to pass to the child agent
     pub context: Option<Value>,
     /// Optional max iterations for the child agent execution loop.
@@ -99,6 +225,10 @@ pub struct DelegationContext {
     /// at completion time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<Value>,
+
+    /// Execution posture for the delegated child, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<DelegationMode>,
 }
 
 fn default_callback() -> bool {
@@ -122,6 +252,7 @@ impl DelegationContext {
             callback_on_complete: true,
             child_conversation_id: None,
             output_schema: None,
+            mode: None,
         }
     }
 
@@ -148,6 +279,12 @@ impl DelegationContext {
         self.output_schema = Some(schema);
         self
     }
+
+    /// Set the delegation mode for this context.
+    pub fn with_mode(mut self, mode: DelegationMode) -> Self {
+        self.mode = Some(mode);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -165,5 +302,86 @@ mod tests {
         assert_eq!(ctx.parent_conversation_id, "parent-conv");
         assert!(ctx.callback_on_complete);
         assert!(ctx.task_context.is_some());
+    }
+
+    #[test]
+    fn delegation_mode_parses_wire_values() {
+        assert_eq!(
+            "direct_artifact".parse::<DelegationMode>().unwrap(),
+            DelegationMode::DirectArtifact
+        );
+        assert_eq!(
+            "ward_hygiene".parse::<DelegationMode>().unwrap(),
+            DelegationMode::WardHygiene
+        );
+        assert_eq!(
+            "ward_backed_build".parse::<DelegationMode>().unwrap(),
+            DelegationMode::WardBackedBuild
+        );
+        assert_eq!(
+            "step_executor".parse::<DelegationMode>().unwrap(),
+            DelegationMode::StepExecutor
+        );
+        assert!("unknown".parse::<DelegationMode>().is_err());
+    }
+
+    #[test]
+    fn explicit_delegation_mode_wins() {
+        assert_eq!(
+            infer_delegation_mode(
+                "builder-agent",
+                "Create a single file: index.html",
+                Some(DelegationMode::WardBackedBuild)
+            ),
+            DelegationMode::WardBackedBuild
+        );
+    }
+
+    #[test]
+    fn infers_step_executor_for_step_specs() {
+        assert_eq!(
+            infer_delegation_mode(
+                "builder-agent",
+                "## Goal\nBuild it\n## Inputs\nx\n## Acceptance\npasses",
+                None
+            ),
+            DelegationMode::StepExecutor
+        );
+        assert_eq!(
+            infer_delegation_mode("builder-agent", "Execute specs/foo/steps/step2.md", None),
+            DelegationMode::StepExecutor
+        );
+    }
+
+    #[test]
+    fn infers_ward_hygiene_for_doc_memory_updates() {
+        assert_eq!(
+            infer_delegation_mode(
+                "builder-agent",
+                "Fill missing AGENTS.md and memory-bank/ward.md files",
+                None
+            ),
+            DelegationMode::WardHygiene
+        );
+    }
+
+    #[test]
+    fn infers_direct_artifact_for_exact_self_contained_outputs() {
+        assert_eq!(
+            infer_delegation_mode(
+                "builder-agent",
+                "Create a single file: pomodoro-timer/index.html. All HTML, CSS, and JS inline.",
+                None
+            ),
+            DelegationMode::DirectArtifact
+        );
+    }
+
+    #[test]
+    fn infers_ward_backed_build_for_ambiguous_builder_work() {
+        assert_eq!(
+            infer_delegation_mode("builder-agent", "Build the data import module", None),
+            DelegationMode::WardBackedBuild
+        );
     }
 }

@@ -387,6 +387,30 @@ impl AgentService {
             }
 
             if self.get(name).await.is_ok() {
+                if let Some(instructions) = instructions_loader(name) {
+                    let hashes = known_template_managed_hashes(name);
+                    if !hashes.is_empty() {
+                        match self
+                            .refresh_default_agent_instructions_if_managed(
+                                name,
+                                &instructions,
+                                hashes,
+                            )
+                            .await
+                        {
+                            Ok(true) => tracing::info!(
+                                agent = %name,
+                                "Refreshed template-managed default agent instructions"
+                            ),
+                            Ok(false) => {}
+                            Err(e) => tracing::warn!(
+                                agent = %name,
+                                error = %e,
+                                "Failed to refresh default agent instructions"
+                            ),
+                        }
+                    }
+                }
                 tracing::debug!("Agent {} already exists, skipping seed", name);
                 continue;
             }
@@ -451,6 +475,68 @@ impl AgentService {
         }
 
         Ok(())
+    }
+
+    async fn refresh_default_agent_instructions_if_managed(
+        &self,
+        name: &str,
+        new_instructions: &str,
+        managed_hashes: &[&str],
+    ) -> Result<bool, String> {
+        let agent_dir = self.agents_dir.join(name);
+        let agents_md_path = agent_dir.join("AGENTS.md");
+        if !agents_md_path.exists() {
+            return Ok(false);
+        }
+
+        let current = fs::read_to_string(&agents_md_path)
+            .map_err(|e| format!("Failed to read AGENTS.md: {}", e))?;
+        let current_normalized = normalize_agent_instructions(&current);
+        let new_normalized = normalize_agent_instructions(new_instructions);
+        if current_normalized == new_normalized {
+            return Ok(false);
+        }
+
+        let current_hash = agent_runtime::content_hash(&current_normalized);
+        if !managed_hashes.iter().any(|hash| *hash == current_hash) {
+            return Ok(false);
+        }
+
+        let backup_path = agent_dir.join(format!(
+            "AGENTS.md.bak-{}",
+            chrono::Utc::now().timestamp_millis()
+        ));
+        fs::write(&backup_path, current)
+            .map_err(|e| format!("Failed to write AGENTS.md backup: {}", e))?;
+        fs::write(&agents_md_path, new_normalized)
+            .map_err(|e| format!("Failed to refresh AGENTS.md: {}", e))?;
+        self.invalidate_cache().await;
+        Ok(true)
+    }
+}
+
+fn normalize_agent_instructions(instructions: &str) -> String {
+    let trimmed = instructions
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("{trimmed}\n")
+    }
+}
+
+fn known_template_managed_hashes(name: &str) -> &'static [&'static str] {
+    match name {
+        // Normalized hashes of the bundled prompts before
+        // builder-delegation-hygiene mode updates.
+        "builder-agent" => &["3f7bcb5343be4add6b90775d0d02be28ace6f1306e425b213ba9c53f0b21ec0a"],
+        "planner-agent" => &["e8575d90ee8342db9b969dd33fbb3d9cf431e6e3896a936b764c9fed2f1deef7"],
+        _ => &[],
     }
 }
 
@@ -569,4 +655,132 @@ You are a specialized writing agent focused on content creation and communicatio
 /// Create a shared agent service.
 pub fn shared_agent_service(agents_dir: PathBuf) -> Arc<AgentService> {
     Arc::new(AgentService::new(agents_dir))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn seed_default_agents_creates_reviewer_agent_from_template() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let service = AgentService::new(dir.path().to_path_buf());
+        let templates = br#"[
+            {
+                "name": "reviewer-agent",
+                "displayName": "Reviewer",
+                "description": "Read-only reviewer",
+                "agentType": "specialist",
+                "temperature": 0.1,
+                "maxTokens": 16384,
+                "skills": [],
+                "mcps": []
+            }
+        ]"#;
+
+        service
+            .seed_default_agents("provider", "model", Some(templates), |name| {
+                (name == "reviewer-agent").then(|| {
+                    "You are a read-only reviewer.\nRESULT: APPROVED\nRESULT: DEFECTS".to_string()
+                })
+            })
+            .await
+            .expect("seed defaults");
+
+        let reviewer = service.get("reviewer-agent").await.expect("reviewer");
+        assert_eq!(reviewer.name, "reviewer-agent");
+        assert_eq!(reviewer.display_name, "Reviewer");
+        assert!(reviewer.instructions.contains("read-only reviewer"));
+    }
+
+    #[tokio::test]
+    async fn refresh_default_agent_updates_known_template_managed_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let service = AgentService::new(dir.path().to_path_buf());
+        let agent_dir = dir.path().join("builder-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(agent_dir.join("config.yaml"), "name: builder-agent\ndisplayName: Builder\ndescription: Builder\nproviderId: provider\nmodel: model\ntemperature: 0.1\nmaxTokens: 8192\nthinkingEnabled: false\nvoiceRecordingEnabled: false\nskills: []\nmcps: []\n").unwrap();
+        let old = "old template\n\n";
+        std::fs::write(agent_dir.join("AGENTS.md"), old).unwrap();
+        let old_hash = agent_runtime::content_hash(&normalize_agent_instructions(old));
+
+        let refreshed = service
+            .refresh_default_agent_instructions_if_managed(
+                "builder-agent",
+                "new template",
+                &[old_hash.as_str()],
+            )
+            .await
+            .expect("refresh");
+
+        assert!(refreshed);
+        assert_eq!(
+            std::fs::read_to_string(agent_dir.join("AGENTS.md")).unwrap(),
+            "new template\n"
+        );
+        let backups = std::fs::read_dir(&agent_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("AGENTS.md.bak-")
+            })
+            .count();
+        assert_eq!(backups, 1);
+    }
+
+    #[tokio::test]
+    async fn refresh_default_agent_preserves_customized_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let service = AgentService::new(dir.path().to_path_buf());
+        let agent_dir = dir.path().join("builder-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let custom = "old template\ncustom line\n";
+        std::fs::write(agent_dir.join("AGENTS.md"), custom).unwrap();
+
+        let refreshed = service
+            .refresh_default_agent_instructions_if_managed(
+                "builder-agent",
+                "new template",
+                &["not-the-custom-hash"],
+            )
+            .await
+            .expect("refresh");
+
+        assert!(!refreshed);
+        assert_eq!(
+            std::fs::read_to_string(agent_dir.join("AGENTS.md")).unwrap(),
+            custom
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_default_agent_is_idempotent_after_update() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let service = AgentService::new(dir.path().to_path_buf());
+        let agent_dir = dir.path().join("builder-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let old = "old template\n";
+        std::fs::write(agent_dir.join("AGENTS.md"), old).unwrap();
+        let old_hash = agent_runtime::content_hash(&normalize_agent_instructions(old));
+
+        assert!(service
+            .refresh_default_agent_instructions_if_managed(
+                "builder-agent",
+                "new template",
+                &[old_hash.as_str()],
+            )
+            .await
+            .unwrap());
+        assert!(!service
+            .refresh_default_agent_instructions_if_managed(
+                "builder-agent",
+                "new template",
+                &[old_hash.as_str()],
+            )
+            .await
+            .unwrap());
+    }
 }

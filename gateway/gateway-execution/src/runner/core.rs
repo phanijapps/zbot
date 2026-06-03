@@ -888,6 +888,7 @@ impl ExecutionRunner {
             child_agent_id: crashed_exec.agent_id.clone(),
             child_execution_id: new_exec.id.clone(),
             task: task.clone(),
+            mode: None,
             context: None,
             max_iterations: None,
             output_schema: None,
