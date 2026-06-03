@@ -180,12 +180,19 @@ Prompt is assembled from layered components:
 OpenAiClient → RetryingLlmClient (3 retries, 500ms backoff) → RateLimitedLlmClient (per-provider)
 ```
 
-**Tool Registry** (line 493–550):
+**Tool Registry**:
 
-| Agent Type | Tools |
-|------------|-------|
-| Root (orchestrator) | respond, delegate_to_agent, load_skill, memory, ward, update_plan, set_session_title, grep, query_resource, multimodal_analyze |
-| Delegated (subagent) | shell, write_file, edit_file, read_file, glob, grep, load_skill, ward, memory, respond, multimodal_analyze |
+`ExecutorBuilder::build_tool_registry()` now filters first-party tools through
+the actor capability policy. See
+[subagent-capability-policy/overview.md](../subagent-capability-policy/overview.md)
+for the exact policy.
+
+| Actor kind | Tool profile |
+|------------|--------------|
+| Root | Orchestration/session tools: `delegate_to_agent`, `respond`, `memory`, `ward`, `update_plan`, `set_session_title`, `grep`, optional connector/query tools. No implementation file-write tools by default. |
+| DelegatedExecutor | Implementation tools: `shell`, `write_file`, `edit_file`, `grep`, `ward`, `memory`, `load_skill`, `list_skills`, `list_mcps`, `respond`, `multimodal_analyze`. No orchestration/control tools. |
+| DelegatedReviewer | Read-only review tools: `read`, `glob`, `grep`, `load_skill`, `list_skills`, `list_mcps`, `respond`, `multimodal_analyze`. No shell, file mutation, ward/memory mutation, or orchestration/control tools. |
+| WardAgent | Full first-party tool profile for warm `ward:<name>` agents, including implementation and orchestration/control tools when backing services are wired. |
 
 Optional tools: file tools (read/write/edit/glob), python, web_fetch, todos, introspection — controlled by tool settings.
 
@@ -254,8 +261,8 @@ When the agent calls `delegate_to_agent`:
 
 **`delegate_to_agent`** — `runtime/agent-runtime/src/tools/delegate.rs`
 
-- Validates args (task ≤ 4000 chars, context ≤ 4000 chars)
-- Builds `DelegationRequest { agent_id, task, context, max_iterations, skills }`
+- Validates args (task ≤ 4000 chars, context ≤ 4000 chars, optional `mode`)
+- Builds `DelegationRequest { agent_id, task, mode, context, max_iterations, skills }`
 - Returns immediately (fire-and-forget)
 
 ### 8b. Delegation Handler (Background)
@@ -274,6 +281,18 @@ When the agent calls `delegate_to_agent`:
 - DB: INSERT `agent_executions` (delegation_type='sequential')
 - DB: UPDATE `sessions` SET pending_delegations += 1
 - Event: `DelegationStarted { parent_agent_id, child_agent_id, task }`
+- Classifies runtime actor kind:
+  - `ward:<name>` → `WardAgent` (full first-party tools)
+  - review-like ordinary tasks → `DelegatedReviewer` (read-only)
+  - other ordinary tasks → `DelegatedExecutor` (implementation tools)
+- Resolves delegation mode:
+  - explicit `mode` wins
+  - step-spec tasks → `step_executor`
+  - ward setup/hygiene tasks → `ward_hygiene`
+  - exact self-contained artifacts → `direct_artifact`
+  - other builder work → `ward_backed_build`
+- Prepends mode-specific executor rules and records
+  `app:delegation_mode` in child initial state.
 - Runs the same execution loop (Stage 7) for the child agent
 - No intent analysis (subagent, not root)
 

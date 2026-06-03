@@ -95,6 +95,11 @@ impl Tool for DelegateTool {
                     "type": "boolean",
                     "default": false,
                     "description": "Set true for independent tasks that can run simultaneously. Use false (default) when tasks must run in order or share files."
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["direct_artifact", "ward_hygiene", "ward_backed_build", "step_executor"],
+                    "description": "Optional child execution posture. Use direct_artifact for exact-output standalone artifacts, ward_hygiene for filling ward AGENTS.md/memory-bank, ward_backed_build for implementation that depends on ward context, and step_executor for plan/spec steps."
                 }
             },
             "required": ["agent_id", "task"]
@@ -162,6 +167,26 @@ impl Tool for DelegateTool {
             .get("parallel")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
+
+        let mode = args
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .map(std::string::ToString::to_string);
+
+        if let Some(mode) = mode.as_deref() {
+            const ALLOWED_MODES: &[&str] = &[
+                "direct_artifact",
+                "ward_hygiene",
+                "ward_backed_build",
+                "step_executor",
+            ];
+            if !ALLOWED_MODES.contains(&mode) {
+                return Err(zero_core::ZeroError::Tool(format!(
+                    "Invalid delegation mode '{mode}'. Expected one of: {}",
+                    ALLOWED_MODES.join(", ")
+                )));
+            }
+        }
 
         // Get parent context from state
         let parent_agent_id = ctx
@@ -250,6 +275,7 @@ impl Tool for DelegateTool {
             output_schema,
             skills,
             complexity: None,
+            mode,
             parallel,
             child_execution_id: Some(child_execution_id.clone()),
         });
@@ -293,6 +319,7 @@ mod tests {
         assert!(properties.get("task").is_some());
         assert!(properties.get("context").is_some());
         assert!(properties.get("wait_for_result").is_some());
+        assert!(properties.get("mode").is_some());
 
         let required = schema.get("required").unwrap().as_array().unwrap();
         assert!(required.iter().any(|v| v == "agent_id"));
@@ -370,6 +397,24 @@ mod tests {
             .await;
         let err = res.expect_err("self-delegation must fail");
         assert!(format!("{err}").contains("Cannot delegate to yourself"));
+    }
+
+    #[tokio::test]
+    async fn invalid_delegation_mode_is_rejected() {
+        let tool = DelegateTool::new();
+        let ctx = ctx_for("root");
+        let res = tool
+            .execute(
+                ctx,
+                json!({
+                    "agent_id": "writer-agent",
+                    "task": "do work",
+                    "mode": "surprise_me"
+                }),
+            )
+            .await;
+        let err = res.expect_err("invalid mode must fail");
+        assert!(format!("{err}").contains("Invalid delegation mode"));
     }
 
     // ------------------------------------------------------------------------
@@ -511,7 +556,28 @@ mod tests {
             "task must be enriched with platform hint"
         );
         assert_eq!(action.skills, vec!["html-report".to_string()]);
+        assert_eq!(action.mode, None);
         assert!(!action.parallel);
         assert!(!action.wait_for_result);
+    }
+
+    #[tokio::test]
+    async fn successful_delegate_sets_mode_on_action() {
+        let tool = DelegateTool::new();
+        let ctx = ctx_for("root");
+
+        tool.execute(
+            ctx.clone(),
+            json!({
+                "agent_id": "builder-agent",
+                "task": "Create output/index.html",
+                "mode": "direct_artifact"
+            }),
+        )
+        .await
+        .expect("delegate must succeed");
+
+        let action = ctx.actions().delegate.expect("delegate action set");
+        assert_eq!(action.mode.as_deref(), Some("direct_artifact"));
     }
 }

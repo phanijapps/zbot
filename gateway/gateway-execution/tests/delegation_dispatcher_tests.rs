@@ -23,6 +23,7 @@ fn make_request(session_id: &str, child_agent_id: &str, task: &str) -> Delegatio
         child_agent_id: child_agent_id.into(),
         child_execution_id: format!("exec-{}-{}", child_agent_id, session_id),
         task: task.into(),
+        mode: None,
         context: None,
         max_iterations: None,
         output_schema: None,

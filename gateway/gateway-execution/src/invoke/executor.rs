@@ -43,6 +43,7 @@ use zero_core::{ConnectorResourceProvider, FileSystemContext};
 use zero_stores::MemoryFactStore;
 use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
+use super::setup::SubagentRole;
 use crate::agent_pool::AgentResultBus;
 use crate::config::GatewayFileSystem;
 
@@ -61,6 +62,199 @@ use crate::config::GatewayFileSystem;
 /// changing the public signature.
 pub fn resolve_thinking_flag(user_flag: bool, _model: &str) -> bool {
     user_flag
+}
+
+/// Runtime actor profile used to derive first-party tool capabilities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeActorKind {
+    Root,
+    DelegatedExecutor,
+    DelegatedReviewer,
+    WardAgent,
+}
+
+impl RuntimeActorKind {
+    fn as_state_value(self) -> &'static str {
+        match self {
+            Self::Root => "root",
+            Self::DelegatedExecutor => "delegated_executor",
+            Self::DelegatedReviewer => "delegated_reviewer",
+            Self::WardAgent => "ward_agent",
+        }
+    }
+
+    fn is_delegated_execution(self) -> bool {
+        !matches!(self, Self::Root)
+    }
+
+    fn is_ordinary_subagent(self) -> bool {
+        matches!(self, Self::DelegatedExecutor | Self::DelegatedReviewer)
+    }
+
+    fn subagent_role(self) -> Option<SubagentRole> {
+        match self {
+            Self::DelegatedExecutor => Some(SubagentRole::Executor),
+            Self::DelegatedReviewer => Some(SubagentRole::Reviewer),
+            Self::Root | Self::WardAgent => None,
+        }
+    }
+}
+
+impl From<SubagentRole> for RuntimeActorKind {
+    fn from(role: SubagentRole) -> Self {
+        match role {
+            SubagentRole::Executor => Self::DelegatedExecutor,
+            SubagentRole::Reviewer => Self::DelegatedReviewer,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolCapability {
+    AgentControl,
+    AgentDelegate,
+    ConnectorQuery,
+    FileRead,
+    FileWrite,
+    GoalWrite,
+    GraphRead,
+    IngestWrite,
+    McpList,
+    MemoryRead,
+    MemoryWrite,
+    MultimodalAnalyze,
+    PlanWrite,
+    ProcedureRun,
+    Respond,
+    SessionTitleWrite,
+    Shell,
+    SkillList,
+    SkillLoad,
+    WardRead,
+    WardWrite,
+}
+
+impl ToolCapability {
+    fn as_state_value(self) -> &'static str {
+        match self {
+            Self::AgentControl => "agent.control",
+            Self::AgentDelegate => "agent.delegate",
+            Self::ConnectorQuery => "connector.query",
+            Self::FileRead => "fs.read",
+            Self::FileWrite => "fs.write",
+            Self::GoalWrite => "goal.write",
+            Self::GraphRead => "graph.read",
+            Self::IngestWrite => "ingest.write",
+            Self::McpList => "mcp.list",
+            Self::MemoryRead => "memory.read",
+            Self::MemoryWrite => "memory.write",
+            Self::MultimodalAnalyze => "multimodal.analyze",
+            Self::PlanWrite => "plan.write",
+            Self::ProcedureRun => "procedure.run",
+            Self::Respond => "respond",
+            Self::SessionTitleWrite => "session_title.write",
+            Self::Shell => "process.shell",
+            Self::SkillList => "skill.list",
+            Self::SkillLoad => "skill.load",
+            Self::WardRead => "ward.read",
+            Self::WardWrite => "ward.write",
+        }
+    }
+}
+
+fn actor_allows(actor: RuntimeActorKind, capability: ToolCapability) -> bool {
+    match actor {
+        RuntimeActorKind::Root => matches!(
+            capability,
+            ToolCapability::AgentControl
+                | ToolCapability::AgentDelegate
+                | ToolCapability::ConnectorQuery
+                | ToolCapability::FileRead
+                | ToolCapability::GoalWrite
+                | ToolCapability::GraphRead
+                | ToolCapability::IngestWrite
+                | ToolCapability::MemoryRead
+                | ToolCapability::MemoryWrite
+                | ToolCapability::MultimodalAnalyze
+                | ToolCapability::PlanWrite
+                | ToolCapability::ProcedureRun
+                | ToolCapability::Respond
+                | ToolCapability::SessionTitleWrite
+                | ToolCapability::Shell
+                | ToolCapability::WardRead
+                | ToolCapability::WardWrite
+        ),
+        RuntimeActorKind::DelegatedExecutor => matches!(
+            capability,
+            ToolCapability::FileRead
+                | ToolCapability::FileWrite
+                | ToolCapability::GoalWrite
+                | ToolCapability::GraphRead
+                | ToolCapability::IngestWrite
+                | ToolCapability::McpList
+                | ToolCapability::MemoryRead
+                | ToolCapability::MemoryWrite
+                | ToolCapability::MultimodalAnalyze
+                | ToolCapability::Respond
+                | ToolCapability::Shell
+                | ToolCapability::SkillList
+                | ToolCapability::SkillLoad
+                | ToolCapability::WardRead
+                | ToolCapability::WardWrite
+        ),
+        RuntimeActorKind::DelegatedReviewer => matches!(
+            capability,
+            ToolCapability::FileRead
+                | ToolCapability::GraphRead
+                | ToolCapability::McpList
+                | ToolCapability::MemoryRead
+                | ToolCapability::MultimodalAnalyze
+                | ToolCapability::Respond
+                | ToolCapability::SkillList
+                | ToolCapability::SkillLoad
+                | ToolCapability::WardRead
+        ),
+        RuntimeActorKind::WardAgent => true,
+    }
+}
+
+fn actor_allows_all(actor: RuntimeActorKind, capabilities: &[ToolCapability]) -> bool {
+    capabilities
+        .iter()
+        .copied()
+        .all(|capability| actor_allows(actor, capability))
+}
+
+fn actor_capabilities(actor: RuntimeActorKind) -> Vec<&'static str> {
+    const ALL: &[ToolCapability] = &[
+        ToolCapability::AgentControl,
+        ToolCapability::AgentDelegate,
+        ToolCapability::ConnectorQuery,
+        ToolCapability::FileRead,
+        ToolCapability::FileWrite,
+        ToolCapability::GoalWrite,
+        ToolCapability::GraphRead,
+        ToolCapability::IngestWrite,
+        ToolCapability::McpList,
+        ToolCapability::MemoryRead,
+        ToolCapability::MemoryWrite,
+        ToolCapability::MultimodalAnalyze,
+        ToolCapability::PlanWrite,
+        ToolCapability::ProcedureRun,
+        ToolCapability::Respond,
+        ToolCapability::SessionTitleWrite,
+        ToolCapability::Shell,
+        ToolCapability::SkillList,
+        ToolCapability::SkillLoad,
+        ToolCapability::WardRead,
+        ToolCapability::WardWrite,
+    ];
+
+    ALL.iter()
+        .copied()
+        .filter(|capability| actor_allows(actor, *capability))
+        .map(ToolCapability::as_state_value)
+        .collect()
 }
 
 fn build_runtime_middleware_pipeline(
@@ -140,7 +334,7 @@ pub struct ExecutorBuilder {
     connector_provider: Option<Arc<dyn ConnectorResourceProvider>>,
     rate_limiter: Option<Arc<agent_runtime::ProviderRateLimiter>>,
     model_registry: Option<Arc<ModelRegistry>>,
-    is_delegated: bool,
+    actor_kind: RuntimeActorKind,
     subagent_non_streaming: bool,
     /// Trait-routed kg store for the `graph_query` tool.
     kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
@@ -169,7 +363,7 @@ impl ExecutorBuilder {
             connector_provider: None,
             rate_limiter: None,
             model_registry: None,
-            is_delegated: false,
+            actor_kind: RuntimeActorKind::Root,
             subagent_non_streaming: true,
             kg_store: None,
             ingestion_adapter: None,
@@ -217,7 +411,23 @@ impl ExecutorBuilder {
 
     /// Mark this executor as a delegated subagent (enables plan step cap).
     pub fn with_delegated(mut self, is_delegated: bool) -> Self {
-        self.is_delegated = is_delegated;
+        self.actor_kind = if is_delegated {
+            RuntimeActorKind::DelegatedExecutor
+        } else {
+            RuntimeActorKind::Root
+        };
+        self
+    }
+
+    /// Set a specific subagent role for ordinary delegated agents.
+    pub fn with_subagent_role(mut self, role: SubagentRole) -> Self {
+        self.actor_kind = RuntimeActorKind::from(role);
+        self
+    }
+
+    /// Set the exact runtime actor kind.
+    pub fn with_actor_kind(mut self, actor_kind: RuntimeActorKind) -> Self {
+        self.actor_kind = actor_kind;
         self
     }
 
@@ -367,10 +577,31 @@ impl ExecutorBuilder {
                 .with_initial_state("ward_id", serde_json::Value::String(ward.to_string()));
         }
 
-        // Mark delegated executors so tools can enforce subagent constraints
-        if self.is_delegated {
+        executor_config = executor_config.with_initial_state(
+            "app:actor_kind",
+            serde_json::Value::String(self.actor_kind.as_state_value().to_string()),
+        );
+        executor_config = executor_config.with_initial_state(
+            "app:tool_capabilities",
+            serde_json::Value::Array(
+                actor_capabilities(self.actor_kind)
+                    .into_iter()
+                    .map(|capability| serde_json::Value::String(capability.to_string()))
+                    .collect(),
+            ),
+        );
+
+        if self.actor_kind.is_ordinary_subagent() {
             executor_config = executor_config
                 .with_initial_state("app:is_delegated", serde_json::Value::Bool(true));
+        }
+        if let Some(role) = self.actor_kind.subagent_role() {
+            let role = match role {
+                SubagentRole::Executor => "executor",
+                SubagentRole::Reviewer => "reviewer",
+            };
+            executor_config = executor_config
+                .with_initial_state("app:subagent_role", serde_json::Value::String(role.into()));
         }
 
         // Inject extra initial state (e.g., ward_purpose, ward_structure from intent analysis)
@@ -523,7 +754,7 @@ impl ExecutorBuilder {
         );
 
         // Root is an orchestrator — enforce single action per turn (except chat mode)
-        if !self.is_delegated && !self.chat_mode {
+        if matches!(self.actor_kind, RuntimeActorKind::Root) && !self.chat_mode {
             executor_config.single_action_mode = true;
         }
 
@@ -533,7 +764,7 @@ impl ExecutorBuilder {
         }
 
         // Wire execution hooks for subagents (code-agent, research-agent, etc.)
-        if self.is_delegated {
+        if self.actor_kind.is_delegated_execution() {
             // beforeToolCall: block shell-as-file-writer bypass
             executor_config.before_tool_call = Some(Arc::new(|tool_name, args| {
                 if tool_name == "shell" {
@@ -593,86 +824,121 @@ impl ExecutorBuilder {
     /// Build the tool registry with core and optional tools.
     fn build_tool_registry(&self, fs_context: Arc<dyn FileSystemContext>) -> Arc<ToolRegistry> {
         let mut tool_registry = ToolRegistry::new();
+        let actor = self.actor_kind;
 
-        if self.is_delegated {
-            // Subagents: execute + context awareness + respond.
-            tool_registry.register(Arc::new(ShellTool::new()));
-            {
-                let mut wt = WriteFileTool::new(fs_context.clone());
-                if let Some(fs) = self.fact_store.clone() {
-                    wt = wt.with_fact_store(fs);
-                }
-                tool_registry.register(Arc::new(wt));
+        fn register_if_allowed(
+            registry: &mut ToolRegistry,
+            actor: RuntimeActorKind,
+            capabilities: &[ToolCapability],
+            tool: Arc<dyn zero_core::Tool>,
+        ) {
+            if actor_allows_all(actor, capabilities) {
+                registry.register(tool);
             }
-            {
-                let mut et = EditFileTool::new(fs_context.clone());
-                if let Some(fs) = self.fact_store.clone() {
-                    et = et.with_fact_store(fs);
-                }
-                tool_registry.register(Arc::new(et));
+        }
+
+        register_if_allowed(
+            &mut tool_registry,
+            actor,
+            &[ToolCapability::Shell],
+            Arc::new(ShellTool::new()),
+        );
+        {
+            let mut wt = WriteFileTool::new(fs_context.clone());
+            if let Some(fs) = self.fact_store.clone() {
+                wt = wt.with_fact_store(fs);
             }
-            tool_registry.register(Arc::new(LoadSkillTool::new(fs_context.clone())));
-            tool_registry.register(Arc::new(ListSkillsTool::new(fs_context.clone())));
-            tool_registry.register(Arc::new(ListMcpsTool::new(fs_context.clone())));
-            tool_registry.register(Arc::new(GrepTool));
-            tool_registry.register(Arc::new(WardTool::new(
+            register_if_allowed(
+                &mut tool_registry,
+                actor,
+                &[ToolCapability::FileWrite],
+                Arc::new(wt),
+            );
+        }
+        {
+            let mut et = EditFileTool::new(fs_context.clone());
+            if let Some(fs) = self.fact_store.clone() {
+                et = et.with_fact_store(fs);
+            }
+            register_if_allowed(
+                &mut tool_registry,
+                actor,
+                &[ToolCapability::FileWrite],
+                Arc::new(et),
+            );
+        }
+        register_if_allowed(
+            &mut tool_registry,
+            actor,
+            &[ToolCapability::SkillLoad],
+            Arc::new(LoadSkillTool::new(fs_context.clone())),
+        );
+        register_if_allowed(
+            &mut tool_registry,
+            actor,
+            &[ToolCapability::SkillList],
+            Arc::new(ListSkillsTool::new(fs_context.clone())),
+        );
+        register_if_allowed(
+            &mut tool_registry,
+            actor,
+            &[ToolCapability::McpList],
+            Arc::new(ListMcpsTool::new(fs_context.clone())),
+        );
+        register_if_allowed(
+            &mut tool_registry,
+            actor,
+            &[ToolCapability::FileRead],
+            Arc::new(GrepTool),
+        );
+        register_if_allowed(
+            &mut tool_registry,
+            actor,
+            &[ToolCapability::WardRead, ToolCapability::WardWrite],
+            Arc::new(WardTool::new(
                 fs_context.clone(),
                 self.fact_store.clone(),
                 self.ward_usage.clone(),
-            )));
-            tool_registry.register(Arc::new(MemoryTool::new(
-                fs_context.clone(),
-                self.fact_store.clone(),
-            )));
-            tool_registry.register(Arc::new(RespondTool::new()));
-            tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
+            )),
+        );
+        register_if_allowed(
+            &mut tool_registry,
+            actor,
+            &[ToolCapability::MemoryRead, ToolCapability::MemoryWrite],
+            Arc::new(MemoryTool::new(fs_context.clone(), self.fact_store.clone())),
+        );
+        register_if_allowed(
+            &mut tool_registry,
+            actor,
+            &[ToolCapability::PlanWrite],
+            Arc::new(UpdatePlanTool::new()),
+        );
+        register_if_allowed(
+            &mut tool_registry,
+            actor,
+            &[ToolCapability::SessionTitleWrite],
+            Arc::new(SetSessionTitleTool::new()),
+        );
+        register_if_allowed(
+            &mut tool_registry,
+            actor,
+            &[ToolCapability::Respond],
+            Arc::new(RespondTool::new()),
+        );
+        register_if_allowed(
+            &mut tool_registry,
+            actor,
+            &[ToolCapability::AgentDelegate],
+            Arc::new(DelegateTool::new()),
+        );
+        register_if_allowed(
+            &mut tool_registry,
+            actor,
+            &[ToolCapability::MultimodalAnalyze],
+            Arc::new(MultimodalAnalyzeTool::new()),
+        );
 
-            // Knowledge graph query — fully trait-routed (Phase E6c):
-            // KgStoreAdapter wraps `Arc<dyn KnowledgeGraphStore>` so the
-            // tool runs identically on the configured backend.
-            if let Some(ref ks) = self.kg_store {
-                let adapter = Arc::new(super::kg_store_adapter::KgStoreAdapter::new(ks.clone()));
-                tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
-            }
-
-            // Ingestion (if adapter wired)
-            if let Some(ref a) = self.ingestion_adapter {
-                tool_registry.register(Arc::new(agent_tools::IngestTool::new(a.clone())));
-            }
-
-            // Goal management (if adapter wired)
-            if let Some(ref a) = self.goal_adapter {
-                tool_registry.register(Arc::new(agent_tools::GoalTool::new(a.clone())));
-            }
-        } else {
-            // Root agent: orchestrator tools only.
-            // Root delegates — it doesn't do specialist work.
-            // Excluded: load_skill, list_skills, list_agents, execution_graph
-
-            // Orchestrator essentials
-            tool_registry.register(Arc::new(ShellTool::new()));
-            tool_registry.register(Arc::new(MemoryTool::new(
-                fs_context.clone(),
-                self.fact_store.clone(),
-            )));
-            tool_registry.register(Arc::new(WardTool::new(
-                fs_context.clone(),
-                self.fact_store.clone(),
-                self.ward_usage.clone(),
-            )));
-            tool_registry.register(Arc::new(UpdatePlanTool::new()));
-            tool_registry.register(Arc::new(SetSessionTitleTool::new()));
-            tool_registry.register(Arc::new(GrepTool));
-
-            // Delegation + response
-            tool_registry.register(Arc::new(RespondTool::new()));
-            tool_registry.register(Arc::new(DelegateTool::new()));
-            tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
-
-            // Run learned procedures (root-only for Phase 1; subagents can use
-            // a follow-up). RunProcedureTool holds an `Arc<ToolRegistry>` of
-            // the tools it can dispatch against — a snapshot of the registry
-            // as it stands here, so the tool cannot recursively call itself.
+        if actor_allows(actor, ToolCapability::ProcedureRun) {
             if let Some(procedure_store) = self.procedure_store.clone() {
                 let mut dispatch_registry = ToolRegistry::new();
                 for t in tool_registry.get_all() {
@@ -685,13 +951,13 @@ impl ExecutorBuilder {
                 );
                 tool_registry.register(Arc::new(run_procedure));
             }
+        }
 
-            // Steer running subagent (if steering registry wired)
+        if actor_allows(actor, ToolCapability::AgentControl) {
             if let Some(ref sr) = self.steering_registry {
                 tool_registry.register(Arc::new(crate::tools::SteerAgentTool::new(sr.clone())));
             }
 
-            // Agent pool tools: wait_agent + kill_agent (if result bus wired)
             if let (Some(ref bus), Some(ref svc), Some(ref repo)) = (
                 &self.agent_result_bus,
                 &self.state_service,
@@ -704,35 +970,54 @@ impl ExecutorBuilder {
                 )));
                 tool_registry.register(Arc::new(crate::tools::KillAgentTool::new(bus.clone())));
             }
+        }
 
-            // Knowledge graph query — fully trait-routed (Phase E6c):
-            // KgStoreAdapter wraps `Arc<dyn KnowledgeGraphStore>` so the
-            // tool runs identically on the configured backend.
+        if actor_allows(actor, ToolCapability::GraphRead) {
             if let Some(ref ks) = self.kg_store {
                 let adapter = Arc::new(super::kg_store_adapter::KgStoreAdapter::new(ks.clone()));
                 tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
             }
+        }
 
-            // Ingestion (if adapter wired)
+        if actor_allows(actor, ToolCapability::IngestWrite) {
             if let Some(ref a) = self.ingestion_adapter {
                 tool_registry.register(Arc::new(agent_tools::IngestTool::new(a.clone())));
             }
+        }
 
-            // Goal management (if adapter wired)
+        if actor_allows(actor, ToolCapability::GoalWrite) {
             if let Some(ref a) = self.goal_adapter {
                 tool_registry.register(Arc::new(agent_tools::GoalTool::new(a.clone())));
             }
+        }
 
-            // Optional file reading (root may need to review delegation results)
-            if self.tool_settings.file_tools {
-                tool_registry.register(Arc::new(ReadTool));
-                tool_registry.register(Arc::new(GlobTool));
-            }
+        if self.tool_settings.file_tools
+            || matches!(
+                actor,
+                RuntimeActorKind::DelegatedReviewer | RuntimeActorKind::WardAgent
+            )
+        {
+            register_if_allowed(
+                &mut tool_registry,
+                actor,
+                &[ToolCapability::FileRead],
+                Arc::new(ReadTool),
+            );
+            register_if_allowed(
+                &mut tool_registry,
+                actor,
+                &[ToolCapability::FileRead],
+                Arc::new(GlobTool),
+            );
+        }
 
-            // Connector query (if provider available)
-            if let Some(provider) = &self.connector_provider {
-                tool_registry.register(Arc::new(QueryResourceTool::new(provider.clone())));
-            }
+        if let Some(provider) = &self.connector_provider {
+            register_if_allowed(
+                &mut tool_registry,
+                actor,
+                &[ToolCapability::ConnectorQuery],
+                Arc::new(QueryResourceTool::new(provider.clone())),
+            );
         }
 
         Arc::new(tool_registry)
@@ -799,6 +1084,7 @@ mod tests {
     use agent_runtime::llm::{ChatResponse, LlmError, StreamCallback};
     use async_trait::async_trait;
     use serde_json::Value;
+    use std::collections::BTreeSet;
 
     struct StubSummaryClient;
 
@@ -858,5 +1144,173 @@ mod tests {
     fn runtime_middleware_order_keeps_plan_block_when_context_window_unknown() {
         let pipeline = build_runtime_middleware_pipeline(0, false, None);
         assert_eq!(pipeline.pre_processor_names(), vec!["plan_block"]);
+    }
+
+    fn registry_names(actor_kind: RuntimeActorKind) -> BTreeSet<String> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fs_context = Arc::new(GatewayFileSystem::new(dir.path().to_path_buf()));
+        ExecutorBuilder::new(dir.path().to_path_buf(), ToolSettings::default())
+            .with_actor_kind(actor_kind)
+            .build_tool_registry(fs_context)
+            .get_all()
+            .iter()
+            .map(|tool| tool.name().to_string())
+            .collect()
+    }
+
+    fn assert_has(names: &BTreeSet<String>, expected: &[&str]) {
+        for name in expected {
+            assert!(names.contains(*name), "expected tool {name}");
+        }
+    }
+
+    fn assert_missing(names: &BTreeSet<String>, denied: &[&str]) {
+        for name in denied {
+            assert!(!names.contains(*name), "unexpected tool {name}");
+        }
+    }
+
+    #[test]
+    fn delegated_executor_keeps_implementation_tools_without_orchestration() {
+        let names = registry_names(RuntimeActorKind::DelegatedExecutor);
+
+        assert_has(
+            &names,
+            &[
+                "shell",
+                "write_file",
+                "edit_file",
+                "grep",
+                "ward",
+                "memory",
+                "respond",
+                "load_skill",
+                "list_skills",
+                "list_mcps",
+            ],
+        );
+        assert_missing(
+            &names,
+            &[
+                "delegate_to_agent",
+                "wait_agent",
+                "kill_agent",
+                "steer_agent",
+                "update_plan",
+                "set_session_title",
+            ],
+        );
+    }
+
+    #[test]
+    fn delegated_reviewer_is_read_only_and_non_orchestrating() {
+        let names = registry_names(RuntimeActorKind::DelegatedReviewer);
+
+        assert_has(
+            &names,
+            &[
+                "read",
+                "glob",
+                "grep",
+                "respond",
+                "load_skill",
+                "list_skills",
+                "list_mcps",
+            ],
+        );
+        assert_missing(
+            &names,
+            &[
+                "shell",
+                "write_file",
+                "edit_file",
+                "ward",
+                "memory",
+                "delegate_to_agent",
+                "wait_agent",
+                "kill_agent",
+                "steer_agent",
+                "update_plan",
+                "set_session_title",
+            ],
+        );
+    }
+
+    #[test]
+    fn root_keeps_orchestration_without_implementation_file_writes() {
+        let names = registry_names(RuntimeActorKind::Root);
+
+        assert_has(
+            &names,
+            &[
+                "shell",
+                "memory",
+                "ward",
+                "update_plan",
+                "set_session_title",
+                "grep",
+                "respond",
+                "delegate_to_agent",
+            ],
+        );
+        assert_missing(
+            &names,
+            &[
+                "write_file",
+                "edit_file",
+                "load_skill",
+                "list_skills",
+                "list_mcps",
+            ],
+        );
+    }
+
+    #[test]
+    fn ward_agent_gets_root_and_executor_first_party_tools() {
+        let names = registry_names(RuntimeActorKind::WardAgent);
+
+        assert_has(
+            &names,
+            &[
+                "shell",
+                "write_file",
+                "edit_file",
+                "read",
+                "glob",
+                "grep",
+                "ward",
+                "memory",
+                "update_plan",
+                "set_session_title",
+                "respond",
+                "delegate_to_agent",
+                "load_skill",
+                "list_skills",
+                "list_mcps",
+            ],
+        );
+    }
+
+    #[test]
+    fn ward_agent_is_not_marked_as_ordinary_subagent() {
+        assert!(RuntimeActorKind::DelegatedExecutor.is_ordinary_subagent());
+        assert!(RuntimeActorKind::DelegatedReviewer.is_ordinary_subagent());
+        assert!(!RuntimeActorKind::WardAgent.is_ordinary_subagent());
+        assert!(!RuntimeActorKind::Root.is_ordinary_subagent());
+    }
+
+    #[test]
+    fn builder_extra_initial_state_carries_delegation_mode() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let builder = ExecutorBuilder::new(dir.path().to_path_buf(), ToolSettings::default())
+            .with_initial_state(
+                "app:delegation_mode",
+                serde_json::Value::String("direct_artifact".to_string()),
+            );
+
+        let entries = builder.extra_initial_state.expect("extra state");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "app:delegation_mode");
+        assert_eq!(entries[0].1, "direct_artifact");
     }
 }

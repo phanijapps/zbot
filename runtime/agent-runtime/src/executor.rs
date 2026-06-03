@@ -1111,6 +1111,7 @@ impl AgentExecutor {
                                     output_schema: delegate.output_schema.clone(),
                                     skills: delegate.skills.clone(),
                                     complexity: delegate.complexity.clone(),
+                                    mode: delegate.mode.clone(),
                                     parallel: delegate.parallel,
                                     child_execution_id: delegate.child_execution_id.clone(),
                                 });

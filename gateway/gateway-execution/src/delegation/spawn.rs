@@ -3,7 +3,7 @@
 //! Handles spawning of delegated subagents.
 
 use super::callback::{handle_delegation_failure, handle_delegation_success};
-use super::context::{DelegationContext, DelegationRequest};
+use super::context::{infer_delegation_mode, DelegationContext, DelegationRequest};
 use super::registry::DelegationRegistry;
 use agent_runtime::AgentExecutor;
 use api_logs::LogService;
@@ -24,7 +24,7 @@ use crate::handle::ExecutionHandle;
 use crate::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, detect_subagent_role,
     process_stream_event, spawn_batch_writer_with_repo, subagent_rules, AgentLoader,
-    ExecutorBuilder, ResponseAccumulator, StreamContext,
+    ExecutorBuilder, ResponseAccumulator, RuntimeActorKind, StreamContext,
 };
 use crate::lifecycle::{
     complete_execution, crash_execution, emit_delegation_completed, emit_delegation_started,
@@ -100,6 +100,8 @@ pub async fn spawn_delegated_agent(
     // COMPLETED before the subagent execution exists.
     let execution_id = request.child_execution_id.clone();
     let session_id = request.session_id.clone();
+    let delegation_mode =
+        infer_delegation_mode(&request.child_agent_id, &request.task, request.mode);
 
     // Link the pre-created execution to its child session (for smart resume)
     if let Err(e) = state_service.set_child_session_id(&execution_id, &child_session_id) {
@@ -135,6 +137,7 @@ pub async fn spawn_delegated_agent(
     } else {
         delegation_context
     };
+    let delegation_context = delegation_context.with_mode(delegation_mode);
     delegation_registry.register(&execution_id, delegation_context);
 
     // Note: pending_delegations is incremented synchronously in handle_delegation (stream.rs).
@@ -169,18 +172,27 @@ pub async fn spawn_delegated_agent(
         }
     };
 
-    // Detect subagent role
-    let role = detect_subagent_role(&request.child_agent_id, &request.task);
+    // Detect actor kind before prompt rules. Warm ward agents keep full-tool
+    // actor policy even when the task contains review-like language.
+    let actor_kind = actor_kind_for_delegation(&request.child_agent_id, &request.task);
+    let role = match actor_kind {
+        RuntimeActorKind::DelegatedReviewer => crate::invoke::SubagentRole::Reviewer,
+        RuntimeActorKind::Root
+        | RuntimeActorKind::DelegatedExecutor
+        | RuntimeActorKind::WardAgent => crate::invoke::SubagentRole::Executor,
+    };
     tracing::info!(
         child_agent = %request.child_agent_id,
+        actor_kind = ?actor_kind,
         role = ?role,
-        "Subagent role detected"
+        delegation_mode = %delegation_mode.as_str(),
+        "Delegated actor kind detected"
     );
 
     // PREPEND rules as the FIRST thing in instructions.
     // Rules must come before agent AGENTS.md, ward context, specs — everything.
     // The agent reads rules first, then context. Rules frame all decisions.
-    let rules = subagent_rules(role);
+    let rules = subagent_rules(role, delegation_mode);
     let original_instructions = std::mem::take(&mut agent.instructions);
     agent.instructions = format!("{}\n\n{}", rules, original_instructions);
 
@@ -286,7 +298,8 @@ pub async fn spawn_delegated_agent(
     // Build executor using ExecutorBuilder
     let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
         .with_model_registry(model_registry)
-        .with_delegated(true);
+        .with_actor_kind(actor_kind)
+        .with_initial_state("app:delegation_mode", delegation_mode.as_state_value());
 
     if let Some(limiter) = rate_limiter {
         builder = builder.with_rate_limiter(limiter);
@@ -1225,6 +1238,14 @@ fn effective_ward_id(child_agent_id: &str, parent_ward_id: Option<String>) -> Op
     }
 }
 
+fn actor_kind_for_delegation(child_agent_id: &str, task: &str) -> RuntimeActorKind {
+    if child_agent_id.strip_prefix("ward:").is_some() {
+        RuntimeActorKind::WardAgent
+    } else {
+        RuntimeActorKind::from(detect_subagent_role(child_agent_id, task))
+    }
+}
+
 /// Simple recursive directory listing that skips hidden files and common noise.
 fn walkdir_simple(dir: &Path) -> std::io::Result<Vec<String>> {
     let mut files = Vec::new();
@@ -1281,6 +1302,26 @@ mod tests {
         assert_eq!(
             effective_ward_id("ward:maritime", None),
             Some("maritime".to_string())
+        );
+    }
+
+    #[test]
+    fn actor_kind_for_delegation_detects_reviewers() {
+        assert_eq!(
+            actor_kind_for_delegation("reviewer-agent", "Review the implementation"),
+            RuntimeActorKind::DelegatedReviewer
+        );
+        assert_eq!(
+            actor_kind_for_delegation("builder-agent", "Build the implementation"),
+            RuntimeActorKind::DelegatedExecutor
+        );
+    }
+
+    #[test]
+    fn actor_kind_for_delegation_keeps_ward_agents_full_tool() {
+        assert_eq!(
+            actor_kind_for_delegation("ward:maritime", "Review the implementation"),
+            RuntimeActorKind::WardAgent
         );
     }
 }
