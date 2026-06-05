@@ -93,10 +93,9 @@ fn encode_part(part: &Part) -> Result<Value, EncodingError> {
                     ImageDetail::High => "high",
                     ImageDetail::Auto => "auto",
                 };
-                image_url
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("detail".to_string(), json!(detail_str));
+                if let Some(image_url_obj) = image_url.as_object_mut() {
+                    image_url_obj.insert("detail".to_string(), json!(detail_str));
+                }
             }
             Ok(json!({ "type": "image_url", "image_url": image_url }))
         }

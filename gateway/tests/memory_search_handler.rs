@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Tests for `search_memory_facts` HTTP handler (Task 4 — Memory Tab Command Deck).
 //!
 //! Verifies hybrid/fts/semantic mode routing and `match_source` annotation

@@ -2216,10 +2216,13 @@ fn extract_json_from_content(content: &str) -> String {
 ///
 /// Can be overridden by creating `config/distillation_prompt.md` in the vault.
 fn default_distillation_prompt() -> String {
-    let bytes = gateway_templates::Templates::get("distillation_prompt.md")
-        .expect("distillation_prompt.md must be embedded in gateway/templates/")
-        .data;
-    String::from_utf8_lossy(&bytes).into_owned()
+    match gateway_templates::Templates::get("distillation_prompt.md") {
+        Some(bytes) => String::from_utf8_lossy(&bytes.data).into_owned(),
+        None => {
+            tracing::error!("distillation_prompt.md is missing from embedded gateway templates");
+            String::new()
+        }
+    }
 }
 
 // ============================================================================

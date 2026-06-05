@@ -24,25 +24,37 @@ impl DelegationRegistry {
 
     /// Register a new delegation.
     pub fn register(&self, child_conversation_id: &str, context: DelegationContext) {
-        let mut delegations = self.delegations.write().unwrap();
+        let mut delegations = self
+            .delegations
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         delegations.insert(child_conversation_id.to_string(), context);
     }
 
     /// Get delegation context for a child conversation.
     pub fn get(&self, child_conversation_id: &str) -> Option<DelegationContext> {
-        let delegations = self.delegations.read().unwrap();
+        let delegations = self
+            .delegations
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         delegations.get(child_conversation_id).cloned()
     }
 
     /// Remove a delegation (called on completion).
     pub fn remove(&self, child_conversation_id: &str) -> Option<DelegationContext> {
-        let mut delegations = self.delegations.write().unwrap();
+        let mut delegations = self
+            .delegations
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         delegations.remove(child_conversation_id)
     }
 
     /// Get all active delegations for a parent.
     pub fn get_children(&self, parent_conversation_id: &str) -> Vec<String> {
-        let delegations = self.delegations.read().unwrap();
+        let delegations = self
+            .delegations
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         delegations
             .iter()
             .filter(|(_, ctx)| ctx.parent_conversation_id == parent_conversation_id)
@@ -52,7 +64,10 @@ impl DelegationRegistry {
 
     /// Get all active delegations for a session.
     pub fn get_by_session_id(&self, session_id: &str) -> Vec<(String, DelegationContext)> {
-        let delegations = self.delegations.read().unwrap();
+        let delegations = self
+            .delegations
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         delegations
             .iter()
             .filter(|(_, ctx)| ctx.session_id == session_id)
@@ -62,7 +77,10 @@ impl DelegationRegistry {
 
     /// Check if a conversation is a delegated subagent.
     pub fn is_delegated(&self, conversation_id: &str) -> bool {
-        let delegations = self.delegations.read().unwrap();
+        let delegations = self
+            .delegations
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         delegations.contains_key(conversation_id)
     }
 }

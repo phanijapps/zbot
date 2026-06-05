@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Concurrency invariant: while a 500-chunk ingestion is in-flight, unrelated
 //! reads against `knowledge.db` stay responsive (<200ms p95).
 

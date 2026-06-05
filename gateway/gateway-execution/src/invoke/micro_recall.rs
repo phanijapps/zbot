@@ -17,7 +17,10 @@ use zero_stores_traits::MemoryFactStore;
 /// Matches: "quoted strings", PascalCase words, ALLCAPS (3+ chars).
 static ENTITY_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?:"([^"]{2,30})"|([A-Z][a-z]+(?:[A-Z][a-z]+)+)|(\b[A-Z]{3,}\b))"#)
-        .unwrap_or_else(|_| Regex::new(".^").expect("fallback regex must compile"))
+        .unwrap_or_else(|_| match Regex::new(".^") {
+            Ok(regex) => regex,
+            Err(error) => panic!("fallback regex must compile: {error}"),
+        })
 });
 
 /// Maximum number of entity triggers per tool result.

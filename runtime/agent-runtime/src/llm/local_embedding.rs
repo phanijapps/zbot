@@ -189,13 +189,15 @@ impl EmbeddingClient for LocalEmbeddingClient {
         );
 
         let guard = self.ensure_loaded()?;
-        let embeddings = guard
-            .as_ref()
-            .expect("ensure_loaded guarantees Some")
-            .embed(owned, None)
-            .map_err(|e| {
-                EmbeddingError::ModelError(format!("Embedding failed ({}): {}", self.model_name, e))
-            })?;
+        let model = guard.as_ref().ok_or_else(|| {
+            EmbeddingError::ModelError(format!(
+                "Embedding model '{}' was not loaded",
+                self.model_name
+            ))
+        })?;
+        let embeddings = model.embed(owned, None).map_err(|e| {
+            EmbeddingError::ModelError(format!("Embedding failed ({}): {}", self.model_name, e))
+        })?;
 
         drop(guard);
         self.ensure_watcher_running();

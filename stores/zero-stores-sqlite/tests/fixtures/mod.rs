@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use gateway_services::paths::VaultPaths;
 use std::sync::Arc;
 use tempfile::TempDir;

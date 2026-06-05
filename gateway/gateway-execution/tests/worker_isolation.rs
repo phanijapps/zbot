@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Worker-panic isolation: a panicking Extractor kills only its own worker
 //! task; siblings continue draining.
 //!

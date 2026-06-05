@@ -173,8 +173,10 @@ impl Tool for MultimodalAnalyzeTool {
         });
 
         // Add response_format if output_schema provided
-        if let Some(schema) = output_schema {
-            body.as_object_mut().unwrap().insert(
+        if let Some(schema) = output_schema
+            && let Some(body_obj) = body.as_object_mut()
+        {
+            body_obj.insert(
                 "response_format".to_string(),
                 json!({ "type": "json_schema", "json_schema": { "name": "analysis", "schema": schema } }),
             );
@@ -184,7 +186,9 @@ impl Tool for MultimodalAnalyzeTool {
         let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
         tracing::info!("multimodal_analyze: calling {} with model {}", url, model);
 
-        let client = reqwest::Client::builder().build().expect("reqwest client");
+        let client = reqwest::Client::builder()
+            .build()
+            .map_err(|e| ZeroError::Tool(format!("Failed to create HTTP client: {e}")))?;
         let mut request = client
             .post(&url)
             .header("Content-Type", "application/json")

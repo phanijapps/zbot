@@ -38,11 +38,19 @@ impl OpenAiEmbeddingClient {
             api_key,
             model,
             dimensions,
-            http_client: reqwest::Client::builder()
+            http_client: match reqwest::Client::builder()
                 .timeout(EMBEDDING_REQUEST_TIMEOUT)
                 .connect_timeout(EMBEDDING_CONNECT_TIMEOUT)
                 .build()
-                .expect("reqwest client"),
+            {
+                Ok(client) => client,
+                Err(error) => {
+                    tracing::warn!(
+                        "Failed to create configured embedding HTTP client; using default client: {error}"
+                    );
+                    reqwest::Client::new()
+                }
+            },
         }
     }
 }

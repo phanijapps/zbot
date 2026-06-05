@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Fresh-boot integration test: both DBs come up, sqlite-vec is loaded,
 //! vec0 tables work end-to-end.
 

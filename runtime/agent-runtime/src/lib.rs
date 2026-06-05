@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 // ============================================================================
 // AGENT RUNTIME LIBRARY
 // A modular AI agent execution framework with MCP support

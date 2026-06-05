@@ -396,7 +396,10 @@ impl OrchestratorAgent {
     pub fn with_agent(mut self, agent: Arc<dyn Agent>) -> Self {
         // Store in agent_store by name
         {
-            let mut store = self.agent_store.write().unwrap();
+            let mut store = self
+                .agent_store
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             store.insert(agent.name().to_string(), Arc::clone(&agent));
         }
         self.sub_agents.push(agent);
@@ -410,7 +413,10 @@ impl OrchestratorAgent {
     pub fn register_agent(&self, agent: Arc<dyn Agent>, capabilities: AgentCapabilities) {
         // Store the agent instance
         {
-            let mut store = self.agent_store.write().unwrap();
+            let mut store = self
+                .agent_store
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             store.insert(capabilities.agent_id.clone(), Arc::clone(&agent));
         }
         // Register capabilities
@@ -419,7 +425,10 @@ impl OrchestratorAgent {
 
     /// Get an agent by ID.
     pub fn get_agent(&self, agent_id: &str) -> Option<Arc<dyn Agent>> {
-        let store = self.agent_store.read().unwrap();
+        let store = self
+            .agent_store
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         store.get(agent_id).cloned()
     }
 

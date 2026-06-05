@@ -393,11 +393,11 @@ impl SubscriptionManager {
             .or_insert_with(HashSet::new)
             .insert(client_id.clone());
 
-        state
+        let client_subscriptions = state
             .client_subscriptions
             .get_mut(client_id)
-            .unwrap()
-            .insert(conversation_id.clone());
+            .ok_or(SubscribeError::ClientNotFound)?;
+        client_subscriptions.insert(conversation_id.clone());
 
         if let Some(client) = state.clients.get_mut(client_id) {
             client.subscription_count += 1;

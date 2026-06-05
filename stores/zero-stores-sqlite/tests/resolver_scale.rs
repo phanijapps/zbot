@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Resolver p95 latency benchmark. Seeds 1000 entities, then measures
 //! 100 fresh candidate resolutions. Fails if p95 ≥ 20 ms.
 //!

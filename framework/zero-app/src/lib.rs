@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Zero App
 //!
 //! Integration crate for the Zero framework. This crate aggregates all zero-* crates

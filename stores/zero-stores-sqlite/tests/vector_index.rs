@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! VectorIndex integration tests against a real knowledge.db + sqlite-vec.
 
 use std::sync::Arc;

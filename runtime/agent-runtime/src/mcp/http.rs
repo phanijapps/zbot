@@ -46,11 +46,19 @@ impl HttpMcpClient {
             name,
             url,
             headers,
-            client: reqwest::Client::builder()
+            client: match reqwest::Client::builder()
                 .timeout(HTTP_MCP_TIMEOUT)
                 .connect_timeout(HTTP_MCP_CONNECT_TIMEOUT)
                 .build()
-                .expect("reqwest client"),
+            {
+                Ok(client) => client,
+                Err(error) => {
+                    tracing::warn!(
+                        "Failed to create configured HTTP MCP client; using default client: {error}"
+                    );
+                    reqwest::Client::new()
+                }
+            },
         }
     }
 

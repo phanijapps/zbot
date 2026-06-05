@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! End-to-end: construct a `MemoryRecall` with a real `MemoryRepository`,
 //! seed one fact, run `recall_unified`, and assert the returned pool carries
 //! at least one `ItemKind::Fact`. Covers the wiring that glues embedding,

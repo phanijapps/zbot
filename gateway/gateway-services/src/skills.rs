@@ -563,8 +563,14 @@ fn parse_skill_frontmatter(content: &str) -> Result<(SkillFrontmatter, String), 
         .captures(content)
         .ok_or_else(|| "Invalid SKILL.md format: missing frontmatter".to_string())?;
 
-    let yaml_content = captures.get(1).unwrap().as_str();
-    let body = captures.get(2).unwrap().as_str();
+    let yaml_content = captures
+        .get(1)
+        .ok_or_else(|| "Invalid SKILL.md format: missing frontmatter body".to_string())?
+        .as_str();
+    let body = captures
+        .get(2)
+        .ok_or_else(|| "Invalid SKILL.md format: missing markdown body".to_string())?
+        .as_str();
 
     let frontmatter: SkillFrontmatter = serde_yaml::from_str(yaml_content)
         .map_err(|e| format!("Failed to parse frontmatter: {}", e))?;

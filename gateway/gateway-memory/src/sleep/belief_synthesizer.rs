@@ -223,7 +223,10 @@ impl BeliefSynthesizer {
             }
         }
 
-        *self.last_run.lock().unwrap() = Some(Instant::now());
+        *self
+            .last_run
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
         Ok(stats)
     }
 
@@ -332,7 +335,11 @@ impl BeliefSynthesizer {
         if self.interval.is_zero() {
             return true;
         }
-        match *self.last_run.lock().unwrap() {
+        match *self
+            .last_run
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        {
             Some(last) => last.elapsed() >= self.interval,
             None => true,
         }
@@ -371,7 +378,9 @@ impl BeliefSynthesizer {
                     );
                     stats.errors += 1;
                     // facts is sorted oldest-first; the tail is most recent.
-                    let primary = facts.last().expect("non-empty multi-fact group");
+                    let primary = facts
+                        .last()
+                        .ok_or_else(|| "belief-synthesizer: empty fact group".to_string())?;
                     (primary.content.clone(), None, false)
                 }
             }
@@ -615,7 +624,10 @@ mod tests {
         }
 
         fn calls(&self) -> u64 {
-            *self.calls.lock().unwrap()
+            *self
+                .calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
         }
     }
 
@@ -626,8 +638,15 @@ mod tests {
             _subject: &str,
             _facts: &[MemoryFact],
         ) -> Result<SynthesisLlmResponse, String> {
-            *self.calls.lock().unwrap() += 1;
-            match &*self.response.lock().unwrap() {
+            *self
+                .calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
+            match &*self
+                .response
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+            {
                 Ok(r) => Ok(r.clone()),
                 Err(e) => Err(e.clone()),
             }
@@ -1094,14 +1113,20 @@ mod tests {
             }
         }
         fn calls(&self) -> u64 {
-            *self.calls.lock().unwrap()
+            *self
+                .calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
         }
     }
 
     #[async_trait]
     impl EmbeddingClient for ConstEmbed {
         async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
-            *self.calls.lock().unwrap() += 1;
+            *self
+                .calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
             Ok(texts.iter().map(|_| vec![1.0_f32, 0.5, -0.25]).collect())
         }
         fn dimensions(&self) -> usize {

@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Zero MCP
 //!
 //! Model Context Protocol (MCP) client and tool integration for the Zero framework.

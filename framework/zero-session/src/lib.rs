@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Zero Session
 //!
 //! Session and state management for the Zero framework.

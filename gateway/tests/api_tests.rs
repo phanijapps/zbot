@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! API Integration Tests for Gateway Endpoints
 //!
 //! These tests verify the HTTP API endpoints work correctly with a real

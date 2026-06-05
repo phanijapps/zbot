@@ -119,6 +119,8 @@ too_many_lines = "allow"
 fn_params_excessive_bools = "allow"
 items_after_statements = "allow"
 unnecessary_wraps = "allow"
+unwrap_used = "deny"
+expect_used = "warn"
 
 [workspace.lints.rust]
 missing_docs = "allow"

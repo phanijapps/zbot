@@ -285,28 +285,28 @@ impl ExecutionTrace {
 
     /// Record successful completion.
     pub fn complete(&mut self, message: impl Into<String>) {
-        self.ended_at = Some(Utc::now());
+        let ended_at = Utc::now();
+        self.ended_at = Some(ended_at);
         self.outcome = TraceOutcome::Success;
-        self.metrics.total_duration_ms =
-            (self.ended_at.unwrap() - self.started_at).num_milliseconds();
+        self.metrics.total_duration_ms = (ended_at - self.started_at).num_milliseconds();
         self.record(TraceEvent::new(TraceEventKind::ExecutionCompleted, message));
     }
 
     /// Record failure.
     pub fn fail(&mut self, message: impl Into<String>) {
-        self.ended_at = Some(Utc::now());
+        let ended_at = Utc::now();
+        self.ended_at = Some(ended_at);
         self.outcome = TraceOutcome::Failure;
-        self.metrics.total_duration_ms =
-            (self.ended_at.unwrap() - self.started_at).num_milliseconds();
+        self.metrics.total_duration_ms = (ended_at - self.started_at).num_milliseconds();
         self.record(TraceEvent::new(TraceEventKind::ExecutionFailed, message));
     }
 
     /// Record cancellation.
     pub fn cancel(&mut self, message: impl Into<String>) {
-        self.ended_at = Some(Utc::now());
+        let ended_at = Utc::now();
+        self.ended_at = Some(ended_at);
         self.outcome = TraceOutcome::Cancelled;
-        self.metrics.total_duration_ms =
-            (self.ended_at.unwrap() - self.started_at).num_milliseconds();
+        self.metrics.total_duration_ms = (ended_at - self.started_at).num_milliseconds();
         self.record(TraceEvent::new(TraceEventKind::ExecutionCancelled, message));
     }
 

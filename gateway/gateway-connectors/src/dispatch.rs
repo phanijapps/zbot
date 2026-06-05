@@ -135,7 +135,9 @@ async fn dispatch_http(
         "Dispatching HTTP request to connector"
     );
 
-    let client = reqwest::Client::builder().build().expect("reqwest client");
+    let client = reqwest::Client::builder()
+        .build()
+        .map_err(|e| DispatchError::Http(format!("Failed to create HTTP client: {e}")))?;
 
     let mut request = match method.to_uppercase().as_str() {
         "POST" => client.post(callback_url),

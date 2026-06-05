@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! End-to-end integration tests for the ward execution pipeline.
 //!
 //! Tests the infrastructure that keeps breaking:

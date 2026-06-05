@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Knowledge Graph
 //!
 //! Extracts and stores entities and relationships from conversations.

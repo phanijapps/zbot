@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! DelegationDispatcher — per-session queue that spawns subagents
 //! sequentially within a session and concurrently across sessions
 //! (capped by Semaphore).

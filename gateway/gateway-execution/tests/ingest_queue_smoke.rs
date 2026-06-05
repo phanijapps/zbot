@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Smoke test: enqueue a few pending episodes, start a 2-worker queue with
 //! NoopExtractor, verify they get drained to 'done' within a timeout.
 

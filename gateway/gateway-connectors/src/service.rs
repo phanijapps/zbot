@@ -28,6 +28,9 @@ pub enum ConnectorServiceError {
 
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+
+    #[error("HTTP error: {0}")]
+    Http(String),
 }
 
 /// Result type for connector service operations.
@@ -214,7 +217,9 @@ impl ConnectorService {
         match &connector.transport {
             super::config::ConnectorTransport::Http { callback_url, .. } => {
                 // Try a HEAD or OPTIONS request to test connectivity
-                let client = reqwest::Client::builder().build().expect("reqwest client");
+                let client = reqwest::Client::builder().build().map_err(|e| {
+                    ConnectorServiceError::Http(format!("Failed to create HTTP client: {e}"))
+                })?;
                 let start = std::time::Instant::now();
 
                 match client

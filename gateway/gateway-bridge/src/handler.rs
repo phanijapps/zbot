@@ -89,11 +89,9 @@ pub async fn handle_worker_connection(
             let err_msg = BridgeServerMessage::Error {
                 message: e.to_string(),
             };
-            let _ = ws_tx
-                .send(axum::extract::ws::Message::Text(
-                    serde_json::to_string(&err_msg).unwrap(),
-                ))
-                .await;
+            if let Ok(text) = serde_json::to_string(&err_msg) {
+                let _ = ws_tx.send(axum::extract::ws::Message::Text(text)).await;
+            }
             return;
         }
         Err(_) => {
@@ -101,11 +99,9 @@ pub async fn handle_worker_connection(
             let err_msg = BridgeServerMessage::Error {
                 message: format!("Hello timeout after {}s", HELLO_TIMEOUT_SECONDS),
             };
-            let _ = ws_tx
-                .send(axum::extract::ws::Message::Text(
-                    serde_json::to_string(&err_msg).unwrap(),
-                ))
-                .await;
+            if let Ok(text) = serde_json::to_string(&err_msg) {
+                let _ = ws_tx.send(axum::extract::ws::Message::Text(text)).await;
+            }
             return;
         }
     };
@@ -136,11 +132,9 @@ pub async fn handle_worker_connection(
         let err_msg = BridgeServerMessage::Error {
             message: e.to_string(),
         };
-        let _ = ws_tx
-            .send(axum::extract::ws::Message::Text(
-                serde_json::to_string(&err_msg).unwrap(),
-            ))
-            .await;
+        if let Ok(text) = serde_json::to_string(&err_msg) {
+            let _ = ws_tx.send(axum::extract::ws::Message::Text(text)).await;
+        }
         return;
     }
 
@@ -149,10 +143,12 @@ pub async fn handle_worker_connection(
         server_time: chrono::Utc::now().to_rfc3339(),
         heartbeat_seconds: HEARTBEAT_SECONDS,
     };
+    let Ok(ack_text) = serde_json::to_string(&ack) else {
+        registry.unregister(&adapter_id).await;
+        return;
+    };
     if ws_tx
-        .send(axum::extract::ws::Message::Text(
-            serde_json::to_string(&ack).unwrap(),
-        ))
+        .send(axum::extract::ws::Message::Text(ack_text))
         .await
         .is_err()
     {

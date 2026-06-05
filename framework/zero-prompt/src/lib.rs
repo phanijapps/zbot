@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Zero Prompt
 //!
 //! Prompt and template management for the Zero framework.

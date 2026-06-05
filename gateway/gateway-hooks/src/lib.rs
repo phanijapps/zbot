@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Gateway Hooks
 //!
 //! Unified abstraction for all inbound triggers (CLI, Web, Cron, WhatsApp, Telegram, etc).

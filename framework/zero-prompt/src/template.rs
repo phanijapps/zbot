@@ -15,7 +15,10 @@ static PLACEHOLDER_REGEX: OnceLock<Regex> = OnceLock::new();
 fn get_placeholder_regex() -> &'static Regex {
     PLACEHOLDER_REGEX.get_or_init(|| {
         // Match: { + any chars except {} + optional ? + }
-        Regex::new(r"\{[^{}]*\??\}").expect("Invalid regex pattern")
+        match Regex::new(r"\{[^{}]*\??\}") {
+            Ok(regex) => regex,
+            Err(error) => panic!("invalid placeholder regex pattern: {error}"),
+        }
     })
 }
 

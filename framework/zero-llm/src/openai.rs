@@ -24,7 +24,9 @@ impl OpenAiLlm {
     pub fn new(config: LlmConfig) -> Result<Self> {
         Ok(Self {
             config,
-            client: reqwest::Client::builder().build().expect("reqwest client"),
+            client: reqwest::Client::builder()
+                .build()
+                .map_err(|e| ZeroError::Llm(format!("Failed to create HTTP client: {e}")))?,
         })
     }
 

@@ -82,10 +82,18 @@ impl WebFetchTool {
     /// Create a new WebFetchTool with default client
     #[must_use]
     pub fn new() -> Self {
-        let client = Client::builder()
+        let client = match Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .expect("Failed to create HTTP client");
+        {
+            Ok(client) => client,
+            Err(error) => {
+                tracing::warn!(
+                    "Failed to create configured web fetch HTTP client; using default client: {error}"
+                );
+                Client::new()
+            }
+        };
         Self { client }
     }
 

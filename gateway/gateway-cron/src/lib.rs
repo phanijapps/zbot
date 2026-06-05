@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Gateway Cron
 //!
 //! Cron job configuration and persistence for the AgentZero gateway.

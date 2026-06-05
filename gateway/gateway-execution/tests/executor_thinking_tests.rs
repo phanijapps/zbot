@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Executor trusts agent.thinking_enabled regardless of registry capability.
 
 use gateway_execution::invoke::resolve_thinking_flag;

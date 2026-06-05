@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! `zero-stores` — backend-agnostic persistence interfaces for AgentZero.
 //!
 //! This crate defines store traits and shared types only. It pulls in NO

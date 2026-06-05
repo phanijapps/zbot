@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! Pure-data domain types for the AgentZero persistence layer.
 //!
 //! This crate is dep-light by design — only `serde`. It is the home for

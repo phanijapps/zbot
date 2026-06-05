@@ -30,25 +30,25 @@ pub struct GatewayServer {
 
 impl GatewayServer {
     /// Create a new gateway server with the given configuration.
-    pub fn new(config: GatewayConfig, config_dir: PathBuf) -> Self {
-        let state = AppState::new(config_dir);
+    pub fn new(config: GatewayConfig, config_dir: PathBuf) -> Result<Self> {
+        let state = AppState::new(config_dir)?;
         let ws_handler = Arc::new(WebSocketHandler::new(
             state.event_bus.clone(),
             state.runtime.clone(),
         ));
 
-        Self {
+        Ok(Self {
             config,
             state,
             ws_handler,
             shutdown_tx: None,
             bridge_retry_handle: None,
             file_watcher: None,
-        }
+        })
     }
 
     /// Create with default configuration and default data directory.
-    pub fn with_defaults() -> Self {
+    pub fn with_defaults() -> Result<Self> {
         // Use ~/Documents/zbot as the default data directory
         let data_dir = dirs::document_dir()
             .or_else(dirs::home_dir)
@@ -521,7 +521,7 @@ mod tests {
     async fn test_server_creation() {
         let temp_dir = TempDir::new().unwrap();
         let config_dir = temp_dir.path().to_path_buf();
-        let server = GatewayServer::new(GatewayConfig::default(), config_dir);
+        let server = GatewayServer::new(GatewayConfig::default(), config_dir).unwrap();
         assert!(server.shutdown_tx.is_none());
     }
 
@@ -530,7 +530,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_dir = temp_dir.path().to_path_buf();
         let config = GatewayConfig::with_ports(19000, 19001);
-        let server = GatewayServer::new(config, config_dir);
+        let server = GatewayServer::new(config, config_dir).unwrap();
         assert_eq!(server.config.websocket_port, 19000);
         assert_eq!(server.config.http_port, 19001);
     }

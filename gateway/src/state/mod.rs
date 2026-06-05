@@ -7,6 +7,7 @@ mod seeded_defaults;
 
 use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
+use crate::error::{GatewayError, Result};
 use crate::events::EventBus;
 use crate::execution::{DelegationRegistry, MemoryRecall, SessionArchiver, SessionDistiller};
 use crate::hooks::HookRegistry;
@@ -238,11 +239,26 @@ fn sync_reconcile_vec_dim_at_boot(
     );
 }
 
+fn init_error(context: &str, error: impl std::fmt::Display) -> GatewayError {
+    GatewayError::Internal(format!("{context}: {error}"))
+}
+
+fn sqlite_vec_index(
+    db: Arc<KnowledgeDatabase>,
+    table: &'static str,
+    id_column: &'static str,
+    context: &str,
+) -> Result<Arc<dyn VectorIndex>> {
+    Ok(Arc::new(
+        SqliteVecIndex::new(db, table, id_column).map_err(|e| init_error(context, e))?,
+    ))
+}
+
 impl AppState {
     /// Create a new application state.
     ///
     /// This creates a fully initialized state with execution runner and SQLite database.
-    pub fn new(config_dir: PathBuf) -> Self {
+    pub fn new(config_dir: PathBuf) -> Result<Self> {
         // Create centralized vault paths
         let paths = Arc::new(VaultPaths::new(config_dir.clone()));
 
@@ -276,7 +292,7 @@ impl AppState {
         // Initialize SQLite database for conversation persistence
         let db_manager = Arc::new(
             DatabaseManager::new(paths.clone())
-                .expect("Failed to initialize conversation database"),
+                .map_err(|e| init_error("failed to initialize conversation database", e))?,
         );
         let conversation_repo = Arc::new(ConversationRepository::new(db_manager.clone()));
 
@@ -284,7 +300,8 @@ impl AppState {
         // SQLite is the only backend; the Option-wrapping is retained so
         // downstream `.as_ref().map(...)` chains stay typecheck-stable.
         let knowledge_db: Option<Arc<KnowledgeDatabase>> = Some(Arc::new(
-            KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
+            KnowledgeDatabase::new(paths.clone())
+                .map_err(|e| init_error("failed to initialize knowledge database", e))?,
         ));
 
         // Create log service for execution tracing
@@ -303,13 +320,18 @@ impl AppState {
 
         // Initialize memory evolution services — repositories that need vector
         // similarity get a SqliteVecIndex over their vec0 partner table.
-        let memory_repo: Option<Arc<MemoryRepository>> = knowledge_db.as_ref().map(|kdb| {
-            let memory_vec: Arc<dyn VectorIndex> = Arc::new(
-                SqliteVecIndex::new(kdb.clone(), "memory_facts_index", "fact_id")
-                    .expect("vec index init"),
-            );
-            Arc::new(MemoryRepository::new(kdb.clone(), memory_vec))
-        });
+        let memory_repo: Option<Arc<MemoryRepository>> = match knowledge_db.as_ref() {
+            Some(kdb) => {
+                let memory_vec = sqlite_vec_index(
+                    kdb.clone(),
+                    "memory_facts_index",
+                    "fact_id",
+                    "failed to initialize memory facts vector index",
+                )?;
+                Some(Arc::new(MemoryRepository::new(kdb.clone(), memory_vec)))
+            }
+            None => None,
+        };
         let goal_repo: Option<Arc<zero_stores_sqlite::GoalRepository>> = knowledge_db
             .as_ref()
             .map(|kdb| Arc::new(zero_stores_sqlite::GoalRepository::new(kdb.clone())));
@@ -321,13 +343,18 @@ impl AppState {
         // actually persists.
         let distillation_repo: Option<Arc<DistillationRepository>> =
             Some(Arc::new(DistillationRepository::new(db_manager.clone())));
-        let episode_repo: Option<Arc<EpisodeRepository>> = knowledge_db.as_ref().map(|kdb| {
-            let episode_vec: Arc<dyn VectorIndex> = Arc::new(
-                SqliteVecIndex::new(kdb.clone(), "session_episodes_index", "episode_id")
-                    .expect("vec index init"),
-            );
-            Arc::new(EpisodeRepository::new(kdb.clone(), episode_vec))
-        });
+        let episode_repo: Option<Arc<EpisodeRepository>> = match knowledge_db.as_ref() {
+            Some(kdb) => {
+                let episode_vec = sqlite_vec_index(
+                    kdb.clone(),
+                    "session_episodes_index",
+                    "episode_id",
+                    "failed to initialize session episodes vector index",
+                )?;
+                Some(Arc::new(EpisodeRepository::new(kdb.clone(), episode_vec)))
+            }
+            None => None,
+        };
         let kg_episode_repo: Option<Arc<KgEpisodeRepository>> = knowledge_db
             .as_ref()
             .map(|kdb| Arc::new(KgEpisodeRepository::new(kdb.clone())));
@@ -363,8 +390,9 @@ impl AppState {
                     "EmbeddingService init failed ({e}); falling back to internal/384d default"
                 );
                 Arc::new(
-                    EmbeddingService::with_config(paths.clone(), Default::default())
-                        .expect("default EmbeddingService must build"),
+                    EmbeddingService::with_config(paths.clone(), Default::default()).map_err(
+                        |e| init_error("failed to initialize default embedding service", e),
+                    )?,
                 )
             }
         };
@@ -453,13 +481,18 @@ impl AppState {
 
         // Ward wiki repository (still concrete; consumed by SessionDistiller
         // and the trait-store wrapper below).
-        let wiki_repo: Option<Arc<WardWikiRepository>> = knowledge_db.as_ref().map(|kdb| {
-            let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
-                SqliteVecIndex::new(kdb.clone(), "wiki_articles_index", "article_id")
-                    .expect("vec index init"),
-            );
-            Arc::new(WardWikiRepository::new(kdb.clone(), wiki_vec))
-        });
+        let wiki_repo: Option<Arc<WardWikiRepository>> = match knowledge_db.as_ref() {
+            Some(kdb) => {
+                let wiki_vec = sqlite_vec_index(
+                    kdb.clone(),
+                    "wiki_articles_index",
+                    "article_id",
+                    "failed to initialize wiki articles vector index",
+                )?;
+                Some(Arc::new(WardWikiRepository::new(kdb.clone(), wiki_vec)))
+            }
+            None => None,
+        };
         // Wire trait-routed wiki_store (Phase E6c).
         if let Some(recall) = memory_recall_inner.as_mut() {
             let store_opt: Option<Arc<dyn zero_stores_traits::WikiStore>> =
@@ -491,13 +524,21 @@ impl AppState {
 
         // Wire procedure repository for procedure recall during intent analysis.
         // SQLite-only — None when knowledge_db is None.
-        let procedure_repo: Option<Arc<ProcedureRepository>> = knowledge_db.as_ref().map(|kdb| {
-            let procedure_vec: Arc<dyn VectorIndex> = Arc::new(
-                SqliteVecIndex::new(kdb.clone(), "procedures_index", "procedure_id")
-                    .expect("vec index init"),
-            );
-            Arc::new(ProcedureRepository::new(kdb.clone(), procedure_vec))
-        });
+        let procedure_repo: Option<Arc<ProcedureRepository>> = match knowledge_db.as_ref() {
+            Some(kdb) => {
+                let procedure_vec = sqlite_vec_index(
+                    kdb.clone(),
+                    "procedures_index",
+                    "procedure_id",
+                    "failed to initialize procedures vector index",
+                )?;
+                Some(Arc::new(ProcedureRepository::new(
+                    kdb.clone(),
+                    procedure_vec,
+                )))
+            }
+            None => None,
+        };
         let procedure_store_for_state: Option<Arc<dyn zero_stores_traits::ProcedureStore>> =
             procedure_repo.as_ref().map(|pr| {
                 Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(pr.clone()))
@@ -550,12 +591,12 @@ impl AppState {
         // MemoryRecall before that struct is moved into Arc::new below.
         // Wraps the SQLite GraphStorage.
         let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
-            graph_storage.as_ref().map(|gs| {
-                let embedder = embedding_client
-                    .clone()
-                    .expect("embedding_client wired above for distillation/recall");
-                persistence_factory::build_kg_store_from_storage(gs.clone(), embedder)
-            });
+            match (graph_storage.as_ref(), embedding_client.clone()) {
+                (Some(gs), Some(embedder)) => Some(
+                    persistence_factory::build_kg_store_from_storage(gs.clone(), embedder),
+                ),
+                _ => None,
+            };
         if let (Some(recall), Some(ks)) = (memory_recall_inner.as_mut(), kg_store.as_ref()) {
             recall.set_kg_store(ks.clone());
         }
@@ -1034,7 +1075,7 @@ impl AppState {
             None, // bus is set later by server.start()
         ));
 
-        Self {
+        Ok(Self {
             agents,
             skills,
             provider_service,
@@ -1081,11 +1122,11 @@ impl AppState {
             belief_store: belief_store_for_http,
             belief_contradiction_store: belief_contradiction_store_for_http,
             belief_network_activity,
-        }
+        })
     }
 
     /// Create a minimal state without execution runner (for testing).
-    pub fn minimal(config_dir: PathBuf) -> Self {
+    pub fn minimal(config_dir: PathBuf) -> Result<Self> {
         let paths = Arc::new(VaultPaths::new(config_dir.clone()));
         let agents_dir = paths.agents_dir();
         let skills_roots = paths.skills_dirs();
@@ -1094,19 +1135,22 @@ impl AppState {
         // Initialize SQLite database for conversation persistence
         let db_manager = Arc::new(
             DatabaseManager::new(paths.clone())
-                .expect("Failed to initialize conversation database"),
+                .map_err(|e| init_error("failed to initialize conversation database", e))?,
         );
         let conversation_repo = Arc::new(ConversationRepository::new(db_manager.clone()));
         let log_service = Arc::new(LogService::new(db_manager.clone()));
         let bridge_outbox = Arc::new(gateway_bridge::OutboxRepository::new(db_manager.clone()));
         let state_service = Arc::new(StateService::new(db_manager));
         let knowledge_db = Arc::new(
-            KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
+            KnowledgeDatabase::new(paths.clone())
+                .map_err(|e| init_error("failed to initialize knowledge database", e))?,
         );
-        let memory_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "memory_facts_index", "fact_id")
-                .expect("vec index init"),
-        );
+        let memory_vec = sqlite_vec_index(
+            knowledge_db.clone(),
+            "memory_facts_index",
+            "fact_id",
+            "failed to initialize memory facts vector index",
+        )?;
         let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
 
         // Create connector registry
@@ -1135,10 +1179,12 @@ impl AppState {
         // Episode / wiki / procedure trait stores so HTTP handlers reach
         // these listings without concrete-repo fallbacks. Each wraps the
         // SQLite repo bound to its own vec0 partner table.
-        let episode_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "session_episodes_index", "episode_id")
-                .expect("episode vec index init"),
-        );
+        let episode_vec = sqlite_vec_index(
+            knowledge_db.clone(),
+            "session_episodes_index",
+            "episode_id",
+            "failed to initialize session episodes vector index",
+        )?;
         let episode_repo_handle = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
             knowledge_db.clone(),
             episode_vec,
@@ -1147,10 +1193,12 @@ impl AppState {
             zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo_handle),
         ));
 
-        let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "wiki_articles_index", "article_id")
-                .expect("wiki vec index init"),
-        );
+        let wiki_vec = sqlite_vec_index(
+            knowledge_db.clone(),
+            "wiki_articles_index",
+            "article_id",
+            "failed to initialize wiki articles vector index",
+        )?;
         let wiki_repo_handle = Arc::new(zero_stores_sqlite::WardWikiRepository::new(
             knowledge_db.clone(),
             wiki_vec,
@@ -1159,10 +1207,12 @@ impl AppState {
             zero_stores_sqlite::GatewayWikiStore::new(wiki_repo_handle),
         ));
 
-        let proc_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
-                .expect("procedure vec index init"),
-        );
+        let proc_vec = sqlite_vec_index(
+            knowledge_db.clone(),
+            "procedures_index",
+            "procedure_id",
+            "failed to initialize procedures vector index",
+        )?;
         let procedure_repo_handle = Arc::new(zero_stores_sqlite::ProcedureRepository::new(
             knowledge_db.clone(),
             proc_vec,
@@ -1171,7 +1221,7 @@ impl AppState {
             zero_stores_sqlite::GatewayProcedureStore::new(procedure_repo_handle),
         ));
 
-        Self {
+        Ok(Self {
             agents: Arc::new(AgentService::new(agents_dir)),
             skills: Arc::new(SkillService::with_roots(skills_roots)),
             provider_service: Arc::new(ProviderService::new(paths.clone())),
@@ -1197,7 +1247,7 @@ impl AppState {
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
             embedding_service: Arc::new(
                 EmbeddingService::with_config(paths.clone(), Default::default())
-                    .expect("default EmbeddingService must build"),
+                    .map_err(|e| init_error("failed to initialize default embedding service", e))?,
             ),
             plugin_manager,
             paths,
@@ -1221,7 +1271,7 @@ impl AppState {
             belief_store: None,
             belief_contradiction_store: None,
             belief_network_activity: None,
-        }
+        })
     }
 
     /// Create with custom components.
@@ -1238,15 +1288,18 @@ impl AppState {
         state_service: Arc<StateService<DatabaseManager>>,
         connector_registry: Arc<ConnectorRegistry>,
         paths: SharedVaultPaths,
-    ) -> Self {
+    ) -> Result<Self> {
         let config_dir = paths.vault_dir().clone();
         let knowledge_db = Arc::new(
-            KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
+            KnowledgeDatabase::new(paths.clone())
+                .map_err(|e| init_error("failed to initialize knowledge database", e))?,
         );
-        let memory_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "memory_facts_index", "fact_id")
-                .expect("vec index init"),
-        );
+        let memory_vec = sqlite_vec_index(
+            knowledge_db.clone(),
+            "memory_facts_index",
+            "fact_id",
+            "failed to initialize memory facts vector index",
+        )?;
         let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
 
         // Phase B: same trait wrap as `minimal()` so test paths see a
@@ -1257,10 +1310,12 @@ impl AppState {
 
         // Episode / wiki / procedure trait stores so HTTP handlers reach
         // these listings without concrete-repo fallbacks.
-        let episode_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "session_episodes_index", "episode_id")
-                .expect("episode vec index init"),
-        );
+        let episode_vec = sqlite_vec_index(
+            knowledge_db.clone(),
+            "session_episodes_index",
+            "episode_id",
+            "failed to initialize session episodes vector index",
+        )?;
         let episode_repo_handle = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
             knowledge_db.clone(),
             episode_vec,
@@ -1269,10 +1324,12 @@ impl AppState {
             zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo_handle),
         ));
 
-        let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "wiki_articles_index", "article_id")
-                .expect("wiki vec index init"),
-        );
+        let wiki_vec = sqlite_vec_index(
+            knowledge_db.clone(),
+            "wiki_articles_index",
+            "article_id",
+            "failed to initialize wiki articles vector index",
+        )?;
         let wiki_repo_handle = Arc::new(zero_stores_sqlite::WardWikiRepository::new(
             knowledge_db.clone(),
             wiki_vec,
@@ -1281,10 +1338,12 @@ impl AppState {
             zero_stores_sqlite::GatewayWikiStore::new(wiki_repo_handle),
         ));
 
-        let proc_vec: Arc<dyn VectorIndex> = Arc::new(
-            SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
-                .expect("procedure vec index init"),
-        );
+        let proc_vec = sqlite_vec_index(
+            knowledge_db.clone(),
+            "procedures_index",
+            "procedure_id",
+            "failed to initialize procedures vector index",
+        )?;
         let procedure_repo_handle = Arc::new(zero_stores_sqlite::ProcedureRepository::new(
             knowledge_db.clone(),
             proc_vec,
@@ -1296,10 +1355,10 @@ impl AppState {
         // Create bridge registry and outbox
         let bridge_registry = Arc::new(gateway_bridge::BridgeRegistry::new());
         let bridge_outbox = {
-            let db = Arc::new(
-                DatabaseManager::new(paths.clone())
-                    .expect("Failed to initialize database for bridge outbox"),
-            );
+            let db =
+                Arc::new(DatabaseManager::new(paths.clone()).map_err(|e| {
+                    init_error("failed to initialize database for bridge outbox", e)
+                })?);
             Arc::new(gateway_bridge::OutboxRepository::new(db))
         };
 
@@ -1311,7 +1370,7 @@ impl AppState {
             None, // bus is set later by server.start()
         ));
 
-        Self {
+        Ok(Self {
             agents,
             skills,
             provider_service,
@@ -1337,7 +1396,7 @@ impl AppState {
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
             embedding_service: Arc::new(
                 EmbeddingService::with_config(paths.clone(), Default::default())
-                    .expect("default EmbeddingService must build"),
+                    .map_err(|e| init_error("failed to initialize default embedding service", e))?,
             ),
             plugin_manager,
             paths,
@@ -1361,7 +1420,7 @@ impl AppState {
             belief_store: None,
             belief_contradiction_store: None,
             belief_network_activity: None,
-        }
+        })
     }
 
     /// Create with hook registry.
@@ -2019,7 +2078,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join("agents")).unwrap();
         std::fs::create_dir_all(dir.path().join("skills")).unwrap();
-        let state = AppState::minimal(dir.path().to_path_buf());
+        let state = AppState::minimal(dir.path().to_path_buf()).unwrap();
         (dir, state)
     }
 
@@ -2222,7 +2281,7 @@ mod tests {
     #[tokio::test]
     async fn new_app_state_initialises_full_constructor_path() {
         let dir = TempDir::new().unwrap();
-        let state = AppState::new(dir.path().to_path_buf());
+        let state = AppState::new(dir.path().to_path_buf()).unwrap();
         assert!(state.knowledge_db.is_some());
         assert!(state.memory_store.is_some());
         assert!(state.kg_store.is_some());
@@ -2266,7 +2325,8 @@ mod tests {
             state_service,
             connector_registry,
             paths.clone(),
-        );
+        )
+        .unwrap();
 
         assert_eq!(state.config_dir, *paths.vault_dir());
         assert!(state.memory_store.is_some());

@@ -27,14 +27,20 @@ impl PendingRequests {
     /// Register a pending request and return the receiver.
     pub fn register(&self, request_id: String) -> oneshot::Receiver<Result<Value, String>> {
         let (tx, rx) = oneshot::channel();
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         pending.insert(request_id, tx);
         rx
     }
 
     /// Resolve a pending request with a successful result.
     pub fn resolve(&self, request_id: &str, data: Value) -> bool {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(tx) = pending.remove(request_id) {
             let _ = tx.send(Ok(data));
             true
@@ -45,7 +51,10 @@ impl PendingRequests {
 
     /// Reject a pending request with an error.
     pub fn reject(&self, request_id: &str, error: String) -> bool {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(tx) = pending.remove(request_id) {
             let _ = tx.send(Err(error));
             true
@@ -56,7 +65,10 @@ impl PendingRequests {
 
     /// Cancel all pending requests (on disconnect).
     pub fn cancel_all(&self) {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         for (id, tx) in pending.drain() {
             let _ = tx.send(Err(format!("Worker disconnected (request {})", id)));
         }
@@ -64,12 +76,18 @@ impl PendingRequests {
 
     /// Number of pending requests.
     pub fn len(&self) -> usize {
-        self.pending.lock().unwrap().len()
+        self.pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
     }
 
     /// Whether there are no pending requests.
     pub fn is_empty(&self) -> bool {
-        self.pending.lock().unwrap().is_empty()
+        self.pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty()
     }
 }
 

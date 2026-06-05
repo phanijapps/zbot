@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Gateway Connectors
 //!
 //! External connector management for bidirectional messaging.

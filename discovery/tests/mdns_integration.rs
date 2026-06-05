@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Integration tests that exercise real multicast. Gated by `#[ignore]` so
 //! they don't run on every `cargo test`. Run them locally via:
 //!

@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! `zero-stores-traits` — dependency-light home for store traits.
 //!
 //! This crate holds the trait surface that consumers deep in the dep graph

@@ -99,7 +99,11 @@ impl ConflictResolver {
     /// any per-pair error is logged and skipped — cycle never fails hard.
     pub async fn run_cycle(&self, run_id: &str, agent_id: &str) -> Result<ConflictStats, String> {
         if !self.interval.is_zero() {
-            if let Some(last) = *self.last_run.lock().unwrap() {
+            if let Some(last) = *self
+                .last_run
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+            {
                 if last.elapsed() < self.interval {
                     return Ok(ConflictStats::default());
                 }
@@ -131,7 +135,10 @@ impl ConflictResolver {
         stats.facts_considered = facts.len() as u64;
 
         if facts.len() < 2 {
-            *self.last_run.lock().unwrap() = Some(Instant::now());
+            *self
+                .last_run
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
             return Ok(stats);
         }
 
@@ -251,7 +258,10 @@ impl ConflictResolver {
             }
         }
 
-        *self.last_run.lock().unwrap() = Some(Instant::now());
+        *self
+            .last_run
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
         Ok(stats)
     }
 }
@@ -365,7 +375,11 @@ mod tests {
     #[async_trait]
     impl ConflictJudgeLlm for MockJudge {
         async fn judge(&self, _a: &str, _b: &str) -> Result<ConflictResponse, String> {
-            Ok(self.response.lock().unwrap().clone())
+            Ok(self
+                .response
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone())
         }
     }
 

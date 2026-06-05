@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Shared integration-test fixtures.
 //!
 //! Rust's integration-test convention: files under `tests/common/` are NOT
@@ -36,7 +38,7 @@ pub fn make_state() -> (TempDir, AppState) {
     let dir = TempDir::new().expect("temp dir");
     std::fs::create_dir_all(dir.path().join("agents")).unwrap();
     std::fs::create_dir_all(dir.path().join("skills")).unwrap();
-    let state = AppState::minimal(dir.path().to_path_buf());
+    let state = AppState::minimal(dir.path().to_path_buf()).unwrap();
     (dir, state)
 }
 

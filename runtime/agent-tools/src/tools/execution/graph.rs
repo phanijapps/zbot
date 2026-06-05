@@ -249,7 +249,9 @@ impl ExecutionGraph {
         let node_ids: Vec<String> = self.nodes.keys().cloned().collect();
 
         for node_id in &node_ids {
-            let node = self.nodes.get(node_id).unwrap().clone();
+            let Some(node) = self.nodes.get(node_id).cloned() else {
+                continue;
+            };
             if node.status != NodeStatus::Pending {
                 continue;
             }

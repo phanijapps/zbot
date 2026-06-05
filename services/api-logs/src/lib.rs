@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # API Logs
 //!
 //! Self-contained execution logs API for agent tracing.

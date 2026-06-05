@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # z-Bot Daemon
 //!
 //! Standalone server for the agent runtime.
@@ -427,7 +429,7 @@ async fn main() -> Result<()> {
     }
 
     // Create and start server
-    let mut server = GatewayServer::new(gateway_config, data_dir);
+    let mut server = GatewayServer::new(gateway_config, data_dir)?;
     server.start().await?;
 
     info!("Daemon started. Press Ctrl+C to stop.");

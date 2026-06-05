@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # zero-stores-sqlite
 //!
 //! SQLite-backed persistence for AgentZero. Implements the `zero-stores`

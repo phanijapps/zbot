@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Tests for `GET /api/wards/:ward_id/content` aggregator (Task 5 — Memory Tab
 //! Command Deck).
 //!

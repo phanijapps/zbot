@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! Memory subsystem configuration types. Owned by gateway-memory crate;
 //! re-exported through gateway-services for backward compat.
 
@@ -320,7 +322,13 @@ impl RecallConfig {
         };
 
         // Deep merge: serialize defaults to Value, merge overlay on top, deserialize back.
-        let base = serde_json::to_value(Self::default()).expect("default config must serialize");
+        let base = match serde_json::to_value(Self::default()) {
+            Ok(base) => base,
+            Err(e) => {
+                tracing::warn!("Default recall config failed to serialize; using defaults: {e}");
+                return Self::default();
+            }
+        };
         let merged = deep_merge(base, overlay);
 
         match serde_json::from_value(merged) {

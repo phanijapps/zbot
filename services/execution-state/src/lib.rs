@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Execution State
 //!
 //! Session state tracking, execution management, and checkpointing.

@@ -369,13 +369,10 @@ impl OpenAiClient {
                             .to_string();
 
                         // Parse arguments from string to Value for internal use
-                        let arguments = serde_json::from_str(&arguments_str)
-                            .or_else(|_| {
-                                recover_first_json(&arguments_str).ok_or_else(|| {
-                                    serde_json::from_str::<Value>("null").unwrap_err()
-                                })
-                            })
-                            .ok()?;
+                        let arguments = match serde_json::from_str(&arguments_str) {
+                            Ok(arguments) => arguments,
+                            Err(_) => recover_first_json(&arguments_str)?,
+                        };
 
                         Some(ToolCall::new(id, name, arguments))
                     })

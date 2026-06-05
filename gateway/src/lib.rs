@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Gateway
 //!
 //! HTTP and WebSocket gateway for the AgentZero daemon.

@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! # Lifecycle integration tests
 //!
 //! Exercises the public surface of `gateway_execution::lifecycle` end-to-end

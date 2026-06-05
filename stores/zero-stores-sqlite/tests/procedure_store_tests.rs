@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Integration tests for `GatewayProcedureStore`.
 
 use std::sync::Arc;

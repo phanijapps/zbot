@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 // ============================================================================
 // DAILY SESSIONS
 // Daily session management for Agent Channel architecture

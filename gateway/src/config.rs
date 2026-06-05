@@ -52,7 +52,7 @@ fn default_serve_dashboard() -> bool {
 }
 
 fn default_host() -> IpAddr {
-    "127.0.0.1".parse().unwrap()
+    IpAddr::from([127, 0, 0, 1])
 }
 
 fn default_ws_port() -> u16 {

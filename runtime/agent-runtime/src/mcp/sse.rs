@@ -42,11 +42,19 @@ impl SseMcpClient {
             name,
             url,
             headers,
-            client: reqwest::Client::builder()
+            client: match reqwest::Client::builder()
                 .timeout(SSE_MCP_TIMEOUT)
                 .connect_timeout(SSE_MCP_CONNECT_TIMEOUT)
                 .build()
-                .expect("reqwest client"),
+            {
+                Ok(client) => client,
+                Err(error) => {
+                    tracing::warn!(
+                        "Failed to create configured SSE MCP client; using default client: {error}"
+                    );
+                    reqwest::Client::new()
+                }
+            },
         }
     }
 

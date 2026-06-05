@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Gateway Execution
 //!
 //! Agent execution engine for the AgentZero gateway.

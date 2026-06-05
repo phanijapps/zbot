@@ -26,7 +26,7 @@ use std::time::Instant;
 use zero_stores_domain::{RouteHint, RouteSourceKind, SessionEpisode, WikiHit};
 
 fn route_hint_value(hint: RouteHint) -> Value {
-    serde_json::to_value(hint).unwrap_or_else(|_| Value::Null)
+    serde_json::to_value(hint).unwrap_or(Value::Null)
 }
 
 /// Request body for unified search.

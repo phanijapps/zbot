@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Gateway Events
 //!
 //! Event bus for broadcasting events to connected clients.

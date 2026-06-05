@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! E2E integration tests for the intent analysis enrichment pipeline.
 //!
 //! These tests verify the full flow:

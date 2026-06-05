@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! End-to-end: register `run_procedure` into a live registry alongside
 //! another tool, run a real procedure row from an in-memory store, verify
 //! dispatch and counter increment.

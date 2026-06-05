@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Narrow invoker traits — stub recording tests.
 //!
 //! Run with: cargo test -p gateway-execution --test session_invoker_tests --features test-stubs

@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! # Session State Builder Tests
 //!
 //! Integration tests for `SessionStateBuilder::build()`.

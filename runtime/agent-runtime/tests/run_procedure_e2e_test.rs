@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! End-to-end procedure-as-callable test.
 //!
 //! Builds a 2-step procedure (with arg interpolation between steps),

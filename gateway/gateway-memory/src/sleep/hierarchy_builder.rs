@@ -212,7 +212,11 @@ impl HierarchyBuilder {
         if self.interval.is_zero() {
             return true;
         }
-        match *self.last_run.lock().unwrap() {
+        match *self
+            .last_run
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        {
             Some(last) => last.elapsed() >= self.interval,
             None => true,
         }
@@ -233,7 +237,10 @@ impl HierarchyBuilder {
         // are skipped. Same shape as BeliefSynthesizer — timestamping
         // any "we got past the throttle" entry, not just successful
         // ones, prevents busy-looping on PoolTooSmall etc.
-        *self.last_run.lock().unwrap() = Some(Instant::now());
+        *self
+            .last_run
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
         let mut prev_sparsity: Option<f32> = None;
 
         for layer in 0..self.config.max_layers {
@@ -611,11 +618,17 @@ mod tests {
         }
 
         fn synth_call_count(&self) -> u64 {
-            *self.synth_calls.lock().unwrap()
+            *self
+                .synth_calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
         }
 
         fn synth_prior_history(&self) -> Vec<Vec<String>> {
-            self.synth_prior_history.lock().unwrap().clone()
+            self.synth_prior_history
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
         }
     }
 
@@ -626,10 +639,13 @@ mod tests {
             members: &[AggregateMemberContext],
             prior_names: &[String],
         ) -> Result<AggregateResponse, String> {
-            *self.synth_calls.lock().unwrap() += 1;
+            *self
+                .synth_calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
             self.synth_prior_history
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .push(prior_names.to_vec());
             if self.synth_should_fail {
                 return Err("mock fail".into());
@@ -638,7 +654,10 @@ mod tests {
             // happen in tests (mirroring the real LLM's role) and the
             // orchestrator's accumulator gets meaningful values to
             // record across iterations.
-            let call_index = *self.synth_calls.lock().unwrap();
+            let call_index = *self
+                .synth_calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             Ok(AggregateResponse {
                 name: format!("agg-{call_index}-of-{}-members", members.len()),
                 description: format!("Aggregate over {} entities.", members.len()),
@@ -651,7 +670,10 @@ mod tests {
             _b: &str,
             _lambda: usize,
         ) -> Result<String, String> {
-            *self.relation_calls.lock().unwrap() += 1;
+            *self
+                .relation_calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
             Ok(self.relation_response.clone())
         }
     }

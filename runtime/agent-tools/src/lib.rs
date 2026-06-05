@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 // ============================================================================
 // APP-TOOLS - Built-in Tools for z-Bot Application
 // ============================================================================

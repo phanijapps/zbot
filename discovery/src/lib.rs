@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Discovery
 //!
 //! LAN service advertisement (mDNS) for the AgentZero daemon. Provides an

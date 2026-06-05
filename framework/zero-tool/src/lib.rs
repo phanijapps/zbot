@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Zero Tool
 //!
 //! Tool system and registry for the Zero framework.

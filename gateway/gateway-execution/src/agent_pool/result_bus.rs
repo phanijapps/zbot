@@ -45,7 +45,7 @@ impl AgentResultBus {
     pub fn register_handle(&self, execution_id: &str, handle: ExecutionHandle) {
         self.execution_handles
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(execution_id.to_string(), handle);
     }
 
@@ -57,14 +57,18 @@ impl AgentResultBus {
         let (tx, rx) = oneshot::channel();
         self.waiting
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(execution_id.to_string(), tx);
         rx
     }
 
     /// Called by handle_execution_success — unblocks any pending wait_agent.
     pub fn resolve(&self, execution_id: &str, agent_id: &str, response: &str) {
-        let tx = self.waiting.lock().unwrap().remove(execution_id);
+        let tx = self
+            .waiting
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(execution_id);
         if let Some(tx) = tx {
             let _ = tx.send(Ok(AgentResult {
                 execution_id: execution_id.to_string(),
@@ -72,27 +76,45 @@ impl AgentResultBus {
                 response: response.to_string(),
             }));
         }
-        self.execution_handles.lock().unwrap().remove(execution_id);
+        self.execution_handles
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(execution_id);
     }
 
     /// Called by handle_execution_failure — unblocks any pending wait_agent with an error.
     pub fn reject(&self, execution_id: &str, error: AgentWaitError) {
-        let tx = self.waiting.lock().unwrap().remove(execution_id);
+        let tx = self
+            .waiting
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(execution_id);
         if let Some(tx) = tx {
             let _ = tx.send(Err(error));
         }
-        self.execution_handles.lock().unwrap().remove(execution_id);
+        self.execution_handles
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(execution_id);
     }
 
     /// Stop the execution and unblock any waiting `wait_agent` with a killed error.
     /// Returns true if a registered handle was found and stopped.
     pub fn kill(&self, execution_id: &str) -> bool {
-        let handle = self.execution_handles.lock().unwrap().remove(execution_id);
+        let handle = self
+            .execution_handles
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(execution_id);
         let had_handle = handle.is_some();
         if let Some(h) = handle {
             h.stop();
         }
-        let tx = self.waiting.lock().unwrap().remove(execution_id);
+        let tx = self
+            .waiting
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(execution_id);
         if let Some(tx) = tx {
             let _ = tx.send(Err(AgentWaitError::Crashed {
                 error: "killed by orchestrator".to_string(),

@@ -41,7 +41,7 @@ impl ProviderRateLimiter {
             {
                 let mut window = self.window.lock().await;
                 let now = Instant::now();
-                let one_minute_ago = now.checked_sub(Duration::from_secs(60)).unwrap();
+                let one_minute_ago = now.checked_sub(Duration::from_secs(60)).unwrap_or(now);
 
                 // Remove old timestamps
                 while window
@@ -73,10 +73,10 @@ impl ProviderRateLimiter {
             }
         }
 
-        self.concurrency
-            .acquire()
-            .await
-            .expect("Rate limiter semaphore closed")
+        match self.concurrency.acquire().await {
+            Ok(permit) => permit,
+            Err(error) => panic!("rate limiter semaphore closed unexpectedly: {error}"),
+        }
     }
 
     /// Auto-reduce RPM after 429.

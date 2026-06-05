@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Zero Middleware — compatibility re-export
 //!
 //! The middleware pipeline has one canonical implementation in

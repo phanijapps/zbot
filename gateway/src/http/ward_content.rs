@@ -113,7 +113,7 @@ fn stamp(mut value: Value, now: DateTime<Utc>, anchor: Option<&str>) -> Value {
 }
 
 fn route_hint_value(hint: RouteHint) -> Value {
-    serde_json::to_value(hint).unwrap_or_else(|_| Value::Null)
+    serde_json::to_value(hint).unwrap_or(Value::Null)
 }
 
 fn first_non_empty_line(s: &str) -> Option<String> {

@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! `zbot` — lightweight streaming Claude-Code-style CLI for the z-Bot daemon.
 //!
 //! Architecture: this CLI is a thin front-end. The interactive mode uses

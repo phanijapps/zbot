@@ -198,7 +198,10 @@ impl BeliefContradictionDetector {
             stats.budget_exhausted = true;
         }
 
-        *self.last_run.lock().unwrap() = Some(Instant::now());
+        *self
+            .last_run
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
         tracing::info!(
             run_id,
             partition_id,
@@ -230,7 +233,11 @@ impl BeliefContradictionDetector {
         if self.interval.is_zero() {
             return true;
         }
-        match *self.last_run.lock().unwrap() {
+        match *self
+            .last_run
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        {
             Some(last) => last.elapsed() >= self.interval,
             None => true,
         }
@@ -520,7 +527,10 @@ mod tests {
         }
 
         fn calls(&self) -> u64 {
-            *self.calls.lock().unwrap()
+            *self
+                .calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
         }
     }
 
@@ -531,10 +541,16 @@ mod tests {
             _a: &Belief,
             _b: &Belief,
         ) -> Result<ContradictionJudgeResponse, String> {
-            *self.calls.lock().unwrap() += 1;
+            *self
+                .calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
             // If multiple responses queued, pop the front; otherwise
             // return the single response repeatedly.
-            let mut guard = self.responses.lock().unwrap();
+            let mut guard = self
+                .responses
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if guard.len() > 1 {
                 guard.remove(0)
             } else {

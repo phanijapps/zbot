@@ -87,7 +87,11 @@ impl CorrectionsAbstractor {
         agent_id: &str,
     ) -> Result<AbstractionStats, String> {
         if !self.interval.is_zero() {
-            if let Some(last) = *self.last_run.lock().unwrap() {
+            if let Some(last) = *self
+                .last_run
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+            {
                 if last.elapsed() < self.interval {
                     return Ok(AbstractionStats::default());
                 }
@@ -145,7 +149,10 @@ impl CorrectionsAbstractor {
         {
             Ok(_) => {
                 stats.schemas_abstracted += 1;
-                *self.last_run.lock().unwrap() = Some(Instant::now());
+                *self
+                    .last_run
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
                 let reason = format!(
                     "abstracted from {} corrections (schema={}, confidence={:.2})",
                     corrections.len(),
@@ -286,7 +293,11 @@ mod tests {
             &self,
             _corrections: &[String],
         ) -> Result<AbstractionResponse, String> {
-            Ok(self.response.lock().unwrap().clone())
+            Ok(self
+                .response
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone())
         }
     }
 

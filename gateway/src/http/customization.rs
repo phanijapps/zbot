@@ -653,7 +653,7 @@ mod handler_tests {
         let dir = TempDir::new().expect("temp dir");
         std::fs::create_dir_all(dir.path().join("agents")).unwrap();
         std::fs::create_dir_all(dir.path().join("skills")).unwrap();
-        let state = AppState::minimal(dir.path().to_path_buf());
+        let state = AppState::minimal(dir.path().to_path_buf()).unwrap();
         (dir, state)
     }
 

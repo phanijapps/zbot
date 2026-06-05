@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Integration test: multimodal message round-trip.
 //! Create → flush to disk → store (text only) → rehydrate → encode for API.
 

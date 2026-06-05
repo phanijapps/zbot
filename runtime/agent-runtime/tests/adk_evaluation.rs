@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 // ============================================================================
 // ADK-RUST EVALUATION TEST
 // Phase 1: Proof-of-concept for ADK-Rust migration
@@ -20,7 +21,6 @@
 // EVALUATION RESULT: ❌ DO NOT MIGRATE
 // See adkrust-migration.md for detailed findings.
 // ============================================================================
-
 #![cfg(feature = "adk-eval")] // Only compiles when feature is enabled
 
 use adk_core::{

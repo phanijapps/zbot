@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Gateway Bridge
 //!
 //! WebSocket worker system for bidirectional agent-worker communication.

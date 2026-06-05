@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! ContinuationWatcher — unit tests for the event-loop struct.
 //!
 //! These tests exercise the watcher's event-handling logic in isolation

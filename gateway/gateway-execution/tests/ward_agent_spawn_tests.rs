@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Integration tests for ward-agent synthesis via `load_or_create_specialist`.
 //!
 //! These tests verify that `delegate_to_agent(agent_id="ward:<name>")` resolves

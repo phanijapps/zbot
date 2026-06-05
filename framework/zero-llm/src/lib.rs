@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Zero LLM
 //!
 //! LLM abstractions and OpenAI client for the Zero framework.

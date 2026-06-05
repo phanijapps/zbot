@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use knowledge_graph::types::{Entity, EntityType, Relationship, RelationshipType};
 use zero_stores::KnowledgeGraphStore;
 

@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Cold-boot baseline: how long does it take to initialize a knowledge.db
 //! pointing at an already-populated 10k-entity vault?
 //!

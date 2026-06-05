@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Tests for WardSetup frontmatter parsing in skills.
 
 use gateway_services::{SkillFrontmatter, WardAgentsMdConfig};

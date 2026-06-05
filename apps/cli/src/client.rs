@@ -28,11 +28,22 @@ pub struct DaemonClient {
 
 impl DaemonClient {
     pub fn new(cfg: Config) -> Self {
-        let http = reqwest::Client::builder()
+        let http = match reqwest::Client::builder()
             .user_agent(concat!("zbot/", env!("CARGO_PKG_VERSION")))
             .build()
-            .expect("reqwest::Client should always build");
-        Self { http, base: cfg.daemon_url }
+        {
+            Ok(client) => client,
+            Err(error) => {
+                tracing::warn!(
+                    "Failed to create configured daemon HTTP client; using default client: {error}"
+                );
+                reqwest::Client::new()
+            }
+        };
+        Self {
+            http,
+            base: cfg.daemon_url,
+        }
     }
 
     /// `GET /api/health` — startup smoke test.
@@ -68,10 +79,7 @@ impl DaemonClient {
             .await
             .with_context(|| format!("POST {url}"))?;
         if !resp.status().is_success() {
-            return Err(anyhow!(
-                "/api/chat/init returned HTTP {}",
-                resp.status()
-            ));
+            return Err(anyhow!("/api/chat/init returned HTTP {}", resp.status()));
         }
         let body: ChatInit = resp.json().await.context("parse /api/chat/init body")?;
         Ok(body)
@@ -87,10 +95,7 @@ impl DaemonClient {
             .await
             .with_context(|| format!("DELETE {url}"))?;
         if !resp.status().is_success() {
-            return Err(anyhow!(
-                "/api/chat/session returned HTTP {}",
-                resp.status()
-            ));
+            return Err(anyhow!("/api/chat/session returned HTTP {}", resp.status()));
         }
         Ok(())
     }

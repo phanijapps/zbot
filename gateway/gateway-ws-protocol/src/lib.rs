@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Gateway WebSocket Protocol
 //!
 //! Message types for WebSocket communication between the gateway and clients.

@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Tests for `POST /api/memory/search` unified hybrid search (Task 6 —
 //! Memory Tab Command Deck).
 //!

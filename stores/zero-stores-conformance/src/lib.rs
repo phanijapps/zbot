@@ -5,6 +5,8 @@
 //! Impl crates call these from their integration tests; behavioural drift
 //! between impls produces failing assertions.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use knowledge_graph::types::{Entity, EntityType, Relationship, RelationshipType};
 use zero_stores::extracted::ExtractedKnowledge;
 use zero_stores::types::{Direction, EntityId, ResolveOutcome};

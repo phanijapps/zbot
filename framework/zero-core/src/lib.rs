@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! # Zero Core
 //!
 //! Core traits, types, and errors for the Zero agent framework.

@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Verify the SleepTimeWorker fires a cycle when triggered.
 
 use std::sync::Arc;

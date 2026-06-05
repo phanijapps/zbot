@@ -616,8 +616,10 @@ fn finds_privilege_escalation(command_normalized: &str) -> Option<&'static str> 
     // One regex matches every shell separator that begins a new
     // command. Compiled once, reused across calls.
     static SEPARATOR_RE: OnceLock<regex::Regex> = OnceLock::new();
-    let re = SEPARATOR_RE
-        .get_or_init(|| regex::Regex::new(r"&&|\|\||[;|`(]|\$\(").expect("static regex"));
+    let re = SEPARATOR_RE.get_or_init(|| match regex::Regex::new(r"&&|\|\||[;|`(]|\$\(") {
+        Ok(regex) => regex,
+        Err(error) => panic!("invalid shell separator regex: {error}"),
+    });
 
     for segment in re.split(command_normalized) {
         let Some(raw) = segment.split_whitespace().next() else {

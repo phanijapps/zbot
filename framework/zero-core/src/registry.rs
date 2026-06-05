@@ -68,8 +68,14 @@ impl CapabilityRegistry {
 
         // Update capability index
         {
-            let mut cap_index = self.capability_index.write().unwrap();
-            let mut cat_index = self.category_index.write().unwrap();
+            let mut cap_index = self
+                .capability_index
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut cat_index = self
+                .category_index
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
 
             for cap in &capabilities.capabilities {
                 // Add to capability index (allow duplicates for same capability)
@@ -90,7 +96,10 @@ impl CapabilityRegistry {
 
         // Store agent capabilities
         {
-            let mut agents = self.agents.write().unwrap();
+            let mut agents = self
+                .agents
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             agents.insert(agent_id, capabilities);
         }
     }
@@ -99,14 +108,23 @@ impl CapabilityRegistry {
     pub fn unregister(&self, agent_id: &str) {
         // Remove from agents
         let capabilities = {
-            let mut agents = self.agents.write().unwrap();
+            let mut agents = self
+                .agents
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             agents.remove(agent_id)
         };
 
         // Remove from indexes
         if let Some(caps) = capabilities {
-            let mut cap_index = self.capability_index.write().unwrap();
-            let mut cat_index = self.category_index.write().unwrap();
+            let mut cap_index = self
+                .capability_index
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut cat_index = self
+                .category_index
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
 
             for cap in &caps.capabilities {
                 if let Some(agents) = cap_index.get_mut(&cap.id) {
@@ -124,25 +142,37 @@ impl CapabilityRegistry {
 
     /// Get capabilities for a specific agent.
     pub fn get(&self, agent_id: &str) -> Option<AgentCapabilities> {
-        let agents = self.agents.read().unwrap();
+        let agents = self
+            .agents
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         agents.get(agent_id).cloned()
     }
 
     /// Get all registered agent IDs.
     pub fn agent_ids(&self) -> Vec<String> {
-        let agents = self.agents.read().unwrap();
+        let agents = self
+            .agents
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         agents.keys().cloned().collect()
     }
 
     /// Get all registered agents.
     pub fn all_agents(&self) -> Vec<AgentCapabilities> {
-        let agents = self.agents.read().unwrap();
+        let agents = self
+            .agents
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         agents.values().cloned().collect()
     }
 
     /// Find agents matching a capability query.
     pub fn find_agents(&self, query: &CapabilityQuery) -> Vec<AgentCapabilities> {
-        let agents = self.agents.read().unwrap();
+        let agents = self
+            .agents
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         agents
             .values()
@@ -155,7 +185,10 @@ impl CapabilityRegistry {
     ///
     /// Returns the agent with the highest match score, or None if no match.
     pub fn find_best_agent(&self, query: &CapabilityQuery) -> Option<AgentCapabilities> {
-        let agents = self.agents.read().unwrap();
+        let agents = self
+            .agents
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         agents
             .values()
@@ -170,8 +203,14 @@ impl CapabilityRegistry {
 
     /// Find agents by capability ID (fast index lookup).
     pub fn find_by_capability(&self, capability_id: &str) -> Vec<AgentCapabilities> {
-        let cap_index = self.capability_index.read().unwrap();
-        let agents = self.agents.read().unwrap();
+        let cap_index = self
+            .capability_index
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let agents = self
+            .agents
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         cap_index
             .get(capability_id)
@@ -185,8 +224,14 @@ impl CapabilityRegistry {
 
     /// Find agents by category (fast index lookup).
     pub fn find_by_category(&self, category: CapabilityCategory) -> Vec<AgentCapabilities> {
-        let cat_index = self.category_index.read().unwrap();
-        let agents = self.agents.read().unwrap();
+        let cat_index = self
+            .category_index
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let agents = self
+            .agents
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         cat_index
             .get(&category)
@@ -200,7 +245,10 @@ impl CapabilityRegistry {
 
     /// Get available agents (not at capacity).
     pub fn available_agents(&self) -> Vec<AgentCapabilities> {
-        let agents = self.agents.read().unwrap();
+        let agents = self
+            .agents
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         agents
             .values()
             .filter(|a| a.is_available())
@@ -210,7 +258,10 @@ impl CapabilityRegistry {
 
     /// Update agent availability.
     pub fn set_availability(&self, agent_id: &str, available: bool) {
-        let mut agents = self.agents.write().unwrap();
+        let mut agents = self
+            .agents
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(caps) = agents.get_mut(agent_id) {
             caps.available = available;
         }
@@ -218,7 +269,10 @@ impl CapabilityRegistry {
 
     /// Number of registered agents.
     pub fn len(&self) -> usize {
-        let agents = self.agents.read().unwrap();
+        let agents = self
+            .agents
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         agents.len()
     }
 
@@ -229,9 +283,18 @@ impl CapabilityRegistry {
 
     /// Clear all registrations.
     pub fn clear(&self) {
-        let mut agents = self.agents.write().unwrap();
-        let mut cap_index = self.capability_index.write().unwrap();
-        let mut cat_index = self.category_index.write().unwrap();
+        let mut agents = self
+            .agents
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut cap_index = self
+            .capability_index
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut cat_index = self
+            .category_index
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         agents.clear();
         cap_index.clear();
@@ -391,7 +454,10 @@ impl UnifiedCapabilityRegistry {
 
         // Add to descriptors (multiple descriptors can provide same capability)
         {
-            let mut descriptors = self.descriptors.write().unwrap();
+            let mut descriptors = self
+                .descriptors
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             descriptors
                 .entry(cap_id.clone())
                 .or_default()
@@ -400,7 +466,10 @@ impl UnifiedCapabilityRegistry {
 
         // Update kind index
         {
-            let mut kind_index = self.kind_index.write().unwrap();
+            let mut kind_index = self
+                .kind_index
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let ids = kind_index.entry(kind).or_default();
             if !ids.contains(&cap_id) {
                 ids.push(cap_id.clone());
@@ -409,7 +478,10 @@ impl UnifiedCapabilityRegistry {
 
         // Update resource index
         {
-            let mut resource_index = self.resource_index.write().unwrap();
+            let mut resource_index = self
+                .resource_index
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let ids = resource_index.entry(resource_id).or_default();
             if !ids.contains(&cap_id) {
                 ids.push(cap_id);
@@ -428,13 +500,19 @@ impl UnifiedCapabilityRegistry {
     pub fn unregister_resource(&self, resource_id: &str) {
         // Get capability IDs for this resource
         let cap_ids: Vec<String> = {
-            let resource_index = self.resource_index.read().unwrap();
+            let resource_index = self
+                .resource_index
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             resource_index.get(resource_id).cloned().unwrap_or_default()
         };
 
         // Remove from descriptors
         {
-            let mut descriptors = self.descriptors.write().unwrap();
+            let mut descriptors = self
+                .descriptors
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             for cap_id in &cap_ids {
                 if let Some(descs) = descriptors.get_mut(cap_id) {
                     descs.retain(|d| d.resource_id != resource_id);
@@ -447,7 +525,10 @@ impl UnifiedCapabilityRegistry {
 
         // Remove from resource index
         {
-            let mut resource_index = self.resource_index.write().unwrap();
+            let mut resource_index = self
+                .resource_index
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             resource_index.remove(resource_id);
         }
 
@@ -456,14 +537,23 @@ impl UnifiedCapabilityRegistry {
 
     /// Find all descriptors for a capability ID.
     pub fn find_by_id(&self, capability_id: &str) -> Vec<CapabilityDescriptor> {
-        let descriptors = self.descriptors.read().unwrap();
+        let descriptors = self
+            .descriptors
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         descriptors.get(capability_id).cloned().unwrap_or_default()
     }
 
     /// Find all descriptors of a specific kind.
     pub fn find_by_kind(&self, kind: CapabilityKind) -> Vec<CapabilityDescriptor> {
-        let kind_index = self.kind_index.read().unwrap();
-        let descriptors = self.descriptors.read().unwrap();
+        let kind_index = self
+            .kind_index
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let descriptors = self
+            .descriptors
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         kind_index
             .get(&kind)
@@ -478,8 +568,14 @@ impl UnifiedCapabilityRegistry {
 
     /// Find all descriptors from a specific resource.
     pub fn find_by_resource(&self, resource_id: &str) -> Vec<CapabilityDescriptor> {
-        let resource_index = self.resource_index.read().unwrap();
-        let descriptors = self.descriptors.read().unwrap();
+        let resource_index = self
+            .resource_index
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let descriptors = self
+            .descriptors
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         resource_index
             .get(resource_id)
@@ -494,7 +590,10 @@ impl UnifiedCapabilityRegistry {
 
     /// Find descriptors matching a capability query.
     pub fn find_matching(&self, query: &CapabilityQuery) -> Vec<CapabilityDescriptor> {
-        let descriptors = self.descriptors.read().unwrap();
+        let descriptors = self
+            .descriptors
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         descriptors
             .values()
@@ -531,13 +630,19 @@ impl UnifiedCapabilityRegistry {
 
     /// Get all registered capability IDs.
     pub fn capability_ids(&self) -> Vec<String> {
-        let descriptors = self.descriptors.read().unwrap();
+        let descriptors = self
+            .descriptors
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         descriptors.keys().cloned().collect()
     }
 
     /// Get all available descriptors.
     pub fn all_available(&self) -> Vec<CapabilityDescriptor> {
-        let descriptors = self.descriptors.read().unwrap();
+        let descriptors = self
+            .descriptors
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         descriptors
             .values()
             .flat_map(|descs| descs.iter())
@@ -548,7 +653,10 @@ impl UnifiedCapabilityRegistry {
 
     /// Set availability for all capabilities from a resource.
     pub fn set_resource_availability(&self, resource_id: &str, available: bool) {
-        let mut descriptors = self.descriptors.write().unwrap();
+        let mut descriptors = self
+            .descriptors
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         for descs in descriptors.values_mut() {
             for desc in descs.iter_mut() {
@@ -561,13 +669,19 @@ impl UnifiedCapabilityRegistry {
 
     /// Number of unique capability IDs registered.
     pub fn len(&self) -> usize {
-        let descriptors = self.descriptors.read().unwrap();
+        let descriptors = self
+            .descriptors
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         descriptors.len()
     }
 
     /// Total number of descriptors (including duplicates).
     pub fn total_descriptors(&self) -> usize {
-        let descriptors = self.descriptors.read().unwrap();
+        let descriptors = self
+            .descriptors
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         descriptors.values().map(|v| v.len()).sum()
     }
 
@@ -578,9 +692,18 @@ impl UnifiedCapabilityRegistry {
 
     /// Clear all registrations.
     pub fn clear(&self) {
-        let mut descriptors = self.descriptors.write().unwrap();
-        let mut kind_index = self.kind_index.write().unwrap();
-        let mut resource_index = self.resource_index.write().unwrap();
+        let mut descriptors = self
+            .descriptors
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut kind_index = self
+            .kind_index
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut resource_index = self
+            .resource_index
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         descriptors.clear();
         kind_index.clear();
