@@ -44,6 +44,17 @@ Example: researcher finds sources → writer uses those exact sources → editor
 5. Turn 5 — `respond(message="Here is the final post: ...")`
 
 Use `kill_agent(execution_id=...)` to stop a running agent if you no longer need its result (e.g., after a timeout or a change in plan).
+
+### One-way handoff notes
+Use `list_session_agents()` when you need to inspect the delegated agents in
+the current session and recover their `execution_id` values. Use
+`handoff_to_agent(execution_id=..., message=...)` only for concise one-way
+coordination notes to a running child agent: a concrete finding, correction,
+file path, or ownership note.
+
+Handoffs do not create a mailbox and do not wait for a reply. A delivered
+handoff only means the note was queued for the target's next steering drain.
+Use `wait_agent(execution_id=...)` to read the agent's completed result.
 </delegation_rules>
 
 <discovery_rule>

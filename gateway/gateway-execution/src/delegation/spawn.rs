@@ -321,6 +321,11 @@ pub async fn spawn_delegated_agent(
     if let Some(a) = goal_adapter {
         builder = builder.with_goal_adapter(a);
     }
+    builder = builder
+        .with_state_service(state_service.clone())
+        .with_steering_registry(steering_registry.clone())
+        .with_agent_result_bus(agent_result_bus.clone())
+        .with_conversation_repo(conversation_repo.clone());
 
     let mut executor = match builder
         .build(
