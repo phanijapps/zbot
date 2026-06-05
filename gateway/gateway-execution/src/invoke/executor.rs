@@ -954,6 +954,19 @@ impl ExecutorBuilder {
         }
 
         if actor_allows(actor, ToolCapability::AgentControl) {
+            if let Some(ref svc) = self.state_service {
+                tool_registry.register(Arc::new(crate::tools::ListSessionAgentsTool::new(
+                    svc.clone(),
+                )));
+            }
+
+            if let (Some(ref svc), Some(ref sr)) = (&self.state_service, &self.steering_registry) {
+                tool_registry.register(Arc::new(crate::tools::HandoffToAgentTool::new(
+                    svc.clone(),
+                    sr.clone(),
+                )));
+            }
+
             if let Some(ref sr) = self.steering_registry {
                 tool_registry.register(Arc::new(crate::tools::SteerAgentTool::new(sr.clone())));
             }
@@ -1158,6 +1171,24 @@ mod tests {
             .collect()
     }
 
+    fn registry_names_with_agent_control_deps(actor_kind: RuntimeActorKind) -> BTreeSet<String> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = Arc::new(gateway_services::VaultPaths::new(dir.path().to_path_buf()));
+        paths.ensure_dirs_exist().expect("ensure vault dirs");
+        let db = Arc::new(DatabaseManager::new(paths.clone()).expect("db init"));
+        let fs_context = Arc::new(GatewayFileSystem::new(dir.path().to_path_buf()));
+
+        ExecutorBuilder::new(dir.path().to_path_buf(), ToolSettings::default())
+            .with_actor_kind(actor_kind)
+            .with_state_service(Arc::new(StateService::new(db)))
+            .with_steering_registry(Arc::new(agent_runtime::SteeringRegistry::new()))
+            .build_tool_registry(fs_context)
+            .get_all()
+            .iter()
+            .map(|tool| tool.name().to_string())
+            .collect()
+    }
+
     fn assert_has(names: &BTreeSet<String>, expected: &[&str]) {
         for name in expected {
             assert!(names.contains(*name), "expected tool {name}");
@@ -1297,6 +1328,38 @@ mod tests {
         assert!(RuntimeActorKind::DelegatedReviewer.is_ordinary_subagent());
         assert!(!RuntimeActorKind::WardAgent.is_ordinary_subagent());
         assert!(!RuntimeActorKind::Root.is_ordinary_subagent());
+    }
+
+    #[test]
+    fn root_and_ward_get_handoff_tools_when_agent_control_deps_are_wired() {
+        let root_names = registry_names_with_agent_control_deps(RuntimeActorKind::Root);
+        assert_has(
+            &root_names,
+            &["list_session_agents", "handoff_to_agent", "steer_agent"],
+        );
+
+        let ward_names = registry_names_with_agent_control_deps(RuntimeActorKind::WardAgent);
+        assert_has(
+            &ward_names,
+            &["list_session_agents", "handoff_to_agent", "steer_agent"],
+        );
+    }
+
+    #[test]
+    fn ordinary_subagents_do_not_get_handoff_tools_even_when_deps_are_wired() {
+        let executor_names =
+            registry_names_with_agent_control_deps(RuntimeActorKind::DelegatedExecutor);
+        assert_missing(
+            &executor_names,
+            &["list_session_agents", "handoff_to_agent", "steer_agent"],
+        );
+
+        let reviewer_names =
+            registry_names_with_agent_control_deps(RuntimeActorKind::DelegatedReviewer);
+        assert_missing(
+            &reviewer_names,
+            &["list_session_agents", "handoff_to_agent", "steer_agent"],
+        );
     }
 
     #[test]

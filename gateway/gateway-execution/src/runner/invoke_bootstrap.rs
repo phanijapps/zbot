@@ -173,8 +173,10 @@ fn root_orchestrator_tool_names(bootstrap: &InvokeBootstrap) -> Vec<String> {
         names.push("run_procedure".to_string());
     }
     if bootstrap.steering_registry.is_some() {
+        names.push("handoff_to_agent".to_string());
         names.push("steer_agent".to_string());
     }
+    names.push("list_session_agents".to_string());
     if bootstrap.agent_result_bus.is_some() {
         names.push("wait_agent".to_string());
         names.push("kill_agent".to_string());
@@ -759,13 +761,13 @@ impl InvokeBootstrap {
             );
             builder = builder.with_ward_usage(observer);
         }
+        builder = builder.with_state_service(self.state_service.clone());
         if let Some(ref sr) = self.steering_registry {
             builder = builder.with_steering_registry(sr.clone());
         }
         if let Some(ref bus) = self.agent_result_bus {
             builder = builder
                 .with_agent_result_bus(bus.clone())
-                .with_state_service(self.state_service.clone())
                 .with_conversation_repo(self.conversation_repo.clone());
         }
         if let Some(ref ps) = self.procedure_store {
