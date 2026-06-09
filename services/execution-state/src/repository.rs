@@ -4,6 +4,7 @@
 
 use crate::types::*;
 use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 // ============================================================================
@@ -215,6 +216,158 @@ impl<D: StateDbProvider> StateRepository<D> {
         }
 
         Ok(result)
+    }
+
+    /// List bounded Mission Control summary rows without loading logs/messages.
+    pub fn list_mission_control_summaries(
+        &self,
+        filter: &MissionControlFilter,
+    ) -> Result<Vec<MissionControlSessionSummary>, String> {
+        const DEFAULT_LIMIT: u32 = 50;
+        const MAX_LIMIT: u32 = 200;
+
+        let limit = filter.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
+        let sessions = self.list_sessions(&SessionFilter {
+            limit: Some(limit),
+            offset: filter.offset,
+            ..Default::default()
+        })?;
+
+        if sessions.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let session_ids: Vec<String> = sessions.iter().map(|s| s.id.clone()).collect();
+        let executions_by_session = self.list_executions_for_sessions(&session_ids)?;
+
+        let mut summaries = Vec::with_capacity(sessions.len());
+        for session in sessions {
+            let executions = executions_by_session
+                .get(&session.id)
+                .cloned()
+                .unwrap_or_default();
+
+            let root_execution = executions
+                .iter()
+                .find(|e| e.delegation_type == DelegationType::Root)
+                .or_else(|| executions.iter().find(|e| e.parent_execution_id.is_none()));
+
+            let root_execution_id = root_execution
+                .map(|e| e.id.clone())
+                .unwrap_or_else(|| session.id.clone());
+
+            let subagent_count = executions
+                .iter()
+                .filter(|e| e.delegation_type != DelegationType::Root)
+                .count() as u32;
+
+            summaries.push(MissionControlSessionSummary {
+                conversation_id: session.id,
+                root_execution_id,
+                status: session.status,
+                source: session.source,
+                root_agent_id: session.root_agent_id,
+                title: session.title,
+                created_at: session.created_at,
+                started_at: session.started_at,
+                completed_at: session.completed_at,
+                total_tokens_in: session.total_tokens_in,
+                total_tokens_out: session.total_tokens_out,
+                subagent_count,
+                mode: session.mode,
+            });
+        }
+
+        Ok(summaries)
+    }
+
+    /// Get per-execution token slices for one selected Mission Control session.
+    pub fn get_mission_control_session_tokens(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<MissionControlSessionTokens>, String> {
+        let Some(session) = self.get_session(session_id)? else {
+            return Ok(None);
+        };
+
+        let executions = self.list_executions(&ExecutionFilter {
+            session_id: Some(session.id.clone()),
+            ..Default::default()
+        })?;
+
+        let root_execution = executions
+            .iter()
+            .find(|e| e.delegation_type == DelegationType::Root)
+            .or_else(|| executions.iter().find(|e| e.parent_execution_id.is_none()));
+
+        let root_execution_id = root_execution
+            .map(|e| e.id.clone())
+            .unwrap_or_else(|| session.id.clone());
+
+        let execution_summaries = executions
+            .into_iter()
+            .map(|e| MissionControlExecutionSummary {
+                execution_id: e.id,
+                agent_id: e.agent_id,
+                delegation_type: e.delegation_type,
+                tokens_in: e.tokens_in,
+                tokens_out: e.tokens_out,
+                child_session_id: e.child_session_id,
+            })
+            .collect();
+
+        Ok(Some(MissionControlSessionTokens {
+            conversation_id: session.id,
+            root_execution_id,
+            total_tokens_in: session.total_tokens_in,
+            total_tokens_out: session.total_tokens_out,
+            executions: execution_summaries,
+        }))
+    }
+
+    fn list_executions_for_sessions(
+        &self,
+        session_ids: &[String],
+    ) -> Result<HashMap<String, Vec<AgentExecution>>, String> {
+        if session_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        self.db.with_connection(|conn| {
+            let placeholders = std::iter::repeat_n("?", session_ids.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT id, session_id, agent_id, parent_execution_id,
+                        delegation_type, task, status,
+                        started_at, completed_at,
+                        tokens_in, tokens_out, checkpoint, error, log_path,
+                        child_session_id
+                 FROM agent_executions
+                 WHERE session_id IN ({placeholders})
+                 ORDER BY session_id ASC,
+                          CASE delegation_type WHEN 'root' THEN 0 ELSE 1 END,
+                          started_at ASC"
+            );
+
+            let params_refs: Vec<&dyn rusqlite::ToSql> = session_ids
+                .iter()
+                .map(|id| id as &dyn rusqlite::ToSql)
+                .collect();
+            let mut stmt = conn.prepare(&sql)?;
+            let executions = stmt
+                .query_map(params_refs.as_slice(), |row| Self::row_to_execution(row))?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let mut by_session: HashMap<String, Vec<AgentExecution>> = HashMap::new();
+            for execution in executions {
+                by_session
+                    .entry(execution.session_id.clone())
+                    .or_default()
+                    .push(execution);
+            }
+            Ok(by_session)
+        })
     }
 
     // =========================================================================
@@ -1430,6 +1583,134 @@ mod tests {
         };
         let sessions = repo.list_sessions(&filter).unwrap();
         assert_eq!(sessions.len(), 2);
+    }
+
+    #[test]
+    fn mission_control_summaries_default_to_fifty_rows() {
+        let repo = setup_repo();
+
+        for i in 0..55 {
+            let session = Session::new(format!("agent{}", i));
+            repo.create_session(&session).unwrap();
+            repo.create_execution(&AgentExecution::new_root(
+                &session.id,
+                &session.root_agent_id,
+            ))
+            .unwrap();
+        }
+
+        let summaries = repo
+            .list_mission_control_summaries(&MissionControlFilter::default())
+            .unwrap();
+
+        assert_eq!(summaries.len(), 50);
+    }
+
+    #[test]
+    fn mission_control_summaries_clamp_excessive_limit() {
+        let repo = setup_repo();
+
+        for i in 0..205 {
+            let session = Session::new(format!("agent{}", i));
+            repo.create_session(&session).unwrap();
+            repo.create_execution(&AgentExecution::new_root(
+                &session.id,
+                &session.root_agent_id,
+            ))
+            .unwrap();
+        }
+
+        let summaries = repo
+            .list_mission_control_summaries(&MissionControlFilter {
+                limit: Some(500),
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(summaries.len(), 200);
+    }
+
+    #[test]
+    fn mission_control_summaries_are_list_only_rows() {
+        let repo = setup_repo();
+        let mut session = Session::new("root-agent");
+        session.total_tokens_in = 100;
+        session.total_tokens_out = 25;
+        repo.create_session(&session).unwrap();
+
+        let mut root = AgentExecution::new_root(&session.id, "root-agent");
+        root.id = "exec-root".to_string();
+        root.tokens_in = 70;
+        root.tokens_out = 20;
+        repo.create_execution(&root).unwrap();
+
+        let mut child = AgentExecution::new_delegated(
+            &session.id,
+            "analyst-agent",
+            &root.id,
+            DelegationType::Sequential,
+            "analyze",
+        );
+        child.id = "exec-child".to_string();
+        child.tokens_in = 30;
+        child.tokens_out = 5;
+        repo.create_execution(&child).unwrap();
+
+        let summaries = repo
+            .list_mission_control_summaries(&MissionControlFilter::default())
+            .unwrap();
+
+        assert_eq!(summaries.len(), 1);
+        let summary = &summaries[0];
+        assert_eq!(summary.conversation_id, session.id);
+        assert_eq!(summary.root_execution_id, "exec-root");
+        assert_eq!(summary.total_tokens_in, 100);
+        assert_eq!(summary.total_tokens_out, 25);
+        assert_eq!(summary.subagent_count, 1);
+
+        let json = serde_json::to_value(summary).unwrap();
+        assert!(json.get("executions").is_none());
+        assert!(json.get("child_execution_ids").is_none());
+    }
+
+    #[test]
+    fn mission_control_session_tokens_include_execution_slices() {
+        let repo = setup_repo();
+        let mut session = Session::new("root-agent");
+        session.total_tokens_in = 100;
+        session.total_tokens_out = 25;
+        repo.create_session(&session).unwrap();
+
+        let mut root = AgentExecution::new_root(&session.id, "root-agent");
+        root.id = "exec-root".to_string();
+        root.tokens_in = 70;
+        root.tokens_out = 20;
+        repo.create_execution(&root).unwrap();
+
+        let mut child = AgentExecution::new_delegated(
+            &session.id,
+            "analyst-agent",
+            &root.id,
+            DelegationType::Sequential,
+            "analyze",
+        );
+        child.id = "exec-child".to_string();
+        child.tokens_in = 30;
+        child.tokens_out = 5;
+        repo.create_execution(&child).unwrap();
+
+        let tokens = repo
+            .get_mission_control_session_tokens(&session.id)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(tokens.conversation_id, session.id);
+        assert_eq!(tokens.root_execution_id, "exec-root");
+        assert_eq!(tokens.total_tokens_in, 100);
+        assert_eq!(tokens.total_tokens_out, 25);
+        assert_eq!(tokens.executions.len(), 2);
+        assert_eq!(tokens.executions[0].execution_id, "exec-root");
+        assert_eq!(tokens.executions[1].execution_id, "exec-child");
     }
 
     #[test]

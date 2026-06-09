@@ -50,6 +50,8 @@ use std::sync::Arc;
 /// ## Sessions (V2 API)
 /// - `GET /v2/sessions` - List sessions (basic)
 /// - `GET /v2/sessions/full` - List sessions with executions (dashboard)
+/// - `GET /v2/mission-control/sessions` - List bounded Mission Control summaries
+/// - `GET /v2/mission-control/sessions/:id/tokens` - Selected-session token slices
 /// - `GET /v2/sessions/:id` - Get session detail
 /// - `GET /v2/sessions/:id/full` - Get session with all executions
 /// - `GET /v2/sessions/:id/messages` - Get session messages with scope filtering
@@ -77,6 +79,14 @@ where
         // Sessions (V2 API - use /v2/sessions/full for dashboard)
         .route("/v2/sessions", get(handlers::list_sessions::<D>))
         .route("/v2/sessions/full", get(handlers::list_sessions_full::<D>))
+        .route(
+            "/v2/mission-control/sessions",
+            get(handlers::list_mission_control_sessions::<D>),
+        )
+        .route(
+            "/v2/mission-control/sessions/:id/tokens",
+            get(handlers::get_mission_control_session_tokens::<D>),
+        )
         .route(
             "/v2/sessions/:id",
             get(handlers::get_session::<D>).delete(handlers::delete_session::<D>),

@@ -8,6 +8,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
+import { createElement, StrictMode, type PropsWithChildren } from "react";
 import type { LogSession } from "@/services/transport/types";
 import { useRecentSessions } from "./mission-hooks";
 
@@ -47,6 +48,21 @@ function makeRow(overrides: Partial<LogSession> & { conversation_id: string }): 
 
 describe("useRecentSessions", () => {
   beforeEach(() => listLogSessionsMock.mockReset());
+
+  it("coalesces StrictMode mount refresh into one recent-sessions request", async () => {
+    listLogSessionsMock.mockResolvedValue({
+      success: true,
+      data: [makeRow({ conversation_id: "s-1" })],
+    });
+    const wrapper = ({ children }: PropsWithChildren) =>
+      createElement(StrictMode, null, children);
+
+    const { result } = renderHook(() => useRecentSessions(), { wrapper });
+    await waitFor(() => expect(result.current.sessions.length).toBe(1));
+
+    expect(listLogSessionsMock).toHaveBeenCalledTimes(1);
+    expect(listLogSessionsMock).toHaveBeenCalledWith({ limit: 5, root_only: true });
+  });
 
   it("requests limit=5 when no exclude predicate is provided", async () => {
     listLogSessionsMock.mockResolvedValue({

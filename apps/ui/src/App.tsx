@@ -3,7 +3,7 @@
 // Main application for standalone web dashboard (no Tauri, no vaults)
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate, Link, useLocation, useParams } from "react-router-dom";
 import { Toaster } from "sonner";
 import {
@@ -33,7 +33,6 @@ import { QuickChat } from "./features/chat-v2";
 import { ResearchPage } from "./features/research-v2";
 import { MissionControlPage } from "./features/mission-control";
 import { AccentPicker } from "./components/AccentPicker";
-import { useVersion } from "@/hooks/useVersion";
 
 // ============================================================================
 // Types
@@ -42,6 +41,12 @@ import { useVersion } from "@/hooks/useVersion";
 interface ConnectionStatus {
   connected: boolean;
   error?: string;
+}
+
+interface AppInitResult {
+  connected: boolean;
+  error?: string;
+  version?: string;
 }
 
 // ============================================================================
@@ -63,8 +68,7 @@ function ResearchV2Redirect() {
  * the build.rs that runs on `make install` / `scripts/install.sh`. Plain
  * `cargo build` reports the bare `2026.5.3`.
  */
-function VersionBadge() {
-  const version = useVersion();
+function VersionBadge({ version }: { version?: string | null }) {
   if (!version) return null;
   return (
     <span className="topbar__version" title={`z-bot ${version}`}>
@@ -80,63 +84,61 @@ function App() {
   });
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+  const [daemonVersion, setDaemonVersion] = useState<string | null>(null);
+  const initPromiseRef = useRef<Promise<AppInitResult> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    const initializeApp = async () => {
-      try {
-        await initializeTransport();
+    const initializeApp = async (): Promise<AppInitResult> => {
+      await initializeTransport();
+      const transport = await getTransport();
+      const healthResult = await transport.health();
 
-        // Check if cancelled before proceeding
-        if (cancelled) return;
-
-        const transport = await getTransport();
-        const healthResult = await transport.health();
-
-        if (cancelled) return;
-
-        if (!healthResult.success) {
-          setError(`Cannot connect to gateway: ${healthResult.error}`);
-          setConnectionStatus({ connected: false, error: healthResult.error });
-          return;
-        }
-
-        // Check again before connecting WebSocket
-        if (cancelled) return;
-
-        await transport.connect();
-
-        if (cancelled) {
-          // If cancelled during connect, disconnect immediately
-          transport.disconnect();
-          return;
-        }
-
-        setConnectionStatus({ connected: true });
-      } catch (err) {
-        if (cancelled) return;
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        setError(errorMessage);
-        setConnectionStatus({ connected: false, error: errorMessage });
-      } finally {
-        if (!cancelled) {
-          setIsInitializing(false);
-        }
+      if (!healthResult.success) {
+        return {
+          connected: false,
+          error: `Cannot connect to gateway: ${healthResult.error}`,
+        };
       }
+
+      await transport.connect();
+      return {
+        connected: true,
+        version: healthResult.data?.version,
+      };
     };
 
-    initializeApp();
+    if (!initPromiseRef.current) {
+      initPromiseRef.current = initializeApp().catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        return { connected: false, error: message };
+      });
+    }
+
+    void initPromiseRef.current.then((result) => {
+      if (cancelled) return;
+      if (!result.connected) {
+        setError(result.error ?? "Cannot connect to gateway");
+        setConnectionStatus({ connected: false, error: result.error });
+      } else {
+        setError(null);
+        setConnectionStatus({ connected: true });
+        setDaemonVersion(result.version ?? null);
+      }
+      setIsInitializing(false);
+    });
 
     return () => {
       cancelled = true;
-      getTransport().then(t => t.disconnect());
     };
   }, [retryCount]);
 
   const handleRetry = () => {
     setError(null);
+    setDaemonVersion(null);
     setIsInitializing(true);
+    initPromiseRef.current = null;
     setRetryCount(c => c + 1);
   };
 
@@ -200,7 +202,7 @@ function App() {
           {/* Main app with sidebar */}
           <Route path="/*" element={
             <SetupGuard>
-              <WebAppShell connectionStatus={connectionStatus}>
+              <WebAppShell connectionStatus={connectionStatus} version={daemonVersion}>
                 <Routes>
                   <Route path="/" element={<Navigate to="/research" replace />} />
                   <Route path="/mission-control" element={<MissionControlPage />} />
@@ -242,6 +244,7 @@ function App() {
 interface WebAppShellProps {
   children: React.ReactNode;
   connectionStatus: ConnectionStatus;
+  version?: string | null;
 }
 
 // Flat top-bar nav — no groups, no Main/Manage/System split.
@@ -266,7 +269,7 @@ export const navItems: NavItem[] = [
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
-export function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
+export function WebAppShell({ children, connectionStatus, version }: WebAppShellProps) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const location = useLocation();
   // Close the mobile sheet whenever the route changes.
@@ -302,7 +305,7 @@ export function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
         </nav>
 
         <div className="topbar__right">
-          <VersionBadge />
+          <VersionBadge version={version} />
           <AccentPicker />
           <div className="connection-status">
             <div className={`connection-status__dot ${

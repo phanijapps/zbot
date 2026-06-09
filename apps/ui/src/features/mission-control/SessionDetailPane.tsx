@@ -4,6 +4,7 @@
 // grid hosting MessagesPane and ToolsPane side-by-side.
 // ============================================================================
 
+import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Pause, Square, RotateCcw, ExternalLink } from "lucide-react";
 import type { LogSession } from "@/services/transport/types";
@@ -12,6 +13,8 @@ import { MessagesPane } from "./MessagesPane";
 import { ToolsPane } from "./ToolsPane";
 import { TokenPair } from "./SessionListPanel";
 import type { SessionTokenIndex } from "./useSessionTokens";
+import { useSessionDetailBundle } from "./useSessionDetailBundle";
+import { useSelectedSessionTokens } from "./useSelectedSessionTokens";
 
 interface SessionDetailPaneProps {
   session: LogSession | null;
@@ -22,6 +25,15 @@ interface SessionDetailPaneProps {
 
 export function SessionDetailPane({ session, tokenIndex }: SessionDetailPaneProps) {
   const navigate = useNavigate();
+  const sessionId = session?.session_id ?? null;
+  const conversationId = session?.conversation_id ?? null;
+  const isRunning = session?.status === "running";
+  const detail = useSessionDetailBundle(sessionId, isRunning);
+  const selectedTokenIndex = useSelectedSessionTokens(conversationId);
+  const detailTokenIndex = useMemo(
+    () => mergeTokenIndexes(tokenIndex, selectedTokenIndex),
+    [tokenIndex, selectedTokenIndex],
+  );
 
   if (!session) {
     return (
@@ -34,10 +46,9 @@ export function SessionDetailPane({ session, tokenIndex }: SessionDetailPaneProp
   }
 
   const status = session.status;
-  const isRunning = status === "running";
   const title = session.title || session.agent_name || session.session_id;
   const duration = formatDuration(session.duration_ms);
-  const sessionTokens = tokenIndex?.byRootExecId.get(session.session_id);
+  const sessionTokens = detailTokenIndex?.byRootExecId.get(session.session_id);
 
   return (
     <section className="session-detail-pane">
@@ -99,8 +110,19 @@ export function SessionDetailPane({ session, tokenIndex }: SessionDetailPaneProp
         </div>
       </header>
       <div className="session-detail-pane__panes">
-        <MessagesPane session={session} />
-        <ToolsPane session={session} tokenIndex={tokenIndex} />
+        <MessagesPane
+          session={session}
+          detailBundle={detail.bundle}
+          detailLoading={detail.loading}
+          detailError={detail.error}
+        />
+        <ToolsPane
+          session={session}
+          tokenIndex={detailTokenIndex}
+          detailBundle={detail.bundle}
+          detailLoading={detail.loading}
+          onDetailEvent={detail.refetch}
+        />
       </div>
     </section>
   );
@@ -108,4 +130,19 @@ export function SessionDetailPane({ session, tokenIndex }: SessionDetailPaneProp
 
 function shortId(id: string): string {
   return id.length > 8 ? id.slice(-6) : id;
+}
+
+function mergeTokenIndexes(
+  base?: SessionTokenIndex,
+  selected?: SessionTokenIndex,
+): SessionTokenIndex | undefined {
+  if (!base) return selected;
+  if (!selected) return base;
+  return {
+    byRootExecId: new Map([...base.byRootExecId, ...selected.byRootExecId]),
+    executionsByRootExecId: new Map([
+      ...base.executionsByRootExecId,
+      ...selected.executionsByRootExecId,
+    ]),
+  };
 }

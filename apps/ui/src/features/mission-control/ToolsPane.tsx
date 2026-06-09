@@ -14,15 +14,26 @@ import { useTraceSubscription } from "../logs/useTraceSubscription";
 import { AgentToolGroup } from "./AgentToolGroup";
 import { ToolDetailPopover } from "./ToolDetailPopover";
 import { sumExecutionTokensByAgent, executionTokensById, type SessionTokenIndex } from "./useSessionTokens";
+import type { DetailBundle } from "./useSessionDetailBundle";
 
 interface ToolsPaneProps {
   session: LogSession | null;
   tokenIndex?: SessionTokenIndex;
+  detailBundle?: DetailBundle;
+  detailLoading?: boolean;
+  onDetailEvent?: () => void;
 }
 
-export function ToolsPane({ session, tokenIndex }: ToolsPaneProps) {
+export function ToolsPane({
+  session,
+  tokenIndex,
+  detailBundle,
+  detailLoading,
+  onDetailEvent,
+}: ToolsPaneProps) {
   const sessionId = session?.session_id ?? null;
-  const { trace, loading, refetch } = useSessionTrace(sessionId);
+  const { trace, loading: traceLoading, refetch } = useSessionTrace(sessionId, detailBundle);
+  const loading = detailBundle ? (detailLoading ?? false) : traceLoading;
   const [openTool, setOpenTool] = useState<TraceNode | null>(null);
 
   // Per-agent token totals (agent_id → combined tokens across all runs of that agent).
@@ -45,7 +56,7 @@ export function ToolsPane({ session, tokenIndex }: ToolsPaneProps) {
   // Live: refetch trace whenever a tool_call/tool_result event arrives on
   // the conversation WebSocket (no polling). When the session is finished,
   // useTraceSubscription is a no-op.
-  useTraceSubscription({ session, onEvent: refetch });
+  useTraceSubscription({ session, onEvent: onDetailEvent ?? refetch });
 
   return (
     <div className="mc-pane">

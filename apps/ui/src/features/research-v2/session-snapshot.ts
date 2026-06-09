@@ -78,18 +78,17 @@ export interface ResearchSnapshot {
 }
 
 /**
- * Build a snapshot for `sessionId` by fanning out to
- * `/api/logs/sessions`, `/api/sessions/:id/messages?scope=all`, and
- * `/api/sessions/:id/artifacts` in parallel. Returns null if any required
- * call fails or the root row can't be located — caller typically dispatches
- * ERROR on null.
+ * Build a snapshot for `sessionId` by fanning out to scoped session detail,
+ * `/api/sessions/:id/messages?scope=all`, and `/api/sessions/:id/artifacts`.
+ * Returns null if any required call fails or the root row can't be located —
+ * caller typically dispatches ERROR on null.
  */
 export async function snapshotSession(
   transport: Transport,
   sessionId: string,
 ): Promise<ResearchSnapshot | null> {
-  const [logsRes, msgsRes, artifactsRes, stateRes] = await Promise.all([
-    transport.listLogSessions(),
+  const [rootDetailRes, msgsRes, artifactsRes, stateRes] = await Promise.all([
+    transport.getLogSession(sessionId),
     transport.getSessionMessages(sessionId, { scope: "all" }),
     transport.listSessionArtifacts(sessionId).catch(() => ({ success: false } as const)),
     // /api/sessions/:id/state carries ward info so a reopened session
@@ -98,12 +97,18 @@ export async function snapshotSession(
     transport.getSessionState(sessionId).catch(() => ({ success: false } as const)),
   ]);
 
-  if (!logsRes.success || !logsRes.data) return null;
+  if (!rootDetailRes.success || !rootDetailRes.data) return null;
   if (!msgsRes.success || !msgsRes.data) return null;
 
-  const sessionRows = logsRes.data.filter((r) => r.conversation_id === sessionId);
-  const rootRow = sessionRows.find(isRootRow);
-  if (!rootRow) return null;
+  const rootRow = rootDetailRes.data.session;
+  if (!rootRow || rootRow.conversation_id !== sessionId) return null;
+
+  const childIds = rootRow.child_session_ids ?? [];
+  const childResults = await Promise.all(childIds.map((id) => transport.getLogSession(id)));
+  const childRows = childResults.flatMap((res) => (
+    res.success && res.data ? [res.data.session] : []
+  ));
+  const sessionRows = [rootRow, ...childRows];
 
   const messages = msgsRes.data;
   const artifacts = buildArtifacts(artifactsRes, messages);
@@ -140,15 +145,13 @@ export async function snapshotSession(
   const rootMessages = messages.filter(
     (m) => m.execution_id === rootRow.session_id && !isSystemInjectedUserRow(m),
   );
-  const childRows = sessionRows.filter(
-    (r) => !isRootRow(r) && r.session_id !== rootRow.session_id,
-  );
+  const turnChildRows = childRows.filter((r) => r.session_id !== rootRow.session_id);
   const turns = buildSessionTurns({
     rootSessionId: rootRow.session_id,
     rootEndedAt: rootRow.ended_at ?? null,
     rootStatus: researchStatusToTurnStatus(status),
     rootMessages,
-    childRows,
+    childRows: turnChildRows,
   });
 
   return {
@@ -361,4 +364,3 @@ function dedupeRefs(refs: ResearchArtifactRef[]): ResearchArtifactRef[] {
   }
   return out;
 }
-

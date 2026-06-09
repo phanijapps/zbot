@@ -366,6 +366,25 @@ describe('HttpTransport — query-string builders', () => {
     // Documented behavior: filter `if (filter?.offset)` skips zero.
     expect(u.searchParams.get('offset')).toBeNull();
   });
+
+  it('listMissionControlSessions builds query params and base path', async () => {
+    fetchMock.mockResolvedValue(mockResponse({ body: [] }));
+    const t = newTransport();
+    await t.listMissionControlSessions({ limit: 50, offset: 20 });
+    const [url] = fetchMock.mock.calls[0];
+    const u = new URL(url);
+    expect(u.pathname).toBe('/api/executions/v2/mission-control/sessions');
+    expect(u.searchParams.get('limit')).toBe('50');
+    expect(u.searchParams.get('offset')).toBe('20');
+  });
+
+  it('getMissionControlSessionTokens encodes session id and uses token endpoint', async () => {
+    fetchMock.mockResolvedValue(mockResponse({ body: {} }));
+    const t = newTransport();
+    await t.getMissionControlSessionTokens('sess-abc/123');
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe(`${HTTP}/api/executions/v2/mission-control/sessions/sess-abc%2F123/tokens`);
+  });
 });
 
 // ===========================================================================

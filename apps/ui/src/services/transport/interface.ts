@@ -39,6 +39,9 @@ import type {
   // V2 types
   SessionWithExecutions,
   SessionFilter,
+  MissionControlSessionSummary,
+  MissionControlSessionTokens,
+  MissionControlFilter,
   DashboardStats,
   // Legacy types
   ExecutionSession,
@@ -318,6 +321,12 @@ export interface Transport {
 
   /** List sessions with their executions (V2 API - for dashboard) */
   listSessionsFull(filter?: SessionFilter): Promise<TransportResult<SessionWithExecutions[]>>;
+
+  /** List bounded Mission Control summary rows */
+  listMissionControlSessions(filter?: MissionControlFilter): Promise<TransportResult<MissionControlSessionSummary[]>>;
+
+  /** Get per-execution token slices for one selected Mission Control session */
+  getMissionControlSessionTokens(sessionId: string): Promise<TransportResult<MissionControlSessionTokens>>;
 
   /** Get a single session with executions (V2 API) */
   getSessionFull(sessionId: string): Promise<TransportResult<SessionWithExecutions>>;
