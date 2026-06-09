@@ -11,22 +11,33 @@
 // response.
 // ============================================================================
 
-import { useEffect, useState, useMemo } from "react";
+import { useMemo } from "react";
 import { Brain, MessageSquare, GitBranch, AlertCircle, Loader2 } from "lucide-react";
-import { getTransport } from "@/services/transport";
 import type { LogSession, SessionDetail } from "@/services/transport/types";
+import { useSessionDetailBundle, type DetailBundle } from "./useSessionDetailBundle";
 
 interface MessagesPaneProps {
   session: LogSession | null;
+  detailBundle?: DetailBundle;
+  detailLoading?: boolean;
+  detailError?: string | null;
 }
 
 /** Categories from the session log we render as message-like items. */
 const RENDERED_CATEGORIES = new Set<string>(["intent", "response", "delegation", "error"]);
 
-export function MessagesPane({ session }: MessagesPaneProps) {
+export function MessagesPane({
+  session,
+  detailBundle,
+  detailLoading,
+  detailError,
+}: MessagesPaneProps) {
   const sessionId = session?.session_id ?? null;
   const isRunning = session?.status === "running";
-  const { bundle, loading, error } = useSessionDetailWithLive(sessionId, isRunning);
+  const internal = useSessionDetailBundle(detailBundle ? null : sessionId, isRunning);
+  const bundle = detailBundle ?? internal.bundle;
+  const loading = detailBundle ? (detailLoading ?? false) : internal.loading;
+  const error = detailBundle ? (detailError ?? null) : internal.error;
 
   const messages = useMemo(() => extractMessages(bundle.root, bundle.children), [bundle]);
 
@@ -59,67 +70,6 @@ export function MessagesPane({ session }: MessagesPaneProps) {
       </div>
     </div>
   );
-}
-
-// ----------------------------------------------------------------------------
-// Live data fetch — re-fetches SessionDetail every 2s while running. The
-// payload is small (logs are paged at the gateway), so a short interval is
-// cheap and the UX gain is large.
-// ----------------------------------------------------------------------------
-
-interface DetailBundle {
-  /** The root session detail. Always set when sessionId is non-null and load succeeded. */
-  root: SessionDetail | null;
-  /** Detail records for each direct child session (one delegation per child). */
-  children: SessionDetail[];
-}
-
-function useSessionDetailWithLive(sessionId: string | null, isRunning: boolean) {
-  const [bundle, setBundle] = useState<DetailBundle>({ root: null, children: [] });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    if (!sessionId) { setBundle({ root: null, children: [] }); return; }
-    let cancelled = false;
-    setLoading(true);
-    (async () => {
-      try {
-        const transport = await getTransport();
-        const rootResult = await transport.getLogSession(sessionId);
-        if (cancelled) return;
-        if (!rootResult.success || !rootResult.data) {
-          setError(rootResult.error ?? "failed");
-          return;
-        }
-        const root = rootResult.data;
-        const childIds = root.session.child_session_ids ?? [];
-        const childResults = await Promise.all(childIds.map((id) => transport.getLogSession(id)));
-        if (cancelled) return;
-        const children: SessionDetail[] = [];
-        for (const cr of childResults) {
-          if (cr.success && cr.data) children.push(cr.data);
-        }
-        setBundle({ root, children });
-        setError(null);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [sessionId, tick]);
-
-  // Live refresh every 2s while running; stops when the session terminates.
-  useEffect(() => {
-    if (!sessionId || !isRunning) return;
-    const id = setInterval(() => setTick((t) => t + 1), 2000);
-    return () => clearInterval(id);
-  }, [sessionId, isRunning]);
-
-  return { bundle, loading, error };
 }
 
 // ----------------------------------------------------------------------------

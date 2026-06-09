@@ -1,36 +1,19 @@
 // ============================================================================
 // MISSION CONTROL — useSessionTokens
 //
-// `LogSession` (from /api/logs/sessions) doesn't carry token counts in any
-// reliable shape — `token_count` returns 0 for everything in the current
-// gateway. Worse, that endpoint also reports STALE STATUS — it can mark a
-// session as "completed" while the v2 endpoint correctly shows "running".
-// We treat the v2 endpoint as the source of truth for both tokens AND
-// status, then merge it into the LogSession list at the page level.
-//
-// `/api/executions/v2/sessions/full` carries:
-//
-//   SessionWithExecutions:
-//     id                  → "sess-..."
-//     status              → SessionStateStatus (queued/running/paused/completed/crashed)
-//     total_tokens_in/out → cumulative across all the session's executions
-//     executions[]        → per-agent execution records, each carrying:
-//        id              → "exec-..."   (this matches LogSession.session_id!)
-//        session_id      → "sess-..."   (parent session id)
-//        agent_id        → "root" | "research-agent" | …
-//        tokens_in/out   → tokens for THIS agent's slice of the session
-//
-// We fetch the full list, then build keyed lookups:
-//   • totals + canonical status by root execution id
-//   • per-execution slices by root execution id
-//
-// The hook auto-refreshes every 5s while any session is in `running` /
-// `queued` status (matches the cadence of useAutoRefresh on the log list).
+// Mission Control's initial list must stay lightweight. The hook uses the
+// bounded summary endpoint for aggregate totals and canonical status only;
+// selected-session per-execution token slices are loaded separately by
+// useSelectedSessionTokens.
 // ============================================================================
 
 import { useState, useEffect, useRef } from "react";
 import { getTransport } from "@/services/transport";
-import type { SessionStateStatus, SessionStatus } from "@/services/transport/types";
+import type {
+  MissionControlSessionSummary,
+  SessionStateStatus,
+  SessionStatus,
+} from "@/services/transport/types";
 
 /** Cumulative session totals (root + all subagents) + canonical status. */
 export interface SessionTokenSummary {
@@ -68,8 +51,8 @@ const EMPTY_INDEX: SessionTokenIndex = {
 };
 
 /**
- * Hook: fetches /api/executions/v2/sessions/full and returns a token-lookup
- * index keyed by root execution id (so it joins cleanly with LogSession data).
+ * Hook: fetches bounded Mission Control summaries and returns aggregate token
+ * lookups keyed by root execution id.
  *
  * @param activelyRunning  When true, the hook polls every 5s. Pass `false`
  *   when no sessions are in flight to skip background traffic.
@@ -85,10 +68,10 @@ export function useSessionTokens(activelyRunning: boolean): SessionTokenIndex {
     (async () => {
       try {
         const transport = await getTransport();
-        const result = await transport.listSessionsFull({ limit: 200 });
+        const result = await transport.listMissionControlSessions({ limit: 50 });
         if (cancelled) return;
         if (!result.success || !result.data) return;
-        setIndex(buildIndex(result.data));
+        setIndex(buildSummaryIndex(result.data));
       } catch {
         // Swallow — the token columns will simply stay empty until the next
         // successful refresh. Better than tearing down the page.
@@ -104,6 +87,26 @@ export function useSessionTokens(activelyRunning: boolean): SessionTokenIndex {
   }, [activelyRunning]);
 
   return index;
+}
+
+/** Pure: turn lightweight Mission Control rows into aggregate token lookups. */
+export function buildSummaryIndex(summaries: MissionControlSessionSummary[]): SessionTokenIndex {
+  const byRootExecId = new Map<string, SessionTokenSummary>();
+  const executionsByRootExecId = new Map<string, ExecutionTokenEntry[]>();
+
+  for (const s of summaries) {
+    const tokensIn = s.total_tokens_in ?? 0;
+    const tokensOut = s.total_tokens_out ?? 0;
+    byRootExecId.set(s.root_execution_id, {
+      in: tokensIn,
+      out: tokensOut,
+      total: tokensIn + tokensOut,
+      status: s.status,
+    });
+    executionsByRootExecId.set(s.root_execution_id, []);
+  }
+
+  return { byRootExecId, executionsByRootExecId };
 }
 
 /** Pure: turn the raw API list into the keyed lookup the UI needs. */

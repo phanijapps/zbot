@@ -16,6 +16,8 @@ import type {
   Artifact,
   ConversationEvent,
   LogSession,
+  MissionControlSessionSummary,
+  SessionDetail,
   SessionMessage,
   SessionStatus,
 } from "@/services/transport/types";
@@ -29,7 +31,8 @@ const executeAgent = vi.fn<Transport["executeAgent"]>();
 const stopAgent = vi.fn<Transport["stopAgent"]>();
 const getSessionMessages = vi.fn<Transport["getSessionMessages"]>();
 const listSessionArtifacts = vi.fn<Transport["listSessionArtifacts"]>();
-const listLogSessions = vi.fn<Transport["listLogSessions"]>();
+const getLogSession = vi.fn<Transport["getLogSession"]>();
+const listMissionControlSessions = vi.fn<Transport["listMissionControlSessions"]>();
 const getSessionState = vi.fn<Transport["getSessionState"]>();
 const unsubscribeSpy = vi.fn<() => void>();
 // Ordered log of all transport calls to assert subscribe-before-invoke.
@@ -42,7 +45,8 @@ vi.mock("@/services/transport", () => ({
     stopAgent,
     getSessionMessages,
     listSessionArtifacts,
-    listLogSessions,
+    getLogSession,
+    listMissionControlSessions,
     getSessionState,
     // R14h recovery uses this to re-check session_id on reconnect.
     onConnectionStateChange: () => () => undefined,
@@ -114,6 +118,39 @@ function makeRootRow(sessionId: string, overrides: Partial<LogSession> = {}): Lo
   };
 }
 
+function detailFromRow(row: LogSession): SessionDetail {
+  return { session: row, logs: [] };
+}
+
+function mockSessionDetails(rows: LogSession[]): void {
+  getLogSession.mockImplementation(async (id: string) => {
+    const row = rows.find((r) => r.conversation_id === id || r.session_id === id);
+    return row
+      ? { success: true, data: detailFromRow(row) }
+      : { success: false, error: "missing session" };
+  });
+}
+
+function makeSummary(
+  sessionId: string,
+  overrides: Partial<MissionControlSessionSummary> = {},
+): MissionControlSessionSummary {
+  return {
+    root_execution_id: `exec-${sessionId}`,
+    root_agent_id: "root",
+    conversation_id: sessionId,
+    source: "web",
+    title: "Recovered",
+    created_at: "2026-04-19T00:00:00.000Z",
+    started_at: "2026-04-19T00:00:00.000Z",
+    status: "running",
+    total_tokens_in: 0,
+    total_tokens_out: 0,
+    subagent_count: 0,
+    ...overrides,
+  };
+}
+
 function makeUserMessage(sessionId: string): SessionMessage {
   return {
     id: "m-user-1",
@@ -133,7 +170,8 @@ beforeEach(() => {
   stopAgent.mockReset();
   getSessionMessages.mockReset();
   listSessionArtifacts.mockReset();
-  listLogSessions.mockReset();
+  getLogSession.mockReset();
+  listMissionControlSessions.mockReset();
   getSessionState.mockReset();
   unsubscribeSpy.mockReset();
 
@@ -148,7 +186,8 @@ beforeEach(() => {
   stopAgent.mockResolvedValue({ success: true, data: undefined });
   getSessionMessages.mockResolvedValue({ success: true, data: [] });
   listSessionArtifacts.mockResolvedValue({ success: true, data: [] });
-  listLogSessions.mockResolvedValue({ success: true, data: [] });
+  getLogSession.mockResolvedValue({ success: false, error: "missing session" });
+  listMissionControlSessions.mockResolvedValue({ success: true, data: [] });
   // Default: benign snapshot state — tests that care about ward info override.
   getSessionState.mockResolvedValue({
     success: true,
@@ -311,10 +350,7 @@ describe("useResearchSession — subscription ordering (R14a)", () => {
 
   it("hydrate + sendMessage: subscribe fires with a fresh convId; invoke carries the sessionId", async () => {
     const EXISTING_SESSION = "sess-existing-123";
-    listLogSessions.mockResolvedValueOnce({
-      success: true,
-      data: [makeRootRow(EXISTING_SESSION)],
-    });
+    mockSessionDetails([makeRootRow(EXISTING_SESSION)]);
     getSessionMessages.mockResolvedValueOnce({
       success: true,
       data: [makeUserMessage(EXISTING_SESSION)],
@@ -330,7 +366,7 @@ describe("useResearchSession — subscription ordering (R14a)", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(listLogSessions).toHaveBeenCalled();
+    expect(getLogSession).toHaveBeenCalledWith(EXISTING_SESSION);
     expect(getSessionMessages).toHaveBeenCalledWith(
       EXISTING_SESSION,
       expect.objectContaining({ scope: "all" }),
@@ -422,11 +458,31 @@ function makeArtifact(id: string, sessionId = "sess-existing-123"): Artifact {
 describe("useResearchSession — snapshot flow (R14f)", () => {
   const EXISTING_SESSION = "sess-existing-123";
 
-  it("hydrates title + turns + artifacts via snapshotSession on open", async () => {
-    listLogSessions.mockResolvedValueOnce({
+  it("StrictMode hydrate only starts one scoped root detail request", async () => {
+    mockSessionDetails([makeRootRow(EXISTING_SESSION, { title: "Hydrated title" })]);
+    getSessionMessages.mockResolvedValueOnce({
       success: true,
-      data: [makeRootRow(EXISTING_SESSION, { title: "Hydrated title" })],
+      data: [makeUserMessage(EXISTING_SESSION)],
     });
+    listSessionArtifacts.mockResolvedValue({ success: true, data: [] });
+
+    const { result } = renderHook(() => useResearchSession(), {
+      wrapper: strictRouterWrapper(`/research/${EXISTING_SESSION}`),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.state.sessionId).toBe(EXISTING_SESSION);
+    expect(getLogSession).toHaveBeenCalledTimes(1);
+    expect(getLogSession).toHaveBeenCalledWith(EXISTING_SESSION);
+  });
+
+  it("hydrates title + turns + artifacts via snapshotSession on open", async () => {
+    mockSessionDetails([makeRootRow(EXISTING_SESSION, { title: "Hydrated title" })]);
     getSessionMessages.mockResolvedValueOnce({
       success: true,
       data: [makeUserMessage(EXISTING_SESSION)],
@@ -461,10 +517,7 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
     // Initial open: idle (a just-created fresh session that the user sends to).
     // Previously-running snapshots don't re-subscribe (documented R14f limitation),
     // so drive sendMessage to create the subscription and capture onEvent.
-    listLogSessions.mockResolvedValueOnce({
-      success: true,
-      data: [makeRootRow(EXISTING_SESSION, { title: "" })],
-    });
+    mockSessionDetails([makeRootRow(EXISTING_SESSION, { title: "" })]);
     getSessionMessages.mockResolvedValueOnce({ success: true, data: [] });
     listSessionArtifacts.mockResolvedValueOnce({ success: true, data: [] });
 
@@ -494,15 +547,12 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
     const onEvent = convCall![1].onEvent;
 
     // Second snapshot returns the finalised title + artifact.
-    listLogSessions.mockResolvedValue({
-      success: true,
-      data: [
-        makeRootRow(EXISTING_SESSION, {
-          title: "Final title",
-          status: "completed" as SessionStatus,
-        }),
-      ],
-    });
+    mockSessionDetails([
+      makeRootRow(EXISTING_SESSION, {
+        title: "Final title",
+        status: "completed" as SessionStatus,
+      }),
+    ]);
     getSessionMessages.mockResolvedValue({ success: true, data: [] });
     listSessionArtifacts.mockResolvedValue({
       success: true,
@@ -532,10 +582,7 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
   });
 
   it("child agent_completed does NOT trigger a re-snapshot", async () => {
-    listLogSessions.mockResolvedValue({
-      success: true,
-      data: [makeRootRow(EXISTING_SESSION)],
-    });
+    mockSessionDetails([makeRootRow(EXISTING_SESSION)]);
     getSessionMessages.mockResolvedValue({ success: true, data: [] });
     listSessionArtifacts.mockResolvedValue({ success: true, data: [] });
 
@@ -551,7 +598,7 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
       await result.current.sendMessage("hello");
     });
 
-    const callsAfterOpen = listLogSessions.mock.calls.length;
+    const callsAfterOpen = getLogSession.mock.calls.length;
     const onEvent = subscribeConversation.mock.calls[0][1].onEvent;
 
     act(() => {
@@ -571,14 +618,11 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
     });
 
     // No extra snapshot calls — children don't retrigger reconcile.
-    expect(listLogSessions.mock.calls.length).toBe(callsAfterOpen);
+    expect(getLogSession.mock.calls.length).toBe(callsAfterOpen);
   });
 
   it("no polling after the snapshot completes", async () => {
-    listLogSessions.mockResolvedValue({
-      success: true,
-      data: [makeRootRow(EXISTING_SESSION)],
-    });
+    mockSessionDetails([makeRootRow(EXISTING_SESSION)]);
     getSessionMessages.mockResolvedValue({ success: true, data: [] });
     listSessionArtifacts.mockResolvedValue({ success: true, data: [] });
 

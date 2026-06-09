@@ -11,7 +11,8 @@
 //   via `makeEventHandler`, so one dispatch is enough to route reducer
 //   actions.
 // - All methods the hooks might call — including R14g/R14h/R19 additions
-//   (listLogSessions, deleteSession, onConnectionStateChange) — MUST be
+//   (getLogSession, listMissionControlSessions, deleteSession,
+//   onConnectionStateChange) — MUST be
 //   stubs, otherwise the hook throws "transport.X is not a function".
 // =============================================================================
 
@@ -20,6 +21,7 @@ import type {
   Artifact,
   ConversationEvent,
   LogSession,
+  MissionControlSessionSummary,
   SessionMessage,
 } from "@/services/transport/types";
 
@@ -43,7 +45,9 @@ export interface MockTransportCalls {
   stopAgent: ReturnType<typeof vi.fn>;
   deleteSession: ReturnType<typeof vi.fn>;
   subscribeConversation: ReturnType<typeof vi.fn>;
+  getLogSession: ReturnType<typeof vi.fn>;
   listLogSessions: ReturnType<typeof vi.fn>;
+  listMissionControlSessions: ReturnType<typeof vi.fn>;
   onConnectionStateChange: ReturnType<typeof vi.fn>;
   unsubscribe: ReturnType<typeof vi.fn>;
 }
@@ -62,7 +66,9 @@ export interface MockTransport {
   stopAgent: MockTransportCalls["stopAgent"];
   deleteSession: MockTransportCalls["deleteSession"];
   subscribeConversation: MockTransportCalls["subscribeConversation"];
+  getLogSession: MockTransportCalls["getLogSession"];
   listLogSessions: MockTransportCalls["listLogSessions"];
+  listMissionControlSessions: MockTransportCalls["listMissionControlSessions"];
   onConnectionStateChange: MockTransportCalls["onConnectionStateChange"];
   getConnectionState: () => { status: "connected" };
   getArtifactContentUrl: (id: string) => string;
@@ -73,6 +79,7 @@ export interface MockTransportOptions {
   messages?: SessionMessage[];
   artifacts?: Artifact[];
   logSessions?: LogSession[];
+  missionControlSessions?: MissionControlSessionSummary[];
 }
 
 // -----------------------------------------------------------------------------
@@ -125,9 +132,20 @@ export function makeMockTransport(
         return unsubscribe;
       },
     ),
+    getLogSession: vi.fn().mockImplementation(async (id: string) => {
+      const row = (opts.logSessions ?? []).find(
+        (s) => s.conversation_id === id || s.session_id === id,
+      );
+      return row
+        ? { success: true, data: { session: row, logs: [] } }
+        : { success: false, error: "missing session" };
+    }),
     listLogSessions: vi
       .fn()
       .mockResolvedValue({ success: true, data: opts.logSessions ?? [] }),
+    listMissionControlSessions: vi
+      .fn()
+      .mockResolvedValue({ success: true, data: opts.missionControlSessions ?? [] }),
     onConnectionStateChange: vi.fn(() => () => undefined),
     unsubscribe,
   };
@@ -142,7 +160,9 @@ export function makeMockTransport(
     stopAgent: calls.stopAgent,
     deleteSession: calls.deleteSession,
     subscribeConversation: calls.subscribeConversation,
+    getLogSession: calls.getLogSession,
     listLogSessions: calls.listLogSessions,
+    listMissionControlSessions: calls.listMissionControlSessions,
     onConnectionStateChange: calls.onConnectionStateChange,
     getConnectionState: () => ({ status: "connected" }),
     getArtifactContentUrl: (id: string) => `/api/artifacts/${id}`,
