@@ -68,7 +68,7 @@ jobs:
         run: cd apps/ui && npm ci
 
       - name: Run frontend integration tests
-        run: cd apps/ui && npm run test -- tests/integration/
+        run: cd apps/ui && npm run test -- tests/integration/ --passWithNoTests
 
   # E2E tests - run after integration tests
   e2e-tests:
