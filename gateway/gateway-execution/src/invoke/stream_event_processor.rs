@@ -80,6 +80,7 @@ fn handle_delegation_event(ctx: &StreamContext, event: &StreamEvent) {
         output_schema,
         skills,
         complexity,
+        mode,
         parallel,
         child_execution_id,
         ..
@@ -94,6 +95,7 @@ fn handle_delegation_event(ctx: &StreamContext, event: &StreamEvent) {
             output_schema,
             skills,
             complexity,
+            mode,
             *parallel,
             child_execution_id.as_deref(),
         );

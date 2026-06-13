@@ -2,6 +2,7 @@
 //!
 //! Provider resolution and agent loading utilities for execution setup.
 
+use crate::delegation::DelegationMode;
 use agent_tools::ToolSettings;
 use gateway_services::providers::Provider;
 use gateway_services::{AgentService, ProviderService, SettingsService, SharedVaultPaths};
@@ -266,7 +267,7 @@ impl<'a> AgentLoader<'a> {
                 // Append OS context and shards so pre-configured agents
                 // also know platform commands (PowerShell vs bash, etc.)
                 agent.instructions =
-                    append_system_context(&agent.instructions, &self.paths, SubagentRole::Executor);
+                    append_system_context_without_rules(&agent.instructions, &self.paths);
                 let provider = self.provider_resolver.get_or_default(&agent.provider_id)?;
                 Ok((agent, provider))
             }
@@ -435,38 +436,88 @@ pub enum SubagentRole {
 }
 
 /// Detect subagent role from task description.
-pub fn detect_subagent_role(_agent_id: &str, task: &str) -> SubagentRole {
+pub fn detect_subagent_role(agent_id: &str, task: &str) -> SubagentRole {
+    let agent_lower = agent_id.to_lowercase();
     let task_lower = task.to_lowercase();
-    let review_signals = [
-        "review",
-        "validate",
-        "verify",
-        "evaluate",
-        "check quality",
-        "assess",
-        "qa",
-        "audit",
-    ];
-    if review_signals.iter().any(|s| task_lower.contains(s)) {
-        SubagentRole::Reviewer
-    } else {
-        SubagentRole::Executor
+
+    if is_reviewer_agent(&agent_lower) {
+        return SubagentRole::Reviewer;
     }
+    if has_execution_signal(&task_lower) {
+        return SubagentRole::Executor;
+    }
+    if has_read_only_review_signal(&task_lower) {
+        return SubagentRole::Reviewer;
+    }
+    if is_execution_agent(&agent_lower) {
+        return SubagentRole::Executor;
+    }
+    if has_review_signal(&task_lower) {
+        return SubagentRole::Reviewer;
+    }
+
+    SubagentRole::Executor
 }
 
-pub fn subagent_rules(role: SubagentRole) -> &'static str {
+fn is_reviewer_agent(agent_lower: &str) -> bool {
+    agent_lower == "reviewer-agent"
+        || agent_lower.contains("reviewer")
+        || agent_lower.contains("review-agent")
+}
+
+fn is_execution_agent(agent_lower: &str) -> bool {
+    [
+        "builder-agent",
+        "research-agent",
+        "planner-agent",
+        "writing-agent",
+        "code-agent",
+    ]
+    .iter()
+    .any(|agent| agent_lower == *agent)
+}
+
+fn has_execution_signal(task_lower: &str) -> bool {
+    [
+        "find ", "fetch", "scrape", "write", "create", "run ", "parse", "extract", "generate",
+        "save", "build", "load", "search", "gather", "collect",
+    ]
+    .iter()
+    .any(|signal| task_lower.contains(signal))
+}
+
+fn has_read_only_review_signal(task_lower: &str) -> bool {
+    [
+        "read-only review",
+        "review without changing",
+        "review without editing",
+        "inspect and report",
+        "report defects",
+        "do not write",
+        "no shell",
+        "no file changes",
+        "result: approved",
+        "result: defects",
+        "quality review",
+    ]
+    .iter()
+    .any(|signal| task_lower.contains(signal))
+}
+
+fn has_review_signal(task_lower: &str) -> bool {
+    ["review", "audit"]
+        .iter()
+        .any(|signal| task_lower.contains(signal))
+}
+
+pub fn subagent_rules(role: SubagentRole, mode: DelegationMode) -> &'static str {
     match role {
-        SubagentRole::Executor => {
-            "\n\n# RULES\n\
-            First: enter ward, read AGENTS.md + memory-bank/core_docs.md. Reuse core/ — never recreate.\n\
-            Execute with write_file + edit_file + shell. Extract reusable functions to core/ when done.\n\
-            Respond with: files created, commands run, errors.\n"
-        }
+        SubagentRole::Executor => executor_rules(mode),
         SubagentRole::Reviewer => {
             "\n\n# --- SUBAGENT RULES ---\n\
             You are reviewing work produced by another agent. Think critically and independently.\n\
             1. Read the specs and the implementation carefully before forming opinions.\n\
-            2. Run the code and examine actual output — don't trust claims.\n\
+            2. Inspect source files, provided context, and command output already produced by executor/root agents.\n\
             3. Evaluate with domain expertise — are values reasonable? Is data complete?\n\
             4. Report your findings in structured format.\n\n\
             ## Report Format\n\
@@ -475,6 +526,32 @@ pub fn subagent_rules(role: SubagentRole) -> &'static str {
             or\n\
             RESULT: DEFECTS\n\
             - {file_or_output}: {issue} (severity: high|medium|low)\n"
+        }
+    }
+}
+
+fn executor_rules(mode: DelegationMode) -> &'static str {
+    match mode {
+        DelegationMode::DirectArtifact => {
+            "\n\n# RULES: direct_artifact\n\
+            Create the exact requested output files first. Do not read unrelated documentation or root workspace docs.\n\
+            Use write_file/edit_file/shell as needed, verify the files exist, and respond with artifact paths, commands run, and errors.\n"
+        }
+        DelegationMode::WardHygiene => {
+            "\n\n# RULES: ward_hygiene\n\
+            Enter the ward and fill only missing or empty AGENTS.md and memory-bank/{ward.md,structure.md,core_docs.md} files.\n\
+            Preserve non-empty ward doctrine. Respond with updated paths, checks run, and errors.\n"
+        }
+        DelegationMode::WardBackedBuild => {
+            "\n\n# RULES: ward_backed_build\n\
+            Read the supplied ward_snapshot and only the relevant ward files before coding. Reuse registered primitives before creating new ones.\n\
+            Execute with write_file/edit_file/shell and update memory-bank/core_docs.md only for new reusable primitives or changed reusable structure.\n\
+            Respond with files changed, commands run, memory updates, and errors.\n"
+        }
+        DelegationMode::StepExecutor => {
+            "\n\n# RULES: step_executor\n\
+            Execute the delegated step spec exactly: read Goal, Inputs, Outputs, Acceptance, and any Paths table before writing.\n\
+            Write outputs to the specified paths, run acceptance checks, update required summaries/manifests, and respond with step result paths and errors.\n"
         }
     }
 }
@@ -494,11 +571,13 @@ pub fn append_system_context(
     let os_context =
         std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md")).unwrap_or_default();
 
-    // Rules: only append if not already present (delegated agents prepend rules in spawn.rs)
+    // Rules: only append if not already present (delegated agents prepend
+    // mode-specific rules in spawn.rs). Direct non-root loads use the
+    // conservative ward-backed posture.
     let rules = if instructions.contains("# RULES") {
         "" // Already prepended by spawn.rs
     } else {
-        subagent_rules(role)
+        subagent_rules(role, DelegationMode::WardBackedBuild)
     };
 
     // Memory shard for all agents — subagents are knowledge readers AND writers
@@ -525,6 +604,25 @@ pub fn append_system_context(
     format!(
         "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}\n\n{}\n\n{}{}",
         instructions, os_context, memory_shard, curation_shard, ctx_shard, rules
+    )
+}
+
+fn append_system_context_without_rules(instructions: &str, paths: &SharedVaultPaths) -> String {
+    let os_context =
+        std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md")).unwrap_or_default();
+    let memory_shard = gateway_templates::Templates::get("shards/memory_learning.md")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .unwrap_or_default();
+    let curation_shard = gateway_templates::Templates::get("shards/ward_curation.md")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .unwrap_or_default();
+    let ctx_shard = gateway_templates::Templates::get("shards/session_ctx.md")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .unwrap_or_default();
+
+    format!(
+        "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}\n\n{}\n\n{}",
+        instructions, os_context, memory_shard, curation_shard, ctx_shard
     )
 }
 
@@ -564,7 +662,7 @@ fn compose_ward_agent_instructions(
     ward_name: &str,
     doctrine: &str,
 ) -> String {
-    let mut instructions = append_system_context(identity.trim(), paths, SubagentRole::Executor);
+    let mut instructions = append_system_context_without_rules(identity.trim(), paths);
     if !doctrine.trim().is_empty() {
         instructions.push_str(&format!(
             "\n\n# --- WARD DOCTRINE: {ward_name} ---\n\n{}\n",

@@ -204,6 +204,13 @@ pub struct DelegateAction {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub complexity: Option<String>,
 
+    /// Optional execution posture for the delegated child.
+    ///
+    /// Gateway validates this wire value and maps it to its internal
+    /// DelegationMode enum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+
     /// Whether to run this delegation in parallel (skip per-session queue).
     ///
     /// When true, the delegation bypasses the sequential queue and runs
@@ -308,10 +315,12 @@ mod tests {
             output_schema: None,
             skills: vec![],
             complexity: Some("M".to_string()),
+            mode: Some("ward_backed_build".to_string()),
             parallel: false,
             child_execution_id: None,
         };
         assert_eq!(action.complexity, Some("M".to_string()));
+        assert_eq!(action.mode.as_deref(), Some("ward_backed_build"));
     }
 
     #[test]
@@ -319,5 +328,6 @@ mod tests {
         let json = r#"{"agent_id":"a","task":"t","wait_for_result":false,"skills":[]}"#;
         let action: DelegateAction = serde_json::from_str(json).unwrap();
         assert_eq!(action.complexity, None);
+        assert_eq!(action.mode, None);
     }
 }

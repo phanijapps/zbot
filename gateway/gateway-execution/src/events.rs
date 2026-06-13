@@ -424,6 +424,7 @@ mod tests {
             output_schema: None,
             skills: vec![],
             complexity: None,
+            mode: None,
             parallel: false,
             child_execution_id: None,
         })
