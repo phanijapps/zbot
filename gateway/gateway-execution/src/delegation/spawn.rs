@@ -485,7 +485,7 @@ fn reuse_check_block(agent_id: &str) -> Option<&'static str> {
          ✗ WRONG: Writing a parallel copy of a listed primitive under a different name (e.g. `goog-dcf-model.py` when `core/valuation.py::dcf_valuation(...)` is listed).\n\
          ✗ WRONG: Putting reusable code inside the task directory (`<task>/core/`, `<task>/lib/`). Reusable code is ward-level per Conventions.\n\
          ✗ WRONG: Writing code without emitting the reuse_audit block first — that's guessing, not reusing.\n\
-         </reuse_check>"
+         </reuse_check>",
     )
 }
 

@@ -15,7 +15,7 @@
 // (`useResearchSession.ts`) and chat-v2 owns its own (`useQuickChat.ts`).
 // =============================================================================
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getTransport } from "@/services/transport";
 import type { LogSession } from "@/services/transport/types";
 
@@ -80,23 +80,34 @@ const FINAL_CAP = 5;
  */
 export function useRecentSessions(options: UseRecentSessionsOptions = {}) {
   const [sessions, setSessions] = useState<LogSession[]>([]);
+  const loadInFlightRef = useRef<Promise<LogSession[]> | null>(null);
   const { exclude } = options;
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      try {
-        const transport = await getTransport();
-        const limit = exclude ? RAW_LIMIT_WITH_EXCLUDE : RAW_LIMIT_PLAIN;
-        const res = await transport.listLogSessions({ limit, root_only: true });
-        if (cancelled || !res.success || !res.data) return;
-        const filtered = exclude ? res.data.filter((r) => !exclude(r)) : res.data;
-        setSessions(filtered.slice(0, FINAL_CAP));
-      } catch (err) {
-        console.error("[useRecentSessions] Failed to load sessions:", err);
-      }
+      if (loadInFlightRef.current) return loadInFlightRef.current;
+      const loadPromise = (async () => {
+        try {
+          const transport = await getTransport();
+          const limit = exclude ? RAW_LIMIT_WITH_EXCLUDE : RAW_LIMIT_PLAIN;
+          const res = await transport.listLogSessions({ limit, root_only: true });
+          if (!res.success || !res.data) return [];
+          const filtered = exclude ? res.data.filter((r) => !exclude(r)) : res.data;
+          return filtered.slice(0, FINAL_CAP);
+        } catch (err) {
+          console.error("[useRecentSessions] Failed to load sessions:", err);
+          return [];
+        } finally {
+          loadInFlightRef.current = null;
+        }
+      })();
+      loadInFlightRef.current = loadPromise;
+      return loadPromise;
     };
-    load();
+    load().then((rows) => {
+      if (!cancelled) setSessions(rows);
+    }).catch(() => {});
     return () => {
       cancelled = true;
     };

@@ -2,15 +2,81 @@
 // useSessionTokens — pure buildIndex + sumExecutionTokensByAgent helpers
 // ============================================================================
 
-import { describe, it, expect } from "vitest";
+import { renderHook, waitFor } from "@testing-library/react";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import {
   buildIndex,
+  buildSummaryIndex,
   sumExecutionTokensByAgent,
   executionTokensById,
   normalizeV2Status,
   applyV2Status,
+  useSessionTokens,
 } from "./useSessionTokens";
-import type { LogSession } from "@/services/transport/types";
+import type { LogSession, MissionControlSessionSummary } from "@/services/transport/types";
+import type { Transport } from "@/services/transport/interface";
+
+const listMissionControlSessions = vi.fn<Transport["listMissionControlSessions"]>();
+const listSessionsFull = vi.fn<Transport["listSessionsFull"]>();
+
+vi.mock("@/services/transport", () => ({
+  getTransport: async () => ({
+    listMissionControlSessions,
+    listSessionsFull,
+  }),
+}));
+
+function makeSummary(overrides: Partial<MissionControlSessionSummary> = {}): MissionControlSessionSummary {
+  return {
+    conversation_id: "sess-1",
+    root_execution_id: "exec-root-1",
+    status: "running",
+    source: "web",
+    root_agent_id: "root-agent",
+    title: "Mission row",
+    created_at: "2026-06-09T10:00:00Z",
+    started_at: "2026-06-09T10:00:00Z",
+    total_tokens_in: 100,
+    total_tokens_out: 25,
+    subagent_count: 1,
+    mode: "deep",
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  listMissionControlSessions.mockReset();
+  listSessionsFull.mockReset();
+});
+
+describe("useSessionTokens", () => {
+  it("uses bounded Mission Control summaries instead of full session payloads", async () => {
+    listMissionControlSessions.mockResolvedValue({ success: true, data: [makeSummary()] });
+
+    const { result } = renderHook(() => useSessionTokens(false));
+
+    await waitFor(() => {
+      expect(result.current.byRootExecId.get("exec-root-1")?.total).toBe(125);
+    });
+    expect(listMissionControlSessions).toHaveBeenCalledWith({ limit: 50 });
+    expect(listSessionsFull).not.toHaveBeenCalled();
+    expect(result.current.executionsByRootExecId.get("exec-root-1")).toEqual([]);
+  });
+});
+
+describe("buildSummaryIndex", () => {
+  it("builds aggregate token totals without per-execution entries", () => {
+    const idx = buildSummaryIndex([makeSummary()]);
+
+    expect(idx.byRootExecId.get("exec-root-1")).toEqual({
+      in: 100,
+      out: 25,
+      total: 125,
+      status: "running",
+    });
+    expect(idx.executionsByRootExecId.get("exec-root-1")).toEqual([]);
+  });
+});
 
 describe("buildIndex", () => {
   it("returns empty maps for an empty input", () => {

@@ -4,6 +4,8 @@ Active feature specs for AgentZero.
 
 | Spec | Status | Summary |
 | --- | --- | --- |
+| [Tool Waste Visibility](tool-waste-visibility/spec.md) | Done | Makes blocked hooks, invalid tool arguments, planner skill drift, and tool durations visible in existing session telemetry. |
+| [Mission Control Performance](mission-control-performance/spec.md) | Draft | Makes Mission Control load bounded summary data first, then lazy-load selected-session detail as the database grows. |
 | [GitHub Release Installer](github-release-installer/spec.md) | Draft | Defines GitHub Release installers and artifact packaging for Linux, macOS, and Windows. |
 | [Release On Main](release-on-main/spec.md) | Implementing | Automates the daily CalVer release bump and tag when changes land on `main`, while preserving the manual release script. |
 | [Agent Handoff Notes](agent-handoff-notes/spec.md) | Implementing | Adds current-session agent discovery and one-way handoff notes over existing steering without implementing full Pattern 4 peer messaging. |

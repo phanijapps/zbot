@@ -22,6 +22,7 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::context_management::{sanitize_messages, truncate_tool_result};
 use crate::llm::client::StreamChunk;
@@ -1011,7 +1012,7 @@ impl AgentExecutor {
                 .filter(|tc| !blocked_results.contains_key(&tc.id))
                 .collect();
 
-            let results: Vec<Result<ToolExecutionResult, String>> = if self
+            let results: Vec<(Result<ToolExecutionResult, String>, i64)> = if self
                 .config
                 .tool_execution_mode
                 == ToolExecutionMode::Sequential
@@ -1019,10 +1020,12 @@ impl AgentExecutor {
                 // Sequential: execute one at a time, in order
                 let mut seq_results = Vec::new();
                 for tc in &non_blocked {
+                    let started = Instant::now();
                     let result = self
                         .execute_tool(&shared_tool_context, &tc.id, &tc.name, &tc.arguments)
                         .await;
-                    seq_results.push(result);
+                    let duration_ms = started.elapsed().as_millis() as i64;
+                    seq_results.push((result, duration_ms));
                 }
                 seq_results
             } else {
@@ -1036,7 +1039,10 @@ impl AgentExecutor {
                         let args = tc.arguments.clone();
                         async move {
                             tracing::debug!("Executing tool: {} with args: {}", tool_name, args);
-                            self.execute_tool(&ctx, &tool_id, &tool_name, &args).await
+                            let started = Instant::now();
+                            let result = self.execute_tool(&ctx, &tool_id, &tool_name, &args).await;
+                            let duration_ms = started.elapsed().as_millis() as i64;
+                            (result, duration_ms)
                         }
                     })
                     .collect();
@@ -1044,7 +1050,7 @@ impl AgentExecutor {
             };
 
             // Build a map of executed results (keyed by tool_call id)
-            let mut executed_results: HashMap<String, Result<ToolExecutionResult, String>> =
+            let mut executed_results: HashMap<String, (Result<ToolExecutionResult, String>, i64)> =
                 HashMap::new();
             for (tc, result) in non_blocked.into_iter().zip(results) {
                 executed_results.insert(tc.id.clone(), result);
@@ -1064,10 +1070,12 @@ impl AgentExecutor {
                         timestamp: chrono::Utc::now().timestamp_millis() as u64,
                         tool_id: tool_call.id.clone(),
                         result: "[blocked by hook]".to_string(),
-                        error: None,
+                        error: Some("blocked_by_hook".to_string()),
+                        duration_ms: Some(0),
                     });
                     progress_tracker.record_tool_call(&tool_call.name, &tool_call.arguments, false);
                 } else if let Some(result) = executed_results.remove(&tool_call.id) {
+                    let (result, duration_ms) = result;
                     match result {
                         Ok(tool_result) => {
                             let output = tool_result.output;
@@ -1282,6 +1290,7 @@ impl AgentExecutor {
                                 tool_id: tool_call.id.clone(),
                                 result: output.clone(),
                                 error: None,
+                                duration_ms: Some(duration_ms),
                             });
 
                             // Process tool result (potentially offload large results to filesystem)
@@ -1324,6 +1333,7 @@ impl AgentExecutor {
                                 tool_id: tool_call.id.clone(),
                                 result: String::new(),
                                 error: Some(e.clone()),
+                                duration_ms: Some(duration_ms),
                             });
 
                             // afterToolCall hook — can transform error results too
@@ -2392,9 +2402,70 @@ mod executor_helper_coverage_tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, StreamEvent::TokenUpdate { .. })));
+        assert!(events.iter().any(|e| {
+            matches!(
+                e,
+                StreamEvent::ToolResult {
+                    error: None,
+                    duration_ms: Some(_),
+                    ..
+                }
+            )
+        }));
         assert!(events.iter().any(|e| matches!(e, StreamEvent::Done { .. })));
         // Should have called LLM once (respond stops the loop)
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn blocked_before_tool_call_emits_warning_grade_tool_result() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let llm = Arc::new(ToolCallThenDoneLlm {
+            calls: Arc::clone(&calls),
+            tool_name: "respond".to_string(),
+        });
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(crate::tools::RespondTool::new()));
+
+        let mut cfg = ExecutorConfig::new("agent".into(), "p".into(), "m".into());
+        cfg.before_tool_call = Some(Arc::new(|_, _| ToolCallDecision::Block {
+            reason: "test block".to_string(),
+        }));
+        let exec = AgentExecutor::new(
+            cfg,
+            llm,
+            Arc::new(registry),
+            Arc::new(McpManager::new()),
+            Arc::new(MiddlewarePipeline::new()),
+        )
+        .unwrap();
+
+        let mut events = Vec::new();
+        exec.execute_stream("trigger blocked respond", &[], |e| events.push(e))
+            .await
+            .unwrap();
+
+        let blocked = events
+            .iter()
+            .find_map(|e| {
+                if let StreamEvent::ToolResult {
+                    result,
+                    error,
+                    duration_ms,
+                    ..
+                } = e
+                {
+                    Some((result, error, duration_ms))
+                } else {
+                    None
+                }
+            })
+            .expect("expected blocked ToolResult event");
+
+        assert_eq!(blocked.0, "[blocked by hook]");
+        assert_eq!(blocked.1.as_deref(), Some("blocked_by_hook"));
+        assert_eq!(*blocked.2, Some(0));
     }
 
     /// Stub LLM that emits a tool call for an UNREGISTERED tool, exercising

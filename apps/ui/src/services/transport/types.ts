@@ -605,6 +605,7 @@ export interface LogSession {
   tool_call_count: number;
   error_count: number;
   duration_ms?: number;
+  subagent_count?: number;
   child_session_ids: string[];
   /**
    * Execution mode persisted on the underlying `sessions` row. `"fast"`
@@ -706,12 +707,54 @@ export interface SessionWithExecutions {
   subagent_count: number;
 }
 
+/** Minimal execution token slice for selected Mission Control detail */
+export interface MissionControlExecutionSummary {
+  execution_id: string;
+  agent_id: string;
+  delegation_type: DelegationType;
+  tokens_in: number;
+  tokens_out: number;
+  child_session_id?: string;
+}
+
+/** Bounded Mission Control session row */
+export interface MissionControlSessionSummary {
+  conversation_id: string;
+  root_execution_id: string;
+  status: SessionStateStatus;
+  source: TriggerSource;
+  root_agent_id: string;
+  title?: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  total_tokens_in: number;
+  total_tokens_out: number;
+  subagent_count: number;
+  mode?: string | null;
+}
+
+/** Per-execution token slices for one selected Mission Control session */
+export interface MissionControlSessionTokens {
+  conversation_id: string;
+  root_execution_id: string;
+  total_tokens_in: number;
+  total_tokens_out: number;
+  executions: MissionControlExecutionSummary[];
+}
+
 /** Filter for querying sessions */
 export interface SessionFilter {
   status?: SessionStateStatus;
   root_agent_id?: string;
   from_time?: string;
   to_time?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** Filter for Mission Control summary rows */
+export interface MissionControlFilter {
   limit?: number;
   offset?: number;
 }

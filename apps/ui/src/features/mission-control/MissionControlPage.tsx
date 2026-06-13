@@ -5,46 +5,25 @@
 //   2. SessionListPanel — left rail with search + filters
 //   3. SessionDetailPane — right pane with messages + tools dual view
 //
-// Data: useLogSessions (status + metadata) + useSessionTokens (per-session +
-// per-execution input/output tokens from the v2 API). Two endpoints are
-// joined by execution id; LogSession.session_id == AgentExecution.id of the
-// root execution.
+// Data: useMissionControlSessions pulls a bounded summary page with root
+// execution rows plus minimal per-execution token slices.
 // Live: ToolsPane wires the WS subscription per selected session; the list
-// + tokens both auto-refresh every 5s while any session is running.
+// auto-refreshes every 5s while any session is running.
 // ============================================================================
 
 import { useMemo, useState } from "react";
 import type { LogSession } from "@/services/transport/types";
-import { useLogSessions, useAutoRefresh } from "../logs/log-hooks";
+import { useAutoRefresh } from "../logs/log-hooks";
 import { computeKpis } from "./kpi";
 import { KpiStrip } from "./KpiStrip";
 import { SessionListPanel, applyFilters, DEFAULT_FILTERS } from "./SessionListPanel";
 import { SessionDetailPane } from "./SessionDetailPane";
-import { useSessionTokens, applyV2Status } from "./useSessionTokens";
+import { useMissionControlSessions } from "./useMissionControlSessions";
 import type { SessionFilters } from "./types";
 
 export function MissionControlPage() {
-  const { sessions: rawSessions, loading, refetch } = useLogSessions({ root_only: true, limit: 200 });
-  useAutoRefresh(rawSessions, refetch);
-
-  // Pull tokens AND canonical status from /api/executions/v2/sessions/full —
-  // that endpoint has truthful status (the logs endpoint can lie, e.g. report
-  // "completed" while the v2 endpoint correctly says "running"). We poll
-  // while either source thinks something is running, so a stale "completed"
-  // in the logs API can't disable polling.
-  const tokenIndexBootstrap = useSessionTokens(rawSessions.some((s) => s.status === "running"));
-  const anyRunningV2 = useMemo(
-    () => Array.from(tokenIndexBootstrap.byRootExecId.values()).some((e) => e.status === "running"),
-    [tokenIndexBootstrap],
-  );
-  const tokenIndex = useSessionTokens(
-    rawSessions.some((s) => s.status === "running") || anyRunningV2,
-  );
-
-  // Merge the canonical v2 status into each LogSession. Every downstream
-  // consumer (KPI compute, list display, Live badges, WS subscription gating)
-  // reads `session.status` — by overriding it here, they all become correct.
-  const sessions = useMemo(() => applyV2Status(rawSessions, tokenIndex), [rawSessions, tokenIndex]);
+  const { sessions, loading, refetch, tokenIndex } = useMissionControlSessions(50);
+  useAutoRefresh(sessions, refetch);
 
   const [filters, setFilters] = useState<SessionFilters>(DEFAULT_FILTERS);
   const [selectedId, setSelectedId] = useState<string | null>(null);

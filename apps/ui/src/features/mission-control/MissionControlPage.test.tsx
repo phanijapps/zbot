@@ -13,14 +13,27 @@ import { render, screen, fireEvent } from "@/test/utils";
 // Mock SessionChatViewer so the test doesn't need transport plumbing.
 // ---------------------------------------------------------------------------
 
-const mockUseLogSessions = vi.fn();
+const mockUseMissionControlSessions = vi.fn();
+const mockUseSessionDetailBundle = vi.fn();
+const mockUseSelectedSessionTokens = vi.fn();
 const mockUseAutoRefresh = vi.fn();
 const mockUseSessionTrace = vi.fn();
 const mockUseTraceSubscription = vi.fn();
 
 vi.mock("../logs/log-hooks", () => ({
-  useLogSessions: () => mockUseLogSessions(),
   useAutoRefresh: (...args: unknown[]) => mockUseAutoRefresh(...args),
+}));
+
+vi.mock("./useMissionControlSessions", () => ({
+  useMissionControlSessions: (...args: unknown[]) => mockUseMissionControlSessions(...args),
+}));
+
+vi.mock("./useSessionDetailBundle", () => ({
+  useSessionDetailBundle: (...args: unknown[]) => mockUseSessionDetailBundle(...args),
+}));
+
+vi.mock("./useSelectedSessionTokens", () => ({
+  useSelectedSessionTokens: (...args: unknown[]) => mockUseSelectedSessionTokens(...args),
 }));
 
 vi.mock("../logs/useSessionTrace", () => ({
@@ -62,13 +75,24 @@ function makeSession(overrides: Partial<LogSession> = {}): LogSession {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockUseLogSessions.mockReturnValue({
+  mockUseMissionControlSessions.mockReturnValue({
     sessions: [],
+    tokenIndex: { byRootExecId: new Map(), executionsByRootExecId: new Map() },
     loading: false,
     error: null,
     refetch: vi.fn(),
   });
   mockUseSessionTrace.mockReturnValue({ trace: null, loading: false, refetch: vi.fn() });
+  mockUseSessionDetailBundle.mockReturnValue({
+    bundle: { root: null, children: [] },
+    loading: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+  mockUseSelectedSessionTokens.mockReturnValue({
+    byRootExecId: new Map(),
+    executionsByRootExecId: new Map(),
+  });
   mockUseAutoRefresh.mockReturnValue(undefined);
   mockUseTraceSubscription.mockReturnValue(undefined);
 });
@@ -87,11 +111,12 @@ describe("MissionControlPage", () => {
   });
 
   it("renders one row per session in the list", () => {
-    mockUseLogSessions.mockReturnValue({
+    mockUseMissionControlSessions.mockReturnValue({
       sessions: [
         makeSession({ session_id: "alpha-1", title: "alpha" }),
         makeSession({ session_id: "beta-2", title: "beta" }),
       ],
+      tokenIndex: { byRootExecId: new Map(), executionsByRootExecId: new Map() },
       loading: false,
       error: null,
       refetch: vi.fn(),
@@ -103,7 +128,7 @@ describe("MissionControlPage", () => {
 
   it("auto-selects the first visible session when none is selected", () => {
     // Explicit timestamps so applyFilters' newest-first sort is deterministic.
-    mockUseLogSessions.mockReturnValue({
+    mockUseMissionControlSessions.mockReturnValue({
       sessions: [
         makeSession({
           session_id: "first-aaaaaa",
@@ -116,6 +141,7 @@ describe("MissionControlPage", () => {
           started_at: "2026-04-25T21:00:00Z",
         }),
       ],
+      tokenIndex: { byRootExecId: new Map(), executionsByRootExecId: new Map() },
       loading: false,
       error: null,
       refetch: vi.fn(),
@@ -128,11 +154,12 @@ describe("MissionControlPage", () => {
   });
 
   it("switches the detail pane when a different session row is clicked", () => {
-    mockUseLogSessions.mockReturnValue({
+    mockUseMissionControlSessions.mockReturnValue({
       sessions: [
         makeSession({ session_id: "first-1", title: "first" }),
         makeSession({ session_id: "second-2", title: "second" }),
       ],
+      tokenIndex: { byRootExecId: new Map(), executionsByRootExecId: new Map() },
       loading: false,
       error: null,
       refetch: vi.fn(),
@@ -145,11 +172,12 @@ describe("MissionControlPage", () => {
   });
 
   it("toggles a status filter when a chip is clicked", () => {
-    mockUseLogSessions.mockReturnValue({
+    mockUseMissionControlSessions.mockReturnValue({
       sessions: [
         makeSession({ session_id: "ok", title: "ok-row", status: "completed" }),
         makeSession({ session_id: "broken", title: "broken-row", status: "error" }),
       ],
+      tokenIndex: { byRootExecId: new Map(), executionsByRootExecId: new Map() },
       loading: false,
       error: null,
       refetch: vi.fn(),
@@ -161,11 +189,12 @@ describe("MissionControlPage", () => {
   });
 
   it("filters by search term", () => {
-    mockUseLogSessions.mockReturnValue({
+    mockUseMissionControlSessions.mockReturnValue({
       sessions: [
         makeSession({ session_id: "auth-1", title: "refactor auth ward" }),
         makeSession({ session_id: "report-1", title: "summarize Q4 reports" }),
       ],
+      tokenIndex: { byRootExecId: new Map(), executionsByRootExecId: new Map() },
       loading: false,
       error: null,
       refetch: vi.fn(),
@@ -179,8 +208,9 @@ describe("MissionControlPage", () => {
   });
 
   it("hands the WS subscription to the selected session", () => {
-    mockUseLogSessions.mockReturnValue({
+    mockUseMissionControlSessions.mockReturnValue({
       sessions: [makeSession({ session_id: "live-1", status: "running", title: "live-row" })],
+      tokenIndex: { byRootExecId: new Map(), executionsByRootExecId: new Map() },
       loading: false,
       error: null,
       refetch: vi.fn(),

@@ -473,8 +473,7 @@ fn is_execution_agent(agent_lower: &str) -> bool {
         "writing-agent",
         "code-agent",
     ]
-    .iter()
-    .any(|agent| agent_lower == *agent)
+    .contains(&agent_lower)
 }
 
 fn has_execution_signal(task_lower: &str) -> bool {

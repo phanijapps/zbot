@@ -139,6 +139,22 @@ impl<D: StateDbProvider> StateService<D> {
         self.repo.list_sessions_with_executions(filter)
     }
 
+    /// List bounded Mission Control session summaries.
+    pub fn list_mission_control_summaries(
+        &self,
+        filter: &MissionControlFilter,
+    ) -> Result<Vec<MissionControlSessionSummary>, String> {
+        self.repo.list_mission_control_summaries(filter)
+    }
+
+    /// Get selected-session Mission Control token slices.
+    pub fn get_mission_control_session_tokens(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<MissionControlSessionTokens>, String> {
+        self.repo.get_mission_control_session_tokens(session_id)
+    }
+
     /// Find a session by its thread_id.
     ///
     /// Returns the session if found, regardless of its status.

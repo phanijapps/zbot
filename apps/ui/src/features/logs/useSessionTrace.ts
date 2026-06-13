@@ -6,6 +6,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { getTransport } from "@/services/transport";
 import type { SessionDetail, ExecutionLog, LogSession } from "@/services/transport/types";
+import type { DetailBundle } from "../mission-control/useSessionDetailBundle";
 import type { TraceNode } from "./trace-types";
 import { isInternalTool, extractToolSummary } from "./trace-types";
 
@@ -23,7 +24,10 @@ interface UseSessionTraceResult {
 // Hook
 // ============================================================================
 
-export function useSessionTrace(sessionId: string | null): UseSessionTraceResult {
+export function useSessionTrace(
+  sessionId: string | null,
+  preloaded?: DetailBundle,
+): UseSessionTraceResult {
   const [trace, setTrace] = useState<TraceNode | null>(null);
   const [loading, setLoading] = useState(false);
   const [refetchKey, setRefetchKey] = useState(0);
@@ -33,6 +37,17 @@ export function useSessionTrace(sessionId: string | null): UseSessionTraceResult
   useEffect(() => {
     if (!sessionId) {
       setTrace(null);
+      setLoading(false);
+      return;
+    }
+
+    if (preloaded) {
+      if (!preloaded.root) {
+        setTrace(null);
+        setLoading(false);
+        return;
+      }
+      setTrace(buildTraceTree(preloaded.root, preloaded.children));
       setLoading(false);
       return;
     }
@@ -86,7 +101,7 @@ export function useSessionTrace(sessionId: string | null): UseSessionTraceResult
     return () => {
       cancelled = true;
     };
-  }, [sessionId, refetchKey]);
+  }, [sessionId, refetchKey, preloaded]);
 
   return { trace, loading, refetch };
 }
