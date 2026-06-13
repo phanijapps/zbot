@@ -2,7 +2,7 @@
 // session-snapshot — R14f unit tests (post multi-turn refactor).
 //
 // Coverage targets (new shape):
-// - null returns on getLogSession failure and mismatched root row
+// - null returns on listLogSessions failure and missing root row
 // - completed session: title, SessionTurn rollup with subagents per turn
 // - running session: status + conversationId:null documented limitation
 // - turnFromLogRow status mapping (still emits AgentTurn for subagent rows)
@@ -21,12 +21,11 @@ import type { Transport } from "@/services/transport";
 import type {
   Artifact,
   LogSession,
-  SessionDetail,
   SessionMessage,
   SessionStatus,
 } from "@/services/transport/types";
 
-const getLogSession = vi.fn<Transport["getLogSession"]>();
+const listLogSessions = vi.fn<Transport["listLogSessions"]>();
 const getSessionMessages = vi.fn<Transport["getSessionMessages"]>();
 const listSessionArtifacts = vi.fn<Transport["listSessionArtifacts"]>();
 const getSessionState = vi.fn<Transport["getSessionState"]>();
@@ -50,7 +49,7 @@ function makeTransport(): Transport {
     },
   }));
   return {
-    getLogSession,
+    listLogSessions,
     getSessionMessages,
     listSessionArtifacts,
     getSessionState,
@@ -131,25 +130,12 @@ function makeArtifact(id: string, overrides: Partial<Artifact> = {}): Artifact {
   };
 }
 
-function detailFromRow(row: LogSession): SessionDetail {
-  return { session: row, logs: [] };
-}
-
-function mockSessionDetails(rows: LogSession[]): void {
-  getLogSession.mockImplementation(async (id: string) => {
-    const row = rows.find((r) => r.conversation_id === id || r.session_id === id);
-    return row
-      ? { success: true, data: detailFromRow(row) }
-      : { success: false, error: "missing session" };
-  });
-}
-
 // -----------------------------------------------------------------------------
 // Setup
 // -----------------------------------------------------------------------------
 
 beforeEach(() => {
-  getLogSession.mockReset();
+  listLogSessions.mockReset();
   getSessionMessages.mockReset();
   listSessionArtifacts.mockReset();
   getSessionState.mockReset();
@@ -160,8 +146,8 @@ beforeEach(() => {
 // -----------------------------------------------------------------------------
 
 describe("snapshotSession — null returns", () => {
-  it("returns null when getLogSession fails", async () => {
-    getLogSession.mockResolvedValueOnce({ success: false, error: "offline" });
+  it("returns null when listLogSessions fails", async () => {
+    listLogSessions.mockResolvedValueOnce({ success: false, error: "offline" });
     getSessionMessages.mockResolvedValueOnce({ success: true, data: [] });
     listSessionArtifacts.mockResolvedValueOnce({ success: true, data: [] });
 
@@ -174,7 +160,7 @@ describe("snapshotSession — null returns", () => {
       conversation_id: "sess-DIFFERENT",
       parent_session_id: undefined,
     });
-    getLogSession.mockResolvedValueOnce({ success: true, data: detailFromRow(unrelated) });
+    listLogSessions.mockResolvedValueOnce({ success: true, data: [unrelated] });
     getSessionMessages.mockResolvedValueOnce({ success: true, data: [] });
     listSessionArtifacts.mockResolvedValueOnce({ success: true, data: [] });
 
@@ -194,7 +180,6 @@ describe("snapshotSession — completed session", () => {
       title: "Q4 market analysis",
       status: "completed" as SessionStatus,
       parent_session_id: undefined,
-      child_session_ids: [CHILD_EXEC_1, CHILD_EXEC_2],
     });
     const childRow1 = makeRow({
       session_id: CHILD_EXEC_1,
@@ -239,7 +224,10 @@ describe("snapshotSession — completed session", () => {
     // What we DO assert is that the per-turn rollup zips delegation tasks
     // onto the matching subagent in chronological order.
 
-    mockSessionDetails([rootRow, childRow1, childRow2]);
+    listLogSessions.mockResolvedValueOnce({
+      success: true,
+      data: [rootRow, childRow1, childRow2],
+    });
     getSessionMessages.mockResolvedValueOnce({
       success: true,
       data: [userMsg, rootDelegate1, rootDelegate2, rootRespond],
@@ -276,7 +264,7 @@ describe("snapshotSession — completed session", () => {
       parent_session_id: undefined,
       ended_at: undefined,
     });
-    mockSessionDetails([runningRow]);
+    listLogSessions.mockResolvedValueOnce({ success: true, data: [runningRow] });
     getSessionMessages.mockResolvedValueOnce({ success: true, data: [] });
     listSessionArtifacts.mockResolvedValueOnce({ success: true, data: [] });
     // Session-level truth must also say running — the snapshot status is
@@ -316,7 +304,7 @@ describe("snapshotSession — completed session", () => {
       status: "completed" as SessionStatus,
       parent_session_id: undefined,
     });
-    mockSessionDetails([completedRootRow]);
+    listLogSessions.mockResolvedValueOnce({ success: true, data: [completedRootRow] });
     getSessionMessages.mockResolvedValueOnce({ success: true, data: [] });
     listSessionArtifacts.mockResolvedValueOnce({ success: true, data: [] });
     getSessionState.mockResolvedValueOnce({
@@ -374,11 +362,7 @@ describe("turnFromLogRow", () => {
 
 describe("snapshotSession — children zip + sort", () => {
   it("leftover subagents get request:null when delegation count < subagent count", async () => {
-    const rootRow = makeRow({
-      session_id: ROOT_EXEC,
-      parent_session_id: undefined,
-      child_session_ids: ["child-A", "child-B"],
-    });
+    const rootRow = makeRow({ session_id: ROOT_EXEC, parent_session_id: undefined });
     const childA = makeRow({
       session_id: "child-A",
       parent_session_id: ROOT_EXEC,
@@ -402,7 +386,7 @@ describe("snapshotSession — children zip + sort", () => {
       "2026-04-19T00:00:05.000Z",
     );
 
-    mockSessionDetails([rootRow, childB, childA]);
+    listLogSessions.mockResolvedValueOnce({ success: true, data: [rootRow, childB, childA] });
     getSessionMessages.mockResolvedValueOnce({ success: true, data: [userMsg, delegate] });
     listSessionArtifacts.mockResolvedValueOnce({ success: true, data: [] });
 
@@ -432,7 +416,7 @@ describe("snapshotSession — artifacts", () => {
     ]);
     const realArtifact = makeArtifact("real-1", { fileName: "real.md" });
 
-    mockSessionDetails([rootRow]);
+    listLogSessions.mockResolvedValueOnce({ success: true, data: [rootRow] });
     getSessionMessages.mockResolvedValueOnce({ success: true, data: [respondWithHints] });
     listSessionArtifacts.mockResolvedValueOnce({ success: true, data: [realArtifact] });
 
@@ -451,7 +435,7 @@ describe("snapshotSession — artifacts", () => {
       },
     ]);
 
-    mockSessionDetails([rootRow]);
+    listLogSessions.mockResolvedValueOnce({ success: true, data: [rootRow] });
     getSessionMessages.mockResolvedValueOnce({ success: true, data: [respondWithHints] });
     listSessionArtifacts.mockResolvedValueOnce({ success: true, data: [] });
 

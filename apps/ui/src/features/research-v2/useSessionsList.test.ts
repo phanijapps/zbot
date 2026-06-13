@@ -1,9 +1,10 @@
 // ============================================================================
 // useSessionsList — drawer list filter regression coverage
 //
-// The hook fans out two things research-v2's drawer relies on:
-//   1. Drop chat-mode rows via the shared `isChatSession` predicate
-//   2. Drop rows whose conversation_id is missing/empty
+// The hook fans out three things research-v2's drawer relies on:
+//   1. Drop subagent rows (parent_session_id non-empty)
+//   2. Drop chat-mode rows via the shared `isChatSession` predicate
+//   3. Drop rows whose conversation_id is missing/empty (rowToSummary → null)
 //
 // Each axis used to be one inline-logic branch. These tests lock the
 // behavior in so the next refactor of the predicate / shape can't drop
@@ -12,14 +13,13 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor, act } from "@testing-library/react";
-import { createElement, StrictMode, type PropsWithChildren } from "react";
-import type { MissionControlSessionSummary } from "@/services/transport/types";
+import type { LogSession } from "@/services/transport/types";
 
 // ---------------------------------------------------------------------------
-// Transport mock — captures bounded summary + deleteSession invocations.
+// Transport mock — captures listLogSessions + deleteSession invocations.
 // ---------------------------------------------------------------------------
 
-const listMissionControlSessionsMock = vi.fn<() => Promise<{ success: boolean; data?: MissionControlSessionSummary[]; error?: string }>>();
+const listLogSessionsMock = vi.fn<() => Promise<{ success: boolean; data?: LogSession[]; error?: string }>>();
 const deleteSessionMock = vi.fn<(id: string) => Promise<{ success: boolean; error?: string }>>();
 
 vi.mock("@/services/transport", async () => {
@@ -27,7 +27,7 @@ vi.mock("@/services/transport", async () => {
   return {
     ...actual,
     getTransport: async () => ({
-      listMissionControlSessions: listMissionControlSessionsMock,
+      listLogSessions: listLogSessionsMock,
       deleteSession: deleteSessionMock,
     }),
   };
@@ -39,59 +39,37 @@ import { useSessionsList } from "./useSessionsList";
 // Row factory — minimal shape the hook needs.
 // ---------------------------------------------------------------------------
 
-function row(overrides: Partial<MissionControlSessionSummary> & { conversation_id: string }): MissionControlSessionSummary {
+function row(overrides: Partial<LogSession> & { conversation_id: string }): LogSession {
   return {
-    root_execution_id: `exec-${overrides.conversation_id}`,
-    root_agent_id: "root",
-    source: "web",
+    session_id: `exec-${overrides.conversation_id}`,
+    agent_id: "root",
+    agent_name: "root",
     title: "test session",
-    created_at: "2026-04-24T09:59:00Z",
     started_at: "2026-04-24T10:00:00Z",
     status: "completed",
-    total_tokens_in: 0,
-    total_tokens_out: 0,
-    subagent_count: 0,
+    token_count: 0,
+    tool_call_count: 0,
+    error_count: 0,
+    child_session_ids: [],
     ...overrides,
   };
 }
 
 beforeEach(() => {
-  listMissionControlSessionsMock.mockReset();
+  listLogSessionsMock.mockReset();
   deleteSessionMock.mockReset();
 });
 
 describe("useSessionsList — research drawer filter", () => {
-  it("does not auto-load while disabled", async () => {
-    listMissionControlSessionsMock.mockResolvedValue({ success: true, data: [] });
-    const { result } = renderHook(() => useSessionsList({ enabled: false }));
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(listMissionControlSessionsMock).not.toHaveBeenCalled();
-  });
-
-  it("coalesces StrictMode mount refresh into one bounded request", async () => {
-    listMissionControlSessionsMock.mockResolvedValue({
-      success: true,
-      data: [row({ conversation_id: "sess-root" })],
-    });
-    const wrapper = ({ children }: PropsWithChildren) =>
-      createElement(StrictMode, null, children);
-
-    const { result } = renderHook(() => useSessionsList(), { wrapper });
-    await waitFor(() => expect(result.current.sessions.length).toBe(1));
-
-    expect(listMissionControlSessionsMock).toHaveBeenCalledTimes(1);
-    expect(listMissionControlSessionsMock).toHaveBeenCalledWith({ limit: 100 });
-  });
-
   it("returns empty list when transport fails", async () => {
-    listMissionControlSessionsMock.mockResolvedValue({ success: false, error: "boom" });
+    listLogSessionsMock.mockResolvedValue({ success: false, error: "boom" });
     const { result } = renderHook(() => useSessionsList());
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.sessions).toEqual([]);
   });
 
   it("excludes chat-mode sessions (mode='fast')", async () => {
-    listMissionControlSessionsMock.mockResolvedValue({
+    listLogSessionsMock.mockResolvedValue({
       success: true,
       data: [
         row({ conversation_id: "sess-research-1", title: "Q4 analysis", mode: null }),
@@ -105,7 +83,7 @@ describe("useSessionsList — research drawer filter", () => {
   });
 
   it("excludes chat-mode sessions (mode='chat')", async () => {
-    listMissionControlSessionsMock.mockResolvedValue({
+    listLogSessionsMock.mockResolvedValue({
       success: true,
       data: [
         row({ conversation_id: "sess-r", mode: "deep" }),
@@ -118,7 +96,7 @@ describe("useSessionsList — research drawer filter", () => {
   });
 
   it("falls back to sess-chat- prefix when mode field is absent (legacy daemon)", async () => {
-    listMissionControlSessionsMock.mockResolvedValue({
+    listLogSessionsMock.mockResolvedValue({
       success: true,
       data: [
         row({ conversation_id: "sess-research-old" }), // no mode
@@ -130,21 +108,24 @@ describe("useSessionsList — research drawer filter", () => {
     expect(result.current.sessions[0].id).toBe("sess-research-old");
   });
 
-  it("loads bounded root summaries from the mission-control endpoint", async () => {
-    listMissionControlSessionsMock.mockResolvedValue({
+  it("excludes subagent (child) rows", async () => {
+    listLogSessionsMock.mockResolvedValue({
       success: true,
       data: [
         row({ conversation_id: "sess-root" }),
+        row({
+          conversation_id: "sess-root-sub-abc",
+          parent_session_id: "sess-root",
+        }),
       ],
     });
     const { result } = renderHook(() => useSessionsList());
     await waitFor(() => expect(result.current.sessions.length).toBe(1));
     expect(result.current.sessions[0].id).toBe("sess-root");
-    expect(listMissionControlSessionsMock).toHaveBeenCalledWith({ limit: 100 });
   });
 
-  it("drops rows with empty conversation_id", async () => {
-    listMissionControlSessionsMock.mockResolvedValue({
+  it("drops rows with empty conversation_id (rowToSummary → null)", async () => {
+    listLogSessionsMock.mockResolvedValue({
       success: true,
       data: [
         row({ conversation_id: "sess-good" }),
@@ -157,7 +138,7 @@ describe("useSessionsList — research drawer filter", () => {
   });
 
   it("synthesizes a 'New research · HH:MM' title when row has no title", async () => {
-    listMissionControlSessionsMock.mockResolvedValue({
+    listLogSessionsMock.mockResolvedValue({
       success: true,
       data: [
         row({
@@ -172,18 +153,18 @@ describe("useSessionsList — research drawer filter", () => {
     expect(result.current.sessions[0].title).toMatch(/^New research · \d{2}:\d{2}$/);
   });
 
-  it("maps wire status 'crashed' / 'completed' / 'paused' onto the SessionSummary status enum", async () => {
+  it("maps wire status 'error' / 'completed' / 'paused' onto the SessionSummary status enum", async () => {
     // The wire `SessionStatus` enum is narrower than the strings the
     // hook accepts at runtime (it tolerates 'paused' and 'crashed' too).
     // Cast through `as unknown` to feed the broader strings without
     // tightening the SessionStatus type just for this test.
-    listMissionControlSessionsMock.mockResolvedValue({
+    listLogSessionsMock.mockResolvedValue({
       success: true,
       data: [
         row({ conversation_id: "s-running", status: "running" }),
         row({ conversation_id: "s-complete", status: "completed" }),
-        row({ conversation_id: "s-paused", status: "paused" }),
-        row({ conversation_id: "s-error", status: "crashed" }),
+        row({ conversation_id: "s-paused", status: "paused" as unknown as LogSession["status"] }),
+        row({ conversation_id: "s-error", status: "error" }),
       ],
     });
     const { result } = renderHook(() => useSessionsList());
@@ -200,7 +181,7 @@ describe("useSessionsList — research drawer filter", () => {
   });
 
   it("deleteSession honors the confirm dialog and skips the network call when cancelled", async () => {
-    listMissionControlSessionsMock.mockResolvedValue({ success: true, data: [] });
+    listLogSessionsMock.mockResolvedValue({ success: true, data: [] });
     window.confirm = vi.fn(() => false);
     const { result } = renderHook(() => useSessionsList());
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -213,7 +194,7 @@ describe("useSessionsList — research drawer filter", () => {
   });
 
   it("deleteSession fires onAfterDelete only on successful transport delete", async () => {
-    listMissionControlSessionsMock.mockResolvedValue({ success: true, data: [] });
+    listLogSessionsMock.mockResolvedValue({ success: true, data: [] });
     deleteSessionMock.mockResolvedValue({ success: true });
     window.confirm = vi.fn(() => true);
     const onAfterDelete = vi.fn();
@@ -230,7 +211,7 @@ describe("useSessionsList — research drawer filter", () => {
   });
 
   it("deleteSession does NOT fire onAfterDelete when transport returns failure", async () => {
-    listMissionControlSessionsMock.mockResolvedValue({ success: true, data: [] });
+    listLogSessionsMock.mockResolvedValue({ success: true, data: [] });
     deleteSessionMock.mockResolvedValue({ success: false, error: "denied" });
     window.confirm = vi.fn(() => true);
     const onAfterDelete = vi.fn();

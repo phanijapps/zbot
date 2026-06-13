@@ -190,14 +190,13 @@ function MainColumn({ state, onSend }: MainColumnProps) {
 export function ResearchPage() {
   const { state, pillState, sendMessage, stopAgent, startNewResearch, getFullArtifact } =
     useResearchSession();
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const { sessions, refresh: refreshSessions, deleteSession } = useSessionsList({
-    enabled: drawerOpen,
     onAfterDelete: (deletedId) => {
       if (state.sessionId === deletedId) startNewResearch();
     },
   });
   const navigate = useNavigate();
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [viewingArtifact, setViewingArtifact] = useState<Artifact | null>(null);
 
   // Reflect the session title in the browser tab + refresh the drawer list
@@ -209,8 +208,8 @@ export function ResearchPage() {
       : "z-Bot - Web Dashboard";
   }, [derivedTitle, state.sessionId]);
   useEffect(() => {
-    if (drawerOpen && state.title && state.sessionId) void refreshSessions();
-  }, [drawerOpen, state.title, state.sessionId, refreshSessions]);
+    if (state.title && state.sessionId) void refreshSessions();
+  }, [state.title, state.sessionId, refreshSessions]);
 
   // R14d — Decision B: state.artifacts holds the lightweight refs (keeps
   // reducer tests stable); the hook caches the full Artifact records from

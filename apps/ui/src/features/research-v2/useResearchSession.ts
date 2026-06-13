@@ -209,9 +209,9 @@ async function hydrateFromSnapshot(
 
 // --- R14h: reconnect recovery helper --------------------------------------
 //
-// Finds a running bounded summary row whose started_at is within a window of
-// our sendMessage timestamp and dispatches SESSION_BOUND so R14g can take over.
-// No-op if:
+// Finds a running /api/logs/sessions row whose started_at is within a
+// window of our sendMessage timestamp and dispatches SESSION_BOUND so
+// R14g can take over. No-op if:
 //   - state.sessionId is already set (normal flow)
 //   - state.status is not "running" (nothing to recover)
 //   - we never sent anything (lastSendMsRef is null)
@@ -227,13 +227,15 @@ async function recoverSessionIdIfNeeded(
   const sendAt = lastSendMsRef.current;
   if (sendAt == null) return;
   const transport = await getTransport();
-  const res = await transport.listMissionControlSessions({ limit: 20 });
+  const res = await transport.listLogSessions();
   if (!res.success || !res.data) return;
-  // Find a recent running root session whose started_at is close to our send
-  // time. Summary rows are already root-scoped and bounded by recency.
+  // Wire quirk: LogSession.conversation_id is the real sess-*; session_id
+  // is the execution id. Find a root row (no parent) with status "running"
+  // that started close to our send time.
   const match = res.data.find((row) => {
+    if (row.parent_session_id && row.parent_session_id.length > 0) return false;
     if (row.status !== "running") return false;
-    const t = Date.parse(row.started_at ?? row.created_at);
+    const t = Date.parse(row.started_at);
     if (Number.isNaN(t)) return false;
     const delta = Math.abs(t - sendAt);
     return delta <= RECONNECT_RECOVERY_WINDOW_MS;
@@ -289,7 +291,6 @@ export function useResearchSession() {
   const { state: pillState, sink: pillSink } = useStatusPill();
 
   const hydratedForSessionRef = useRef<string | null>(null); // one-shot hydration guard (StrictMode)
-  const hydratingForSessionRef = useRef<string | null>(null);
   const subscribedConvIdRef = useRef<string | null>(null); // R14a: sendMessage owns subscription
   const unsubscribeRef = useRef<UnsubscribeFn | null>(null);
   // R14g: second subscription on state.sessionId + scope="session". Receives
@@ -300,8 +301,8 @@ export function useResearchSession() {
   const subscribedSessionIdRef = useRef<string | null>(null);
   const unsubscribeSessionRef = useRef<UnsubscribeFn | null>(null);
   // R14h: sendMessage timestamp. On reconnect/recovery, we match the
-  // server-assigned session_id by finding a bounded running summary row whose
-  // started_at is within ±10s of this stamp. Without it we'd guess.
+  // server-assigned session_id by finding a running /api/logs/sessions row
+  // whose started_at is within ±10s of this stamp. Without it we'd guess.
   const lastSendMsRef = useRef<number | null>(null);
   // R14i: debounce timer shared across the two subscription sites so hints
   // landing in rapid succession (e.g. delegation_started + tool_call +
@@ -316,23 +317,12 @@ export function useResearchSession() {
 
   // --- Hydrate an EXISTING session (only when URL carries one) ---
   useEffect(() => {
-    if (
-      !urlSessionId ||
-      hydratedForSessionRef.current === urlSessionId ||
-      hydratingForSessionRef.current === urlSessionId
-    ) {
-      return;
-    }
-    hydratingForSessionRef.current = urlSessionId;
+    if (!urlSessionId || hydratedForSessionRef.current === urlSessionId) return;
     (async () => {
-      try {
-        await hydrateFromSnapshot(urlSessionId, dispatch, latestArtifactsRef);
-        hydratedForSessionRef.current = urlSessionId;
-      } finally {
-        if (hydratingForSessionRef.current === urlSessionId) {
-          hydratingForSessionRef.current = null;
-        }
-      }
+      await hydrateFromSnapshot(urlSessionId, dispatch, latestArtifactsRef);
+      // Set AFTER the dispatch (chat-v2 learning #6) so StrictMode's first
+      // mount re-entering doesn't skip dispatch via a pre-completion flag.
+      hydratedForSessionRef.current = urlSessionId;
     })();
   }, [urlSessionId]);
 
@@ -417,8 +407,8 @@ export function useResearchSession() {
   // was sent into the dead window and is lost forever (not replayed on
   // reconnect). state.sessionId stays null → R14g can't subscribe → UI stuck.
   // Recovery: watch for WS reconnects; if status=running with sessionId null
-  // and we have a recent sendMessage, match a bounded running summary row by
-  // started_at window and bind its session id into state.
+  // and we have a recent sendMessage, match a running /api/logs/sessions row
+  // by started_at window and bind its session id into state.
   useEffect(() => {
     let cancelled = false;
     let unsubscribeConnState: UnsubscribeFn | null = null;

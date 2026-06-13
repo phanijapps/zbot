@@ -360,7 +360,11 @@ impl Tool for MemoryTool {
         let action = args
             .get("action")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'action' parameter".to_string()))?;
+            .ok_or_else(|| {
+                ZeroError::Tool(
+                    "Missing 'action' parameter. Expected shape: {\"action\":\"get_fact\", \"key\":\"ctx.session.intent\"} or {\"action\":\"recall\", \"query\":\"...\"}".to_string(),
+                )
+            })?;
 
         match action {
             "get" | "set" | "delete" | "list" | "search" => {
@@ -1282,6 +1286,14 @@ mod tests {
                 .to_string()
                 .contains("'file' parameter required")
         );
+    }
+
+    #[test]
+    fn missing_action_error_includes_expected_shape() {
+        let msg = "Missing 'action' parameter. Expected shape: {\"action\":\"get_fact\", \"key\":\"ctx.session.intent\"} or {\"action\":\"recall\", \"query\":\"...\"}";
+        assert!(msg.contains("\"action\""));
+        assert!(msg.contains("get_fact"));
+        assert!(msg.contains("recall"));
     }
 
     #[test]

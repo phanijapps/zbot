@@ -121,9 +121,10 @@ fn handle_side_effects(ctx: &StreamContext, event: &StreamEvent) {
             tool_id,
             result,
             error,
+            duration_ms,
             ..
         } => {
-            log_tool_result(ctx, tool_id, result, error);
+            log_tool_result(ctx, tool_id, result, error, *duration_ms);
         }
         StreamEvent::Error { error, .. } => {
             log_error(ctx, error);

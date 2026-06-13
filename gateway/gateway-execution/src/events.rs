@@ -237,6 +237,7 @@ mod tests {
             tool_id: "t1".into(),
             result: "42".into(),
             error: Some("soft fail".into()),
+            duration_ms: Some(12),
         });
         let Some(GatewayEvent::ToolResult {
             tool_id,

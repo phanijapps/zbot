@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getTransport } from "@/services/transport";
-import type { MissionControlSessionSummary } from "@/services/transport/types";
+import type { LogSession } from "@/services/transport/types";
 import { isChatSession } from "@/services/session-kind";
 import type { SessionSummary } from "./types";
 
@@ -23,6 +23,14 @@ function mapStatus(s: string | undefined): SessionSummary["status"] {
   return STATUS_MAP[s] ?? "complete";
 }
 
+// ---------------------------------------------------------------------------
+// Title synthesis
+// The /api/logs/sessions endpoint derives `title` from the first user message;
+// for brand-new sessions that field is still empty. Fall back to a
+// user-friendly "New research · HH:MM" over the started_at timestamp so the
+// drawer never shows raw agent names or token counts.
+// ---------------------------------------------------------------------------
+
 const UNTITLED_LABEL = "New research";
 
 function formatClock(ms: number): string {
@@ -32,8 +40,8 @@ function formatClock(ms: number): string {
   return `${hh}:${mm}`;
 }
 
-function synthSummaryTitle(row: MissionControlSessionSummary): string {
-  return `${UNTITLED_LABEL} · ${formatClock(parseTimestamp(row.started_at ?? row.created_at))}`;
+function synthTitle(row: LogSession): string {
+  return `${UNTITLED_LABEL} · ${formatClock(parseTimestamp(row.started_at))}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -47,28 +55,23 @@ function parseTimestamp(s: string | undefined | null): number {
 }
 
 // ---------------------------------------------------------------------------
-// Mission Control summary → SessionSummary.
+// Row → SessionSummary
 //
-// `conversation_id` is the real session id (what callers know as sess-*), and
-// `root_execution_id` is the id used by log-detail APIs.
+// Wire-shape quirk: `session_id` holds the *execution* id; `conversation_id`
+// holds the real session id (what callers know as sess-*). We use the latter.
+// `wardName` is absent from this endpoint — the ResearchPage fills it from the
+// WS stream once the session is opened.
 // ---------------------------------------------------------------------------
 
-function missionControlRowToSummary(row: MissionControlSessionSummary): SessionSummary | null {
+function rowToSummary(row: LogSession): SessionSummary | null {
   const id = row.conversation_id;
   if (typeof id !== "string" || id.length === 0) return null;
-  if (isChatSession({
-    conversation_id: row.conversation_id,
-    mode: row.mode,
-  })) {
-    return null;
-  }
-
   return {
     id,
-    title: row.title ?? synthSummaryTitle(row),
+    title: row.title ?? synthTitle(row),
     status: mapStatus(row.status),
     wardName: null,
-    updatedAt: parseTimestamp(row.completed_at ?? row.started_at ?? row.created_at),
+    updatedAt: parseTimestamp(row.ended_at ?? row.started_at),
   };
 }
 
@@ -77,8 +80,6 @@ function missionControlRowToSummary(row: MissionControlSessionSummary): SessionS
 // ---------------------------------------------------------------------------
 
 export interface UseSessionsListOptions {
-  /** When false, skip the automatic mount refresh. Manual refresh still works. */
-  enabled?: boolean;
   /** Invoked after a successful deleteSession (R19 extension point). */
   onAfterDelete?: (sessionId: string) => void;
 }
@@ -103,31 +104,31 @@ export function useSessionsList(
 ): UseSessionsListReturn {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(false);
-  const refreshInFlightRef = useRef<Promise<void> | null>(null);
-  const { enabled = true, onAfterDelete } = opts;
+  const { onAfterDelete } = opts;
 
   const refresh = useCallback(async () => {
-    if (refreshInFlightRef.current) return refreshInFlightRef.current;
-
-    const refreshPromise = (async () => {
-      setLoading(true);
-      try {
-        const transport = await getTransport();
-        const result = await transport.listMissionControlSessions({ limit: 100 });
-        if (result.success && Array.isArray(result.data)) {
-          const mapped = result.data
-            .map((row) => missionControlRowToSummary(row))
-            .filter((s): s is SessionSummary => s !== null);
-          setSessions(mapped);
-        }
-      } finally {
-        setLoading(false);
-        refreshInFlightRef.current = null;
+    setLoading(true);
+    try {
+      const transport = await getTransport();
+      const result = await transport.listLogSessions();
+      if (result.success && Array.isArray(result.data)) {
+        // Drop (1) subagent executions (/api/logs/sessions emits one row
+        // per execution, including children) and (2) chat-mode sessions,
+        // which otherwise leak into the research drawer. Chat detection
+        // lives in the shared `session-kind` module so the research hero
+        // and the drawer can't drift from each other.
+        const rootResearchRows = result.data.filter((row) => {
+          const isChild = row.parent_session_id && row.parent_session_id.length > 0;
+          return !isChild && !isChatSession(row);
+        });
+        const mapped = rootResearchRows
+          .map((row) => rowToSummary(row))
+          .filter((s): s is SessionSummary => s !== null);
+        setSessions(mapped);
       }
-    })();
-
-    refreshInFlightRef.current = refreshPromise;
-    return refreshPromise;
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   const deleteSession = useCallback(async (sessionId: string) => {
@@ -143,9 +144,8 @@ export function useSessionsList(
   }, [refresh, onAfterDelete]);
 
   useEffect(() => {
-    if (!enabled) return;
     refresh().catch(() => {});
-  }, [enabled, refresh]);
+  }, [refresh]);
 
   return { sessions, loading, refresh, deleteSession };
 }
