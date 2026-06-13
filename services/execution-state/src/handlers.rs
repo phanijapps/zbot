@@ -41,6 +41,40 @@ pub async fn list_sessions_full<D: StateDbProvider + 'static>(
     Ok(Json(sessions))
 }
 
+/// List bounded Mission Control session summaries.
+///
+/// GET /v2/mission-control/sessions?limit=...&offset=...
+pub async fn list_mission_control_sessions<D: StateDbProvider + 'static>(
+    State(service): State<Arc<StateService<D>>>,
+    Query(filter): Query<MissionControlFilter>,
+) -> Result<Json<Vec<MissionControlSessionSummary>>, ApiError> {
+    let sessions = service
+        .list_mission_control_summaries(&filter)
+        .map_err(ApiError::Database)?;
+
+    Ok(Json(sessions))
+}
+
+/// Get per-execution token slices for one selected Mission Control session.
+///
+/// GET /v2/mission-control/sessions/:id/tokens
+pub async fn get_mission_control_session_tokens<D: StateDbProvider + 'static>(
+    State(service): State<Arc<StateService<D>>>,
+    Path(session_id): Path<String>,
+) -> Result<Json<MissionControlSessionTokens>, ApiError> {
+    let tokens = service
+        .get_mission_control_session_tokens(&session_id)
+        .map_err(ApiError::Database)?;
+
+    match tokens {
+        Some(t) => Ok(Json(t)),
+        None => Err(ApiError::NotFound(format!(
+            "Session not found: {}",
+            session_id
+        ))),
+    }
+}
+
 /// Get a single session by ID.
 ///
 /// GET /sessions/:id

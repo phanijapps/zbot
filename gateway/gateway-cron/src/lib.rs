@@ -11,6 +11,7 @@ pub mod config;
 pub mod service;
 
 pub use config::{
-    CreateCronJobRequest, CronJobConfig, CronJobsStore, TriggerResult, UpdateCronJobRequest,
+    CreateCronJobRequest, CronHttpAction, CronJobConfig, CronJobKind, CronJobsStore, TriggerResult,
+    UpdateCronJobRequest,
 };
 pub use service::{CronResult, CronService, CronServiceError};

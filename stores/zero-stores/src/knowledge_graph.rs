@@ -10,8 +10,8 @@ use knowledge_graph::types::{
 // `zero_stores::{DuplicateCandidate, DecayCandidate, StrategyCandidate,
 // RelationshipContext, GraphView}` keep compiling.
 pub use zero_stores_domain::{
-    DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit, GraphView, RelationshipContext,
-    StrategyCandidate,
+    AggregateSummary, DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit, GraphView,
+    HierarchySummary, InterClusterRelationHit, RelationshipContext, StrategyCandidate,
 };
 
 /// Backend-agnostic persistence for the knowledge graph subsystem.
@@ -62,6 +62,34 @@ pub trait KnowledgeGraphStore: Send + Sync {
         max_hops: usize,
         limit: usize,
     ) -> StoreResult<Vec<TraversalHit>>;
+
+    /// MEM-001 Part B-2 — confidence-aware BFS traversal for recall.
+    ///
+    /// Walks `kg_relationships` outward from `seed` up to `max_hops`,
+    /// skipping edges whose `confidence` is below `min_edge_confidence`
+    /// (so contradicted / decayed edges don't pollute recall). Returns
+    /// the data recall needs to compute the final score itself —
+    /// keeping the SQL focused on filtering + projection, not weighting.
+    ///
+    /// `min_edge_confidence` is applied to each edge along the path,
+    /// not just the final hop. `edge_confidence_product` is the product
+    /// of every edge's confidence along the shortest path from the
+    /// seed; recall multiplies it by `hop_decay^hop` and the target's
+    /// `entity_confidence`.
+    ///
+    /// Default: empty so backends that haven't implemented yet skip
+    /// the traversal step silently — the recall pipeline already
+    /// surfaces graph-ANN hits in step 4.
+    async fn traverse_weighted(
+        &self,
+        _seed: &EntityId,
+        _agent_id: &str,
+        _max_hops: usize,
+        _min_edge_confidence: f64,
+        _limit: usize,
+    ) -> StoreResult<Vec<WeightedTraversalHit>> {
+        Ok(Vec::new())
+    }
 
     async fn search_entities_by_name(
         &self,
@@ -339,4 +367,316 @@ pub trait KnowledgeGraphStore: Send + Sync {
     ) -> StoreResult<Vec<String>> {
         Ok(Vec::new())
     }
+
+    // ---- Contradiction propagation (MEM-001 Part A) ----------------------
+    //
+    // When a `memory_facts.contradicted_by` is set, the KG entities and
+    // relationships that were created from the same episode become
+    // suspect. This method locates those KG rows so the caller can decay
+    // their confidence multiplicatively.
+
+    /// Locate kg_entities + kg_relationships whose `source_episode_ids`
+    /// overlaps the supplied episode-id set. Comma-delimited token match
+    /// (mirrors the storage format used by `episode_ids_for_entity` and
+    /// `relationship_context_for_entity`).
+    ///
+    /// `agent_id` scopes the query so cross-agent rows don't leak. Only
+    /// non-archival rows are returned — archived rows are already out of
+    /// recall and don't need further decay.
+    ///
+    /// Empty `episode_ids` yields an empty result without issuing the
+    /// query. Default: empty so backends that haven't implemented yet
+    /// disable propagation without breaking the sleep cycle.
+    async fn find_kg_nodes_by_episode_ids(
+        &self,
+        _agent_id: &str,
+        _episode_ids: &[String],
+    ) -> StoreResult<KgNodesForEpisodes> {
+        Ok(KgNodesForEpisodes::default())
+    }
+
+    /// Multiplicatively decay `confidence` for the given kg_entities
+    /// (and floor at `min_floor`). Returns the number of rows updated.
+    /// Default: 0 so backends that haven't implemented yet are no-ops.
+    async fn apply_entity_confidence_multiplier(
+        &self,
+        _agent_id: &str,
+        _entity_ids: &[EntityId],
+        _factor: f64,
+        _min_floor: f64,
+    ) -> StoreResult<u64> {
+        Ok(0)
+    }
+
+    /// Multiplicatively decay `confidence` for the given kg_relationships
+    /// (and floor at `min_floor`). Returns the number of rows updated.
+    async fn apply_relationship_confidence_multiplier(
+        &self,
+        _agent_id: &str,
+        _relationship_ids: &[RelationshipId],
+        _factor: f64,
+        _min_floor: f64,
+    ) -> StoreResult<u64> {
+        Ok(0)
+    }
+
+    // ---- Hierarchical memory (Phase H-3) ---------------------------------
+    //
+    // Reads needed by the `HierarchyBuilder` sleep worker to decide
+    // whether two clusters of entities are "connected enough" to
+    // synthesise an aggregate inter-cluster relation at the next
+    // hierarchy layer (LeanRAG's λ > τ gate).
+
+    /// Count the relationships that bridge two clusters of entities at
+    /// the *current* (non-archival) layer of the graph.
+    ///
+    /// Both directions count: an edge from `cluster_a` to `cluster_b`
+    /// and an edge from `cluster_b` to `cluster_a` each contribute 1.
+    /// The two clusters are assumed disjoint by the caller (K-means
+    /// produces disjoint partitions); when they overlap the SQL still
+    /// runs, it just counts edges within the overlap twice (once per
+    /// direction) — same as it does for non-overlapping clusters.
+    ///
+    /// `agent_id` scopes the query so cross-agent edges don't leak.
+    /// Only `epistemic_class = 'current'` relationships are counted —
+    /// archived/superseded edges don't contribute to "current
+    /// connectivity strength" at any layer.
+    ///
+    /// Empty clusters trivially yield `0`. Default: `0` so backends
+    /// that haven't implemented yet just disable inter-cluster
+    /// relation synthesis (the hierarchy still builds without it).
+    async fn connectivity_strength(
+        &self,
+        _agent_id: &str,
+        _cluster_a: &[EntityId],
+        _cluster_b: &[EntityId],
+    ) -> StoreResult<usize> {
+        Ok(0)
+    }
+
+    /// Promote a cluster of layer-N entities into a single aggregate
+    /// entity at layer N+1 (Phase H-3d).
+    ///
+    /// Three things happen atomically:
+    ///   1. INSERT a new entity into `kg_entities` with `layer = layer`
+    ///      and `parent_cluster_id = NULL` (it sits at the top of the
+    ///      hierarchy until the next layer is built on top of it).
+    ///   2. UPDATE each member's `parent_cluster_id` to point to the
+    ///      new aggregate.
+    ///   3. INSERT the aggregate's embedding into the name-index table
+    ///      when one is provided (so the aggregate participates in
+    ///      semantic recall and in further clustering at layer+1).
+    ///
+    /// The caller is responsible for synthesising `name` + `description`
+    /// (typically via an LLM, or short-circuit-copying from the single
+    /// member of a singleton cluster). This method does no LLM work.
+    ///
+    /// Returns the newly-allocated entity id. Backends that haven't
+    /// implemented yet return a `Backend` error so the orchestrator
+    /// fails loudly rather than silently dropping aggregates.
+    async fn promote_cluster_to_aggregate(
+        &self,
+        _agent_id: &str,
+        _layer: i64,
+        _members: &[EntityId],
+        _name: &str,
+        _description: &str,
+        _embedding: Option<Vec<f32>>,
+    ) -> StoreResult<EntityId> {
+        Err(crate::StoreError::Backend(
+            "promote_cluster_to_aggregate not implemented for this store".to_string(),
+        ))
+    }
+
+    /// Write an inter-cluster relation between two aggregate entities
+    /// at the same hierarchy layer (Phase H-3d).
+    ///
+    /// `source_aggregate` and `target_aggregate` must both live at the
+    /// same `layer` (this is the LeanRAG load-bearing edge — the one
+    /// that links abstract concepts at the same level of abstraction).
+    /// Sets `is_inter_cluster = 1` so recall can distinguish synthesised
+    /// hierarchy edges from base-extracted ones.
+    ///
+    /// The caller decides `relationship_type` (the LLM either picks a
+    /// specific verb or the caller falls back to a generic placeholder
+    /// like `"related-via"` when the LLM budget is exhausted).
+    ///
+    /// Returns the newly-allocated relationship id. Backends that
+    /// haven't implemented yet return a `Backend` error.
+    async fn write_inter_cluster_relation(
+        &self,
+        _agent_id: &str,
+        _layer: i64,
+        _source_aggregate: &EntityId,
+        _target_aggregate: &EntityId,
+        _relationship_type: &str,
+    ) -> StoreResult<RelationshipId> {
+        Err(crate::StoreError::Backend(
+            "write_inter_cluster_relation not implemented for this store".to_string(),
+        ))
+    }
+
+    /// List current-class entities at a specific hierarchy layer
+    /// together with their name embeddings (Phase H-3e).
+    ///
+    /// Used by the `HierarchyBuilder` orchestrator to fetch the
+    /// candidate pool for K-means at each layer. Entities without an
+    /// embedding row in the name-index are skipped — they're invisible
+    /// to clustering, but the orchestrator logs a count so an operator
+    /// can spot embedding-pipeline gaps.
+    ///
+    /// Returns `(EntityId, embedding)` pairs. The order is unspecified.
+    /// `limit = 0` is treated as "no limit" by impls — pass a real
+    /// cap unless you mean it.
+    ///
+    /// Default: empty. Backends that haven't implemented yet just
+    /// can't build the hierarchy on top of them, which is the right
+    /// degradation.
+    async fn list_entities_with_embeddings_at_layer(
+        &self,
+        _agent_id: &str,
+        _layer: i64,
+        _limit: usize,
+    ) -> StoreResult<Vec<EntityWithEmbedding>> {
+        Ok(Vec::new())
+    }
+
+    /// Compute the Lowest Common Ancestor of a set of seed entities
+    /// in the hierarchical KG (Phase H-4 / LeanRAG).
+    ///
+    /// For each seed, walks `parent_cluster_id` upward until either
+    /// the path terminates (NULL parent at the top of the hierarchy)
+    /// or a fixed safety cap is reached. The LCA is the deepest entity
+    /// (highest `layer`) that appears in EVERY seed's ancestry chain.
+    ///
+    /// Returns:
+    /// - `lca`: the LCA entity id, or `None` if no common ancestor.
+    /// - `path_entities`: deduplicated set of all entities on every
+    ///   seed's path from itself up to (and including) the LCA. The
+    ///   seeds themselves are excluded — the recall pipeline already
+    ///   has them from the upstream graph-ANN step and we don't want
+    ///   to double-count.
+    /// - `max_layer`: layer of the LCA, or `0` when there's no LCA.
+    ///
+    /// Empty seed input yields an empty result. Single-seed input
+    /// yields `lca = Some(seed)` with an empty path (the seed is its
+    /// own LCA, and we exclude it). Layer-0 seeds with NULL parents
+    /// (hierarchy never built) yield `lca = None`.
+    ///
+    /// Default: empty. Backends that haven't implemented yet leave
+    /// recall byte-for-byte identical to pre-H-4 behaviour.
+    async fn compute_lca_path(
+        &self,
+        _agent_id: &str,
+        _seed_entity_ids: &[EntityId],
+    ) -> StoreResult<LcaPath> {
+        Ok(LcaPath::default())
+    }
+
+    /// List inter-cluster relations whose BOTH endpoints sit in a
+    /// given set of entity ids (Phase H-4 follow-up).
+    ///
+    /// Used by recall step 5c: after `compute_lca_path` returns the
+    /// `path_entities`, this lookup surfaces the synthesised edges
+    /// between aggregates ALONG that path so the agent sees not just
+    /// the abstraction chain but also how its siblings relate.
+    ///
+    /// Filters: `is_inter_cluster = 1` AND `epistemic_class = 'current'`
+    /// AND agent_id matches AND both endpoints in `entity_ids`. An
+    /// empty input list short-circuits to an empty result without
+    /// running SQL.
+    ///
+    /// Default: empty. Backends without hierarchy data degrade
+    /// gracefully — recall just won't surface the edges.
+    async fn list_inter_cluster_relations(
+        &self,
+        _agent_id: &str,
+        _entity_ids: &[EntityId],
+    ) -> StoreResult<Vec<InterClusterRelationHit>> {
+        Ok(Vec::new())
+    }
+
+    /// Hierarchical-memory health snapshot used by the Observatory
+    /// pill + slideover (`GET /api/hierarchy/stats`).
+    ///
+    /// Returns layer-by-layer entity counts, total inter-cluster edge
+    /// count, and the top-N aggregates by member count (with their
+    /// LLM-synthesised names + descriptions) — enough to render
+    /// "Hierarchy: 2 layers / 693 / 30 entities" and a drill-in panel
+    /// without a second round-trip.
+    ///
+    /// `top_n = 0` is treated as "no aggregates" by impls (counts
+    /// alone). Default: empty summary so backends without hierarchy
+    /// data report cleanly as "no hierarchy built yet".
+    async fn hierarchy_summary(
+        &self,
+        _agent_id: &str,
+        _top_n: usize,
+    ) -> StoreResult<HierarchySummary> {
+        Ok(HierarchySummary::default())
+    }
+}
+
+/// Result of an LCA computation over a seed set (Phase H-4).
+///
+/// See [`KnowledgeGraphStore::compute_lca_path`].
+#[derive(Debug, Clone, Default)]
+pub struct LcaPath {
+    /// LCA entity id, or `None` when the seeds share no common ancestor.
+    pub lca: Option<EntityId>,
+    /// Union of every seed's ancestry chain up to (and including) the
+    /// LCA. Seeds themselves are excluded. Empty when `lca` is `None`.
+    /// Order is unspecified.
+    pub path_entities: Vec<EntityId>,
+    /// `layer` of the LCA, or `0` when there's no LCA.
+    pub max_layer: i64,
+}
+
+/// `(EntityId, name_embedding)` carrier for the layer-fetch API used
+/// by the HierarchyBuilder. Kept separate from `Entity` because the
+/// orchestrator only needs the id + the vector for K-means; pulling
+/// the full Entity row would mean joining `properties`, alias counts,
+/// and other columns that the clustering step doesn't read.
+#[derive(Debug, Clone)]
+pub struct EntityWithEmbedding {
+    pub id: EntityId,
+    pub embedding: Vec<f32>,
+}
+
+/// Carrier for `find_kg_nodes_by_episode_ids` — the KG entities and
+/// relationships whose `source_episode_ids` overlap an episode-id set.
+/// Used by the DecayEngine to apply multiplicative confidence decay
+/// when a contributing fact has been contradicted (MEM-001 Part A).
+#[derive(Debug, Clone, Default)]
+pub struct KgNodesForEpisodes {
+    pub entity_ids: Vec<EntityId>,
+    pub relationship_ids: Vec<RelationshipId>,
+}
+
+/// Carrier for `traverse_weighted` (MEM-001 Part B-2). One per
+/// reachable entity at the shortest hop-distance from the seed.
+///
+/// The store does the filtering + projection (min_edge_confidence,
+/// cycle detection, shortest-hop dedup) and returns enough data for
+/// recall to compute the final score without baking decay math into
+/// SQL: `score = seed_score * hop_decay^hop * edge_confidence_product *
+/// entity_confidence`. Keeping the math out of SQL means recall can
+/// tune `hop_decay` per-call without invalidating prepared statements.
+#[derive(Debug, Clone)]
+pub struct WeightedTraversalHit {
+    pub entity_id: EntityId,
+    pub name: String,
+    pub entity_type: String,
+    /// Shortest hop distance from the seed (1 = direct neighbour).
+    pub hop: usize,
+    /// Comma-separated relationship-type chain from seed to this hit.
+    /// Same shape as `TraversalHit.path`.
+    pub path: String,
+    /// `kg_entities.confidence` at this hit.
+    pub entity_confidence: f64,
+    /// Product of `kg_relationships.confidence` along the shortest
+    /// path from the seed (between 0 and 1 for well-behaved data).
+    /// Empty path (hop = 0) would be 1.0 but the seed itself is
+    /// excluded by the trait method.
+    pub edge_confidence_product: f64,
 }

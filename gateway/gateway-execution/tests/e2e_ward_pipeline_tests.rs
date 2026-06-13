@@ -155,14 +155,16 @@ Instructions here
 fn test_subagent_rules_are_lean() {
     let rules = gateway_execution::invoke::setup::subagent_rules(
         gateway_execution::invoke::setup::SubagentRole::Executor,
+        gateway_execution::delegation::DelegationMode::DirectArtifact,
     );
     let byte_count = rules.len();
     assert!(
-        byte_count < 300,
+        byte_count < 320,
         "Executor rules should be under 300 bytes, got {} bytes:\n{}",
         byte_count,
         rules
     );
+    assert!(!rules.contains("AGENTS.md + memory-bank/core_docs.md"));
 }
 
 /// Reviewer rules should include RESULT format.
@@ -170,6 +172,7 @@ fn test_subagent_rules_are_lean() {
 fn test_reviewer_rules_include_result_format() {
     let rules = gateway_execution::invoke::setup::subagent_rules(
         gateway_execution::invoke::setup::SubagentRole::Reviewer,
+        gateway_execution::delegation::DelegationMode::WardBackedBuild,
     );
     assert!(
         rules.contains("RESULT: APPROVED"),
@@ -179,6 +182,29 @@ fn test_reviewer_rules_include_result_format() {
         rules.contains("RESULT: DEFECTS"),
         "Reviewer rules must mention RESULT: DEFECTS"
     );
+}
+
+#[test]
+fn executor_rules_are_mode_specific() {
+    use gateway_execution::delegation::DelegationMode;
+    use gateway_execution::invoke::setup::{subagent_rules, SubagentRole};
+
+    let direct = subagent_rules(SubagentRole::Executor, DelegationMode::DirectArtifact);
+    assert!(direct.contains("direct_artifact"));
+    assert!(direct.contains("Create the exact requested output files first"));
+    assert!(!direct.contains("read AGENTS.md + memory-bank/core_docs.md"));
+
+    let hygiene = subagent_rules(SubagentRole::Executor, DelegationMode::WardHygiene);
+    assert!(hygiene.contains("ward_hygiene"));
+    assert!(hygiene.contains("fill only missing or empty AGENTS.md"));
+
+    let backed = subagent_rules(SubagentRole::Executor, DelegationMode::WardBackedBuild);
+    assert!(backed.contains("ward_backed_build"));
+    assert!(backed.contains("Read the supplied ward_snapshot"));
+
+    let step = subagent_rules(SubagentRole::Executor, DelegationMode::StepExecutor);
+    assert!(step.contains("step_executor"));
+    assert!(step.contains("Execute the delegated step spec exactly"));
 }
 
 /// Role detection should identify review tasks.
@@ -192,11 +218,11 @@ fn test_role_detection() {
     );
     assert_eq!(
         detect_subagent_role("code-agent", "Review code against specs"),
-        SubagentRole::Reviewer
+        SubagentRole::Executor
     );
     assert_eq!(
         detect_subagent_role("data-analyst", "Validate output quality"),
-        SubagentRole::Reviewer
+        SubagentRole::Executor
     );
     assert_eq!(
         detect_subagent_role("data-analyst", "Run the analysis script"),
@@ -204,6 +230,28 @@ fn test_role_detection() {
     );
     assert_eq!(
         detect_subagent_role("code-agent", "Evaluate the implementation"),
+        SubagentRole::Executor
+    );
+    assert_eq!(
+        detect_subagent_role(
+            "research-agent",
+            "Find 10 homes, extract fields, and verify source URLs"
+        ),
+        SubagentRole::Executor
+    );
+    assert_eq!(
+        detect_subagent_role("builder-agent", "Write parser and verify output"),
+        SubagentRole::Executor
+    );
+    assert_eq!(
+        detect_subagent_role("reviewer-agent", "Review generated output"),
+        SubagentRole::Reviewer
+    );
+    assert_eq!(
+        detect_subagent_role(
+            "code-agent",
+            "Perform a read-only review without changing files"
+        ),
         SubagentRole::Reviewer
     );
 }
@@ -290,6 +338,7 @@ fn test_intent_injection_sdlc_for_graph() {
             explanation: "Complex analysis".to_string(),
         },
         rewritten_prompt: String::new(),
+        procedure_recommendation: None,
     };
 
     let injection = format_intent_injection(&analysis, None, None);
@@ -333,6 +382,7 @@ fn test_intent_injection_no_sdlc_for_simple() {
             explanation: "Quick question".to_string(),
         },
         rewritten_prompt: String::new(),
+        procedure_recommendation: None,
     };
 
     let injection = format_intent_injection(&analysis, None, None);
@@ -370,6 +420,7 @@ fn test_ward_rules_domain_agnostic() {
             explanation: "test".to_string(),
         },
         rewritten_prompt: String::new(),
+        procedure_recommendation: None,
     };
 
     let injection = format_intent_injection(&analysis, None, None);

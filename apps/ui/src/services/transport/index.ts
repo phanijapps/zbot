@@ -52,6 +52,10 @@ export type {
   LogSession,
   SessionDetail,
   LogFilter,
+  MissionControlSessionSummary,
+  MissionControlSessionTokens,
+  MissionControlExecutionSummary,
+  MissionControlFilter,
   // Subscription types
   SubscriptionScope,
   SubscriptionOptions,

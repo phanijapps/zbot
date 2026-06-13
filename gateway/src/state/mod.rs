@@ -17,7 +17,7 @@ use crate::services::{
 use agent_runtime::llm::EmbeddingClient;
 use api_logs::LogService;
 use execution_state::StateService;
-use gateway_services::EmbeddingService;
+use gateway_services::{EmbeddingService, WardProvenance, WardUsage};
 use std::path::PathBuf;
 use std::sync::Arc;
 use zero_stores_sqlite::kg::service::GraphService;
@@ -640,6 +640,12 @@ impl AppState {
             tracing::debug!("Memory MMR rerank: disabled (default)");
         }
 
+        // Observatory v2 Phase 3 — wire the EventBus so recall_unified
+        // can emit RecallTrace telemetry for the live canvas overlay.
+        if let Some(recall) = memory_recall_inner.as_mut() {
+            recall.set_event_bus(event_bus.clone());
+        }
+
         let memory_recall: Option<Arc<MemoryRecall>> = memory_recall_inner.map(Arc::new);
 
         // Clone embedding client before it's moved into distiller — the runner
@@ -812,6 +818,11 @@ impl AppState {
             kg_episode_repo.clone(),
             ingestion_adapter,
             goal_adapter,
+            procedure_store_for_state.clone(),
+            gateway_services::SettingsService::new(paths.clone())
+                .load()
+                .map(|s| s.execution.memory.procedure_recommendation.clone())
+                .unwrap_or_default(),
             memory_llm_factory.clone(),
         ));
 
@@ -962,6 +973,44 @@ impl AppState {
                             .contradiction_budget_per_cycle,
                         belief_fact_confidence_drop_threshold: belief_network_cfg
                             .fact_confidence_drop_threshold,
+                        // Phase H-3: hierarchical memory. Reads
+                        // execution.memory.hierarchy from settings; falls
+                        // back to a disabled HierarchySettings::default()
+                        // when settings aren't available so the daemon
+                        // boots cleanly even with a partial config.
+                        hierarchy_enabled: settings
+                            .get_execution_settings()
+                            .map(|s| s.memory.hierarchy.enabled)
+                            .unwrap_or(false),
+                        hierarchy_interval: std::time::Duration::from_secs(
+                            settings
+                                .get_execution_settings()
+                                .map(|s| s.memory.hierarchy.interval_hours)
+                                .unwrap_or(24) as u64
+                                * 3600,
+                        ),
+                        hierarchy_max_layers: settings
+                            .get_execution_settings()
+                            .map(|s| s.memory.hierarchy.max_layers)
+                            .unwrap_or(4),
+                        hierarchy_cluster_target_size: settings
+                            .get_execution_settings()
+                            .map(|s| s.memory.hierarchy.cluster_target_size)
+                            .unwrap_or(20),
+                        hierarchy_inter_cluster_relation_threshold: settings
+                            .get_execution_settings()
+                            .map(|s| s.memory.hierarchy.inter_cluster_relation_threshold)
+                            .unwrap_or(3),
+                        hierarchy_llm_budget_per_cycle: settings
+                            .get_execution_settings()
+                            .map(|s| s.memory.hierarchy.llm_budget_per_cycle)
+                            .unwrap_or(50),
+                        // MEM-001 Part A — defaults today. The struct
+                        // lives in `gateway-memory::sleep` and can be
+                        // overridden once `settings.memory.contradiction`
+                        // is added to the public settings surface.
+                        contradiction_propagation_config:
+                            gateway_memory::sleep::ContradictionPropagationConfig::default(),
                     });
                 (
                     Some(memory_services.sleep_time_worker.clone()),
@@ -1737,6 +1786,13 @@ impl AppState {
             }
         }
 
+        // Mark the bundled provenance so the curator never archives `scratch`.
+        // Idempotent: re-marking on every boot just refreshes `created_by`.
+        if let Err(e) = WardUsage::new(&wards_dir).mark_created("scratch", WardProvenance::Bundled)
+        {
+            tracing::warn!(error = %e, "ward_usage: failed to mark scratch as bundled");
+        }
+
         let wiki_name = self
             .settings
             .load()
@@ -1796,8 +1852,10 @@ impl AppState {
             let content = format!(
                 "<!-- obsidian-vault -->\n\
                  # {wiki_name}\n\n\
-                 ## Purpose\n\
+                 ## Purpose / Scope\n\
                  Obsidian-style vault. Producer skills (book-reader, stock-analysis, news-research, …) emit vault-ready folders in their origin ward; the `wiki` skill promotes them here. **This AGENTS.md is the authoritative routing map.** If a memory fact contradicts it, this file wins.\n\n\
+                 - **IN scope** — promoting producer-emitted, vault-ready folders from any origin ward into the numbered Obsidian tree; whole-folder copy; routing unmatched items to `00_Inbox/`.\n\
+                 - **OUT of scope** — running code, research, or data fetching; rewriting promoted content; writing to user-managed folders; deleting from origin wards. Tasks needing any of these belong in another ward.\n\n\
                  ## Folder map — what goes where\n\n\
                  | Vault path | What lives here | Producer source |\n\
                  | --- | --- | --- |\n\
@@ -1834,6 +1892,9 @@ impl AppState {
                  - Do NOT write into `50_Resources/`, `60_Archive/`, `_zztemplates/`, or `70_Assets/Knowledge_Graphs/` — those are user-managed or reserved.\n\
                  - Do NOT run code, fetch data, or do research in this ward. It is content-only.\n\
                  - Do NOT edit promoted files outside their `<!-- manual -->` blocks — the skill overwrites on re-promotion.\n\n\
+                 ## Handoff\n\n\
+                 On completion, return a JSON object summarizing the promotion run: `{{ \"status\": \"ok | partial | failed\", \"summary\": \"one line\", \"promoted\": [\"<vault-path>\"], \"inboxed\": [\"<vault-path>\"], \"skipped\": [\"<path>\"] }}`.\n\n\
+                 `promoted` = folders copied to a numbered path; `inboxed` = folders routed to `00_Inbox/` because no rule matched; `skipped` = paths intentionally left in the origin ward.\n\n\
                  ## Discovery marker\n\n\
                  The first line of this file (`<!-- obsidian-vault -->`) is the marker the wiki skill uses to find this ward via `ward(action=\"list\")`. Do not remove it.\n"
             );
@@ -1848,6 +1909,15 @@ impl AppState {
             if !path.exists() {
                 let _ = std::fs::write(&path, "");
             }
+        }
+
+        // Mark the bundled provenance so the curator never archives the wiki.
+        if let Err(e) = WardUsage::new(wards_dir).mark_created(wiki_name, WardProvenance::Bundled) {
+            tracing::warn!(
+                ward = %wiki_name,
+                error = %e,
+                "ward_usage: failed to mark wiki as bundled"
+            );
         }
 
         tracing::info!("Wiki vault ward ready at {}", wiki_dir.display());

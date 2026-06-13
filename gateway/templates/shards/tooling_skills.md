@@ -46,6 +46,10 @@ Search file contents by regex.
 - `memory(action, scope, ...)` — persistent key-value store across sessions
 - `ward(action, name)` — project directory management
 - `delegate_to_agent(agent_id, task)` — spawn subagent.
+- `list_session_agents()` — list delegated agents in the current session.
+- `handoff_to_agent(execution_id, message)` — send a concise one-way note to a
+  running child agent. This is not a reply channel; use `wait_agent` for
+  completed results.
 
 ### Discovering agents and skills — recall first, tool as fallback
 

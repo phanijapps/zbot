@@ -44,6 +44,9 @@ import type {
   // V2 types
   SessionWithExecutions,
   SessionFilter,
+  MissionControlSessionSummary,
+  MissionControlSessionTokens,
+  MissionControlFilter,
   DashboardStats,
   // Legacy types (for backwards compatibility)
   ExecutionSession,
@@ -486,6 +489,25 @@ export class HttpTransport implements Transport {
     const query = params.toString();
     const url = query ? `/api/executions/v2/sessions/full?${query}` : "/api/executions/v2/sessions/full";
     return this.get<SessionWithExecutions[]>(url);
+  }
+
+  /** List bounded Mission Control summary rows */
+  async listMissionControlSessions(filter?: MissionControlFilter): Promise<TransportResult<MissionControlSessionSummary[]>> {
+    const params = new URLSearchParams();
+    if (filter?.limit) params.set("limit", String(filter.limit));
+    if (filter?.offset) params.set("offset", String(filter.offset));
+
+    const query = params.toString();
+    const url = query
+      ? `/api/executions/v2/mission-control/sessions?${query}`
+      : "/api/executions/v2/mission-control/sessions";
+    return this.get<MissionControlSessionSummary[]>(url);
+  }
+
+  async getMissionControlSessionTokens(sessionId: string): Promise<TransportResult<MissionControlSessionTokens>> {
+    return this.get<MissionControlSessionTokens>(
+      `/api/executions/v2/mission-control/sessions/${encodeURIComponent(sessionId)}/tokens`,
+    );
   }
 
   /** Get a single session with executions (V2 API) */

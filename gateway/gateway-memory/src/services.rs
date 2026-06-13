@@ -18,10 +18,11 @@ use zero_stores_traits::{
 
 use crate::sleep::{
     BeliefContradictionConfig, BeliefContradictionDetector, BeliefPropagator, BeliefSynthesizer,
-    Compactor, ConflictResolver, CorrectionsAbstractor, DecayConfig, DecayEngine,
-    LlmBeliefSynthesizer, LlmConflictJudge, LlmContradictionJudge, LlmCorrectionsAbstractor,
-    LlmPairwiseVerifier, LlmPatternExtractor, LlmSynthesizer, OrphanArchiver, PairwiseVerifier,
-    PatternExtractor, Pruner, RecentBeliefNetworkActivity, SleepOps, SleepTimeWorker, Synthesizer,
+    Compactor, ConflictResolver, ContradictionPropagationConfig, CorrectionsAbstractor,
+    DecayConfig, DecayEngine, LlmBeliefSynthesizer, LlmConflictJudge, LlmContradictionJudge,
+    LlmCorrectionsAbstractor, LlmPairwiseVerifier, LlmPatternExtractor, LlmSynthesizer,
+    OrphanArchiver, PairwiseVerifier, PatternExtractor, Pruner, RecentBeliefNetworkActivity,
+    SleepOps, SleepTimeWorker, Synthesizer,
 };
 use crate::{KgDecayConfig, MemoryLlmFactory};
 
@@ -47,6 +48,11 @@ pub struct MemoryServicesConfig {
     pub corrections_abstractor_interval: Duration,
     pub conflict_resolver_interval: Duration,
     pub decay_config: DecayConfig,
+    /// MEM-001 Part A — configuration for contradiction propagation
+    /// from `memory_facts.contradicted_by` to KG entities/relationships
+    /// sharing the same source episodes. Defaults are safe — see
+    /// [`ContradictionPropagationConfig::default`].
+    pub contradiction_propagation_config: ContradictionPropagationConfig,
     /// Optional belief store. When `Some`, the Belief Network worker is
     /// constructed alongside the rest of the sleep ops; when `None` (or
     /// when `belief_network_enabled = false`), the worker is omitted.
@@ -68,6 +74,25 @@ pub struct MemoryServicesConfig {
     /// the belief propagator. Mirrors
     /// `BeliefNetworkConfig.fact_confidence_drop_threshold`.
     pub belief_fact_confidence_drop_threshold: f64,
+
+    // ---- Phase H-3 (Hierarchical Memory) --------------------------------
+    /// Master switch. When `false`, `SleepOps.hierarchy_builder` is set
+    /// to `None` and the cycle is byte-for-byte unchanged.
+    pub hierarchy_enabled: bool,
+    /// Minimum time between hierarchy cycles. Maps from
+    /// `HierarchySettings.interval_hours`.
+    pub hierarchy_interval: Duration,
+    /// Hard cap on layers per cycle. Maps from `HierarchySettings.max_layers`.
+    pub hierarchy_max_layers: u32,
+    /// Target K-means cluster size. Maps from
+    /// `HierarchySettings.cluster_target_size`.
+    pub hierarchy_cluster_target_size: usize,
+    /// λ > τ gate for inter-cluster relation synthesis. Maps from
+    /// `HierarchySettings.inter_cluster_relation_threshold`.
+    pub hierarchy_inter_cluster_relation_threshold: usize,
+    /// Per-cycle LLM call cap. Maps from
+    /// `HierarchySettings.llm_budget_per_cycle`.
+    pub hierarchy_llm_budget_per_cycle: u32,
 }
 
 /// Bundle of ready-to-use memory subsystem handles.
@@ -111,6 +136,13 @@ impl MemoryServices {
             belief_contradiction_neighborhood_prefix_depth,
             belief_contradiction_budget_per_cycle,
             belief_fact_confidence_drop_threshold,
+            hierarchy_enabled,
+            hierarchy_interval,
+            hierarchy_max_layers,
+            hierarchy_cluster_target_size,
+            hierarchy_inter_cluster_relation_threshold,
+            hierarchy_llm_budget_per_cycle,
+            contradiction_propagation_config,
         } = config;
 
         let verifier: Option<Arc<dyn PairwiseVerifier>> =
@@ -133,10 +165,15 @@ impl MemoryServices {
             };
 
         let decay = Arc::new(
-            DecayEngine::new(kg_store.clone(), decay_config).with_belief_propagator(
-                belief_propagator.clone(),
-                belief_fact_confidence_drop_threshold,
-            ),
+            DecayEngine::new(kg_store.clone(), decay_config)
+                .with_belief_propagator(
+                    belief_propagator.clone(),
+                    belief_fact_confidence_drop_threshold,
+                )
+                .with_contradiction_propagation(
+                    Some(memory_store.clone()),
+                    contradiction_propagation_config,
+                ),
         );
         let pruner = Arc::new(Pruner::new(kg_store.clone(), compaction_store.clone()));
 
@@ -157,6 +194,8 @@ impl MemoryServices {
             procedure_store.clone(),
             compaction_store.clone(),
             pattern_llm,
+            embedding_client.clone(),
+            default_pattern_tool_whitelist(),
         ));
 
         let orphan_archiver = Arc::new(OrphanArchiver::new(
@@ -227,6 +266,31 @@ impl MemoryServices {
 
         let belief_network_activity = Arc::new(RecentBeliefNetworkActivity::new());
 
+        // Phase H-3: HierarchyBuilder is constructed when the operator
+        // flips `execution.memory.hierarchy.enabled = true`. When off,
+        // we leave it as None and the sleep cycle is byte-for-byte
+        // unchanged. Same opt-in shape as the Belief Network.
+        let hierarchy_builder = if hierarchy_enabled {
+            let agg_llm = Arc::new(crate::sleep::llm_aggregate_entity::LlmAggregateEntity::new(
+                llm_factory.clone(),
+            ));
+            let hierarchy_cfg = crate::sleep::hierarchy_builder::HierarchyConfig {
+                cluster_target_size: hierarchy_cluster_target_size,
+                max_layers: hierarchy_max_layers,
+                inter_cluster_relation_threshold: hierarchy_inter_cluster_relation_threshold,
+                llm_budget_per_cycle: hierarchy_llm_budget_per_cycle,
+                ..crate::sleep::hierarchy_builder::HierarchyConfig::default()
+            };
+            Some(Arc::new(
+                crate::sleep::hierarchy_builder::HierarchyBuilder::new(kg_store.clone(), agg_llm)
+                    .with_embedding_client(embedding_client.clone())
+                    .with_config(hierarchy_cfg)
+                    .with_interval(hierarchy_interval),
+            ))
+        } else {
+            None
+        };
+
         let ops = SleepOps {
             synthesizer: Some(synthesizer),
             pattern_extractor: Some(pattern_extractor),
@@ -236,6 +300,7 @@ impl MemoryServices {
             belief_synthesizer,
             belief_contradiction_detector,
             belief_network_activity: Some(belief_network_activity.clone()),
+            hierarchy_builder,
         };
 
         let sleep_time_worker = Arc::new(SleepTimeWorker::start_with_ops(
@@ -253,4 +318,48 @@ impl MemoryServices {
             belief_network_activity,
         }
     }
+}
+
+/// Tool names the LLM pattern extractor may emit as procedure step
+/// `action` fields. Sourced statically from the executor's tool
+/// registry surface (`runtime/agent-tools/src/tools/*`) — kept in this
+/// crate so the memory composition site doesn't take an
+/// `agent-tools` dependency. When the registry becomes reachable from
+/// here (Task 10), this static list will be replaced by a live
+/// `tool_names()` query.
+fn default_pattern_tool_whitelist() -> Vec<String> {
+    [
+        "shell",
+        "read",
+        "write",
+        "edit",
+        "write_file",
+        "edit_file",
+        "grep",
+        "glob",
+        "web_fetch",
+        "memory",
+        "graph_query",
+        "execution_graph",
+        "todos",
+        "update_plan",
+        "goal",
+        "ward",
+        "list_agents",
+        "create_agent",
+        "list_skills",
+        "list_tools",
+        "list_mcps",
+        "load_skill",
+        "ingest",
+        "multimodal_analyze",
+        "query_resource",
+        "request_input",
+        "show_content",
+        "set_session_title",
+        "python",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }

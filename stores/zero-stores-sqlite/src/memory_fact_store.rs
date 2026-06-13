@@ -29,6 +29,33 @@ const PRIMITIVE_AGENT_SENTINEL: &str = "__ward__";
 const PRIMITIVE_SCOPE: &str = "global";
 const PRIMITIVE_CATEGORY: &str = "primitive";
 
+/// Maximum character length for a memory fact's `content`.
+///
+/// A well-formed fact is one declarative sentence — three at most, and only
+/// to fit a necessary example. This cap is a backstop that keeps clearly
+/// malformed, oversized facts out of the store; the distillation prompt is
+/// the quality lever. `ctx` and `primitive` facts are machine-generated and
+/// exempt (see [`validate_fact_content`]).
+const MAX_FACT_CONTENT_CHARS: usize = 800;
+
+/// Reject a fact whose `content` is too long to be a 1-3 sentence fact.
+///
+/// `ctx` (session-context blobs) and `primitive` (extracted function
+/// signatures) are machine-generated and not subject to the sentence rule.
+fn validate_fact_content(category: &str, content: &str) -> Result<(), String> {
+    if matches!(category, CTX_CATEGORY | PRIMITIVE_CATEGORY) {
+        return Ok(());
+    }
+    let len = content.chars().count();
+    if len > MAX_FACT_CONTENT_CHARS {
+        return Err(format!(
+            "fact content too long: {len} chars (max {MAX_FACT_CONTENT_CHARS}) — \
+             a fact must be 1-3 sentences"
+        ));
+    }
+    Ok(())
+}
+
 /// Database-backed implementation of `MemoryFactStore`.
 ///
 /// Wraps `MemoryRepository` for SQLite persistence and an optional
@@ -127,6 +154,8 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         session_id: Option<&str>,
         valid_from: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Value, String> {
+        validate_fact_content(category, content)?;
+
         // Generate embedding for the content
         let embedding = self.embed_text(content).await;
 
@@ -710,6 +739,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
     ) -> Result<(), String> {
         let mut typed: MemoryFact =
             serde_json::from_value(fact).map_err(|e| format!("decode MemoryFact: {e}"))?;
+        validate_fact_content(&typed.category, &typed.content)?;
         if embedding.is_some() {
             typed.embedding = embedding;
         }
@@ -981,6 +1011,37 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         self.memory_repo.upsert_memory_fact(&fact)?;
         Ok(id)
     }
+
+    async fn list_contradicted_fact_episode_ids(
+        &self,
+        agent_id: &str,
+        since: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<String>, String> {
+        let agent_id = agent_id.to_string();
+        let since_str = since.to_rfc3339();
+        let db = self.memory_repo.db().clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<String>, String> {
+            db.with_connection(|conn| -> Result<Vec<String>, rusqlite::Error> {
+                let mut stmt = conn.prepare(
+                    "SELECT DISTINCT source_episode_id
+                     FROM memory_facts
+                     WHERE agent_id = ?1
+                       AND contradicted_by IS NOT NULL
+                       AND source_episode_id IS NOT NULL
+                       AND updated_at > ?2",
+                )?;
+                let rows: Vec<String> = stmt
+                    .query_map(rusqlite::params![agent_id, since_str], |row| {
+                        row.get::<_, String>(0)
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
 }
 
 // ---- Helpers --------------------------------------------------------------
@@ -1039,6 +1100,24 @@ mod tests {
     use crate::vector_index::{SqliteVecIndex, VectorIndex};
     use crate::KnowledgeDatabase;
     use tempfile::TempDir;
+
+    #[test]
+    fn validate_fact_content_accepts_short_fact() {
+        assert!(validate_fact_content("pattern", "The user prefers pytest.").is_ok());
+    }
+
+    #[test]
+    fn validate_fact_content_rejects_oversized_fact() {
+        let long = "x".repeat(MAX_FACT_CONTENT_CHARS + 1);
+        assert!(validate_fact_content("pattern", &long).is_err());
+    }
+
+    #[test]
+    fn validate_fact_content_exempts_machine_generated_categories() {
+        let long = "x".repeat(MAX_FACT_CONTENT_CHARS + 500);
+        assert!(validate_fact_content(CTX_CATEGORY, &long).is_ok());
+        assert!(validate_fact_content(PRIMITIVE_CATEGORY, &long).is_ok());
+    }
 
     fn create_test_store() -> GatewayMemoryFactStore {
         use gateway_services::VaultPaths;

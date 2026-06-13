@@ -1,7 +1,7 @@
 # Path to Release — Cross-Platform Packaging & Distribution
 
 **Date:** 2026-04-27
-**Status:** Partial implementation — Phase 2 (ARM64 + rustls) and Phase 3 (`curl|sh` installer) landed; Phase 1 (embed UI) and Phase 4 (CalVer release.yml) still pending. CalVer scheme has shifted from `vYYYY.MM.DD` (zero-padded) to `vYYYY.M.D` (no zero-padding) per PR #102/#106 — see `2026-05-03-versioning-and-rename-plan.md`. Binary names are now `zbotd`/`zbot` (PR #103/#104/#107).
+**Status:** Partial implementation — Phase 2 (ARM64 + rustls), Phase 3 (`curl|sh` installer), and Phase 4 (`scripts/release.sh`) landed. Phase 1 (embed UI) is still pending; Phase 5/6 security, signing, SBOM, and license automation are parked. CalVer scheme has shifted from `vYYYY.MM.DD` (zero-padded) to `vYYYY.M.D` (no zero-padding) per PR #102/#106 — see `2026-05-03-versioning-and-rename-plan.md`. Binary names are now `zbotd`/`zbot` (PR #103/#104/#107).
 **Depends on:** Embedded UI (Phase 1), rustls migration (Phase 2 — done)
 
 ---
@@ -114,7 +114,7 @@ irm https://raw.githubusercontent.com/phanijapps/zbot/main/install.ps1 | iex
 
 ---
 
-### Phase 4: Release Management (CalVer `vYYYY.M.D`) [PENDING — release.sh helper not yet implemented; manual cuts in use]
+### Phase 4: Release Management (CalVer `vYYYY.M.D`) [LANDED]
 
 Version from date, one release per day, Docker handles bleeding edge. CalVer scheme is `YYYY.M.D` with **no zero-padding** (semver forbids leading zeros in numeric identifiers — see `2026-05-03-versioning-and-rename-plan.md`).
 
@@ -132,7 +132,7 @@ Version from date, one release per day, Docker handles bleeding edge. CalVer sch
 - `--dry-run` — show what would happen without making changes
 - `--version v2026.5.4` — manual override for same-day exceptional releases (bump the day)
 
-**Files created:** `scripts/release.sh`, `CHANGELOG.md`
+**Files created:** `scripts/release.sh`, `CHANGELOG.md` at first release cut
 
 ---
 

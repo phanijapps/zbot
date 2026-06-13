@@ -237,6 +237,7 @@ mod tests {
             tool_id: "t1".into(),
             result: "42".into(),
             error: Some("soft fail".into()),
+            duration_ms: Some(12),
         });
         let Some(GatewayEvent::ToolResult {
             tool_id,
@@ -423,6 +424,7 @@ mod tests {
             output_schema: None,
             skills: vec![],
             complexity: None,
+            mode: None,
             parallel: false,
             child_execution_id: None,
         })

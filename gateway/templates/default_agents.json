@@ -9,6 +9,16 @@
     "skills": [],
     "mcps": []
   },
+  {
+    "name": "reviewer-agent",
+    "displayName": "Reviewer",
+    "description": "Read-only reviewer for validating implementation quality, spec alignment, and reported outputs.",
+    "agentType": "specialist",
+    "temperature": 0.1,
+    "maxTokens": 16384,
+    "skills": [],
+    "mcps": []
+  },
 
   {
     "name": "planner-agent",

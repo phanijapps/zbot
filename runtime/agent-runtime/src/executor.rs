@@ -22,8 +22,9 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 
-use crate::context_management::{compact_messages, sanitize_messages, truncate_tool_result};
+use crate::context_management::{sanitize_messages, truncate_tool_result};
 use crate::llm::client::StreamChunk;
 use crate::llm::LlmClient;
 use crate::mcp::McpManager;
@@ -147,11 +148,10 @@ pub struct ExecutorConfig {
     pub extension_size: u32,
 
     /// Context window size for the model in tokens.
-    /// When cumulative tokens exceed 80% of this, auto-compaction triggers.
-    /// Set to 0 to disable compaction.
+    /// Set to 0 to disable context-budget warnings.
     pub context_window_tokens: u64,
 
-    /// Percentage of context window at which to inject a pre-compaction memory flush warning.
+    /// Percentage of context window at which to inject a context memory flush warning.
     /// Default: 80. Chat mode sets this to 70 so the nudge fires before the middleware prunes.
     pub compaction_warn_pct: u64,
 
@@ -695,9 +695,9 @@ impl AgentExecutor {
                 }
             }
 
-            // Token-budget auto-compaction trigger.
+            // Token-budget warning trigger.
             // Compares the CURRENT prompt size (as measured by the provider on
-            // the prompt we just sent) against 80% of the context window.
+            // the prompt we just sent) against the configured context window.
             // `total_tokens_in` is billing-only here — it grows across turns
             // and would spuriously trip the trigger on long tool loops.
             //
@@ -709,11 +709,11 @@ impl AgentExecutor {
                 last_compaction_check_msg_count = current_messages.len();
                 let warn_threshold =
                     (self.config.context_window_tokens * self.config.compaction_warn_pct) / 100;
-                let compact_threshold = (self.config.context_window_tokens * 80) / 100;
+                let prune_threshold = (self.config.context_window_tokens * 80) / 100;
                 if current_prompt_tokens > warn_threshold {
-                    // Pre-compaction memory flush: inject a nudge to save important facts
-                    // before context is trimmed. The agent can use save_fact on the next
-                    // turn before the old messages disappear.
+                    // Context memory flush: inject a nudge to save important facts
+                    // before middleware pruning. The agent can use save_fact on the
+                    // next turn before the old messages disappear.
                     if !compaction_warned {
                         current_messages.push(ChatMessage::system(
                             "[system] Context is getting full. Save important facts with \
@@ -724,24 +724,17 @@ impl AgentExecutor {
                         tracing::info!(
                             current_prompt_tokens = current_prompt_tokens,
                             warn_threshold = warn_threshold,
-                            "Pre-compaction memory flush warning injected"
+                            "Context memory flush warning injected"
                         );
-                        // Skip actual compaction this iteration — give agent one turn to save
+                        // Give the agent one turn to save facts before middleware pruning.
                         continue;
                     }
 
-                    // Actual compaction triggers at 80% regardless of warn threshold
-                    if current_prompt_tokens > compact_threshold {
-                        let before = current_messages.len();
-                        current_messages = compact_messages(current_messages);
-                        tracing::info!(
-                            current_prompt_tokens = current_prompt_tokens,
-                            compact_threshold = compact_threshold,
-                            messages_before = before,
-                            messages_after = current_messages.len(),
-                            "Context compacted"
-                        );
-                    }
+                    tracing::debug!(
+                        current_prompt_tokens = current_prompt_tokens,
+                        prune_threshold = prune_threshold,
+                        "Context threshold exceeded; runtime middleware owns pruning"
+                    );
                 }
             }
 
@@ -931,8 +924,8 @@ impl AgentExecutor {
             if let Some(usage) = &response.usage {
                 total_tokens_in += u64::from(usage.prompt_tokens);
                 total_tokens_out += u64::from(usage.completion_tokens);
-                // Single-response prompt size — the provider's authoritative
-                // measurement of the tape we just sent. Drives compaction.
+                // Single-response prompt size: the provider's authoritative
+                // measurement of the tape we just sent. Drives context warnings.
                 current_prompt_tokens = u64::from(usage.prompt_tokens);
 
                 on_event(StreamEvent::TokenUpdate {
@@ -1019,7 +1012,7 @@ impl AgentExecutor {
                 .filter(|tc| !blocked_results.contains_key(&tc.id))
                 .collect();
 
-            let results: Vec<Result<ToolExecutionResult, String>> = if self
+            let results: Vec<(Result<ToolExecutionResult, String>, i64)> = if self
                 .config
                 .tool_execution_mode
                 == ToolExecutionMode::Sequential
@@ -1027,10 +1020,12 @@ impl AgentExecutor {
                 // Sequential: execute one at a time, in order
                 let mut seq_results = Vec::new();
                 for tc in &non_blocked {
+                    let started = Instant::now();
                     let result = self
                         .execute_tool(&shared_tool_context, &tc.id, &tc.name, &tc.arguments)
                         .await;
-                    seq_results.push(result);
+                    let duration_ms = started.elapsed().as_millis() as i64;
+                    seq_results.push((result, duration_ms));
                 }
                 seq_results
             } else {
@@ -1044,7 +1039,10 @@ impl AgentExecutor {
                         let args = tc.arguments.clone();
                         async move {
                             tracing::debug!("Executing tool: {} with args: {}", tool_name, args);
-                            self.execute_tool(&ctx, &tool_id, &tool_name, &args).await
+                            let started = Instant::now();
+                            let result = self.execute_tool(&ctx, &tool_id, &tool_name, &args).await;
+                            let duration_ms = started.elapsed().as_millis() as i64;
+                            (result, duration_ms)
                         }
                     })
                     .collect();
@@ -1052,7 +1050,7 @@ impl AgentExecutor {
             };
 
             // Build a map of executed results (keyed by tool_call id)
-            let mut executed_results: HashMap<String, Result<ToolExecutionResult, String>> =
+            let mut executed_results: HashMap<String, (Result<ToolExecutionResult, String>, i64)> =
                 HashMap::new();
             for (tc, result) in non_blocked.into_iter().zip(results) {
                 executed_results.insert(tc.id.clone(), result);
@@ -1072,10 +1070,12 @@ impl AgentExecutor {
                         timestamp: chrono::Utc::now().timestamp_millis() as u64,
                         tool_id: tool_call.id.clone(),
                         result: "[blocked by hook]".to_string(),
-                        error: None,
+                        error: Some("blocked_by_hook".to_string()),
+                        duration_ms: Some(0),
                     });
                     progress_tracker.record_tool_call(&tool_call.name, &tool_call.arguments, false);
                 } else if let Some(result) = executed_results.remove(&tool_call.id) {
+                    let (result, duration_ms) = result;
                     match result {
                         Ok(tool_result) => {
                             let output = tool_result.output;
@@ -1119,6 +1119,7 @@ impl AgentExecutor {
                                     output_schema: delegate.output_schema.clone(),
                                     skills: delegate.skills.clone(),
                                     complexity: delegate.complexity.clone(),
+                                    mode: delegate.mode.clone(),
                                     parallel: delegate.parallel,
                                     child_execution_id: delegate.child_execution_id.clone(),
                                 });
@@ -1289,6 +1290,7 @@ impl AgentExecutor {
                                 tool_id: tool_call.id.clone(),
                                 result: output.clone(),
                                 error: None,
+                                duration_ms: Some(duration_ms),
                             });
 
                             // Process tool result (potentially offload large results to filesystem)
@@ -1331,6 +1333,7 @@ impl AgentExecutor {
                                 tool_id: tool_call.id.clone(),
                                 result: String::new(),
                                 error: Some(e.clone()),
+                                duration_ms: Some(duration_ms),
                             });
 
                             // afterToolCall hook — can transform error results too
@@ -2399,9 +2402,70 @@ mod executor_helper_coverage_tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, StreamEvent::TokenUpdate { .. })));
+        assert!(events.iter().any(|e| {
+            matches!(
+                e,
+                StreamEvent::ToolResult {
+                    error: None,
+                    duration_ms: Some(_),
+                    ..
+                }
+            )
+        }));
         assert!(events.iter().any(|e| matches!(e, StreamEvent::Done { .. })));
         // Should have called LLM once (respond stops the loop)
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn blocked_before_tool_call_emits_warning_grade_tool_result() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let llm = Arc::new(ToolCallThenDoneLlm {
+            calls: Arc::clone(&calls),
+            tool_name: "respond".to_string(),
+        });
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(crate::tools::RespondTool::new()));
+
+        let mut cfg = ExecutorConfig::new("agent".into(), "p".into(), "m".into());
+        cfg.before_tool_call = Some(Arc::new(|_, _| ToolCallDecision::Block {
+            reason: "test block".to_string(),
+        }));
+        let exec = AgentExecutor::new(
+            cfg,
+            llm,
+            Arc::new(registry),
+            Arc::new(McpManager::new()),
+            Arc::new(MiddlewarePipeline::new()),
+        )
+        .unwrap();
+
+        let mut events = Vec::new();
+        exec.execute_stream("trigger blocked respond", &[], |e| events.push(e))
+            .await
+            .unwrap();
+
+        let blocked = events
+            .iter()
+            .find_map(|e| {
+                if let StreamEvent::ToolResult {
+                    result,
+                    error,
+                    duration_ms,
+                    ..
+                } = e
+                {
+                    Some((result, error, duration_ms))
+                } else {
+                    None
+                }
+            })
+            .expect("expected blocked ToolResult event");
+
+        assert_eq!(blocked.0, "[blocked by hook]");
+        assert_eq!(blocked.1.as_deref(), Some("blocked_by_hook"));
+        assert_eq!(*blocked.2, Some(0));
     }
 
     /// Stub LLM that emits a tool call for an UNREGISTERED tool, exercising

@@ -14,7 +14,7 @@ use zero_stores_traits::{CompactionStore, MemoryFact, MemoryFactStore};
 
 use crate::sleep::belief_propagator::BeliefPropagator;
 use crate::util::parse_llm_json;
-use crate::{LlmClientConfig, MemoryLlmFactory};
+use crate::{CachedLlmClient, LlmClientConfig, MemoryLlmFactory};
 
 const MAX_SCHEMA_FACTS_PER_CYCLE: usize = 50;
 const MAX_LLM_CALLS_PER_CYCLE: usize = 10;
@@ -297,22 +297,21 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
 
 /// Production conflict judge wired to the injected `MemoryLlmFactory`.
 pub struct LlmConflictJudge {
-    factory: Arc<dyn MemoryLlmFactory>,
+    client: CachedLlmClient,
 }
 
 impl LlmConflictJudge {
     pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
-        Self { factory }
+        Self {
+            client: CachedLlmClient::new(factory, LlmClientConfig::new(0.0, 256)),
+        }
     }
 }
 
 #[async_trait]
 impl ConflictJudgeLlm for LlmConflictJudge {
     async fn judge(&self, a: &str, b: &str) -> Result<ConflictResponse, String> {
-        let client = self
-            .factory
-            .build_client(LlmClientConfig::new(0.0, 256))
-            .await?;
+        let client = self.client.get().await?;
         let prompt = format!(
             "You judge whether two principles for an AI agent contradict each other.\n\
              Two principles can be about the same topic and NOT contradict (they may\n\

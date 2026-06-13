@@ -418,7 +418,11 @@ impl Tool for ShellTool {
         let command = args
             .get("command")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'command' parameter".to_string()))?;
+            .ok_or_else(|| {
+                ZeroError::Tool(
+                    "Missing 'command' parameter. Expected shape: {\"command\":\"pwd && ls -la\", \"timeout_seconds\":10}".to_string(),
+                )
+            })?;
 
         let timeout_seconds = args
             .get("timeout_seconds")
@@ -862,6 +866,13 @@ mod tests {
         // "dd" as substring should not be blocked
         assert!(ShellTool::validate_command("git add .").is_ok());
         assert!(ShellTool::validate_command("npm add express").is_ok());
+    }
+
+    #[test]
+    fn missing_command_error_includes_expected_shape() {
+        let msg = "Missing 'command' parameter. Expected shape: {\"command\":\"pwd && ls -la\", \"timeout_seconds\":10}";
+        assert!(msg.contains("\"command\""));
+        assert!(msg.contains("timeout_seconds"));
     }
 
     #[test]

@@ -67,13 +67,15 @@ pub fn log_tool_call(
 }
 
 /// Log a tool result event.
-pub fn log_tool_result(ctx: &StreamContext, tool_id: &str, result: &str, error: &Option<String>) {
-    // Tool failures are expected behavior, use Warn not Error
-    let level = if error.is_some() {
-        LogLevel::Warn
-    } else {
-        LogLevel::Info
-    };
+pub fn log_tool_result(
+    ctx: &StreamContext,
+    tool_id: &str,
+    result: &str,
+    error: &Option<String>,
+    duration_ms: Option<i64>,
+) {
+    let blocked_by_hook = is_blocked_by_hook_result(result, error);
+    let level = tool_result_log_level(error, blocked_by_hook);
 
     // Truncate result for logging
     let truncated = if result.len() > 500 {
@@ -88,18 +90,55 @@ pub fn log_tool_result(ctx: &StreamContext, tool_id: &str, result: &str, error: 
         &ctx.agent_id,
         level,
         LogCategory::ToolResult,
-        if error.is_some() {
-            "Tool returned error"
-        } else {
-            "Tool completed"
-        },
+        tool_result_message(error, blocked_by_hook),
     )
-    .with_metadata(serde_json::json!({
-        "tool_id": tool_id,
-        "result": truncated,
-        "error": error,
-    }));
+    .with_metadata(tool_result_metadata(
+        tool_id,
+        &truncated,
+        error,
+        blocked_by_hook,
+    ));
+    let entry = match duration_ms {
+        Some(duration_ms) => entry.with_duration(duration_ms),
+        None => entry,
+    };
     log_entry(ctx, entry);
+}
+
+fn is_blocked_by_hook_result(result: &str, error: &Option<String>) -> bool {
+    error.as_deref() == Some("blocked_by_hook") || result == "[blocked by hook]"
+}
+
+fn tool_result_log_level(error: &Option<String>, blocked_by_hook: bool) -> LogLevel {
+    if error.is_some() || blocked_by_hook {
+        LogLevel::Warn
+    } else {
+        LogLevel::Info
+    }
+}
+
+fn tool_result_message(error: &Option<String>, blocked_by_hook: bool) -> &'static str {
+    if blocked_by_hook {
+        "Tool blocked by hook"
+    } else if error.is_some() {
+        "Tool returned error"
+    } else {
+        "Tool completed"
+    }
+}
+
+fn tool_result_metadata(
+    tool_id: &str,
+    result: &str,
+    error: &Option<String>,
+    blocked_by_hook: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "tool_id": tool_id,
+        "result": result,
+        "error": error,
+        "blocked_by_hook": blocked_by_hook,
+    })
 }
 
 /// Log an error event.
@@ -113,4 +152,31 @@ pub fn log_error(ctx: &StreamContext, error: &str) {
         error,
     );
     log_entry(ctx, entry);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blocked_hook_result_is_warn_with_structured_metadata() {
+        let error = Some("blocked_by_hook".to_string());
+
+        assert!(is_blocked_by_hook_result("[blocked by hook]", &error));
+        assert_eq!(tool_result_log_level(&error, true), LogLevel::Warn);
+        assert_eq!(tool_result_message(&error, true), "Tool blocked by hook");
+
+        let metadata = tool_result_metadata("call-1", "[blocked by hook]", &error, true);
+        assert_eq!(metadata["blocked_by_hook"], true);
+        assert_eq!(metadata["error"], "blocked_by_hook");
+    }
+
+    #[test]
+    fn successful_tool_result_stays_info() {
+        let error = None;
+
+        assert!(!is_blocked_by_hook_result("ok", &error));
+        assert_eq!(tool_result_log_level(&error, false), LogLevel::Info);
+        assert_eq!(tool_result_message(&error, false), "Tool completed");
+    }
 }

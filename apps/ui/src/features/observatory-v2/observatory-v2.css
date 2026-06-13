@@ -1,0 +1,580 @@
+/* ============================================================================
+   OBSERVATORY V2 — Apple-Vision glass aesthetic
+   ============================================================================
+
+   Design tokens:
+     --obs2-bg        : deep near-black with subtle gradient for the canvas
+     --obs2-glass     : frosted-glass card background
+     --obs2-border    : low-opacity cream border
+     --obs2-cream     : soft cream-white for primary glow/text
+     --obs2-cream-dim : muted variant for secondary text
+     --obs2-warning   : restrained amber for failure counts
+
+   Layout: full-page canvas, HUD overlays positioned absolute in the
+   four edges. Pointer-events disabled on the canvas wrap so clicks
+   pass through to the WebGL canvas (which has its own controls).
+   ============================================================================ */
+
+.obs2 {
+  position: relative;
+  width: 100%;
+  /* Fill the available main area minus the topbar (~56px in zbot's shell). */
+  height: calc(100vh - 64px);
+  min-height: 600px;
+  overflow: hidden;
+  /* Deep dark glass background — radial gradient so the 3D fog blends
+     into the page rather than ending abruptly at the canvas edge. */
+  background:
+    radial-gradient(ellipse at center, #131722 0%, #0a0e15 60%, #06080d 100%);
+  color: #f5ecd9;
+  --obs2-glass: rgba(20, 26, 36, 0.55);
+  --obs2-border: rgba(245, 236, 217, 0.10);
+  --obs2-border-hover: rgba(245, 236, 217, 0.22);
+  --obs2-cream: #f5ecd9;
+  --obs2-cream-dim: rgba(245, 236, 217, 0.55);
+  --obs2-warning: #f0c46b;
+}
+
+.obs2__canvas-wrap {
+  position: absolute;
+  inset: 0;
+  /* The canvas itself has interactive controls; allow pointer events
+     so OrbitControls can pan/zoom on drag. */
+}
+
+/* ----- empty state when hierarchy is disabled --------------------------- */
+.obs2__empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.obs2__empty-card {
+  background: var(--obs2-glass);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid var(--obs2-border);
+  border-radius: 18px;
+  padding: 28px 32px;
+  max-width: 460px;
+  text-align: center;
+  pointer-events: auto;
+  box-shadow:
+    0 1px 0 rgba(245, 236, 217, 0.04) inset,
+    0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+.obs2__empty-icon {
+  color: var(--obs2-cream-dim);
+  margin-bottom: 8px;
+}
+
+.obs2__empty h2 {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-weight: 500;
+  font-size: 18px;
+  margin: 4px 0 10px;
+  letter-spacing: 0.01em;
+  color: var(--obs2-cream);
+}
+
+.obs2__empty p {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--obs2-cream-dim);
+  margin: 0;
+}
+
+.obs2__empty code {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 12px;
+  color: var(--obs2-cream);
+  background: rgba(245, 236, 217, 0.06);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+/* ----- HUD shared base --------------------------------------------------- */
+.obs2__hud {
+  position: absolute;
+  background: var(--obs2-glass);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid var(--obs2-border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow:
+    0 1px 0 rgba(245, 236, 217, 0.05) inset,
+    0 14px 32px rgba(0, 0, 0, 0.40);
+  pointer-events: auto;
+  transition: border-color 240ms ease;
+}
+
+.obs2__hud:hover {
+  border-color: var(--obs2-border-hover);
+}
+
+.obs2__hud--tl {
+  top: 22px;
+  left: 22px;
+  min-width: 320px;
+}
+
+.obs2__hud--tr {
+  top: 22px;
+  right: 22px;
+  min-width: 180px;
+}
+
+.obs2__hud--bottom {
+  /* Sit just above the comprehensive footer strip. */
+  bottom: 56px;
+  left: 22px;
+  right: 22px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.obs2__hud-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.obs2__hud-row--title {
+  margin-bottom: 10px;
+}
+
+.obs2__hud-row--warn .obs2__hud-value {
+  color: var(--obs2-warning);
+}
+
+.obs2__hud-eyebrow {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--obs2-cream-dim);
+}
+
+.obs2__hud-value {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 14px;
+  color: var(--obs2-cream);
+}
+
+/* ----- Stats grid inside the top-left HUD ------------------------------- */
+.obs2__hud-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.obs2__hud-stats:not(:first-child) {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--obs2-border);
+}
+
+.obs2__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.obs2__stat-value {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--obs2-cream);
+  letter-spacing: -0.01em;
+}
+
+.obs2__stat-label {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--obs2-cream-dim);
+}
+
+.obs2__stat--warning .obs2__stat-value {
+  color: var(--obs2-warning);
+}
+
+/* ----- Bottom detail pills (frosted, individual cards) ------------------ */
+.obs2__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--obs2-glass);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid var(--obs2-border);
+  border-radius: 12px;
+  padding: 10px 14px;
+  min-width: 220px;
+  transition: border-color 240ms ease, transform 240ms ease;
+  box-shadow:
+    0 1px 0 rgba(245, 236, 217, 0.04) inset,
+    0 10px 24px rgba(0, 0, 0, 0.36);
+}
+
+.obs2__pill:hover {
+  border-color: var(--obs2-border-hover);
+  transform: translateY(-1px);
+}
+
+.obs2__pill--dim {
+  opacity: 0.7;
+}
+
+.obs2__pill-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--obs2-cream-dim);
+}
+
+.obs2__pill-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.obs2__pill-label {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 12px;
+  color: var(--obs2-cream);
+  letter-spacing: 0.02em;
+}
+
+.obs2__pill-sub {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 10px;
+  color: var(--obs2-cream-dim);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.obs2__pill-open {
+  background: transparent;
+  border: 1px solid var(--obs2-border);
+  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--obs2-cream);
+  cursor: pointer;
+  transition: border-color 240ms ease, background 240ms ease;
+}
+
+.obs2__pill-open:hover {
+  background: rgba(245, 236, 217, 0.06);
+  border-color: var(--obs2-border-hover);
+}
+
+/* ----- Picked-aggregate floating card ----------------------------------- */
+.obs2__pick-card {
+  position: absolute;
+  bottom: 88px;
+  right: 22px;
+  width: 320px;
+  background: var(--obs2-glass);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid var(--obs2-border-hover);
+  border-radius: 14px;
+  padding: 16px 18px 18px;
+  box-shadow:
+    0 1px 0 rgba(245, 236, 217, 0.05) inset,
+    0 20px 48px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+  animation: obs2-pick-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes obs2-pick-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.obs2__pick-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: transparent;
+  border: 1px solid var(--obs2-border);
+  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--obs2-cream-dim);
+  cursor: pointer;
+  transition: background 200ms ease, color 200ms ease, border-color 200ms ease;
+}
+
+.obs2__pick-close:hover {
+  background: rgba(245, 236, 217, 0.06);
+  color: var(--obs2-cream);
+  border-color: var(--obs2-border-hover);
+}
+
+.obs2__pick-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 28px;
+  margin-bottom: 10px;
+}
+
+.obs2__pick-eyebrow {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--obs2-cream-dim);
+}
+
+.obs2__pick-name {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 14px;
+  color: var(--obs2-cream);
+  letter-spacing: 0.01em;
+  word-break: break-word;
+}
+
+.obs2__pick-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.obs2__pick-meta-chip {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(245, 236, 217, 0.06);
+  border: 1px solid var(--obs2-border);
+  color: var(--obs2-cream);
+}
+
+.obs2__pick-desc {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--obs2-cream-dim);
+  margin: 0;
+  letter-spacing: 0.01em;
+}
+
+/* ----- Comprehensive footer strip (mirrors legacy /observatory) ------- */
+.obs2__footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 22px;
+  background: rgba(10, 14, 21, 0.7);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border-top: 1px solid var(--obs2-border);
+  overflow-x: auto;
+  /* Hide scrollbar but keep scroll behavior for very wide content. */
+  scrollbar-width: none;
+}
+
+.obs2__footer::-webkit-scrollbar {
+  display: none;
+}
+
+.obs2__footer-stat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+}
+
+.obs2__footer-stat-label {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--obs2-cream-dim);
+}
+
+.obs2__footer-stat-value {
+  font-size: 12px;
+  color: var(--obs2-cream);
+  letter-spacing: 0.02em;
+}
+
+.obs2__footer-stat--warning .obs2__footer-stat-value {
+  color: var(--obs2-warning);
+}
+
+.obs2__footer-stat--error .obs2__footer-stat-value {
+  color: #e07a5f;
+}
+
+/* ----- Entity hover label (Phase 4 — smaller than aggregate label) ----- */
+.obs2__entity-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.92),
+    0 0 6px rgba(10, 14, 21, 0.85);
+}
+
+.obs2__entity-label-name {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 11px;
+  color: #f5ecd9;
+  letter-spacing: 0.02em;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.obs2__entity-label-meta {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: rgba(245, 236, 217, 0.7);
+}
+
+/* ----- Entity-type legend in the top-right HUD ----- */
+.obs2__hud-legend {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--obs2-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.obs2__hud-legend-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 4px;
+}
+
+.obs2__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+}
+
+.obs2__legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.obs2__legend-label {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--obs2-cream-dim);
+  text-transform: lowercase;
+}
+
+/* ----- Pick card variant for entities ----- */
+.obs2__pick-card--entity {
+  /* Stack the entity card just above the aggregate card if both are
+     open simultaneously. Position is calculated relative to bottom. */
+  bottom: 308px;
+}
+
+/* ----- 3D node labels (drei <Html> billboards over L1 aggregates) ------ */
+.obs2__node-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  user-select: none;
+  /* Subtle text shadow keeps the label readable against the cream
+     glow of the sphere behind it. */
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.85),
+    0 0 8px rgba(10, 14, 21, 0.7);
+}
+
+.obs2__node-label-text {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: #f5ecd9;
+  /* Cap absurdly long aggregate names so they don't blow out the
+     layout on dense graphs. */
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.obs2__node-label-meta {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: rgba(245, 236, 217, 0.7);
+}
+
+/* ----- responsive: stack the bottom pills on narrow viewports ---------- */
+@media (max-width: 900px) {
+  .obs2__hud--tl,
+  .obs2__hud--tr {
+    position: static;
+    margin: 14px;
+    min-width: 0;
+  }
+  .obs2 {
+    height: auto;
+    min-height: 100vh;
+  }
+  .obs2__hud--bottom {
+    position: static;
+    margin: 14px;
+    flex-direction: column;
+  }
+  .obs2__pill {
+    min-width: 0;
+  }
+}

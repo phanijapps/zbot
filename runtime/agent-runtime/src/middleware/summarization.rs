@@ -117,11 +117,18 @@ impl SummarizationMiddleware {
             .join("\n\n")
     }
 
+    fn is_summarizable_prose(message: &ChatMessage) -> bool {
+        !message.is_summary
+            && message.tool_calls.is_none()
+            && message.tool_call_id.is_none()
+            && matches!(message.role.as_str(), "user" | "assistant")
+    }
+
     /// Split messages into keep and summarize groups.
     ///
-    /// IMPORTANT: Never splits between an assistant message with `tool_calls`
-    /// and its tool responses. The split boundary is walked forward to find
-    /// a clean break point.
+    /// Summarization only consumes old prose messages. System messages,
+    /// plan-block summaries, assistant tool-call messages, tool responses,
+    /// and existing summaries are retained verbatim.
     fn split_messages(
         &self,
         messages: &[ChatMessage],
@@ -132,48 +139,19 @@ impl SummarizationMiddleware {
             .keep
             .to_keep_count(messages.len(), context_window);
 
-        // System messages are always kept
-        let system_messages: Vec<_> = messages
-            .iter()
-            .filter(|m| m.role == "system")
-            .cloned()
-            .collect();
+        let keep_boundary = messages.len().saturating_sub(to_keep);
+        let mut keep = Vec::new();
+        let mut summarize = Vec::new();
 
-        let non_system_messages: Vec<_> = messages
-            .iter()
-            .filter(|m| m.role != "system")
-            .cloned()
-            .collect();
-
-        let keep_count = to_keep.saturating_sub(system_messages.len());
-
-        let (to_keep_messages, to_summarize_messages) = if non_system_messages.len() > keep_count {
-            let target_split = non_system_messages.len() - keep_count;
-
-            // Walk the split boundary forward to find a clean break point.
-            // A clean break is NOT inside an assistant+tool pair.
-            let mut split_idx = target_split;
-            for (i, msg) in non_system_messages.iter().enumerate().skip(target_split) {
-                // Clean boundary: user message or assistant message (not a tool response)
-                if msg.role == "user" || (msg.role == "assistant" && msg.tool_call_id.is_none()) {
-                    split_idx = i;
-                    break;
-                }
-                // tool message = inside a pair, keep walking forward
+        for (idx, message) in messages.iter().enumerate() {
+            if idx < keep_boundary && Self::is_summarizable_prose(message) {
+                summarize.push(message.clone());
+            } else {
+                keep.push(message.clone());
             }
+        }
 
-            let summarize = non_system_messages[..split_idx].to_vec();
-            let keep = non_system_messages[split_idx..].to_vec();
-            (keep, summarize)
-        } else {
-            (non_system_messages, Vec::new())
-        };
-
-        // Prepend system messages to keep group
-        let mut final_keep = system_messages;
-        final_keep.extend(to_keep_messages);
-
-        (final_keep, to_summarize_messages)
+        (keep, summarize)
     }
 }
 
@@ -247,14 +225,18 @@ impl PreProcessMiddleware for SummarizationMiddleware {
         // Build new message list with summary
         let mut new_messages = Vec::new();
 
-        // Add summary as a system-like message at the beginning
-        new_messages.push(ChatMessage::system(format!(
+        let mut summary_message = ChatMessage::system(format!(
             "{}\n\nSummary of previous conversation:\n{}",
             self.config.summary_prefix, summary
-        )));
-
-        // Add the messages we wanted to keep
-        new_messages.extend(keep_messages);
+        ));
+        summary_message.is_summary = true;
+        let insert_at = keep_messages
+            .iter()
+            .position(|message| message.role != "system")
+            .unwrap_or(keep_messages.len());
+        new_messages.extend(keep_messages[..insert_at].iter().cloned());
+        new_messages.push(summary_message);
+        new_messages.extend(keep_messages[insert_at..].iter().cloned());
 
         Ok(MiddlewareEffect::EmitAndModify {
             event,
@@ -299,6 +281,33 @@ mod tests {
                 }),
                 calls,
             )
+        }
+    }
+
+    struct FailingSummaryClient;
+
+    #[async_trait]
+    impl LlmClient for FailingSummaryClient {
+        fn model(&self) -> &str {
+            "stub"
+        }
+        fn provider(&self) -> &str {
+            "stub"
+        }
+        async fn chat(
+            &self,
+            _msgs: Vec<ChatMessage>,
+            _tools: Option<Value>,
+        ) -> Result<ChatResponse, LlmError> {
+            Err(LlmError::ApiError("summary unavailable".to_string()))
+        }
+        async fn chat_stream(
+            &self,
+            _msgs: Vec<ChatMessage>,
+            _tools: Option<Value>,
+            _cb: StreamCallback,
+        ) -> Result<ChatResponse, LlmError> {
+            self.chat(_msgs, _tools).await
         }
     }
 
@@ -495,9 +504,12 @@ mod tests {
         let cfg = permissive_config();
         let mw = make_middleware(cfg, stub);
 
-        // 4 messages: 1 system + 3 non-system. keep=1 means 2 should summarize.
+        // Leading system messages include the pinned plan block and stay before the summary.
+        let mut plan_block = ChatMessage::system("<!-- plan-block:v1 -->\n[Plan]".to_string());
+        plan_block.is_summary = true;
         let messages = vec![
             ChatMessage::system("sys".to_string()),
+            plan_block,
             ChatMessage::user("u1".to_string()),
             ChatMessage::assistant("a1".to_string()),
             ChatMessage::user("u2".to_string()),
@@ -506,10 +518,12 @@ mod tests {
         match result {
             MiddlewareEffect::EmitAndModify { event, messages } => {
                 assert!(matches!(event, StreamEvent::Token { .. }));
-                // Final messages: prepended summary system msg + kept tail
-                assert!(!messages.is_empty());
-                assert_eq!(messages[0].role, "system");
-                assert!(messages[0].text_content().contains("brief recap"));
+                assert_eq!(messages[0].text_content(), "sys");
+                assert!(messages[1].text_content().contains("plan-block"));
+                assert!(messages[1].is_summary);
+                assert_eq!(messages[2].role, "system");
+                assert!(messages[2].is_summary);
+                assert!(messages[2].text_content().contains("brief recap"));
             }
             other => panic!("expected EmitAndModify, got {other:?}"),
         }
@@ -542,8 +556,127 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
+    #[tokio::test]
+    async fn process_returns_error_when_summary_generation_fails() {
+        let cfg = permissive_config();
+        let mw = make_middleware(cfg, Arc::new(FailingSummaryClient));
+        let err = mw
+            .process(
+                vec![
+                    ChatMessage::user("u1".to_string()),
+                    ChatMessage::assistant("a1".to_string()),
+                    ChatMessage::user("u2".to_string()),
+                ],
+                &make_ctx(),
+            )
+            .await
+            .expect_err("summary client failure must be surfaced");
+        assert!(err.contains("Summarization failed"));
+    }
+
+    #[tokio::test]
+    async fn pipeline_does_not_summarize_when_context_editing_drops_below_threshold() {
+        use crate::middleware::config::ContextEditingConfig;
+        use crate::middleware::{ContextEditingMiddleware, MiddlewarePipeline};
+        use zero_core::types::Part;
+
+        let (stub, calls) = StubSummaryClient::new("should not be called");
+        let raw_messages = vec![
+            ChatMessage::user("inspect the old file".to_string()),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: vec![],
+                tool_calls: Some(vec![ToolCall::new(
+                    "call_old".to_string(),
+                    "read_file".to_string(),
+                    serde_json::json!({"path": "old.rs"}),
+                )]),
+                tool_call_id: None,
+                is_summary: false,
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: vec![Part::Text {
+                    text: "large tool output ".repeat(2_000),
+                }],
+                tool_calls: None,
+                tool_call_id: Some("call_old".to_string()),
+                is_summary: false,
+            },
+            ChatMessage::assistant("I found the relevant code.".to_string()),
+            ChatMessage::user("continue".to_string()),
+        ];
+        let post_edit_messages = vec![
+            raw_messages[0].clone(),
+            raw_messages[1].clone(),
+            ChatMessage {
+                role: "tool".to_string(),
+                content: vec![Part::Text {
+                    text: "[cleared]".to_string(),
+                }],
+                tool_calls: None,
+                tool_call_id: Some("call_old".to_string()),
+                is_summary: false,
+            },
+            raw_messages[3].clone(),
+            raw_messages[4].clone(),
+        ];
+        let threshold = crate::middleware::token_counter::estimate_total_tokens(
+            &post_edit_messages,
+            "gpt-4o-mini",
+        ) + 100;
+        assert!(
+            crate::middleware::token_counter::estimate_total_tokens(&raw_messages, "gpt-4o-mini")
+                > threshold
+        );
+
+        let summarization = SummarizationMiddleware::new(
+            SummarizationConfig {
+                enabled: true,
+                trigger: TriggerCondition {
+                    tokens: Some(threshold),
+                    messages: None,
+                    fraction: None,
+                },
+                keep: KeepPolicy {
+                    messages: Some(1),
+                    tokens: None,
+                    fraction: None,
+                },
+                ..SummarizationConfig::default()
+            },
+            stub,
+        );
+        let pipeline = MiddlewarePipeline::new()
+            .add_pre_processor(Box::new(ContextEditingMiddleware::new(
+                ContextEditingConfig {
+                    enabled: true,
+                    trigger_tokens: 1,
+                    keep_tool_results: 0,
+                    min_reclaim: 0,
+                    placeholder: "[cleared]".to_string(),
+                    ..Default::default()
+                },
+            )))
+            .add_pre_processor(Box::new(summarization));
+
+        let mut events = Vec::new();
+        let out = pipeline
+            .process_messages(raw_messages, &make_ctx(), |event| events.push(event))
+            .await
+            .unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(events.len(), 1);
+        assert!(out.iter().any(|m| {
+            m.role == "tool"
+                && m.tool_call_id.as_deref() == Some("call_old")
+                && m.text_content() == "[cleared]"
+        }));
+    }
+
     #[test]
-    fn split_messages_walks_past_assistant_tool_pair() {
+    fn split_messages_excludes_assistant_tool_pair() {
         let (stub, _) = StubSummaryClient::new("");
         let mw = make_middleware(SummarizationConfig::default(), stub);
 
@@ -571,8 +704,8 @@ mod tests {
             ChatMessage::user("after-pair".to_string()),
         ];
 
-        // Force keep = 1 → split target is index 3 (4 - 1). Already a user, so split=3.
-        // Override config keep:
+        // Force keep = 1. Only old prose is summarizable; the assistant
+        // tool-call message and tool response stay on the tape.
         let mw2 = SummarizationMiddleware::new(
             SummarizationConfig {
                 keep: KeepPolicy {
@@ -585,13 +718,18 @@ mod tests {
             mw.summary_client.clone(),
         );
         let (keep, summarize) = mw2.split_messages(&messages, 128_000);
-        assert_eq!(keep.len(), 1);
-        assert_eq!(keep[0].text_content(), "after-pair");
-        assert_eq!(summarize.len(), 3);
+        assert_eq!(summarize.len(), 1);
+        assert_eq!(summarize[0].text_content(), "first");
+        assert_eq!(keep.len(), 3);
+        assert!(keep.iter().any(|m| m.tool_calls.is_some()));
+        assert!(keep
+            .iter()
+            .any(|m| m.role == "tool" && m.tool_call_id.as_deref() == Some("c1")));
+        assert!(keep.iter().any(|m| m.text_content() == "after-pair"));
     }
 
     #[test]
-    fn split_messages_walks_forward_through_tool_response() {
+    fn split_messages_keeps_tool_responses_when_no_old_prose_is_eligible() {
         let (stub, _) = StubSummaryClient::new("");
         let mw = SummarizationMiddleware::new(
             SummarizationConfig {
@@ -605,8 +743,7 @@ mod tests {
             stub,
         );
 
-        // 4 messages: a, t, t, u. With keep=2 target_split = 2. Index 2 is `tool`,
-        // index 3 is `user` — should walk to 3.
+        // Old assistant tool call and tool responses are ineligible for summarization.
         let messages = vec![
             ChatMessage {
                 role: "assistant".to_string(),
@@ -636,10 +773,81 @@ mod tests {
             ChatMessage::user("end".to_string()),
         ];
         let (keep, summarize) = mw.split_messages(&messages, 128_000);
-        // Walk-forward keeps the user message and summarises everything before.
-        assert_eq!(keep.len(), 1);
-        assert_eq!(keep[0].text_content(), "end");
-        assert_eq!(summarize.len(), 3);
+        assert_eq!(keep.len(), 4);
+        assert!(summarize.is_empty());
+    }
+
+    #[test]
+    fn split_messages_excludes_system_plan_tool_and_prior_summary_messages() {
+        use zero_core::types::Part;
+
+        let (stub, _) = StubSummaryClient::new("");
+        let mw = SummarizationMiddleware::new(
+            SummarizationConfig {
+                keep: KeepPolicy {
+                    messages: Some(1),
+                    tokens: None,
+                    fraction: None,
+                },
+                ..SummarizationConfig::default()
+            },
+            stub,
+        );
+        let mut prior_summary = ChatMessage::assistant("old recap".to_string());
+        prior_summary.is_summary = true;
+        let plan_block = ChatMessage {
+            role: "system".to_string(),
+            content: vec![Part::Text {
+                text: "<!-- plan-block:v1 -->\n[Plan]".to_string(),
+            }],
+            tool_calls: None,
+            tool_call_id: None,
+            is_summary: true,
+        };
+        let assistant_tool = ChatMessage {
+            role: "assistant".to_string(),
+            content: vec![],
+            tool_calls: Some(vec![ToolCall::new(
+                "tool_1".to_string(),
+                "read_file".to_string(),
+                Value::Null,
+            )]),
+            tool_call_id: None,
+            is_summary: false,
+        };
+        let tool_result = ChatMessage {
+            role: "tool".to_string(),
+            content: vec![Part::Text {
+                text: "tool body".to_string(),
+            }],
+            tool_calls: None,
+            tool_call_id: Some("tool_1".to_string()),
+            is_summary: false,
+        };
+        let messages = vec![
+            ChatMessage::system("stable prefix".to_string()),
+            plan_block,
+            ChatMessage::user("old prose".to_string()),
+            ChatMessage::assistant("old assistant prose".to_string()),
+            prior_summary,
+            assistant_tool,
+            tool_result,
+            ChatMessage::user("recent prose".to_string()),
+        ];
+
+        let (keep, summarize) = mw.split_messages(&messages, 128_000);
+
+        assert_eq!(summarize.len(), 2);
+        assert_eq!(summarize[0].text_content(), "old prose");
+        assert_eq!(summarize[1].text_content(), "old assistant prose");
+        assert!(keep.iter().any(|m| m.text_content() == "stable prefix"));
+        assert!(keep.iter().any(|m| m.text_content().contains("plan-block")));
+        assert!(keep.iter().any(|m| m.text_content() == "old recap"));
+        assert!(keep.iter().any(|m| m.tool_calls.is_some()));
+        assert!(keep
+            .iter()
+            .any(|m| m.role == "tool" && m.tool_call_id.as_deref() == Some("tool_1")));
+        assert!(keep.iter().any(|m| m.text_content() == "recent prose"));
     }
 
     #[tokio::test]

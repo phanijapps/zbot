@@ -55,6 +55,8 @@ pub enum StreamEvent {
         tool_id: String,
         result: String,
         error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<i64>,
     },
 
     /// Execution is complete
@@ -131,6 +133,7 @@ pub enum StreamEvent {
         output_schema: Option<Value>,
         skills: Vec<String>,
         complexity: Option<String>,
+        mode: Option<String>,
         parallel: bool,
         child_execution_id: Option<String>,
     },
@@ -330,6 +333,7 @@ mod tests {
                 tool_id: "id".into(),
                 result: "r".into(),
                 error: None,
+                duration_ms: Some(10),
             },
             StreamEvent::Done {
                 timestamp: 7,
@@ -378,6 +382,7 @@ mod tests {
                 output_schema: None,
                 skills: vec![],
                 complexity: None,
+                mode: None,
                 parallel: false,
                 child_execution_id: None,
             },

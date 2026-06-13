@@ -75,7 +75,7 @@ chrono-tz = "0.10"
 dirs = "5"
 gethostname = { workspace = true }
 regex = "1"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rust-embed = { workspace = true }
 sha2 = "0.10"
 

@@ -1,566 +1,140 @@
-// ============================================================================
-// ZERO CLI - Main Entry Point
-// Rich TUI interface for Zero Agent platform
-// ============================================================================
+//! `zbot` — lightweight streaming Claude-Code-style CLI for the z-Bot daemon.
+//!
+//! Architecture: this CLI is a thin front-end. The interactive mode uses
+//! `rustyline` for input editing + direct stdout streaming for output —
+//! no full-screen TUI framework. Every byte printed stays printed; no
+//! re-renders, no border math, no layout drift.
+//!
+//! Modes
+//! -----
+//! - `zbot`                                — interactive REPL (rustyline + stream)
+//! - `zbot "do X"`                         — one-shot, prints + exits
+//! - `cat file.md | zbot "summarise"`      — stdin is prepended to message
+//! - `cat file.md | zbot`                  — stdin is the whole message
+//! - `zbot --url http://desktop:18791`     — connect to a remote daemon
 
-mod app;
 mod client;
+mod config;
 mod events;
-mod ui;
+mod oneshot;
+mod repl;
+mod slash;
+mod stream;
+mod style;
 
-use anyhow::Result;
-use clap::{Parser, Subcommand};
+use anyhow::{Context, Result};
+use clap::Parser;
+use std::io::IsTerminal;
 
-#[derive(Parser)]
-#[command(name = "zero")]
-#[command(about = "Zero Agent CLI - AI agent platform", long_about = None)]
-#[command(version)]
-struct Cli {
-    /// Gateway HTTP port
-    #[arg(long, default_value = "18791", global = true)]
-    port: u16,
+use crate::client::DaemonClient;
+use crate::config::Config;
+use crate::events::EventStream;
 
-    /// Gateway host
-    #[arg(long, default_value = "127.0.0.1", global = true)]
-    host: String,
+#[derive(Parser, Debug)]
+#[command(
+    name = "zbot",
+    version,
+    about = "Streaming chat client for the z-Bot daemon",
+    long_about = None,
+)]
+struct Args {
+    /// Daemon base URL (overrides ZBOT_URL and config file).
+    #[arg(long, value_name = "URL")]
+    url: Option<String>,
 
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
+    /// Resume a specific session by id (interactive mode only).
+    #[arg(long, value_name = "ID")]
+    session: Option<String>,
 
-#[derive(Subcommand)]
-enum Commands {
-    /// Start interactive chat with an agent
-    Chat {
-        /// Agent ID to chat with
-        #[arg(default_value = "assistant")]
-        agent: String,
+    /// Disable ANSI colors (also auto-disabled if $NO_COLOR is set or
+    /// stdout is not a terminal).
+    #[arg(long)]
+    no_color: bool,
 
-        /// Conversation ID (auto-generated if not provided)
-        #[arg(short, long)]
-        conversation: Option<String>,
-    },
-
-    /// Send a single message to an agent and get response
-    Invoke {
-        /// Agent ID
-        agent: String,
-
-        /// Message to send
-        message: String,
-
-        /// Conversation ID (auto-generated if not provided)
-        #[arg(short, long)]
-        conversation: Option<String>,
-    },
-
-    /// List available agents
-    Agents {
-        /// Show detailed information
-        #[arg(short, long)]
-        verbose: bool,
-    },
-
-    /// Daemon management
-    Daemon {
-        #[command(subcommand)]
-        action: DaemonAction,
-    },
-
-    /// Check gateway status
-    Status,
-
-    /// Manage distillation
-    Distill {
-        #[command(subcommand)]
-        action: DistillAction,
-    },
-
-    /// Session management
-    Sessions {
-        #[command(subcommand)]
-        action: SessionAction,
-    },
-}
-
-#[derive(Subcommand)]
-enum DaemonAction {
-    /// Check if daemon is running
-    Status,
-
-    /// Show daemon info
-    Info,
-}
-
-#[derive(Subcommand)]
-enum DistillAction {
-    /// Retroactively distill all undistilled sessions
-    Backfill {
-        /// Max concurrent distillation calls
-        #[arg(long, default_value = "2")]
-        concurrency: usize,
-    },
-}
-
-#[derive(Subcommand)]
-enum SessionAction {
-    /// Archive old session transcripts to compressed files
-    Archive {
-        /// Archive sessions older than this many days
-        #[arg(long, default_value = "7")]
-        older_than: u32,
-    },
-    /// Restore an archived session
-    Restore {
-        /// Session ID to restore
-        session_id: String,
-    },
+    /// One-shot prompt. When provided, sends and exits on turn completion.
+    /// If stdin is not a TTY, its contents are prepended to this message.
+    prompt: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::WARN.into()),
-        )
-        .with_target(false)
+    init_tracing();
+    let args = Args::parse();
+
+    let cfg = Config::resolve(args.url.clone()).context("resolve daemon URL")?;
+    let client = DaemonClient::new(cfg.clone());
+
+    client
+        .health()
+        .await
+        .with_context(|| format!("daemon unreachable at {}", cfg.daemon_url))?;
+
+    let chat = client
+        .init_chat_session()
+        .await
+        .context("init chat session")?;
+
+    let events = EventStream::connect(&cfg.websocket_url())
+        .await
+        .with_context(|| format!("ws connect to {}", cfg.websocket_url()))?;
+
+    let color = use_color(args.no_color);
+
+    match pick_mode(&args) {
+        Mode::Interactive => {
+            crate::repl::run(chat, cfg.daemon_url.clone(), events, client.clone(), color)
+                .await
+                .context("interactive REPL")?;
+        }
+        Mode::OneShot => {
+            let message = oneshot::compose_message(args.prompt.clone())
+                .context("compose user message from args + stdin")?;
+            oneshot::run_oneshot(chat, events, message, color)
+                .await
+                .context("one-shot turn")?;
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Mode {
+    Interactive,
+    OneShot,
+}
+
+fn pick_mode(args: &Args) -> Mode {
+    if args.prompt.is_some() {
+        return Mode::OneShot;
+    }
+    if !std::io::stdin().is_terminal() {
+        return Mode::OneShot;
+    }
+    if !std::io::stdout().is_terminal() {
+        return Mode::OneShot;
+    }
+    Mode::Interactive
+}
+
+fn use_color(no_color_flag: bool) -> bool {
+    if no_color_flag {
+        return false;
+    }
+    if std::env::var_os("NO_COLOR")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    std::io::stdout().is_terminal()
+}
+
+fn init_tracing() {
+    use tracing_subscriber::{fmt, EnvFilter};
+    let filter = EnvFilter::try_from_env("ZBOT_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
+    fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
         .init();
-
-    let cli = Cli::parse();
-    let gateway_url = format!("http://{}:{}", cli.host, cli.port);
-    let ws_url = format!("ws://{}:{}", cli.host, cli.port - 1); // WS is typically port - 1
-
-    match cli.command {
-        Some(Commands::Chat {
-            agent,
-            conversation,
-        }) => {
-            let conv_id = conversation.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            app::run_chat_tui(&gateway_url, &ws_url, &agent, &conv_id).await?;
-        }
-
-        Some(Commands::Invoke {
-            agent,
-            message,
-            conversation,
-        }) => {
-            let conv_id = conversation.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            run_invoke(&gateway_url, &ws_url, &agent, &conv_id, &message).await?;
-        }
-
-        Some(Commands::Agents { verbose }) => {
-            run_list_agents(&gateway_url, verbose).await?;
-        }
-
-        Some(Commands::Daemon { action }) => match action {
-            DaemonAction::Status => {
-                run_daemon_status(&gateway_url).await?;
-            }
-            DaemonAction::Info => {
-                run_daemon_info(&gateway_url).await?;
-            }
-        },
-
-        Some(Commands::Status) => {
-            run_status(&gateway_url).await?;
-        }
-
-        Some(Commands::Distill { action }) => match action {
-            DistillAction::Backfill { concurrency } => {
-                run_distill_backfill(&gateway_url, concurrency).await?;
-            }
-        },
-
-        Some(Commands::Sessions { action }) => match action {
-            SessionAction::Archive { older_than } => {
-                run_session_archive(&gateway_url, older_than).await?;
-            }
-            SessionAction::Restore { session_id } => {
-                run_session_restore(&gateway_url, &session_id).await?;
-            }
-        },
-
-        None => {
-            // Default: run interactive chat TUI with agent selector
-            app::run_chat_tui(
-                &gateway_url,
-                &ws_url,
-                "assistant",
-                &uuid::Uuid::new_v4().to_string(),
-            )
-            .await?;
-        }
-    }
-
-    Ok(())
-}
-
-async fn run_invoke(
-    gateway_url: &str,
-    ws_url: &str,
-    agent_id: &str,
-    conversation_id: &str,
-    message: &str,
-) -> Result<()> {
-    let client = client::GatewayClient::new(gateway_url, ws_url);
-
-    // Check if gateway is running
-    if !client.is_running().await {
-        eprintln!("Error: Gateway daemon is not running");
-        eprintln!("Start it with: cargo run -p daemon");
-        std::process::exit(1);
-    }
-
-    println!("Invoking agent '{}'...\n", agent_id);
-
-    // Connect and invoke
-    let mut stream = client.invoke(agent_id, conversation_id, message).await?;
-
-    // Stream the response
-    while let Some(event) = stream.recv().await {
-        match event {
-            client::GatewayEvent::Token { content } => {
-                print!("{}", content);
-                std::io::Write::flush(&mut std::io::stdout())?;
-            }
-            client::GatewayEvent::Thinking { content } => {
-                println!("\n[Thinking: {}]", content);
-            }
-            client::GatewayEvent::ToolCall { tool, .. } => {
-                println!("\n[Tool: {}]", tool);
-            }
-            client::GatewayEvent::ToolResult { result, error, .. } => {
-                if let Some(err) = error {
-                    println!("[Tool Error: {}]", err);
-                } else if let Some(res) = result {
-                    let preview = if res.len() > 100 {
-                        format!("{}...", &res[..res.floor_char_boundary(100)])
-                    } else {
-                        res
-                    };
-                    println!("[Tool Result: {}]", preview);
-                }
-            }
-            client::GatewayEvent::Done { .. } => {
-                println!("\n");
-                break;
-            }
-            client::GatewayEvent::Error { message, .. } => {
-                eprintln!("\nError: {}", message);
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    Ok(())
-}
-
-async fn run_list_agents(gateway_url: &str, verbose: bool) -> Result<()> {
-    let client = client::GatewayClient::new(gateway_url, "");
-
-    if !client.is_running().await {
-        eprintln!("Error: Gateway daemon is not running");
-        std::process::exit(1);
-    }
-
-    let agents = client.list_agents().await?;
-
-    if agents.is_empty() {
-        println!("No agents found");
-        return Ok(());
-    }
-
-    println!("Available agents:\n");
-    for agent in agents {
-        if verbose {
-            println!("  {} - {}", agent.id, agent.name);
-            if let Some(desc) = agent.description {
-                println!("    {}", desc);
-            }
-            println!();
-        } else {
-            println!("  {}", agent.id);
-        }
-    }
-
-    Ok(())
-}
-
-async fn run_daemon_status(gateway_url: &str) -> Result<()> {
-    let client = client::GatewayClient::new(gateway_url, "");
-
-    if client.is_running().await {
-        println!("Daemon: Running");
-        println!("URL: {}", gateway_url);
-    } else {
-        println!("Daemon: Not running");
-        println!("Start with: cargo run -p daemon");
-    }
-
-    Ok(())
-}
-
-async fn run_daemon_info(gateway_url: &str) -> Result<()> {
-    let client = client::GatewayClient::new(gateway_url, "");
-
-    match client.get_status().await {
-        Ok(status) => {
-            println!("Gateway Status");
-            println!("==============");
-            println!("Status: {}", status.status);
-            println!("Version: {}", status.version);
-            if let Some(agents) = status.agent_count {
-                println!("Agents: {}", agents);
-            }
-        }
-        Err(_) => {
-            println!("Daemon: Not running");
-        }
-    }
-
-    Ok(())
-}
-
-async fn run_status(gateway_url: &str) -> Result<()> {
-    run_daemon_info(gateway_url).await
-}
-
-// ============================================================================
-// Distillation Backfill
-// ============================================================================
-
-#[derive(serde::Deserialize)]
-struct UndistilledSession {
-    session_id: String,
-    #[allow(dead_code)]
-    agent_id: String,
-}
-
-#[derive(serde::Deserialize)]
-struct TriggerDistillationResponse {
-    #[allow(dead_code)]
-    session_id: String,
-    status: String,
-    facts_upserted: usize,
-    error: Option<String>,
-}
-
-async fn run_distill_backfill(gateway_url: &str, _concurrency: usize) -> Result<()> {
-    let client = reqwest::Client::builder().build().expect("reqwest client");
-
-    // Check if gateway is running
-    let health_resp = client
-        .get(format!("{}/api/health", gateway_url))
-        .timeout(std::time::Duration::from_secs(2))
-        .send()
-        .await;
-
-    if health_resp.is_err() {
-        eprintln!("Error: Gateway daemon is not running");
-        eprintln!("Start it with: cargo run -p daemon");
-        std::process::exit(1);
-    }
-
-    println!("Fetching undistilled sessions...");
-
-    let sessions: Vec<UndistilledSession> = client
-        .get(format!("{}/api/distillation/undistilled", gateway_url))
-        .send()
-        .await?
-        .json()
-        .await?;
-
-    if sessions.is_empty() {
-        println!("All sessions are already distilled. Nothing to do.");
-        return Ok(());
-    }
-
-    println!("Found {} undistilled session(s)\n", sessions.len());
-
-    let mut success_count = 0;
-    let mut fail_count = 0;
-
-    for (i, session) in sessions.iter().enumerate() {
-        let short_id = if session.session_id.len() > 8 {
-            &session.session_id[..8]
-        } else {
-            &session.session_id
-        };
-
-        print!("[{}/{}] Session {}... ", i + 1, sessions.len(), short_id);
-        std::io::Write::flush(&mut std::io::stdout())?;
-
-        let resp = client
-            .post(format!(
-                "{}/api/distillation/trigger/{}",
-                gateway_url, session.session_id
-            ))
-            .send()
-            .await;
-
-        match resp {
-            Ok(r) if r.status().is_success() => {
-                match r.json::<TriggerDistillationResponse>().await {
-                    Ok(body) => {
-                        if body.status == "success" {
-                            println!("ok ({} facts)", body.facts_upserted);
-                            success_count += 1;
-                        } else {
-                            let err_msg = body.error.as_deref().unwrap_or("unknown error");
-                            println!("failed ({})", err_msg);
-                            fail_count += 1;
-                        }
-                    }
-                    Err(e) => {
-                        println!("failed (parse error: {})", e);
-                        fail_count += 1;
-                    }
-                }
-            }
-            Ok(r) => {
-                println!("failed (HTTP {})", r.status());
-                fail_count += 1;
-            }
-            Err(e) => {
-                println!("failed ({})", e);
-                fail_count += 1;
-            }
-        }
-    }
-
-    println!();
-    println!(
-        "Backfill complete: {} succeeded, {} failed",
-        success_count, fail_count
-    );
-
-    Ok(())
-}
-
-// ============================================================================
-// Session Archive / Restore
-// ============================================================================
-
-#[derive(serde::Deserialize)]
-struct ArchiveResultEntry {
-    session_id: String,
-    messages_archived: usize,
-    logs_archived: usize,
-    file_size: u64,
-}
-
-#[derive(serde::Deserialize)]
-struct ArchiveResponse {
-    archived: usize,
-    results: Vec<ArchiveResultEntry>,
-}
-
-#[derive(serde::Deserialize)]
-struct RestoreResponse {
-    #[allow(dead_code)]
-    session_id: String,
-    records_restored: usize,
-}
-
-async fn run_session_archive(gateway_url: &str, older_than: u32) -> Result<()> {
-    let client = reqwest::Client::builder().build().expect("reqwest client");
-
-    let health_resp = client
-        .get(format!("{}/api/health", gateway_url))
-        .timeout(std::time::Duration::from_secs(2))
-        .send()
-        .await;
-
-    if health_resp.is_err() {
-        eprintln!("Error: Gateway daemon is not running");
-        eprintln!("Start it with: cargo run -p daemon");
-        std::process::exit(1);
-    }
-
-    println!("Archiving sessions older than {} days...", older_than);
-
-    let resp = client
-        .post(format!("{}/api/sessions/archive", gateway_url))
-        .json(&serde_json::json!({ "older_than_days": older_than }))
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        eprintln!("Archive failed (HTTP {}): {}", status, body);
-        std::process::exit(1);
-    }
-
-    let body: ArchiveResponse = resp.json().await?;
-
-    if body.archived == 0 {
-        println!("No sessions eligible for archival.");
-        return Ok(());
-    }
-
-    println!("Archived {} session(s):\n", body.archived);
-    for result in &body.results {
-        let short_id = if result.session_id.len() > 8 {
-            &result.session_id[..8]
-        } else {
-            &result.session_id
-        };
-        println!(
-            "  {} - {} messages, {} logs, {} bytes",
-            short_id, result.messages_archived, result.logs_archived, result.file_size
-        );
-    }
-
-    Ok(())
-}
-
-async fn run_session_restore(gateway_url: &str, session_id: &str) -> Result<()> {
-    let client = reqwest::Client::builder().build().expect("reqwest client");
-
-    let health_resp = client
-        .get(format!("{}/api/health", gateway_url))
-        .timeout(std::time::Duration::from_secs(2))
-        .send()
-        .await;
-
-    if health_resp.is_err() {
-        eprintln!("Error: Gateway daemon is not running");
-        eprintln!("Start it with: cargo run -p daemon");
-        std::process::exit(1);
-    }
-
-    let short_id = if session_id.len() > 8 {
-        &session_id[..8]
-    } else {
-        session_id
-    };
-
-    println!("Restoring session {}...", short_id);
-
-    let resp = client
-        .post(format!(
-            "{}/api/sessions/restore/{}",
-            gateway_url, session_id
-        ))
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        eprintln!("Restore failed (HTTP {}): {}", status, body);
-        std::process::exit(1);
-    }
-
-    let body: RestoreResponse = resp.json().await?;
-    println!(
-        "Restored {} records for session {}",
-        body.records_restored, short_id
-    );
-
-    Ok(())
 }

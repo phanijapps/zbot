@@ -5,10 +5,13 @@ pub mod belief_contradiction_detector;
 pub mod belief_network_activity;
 pub mod belief_propagator;
 pub mod belief_synthesizer;
+pub mod clustering;
 pub mod compactor;
 pub mod conflict_resolver;
 pub mod corrections_abstractor;
 pub mod decay;
+pub mod hierarchy_builder;
+pub mod llm_aggregate_entity;
 pub mod orphan_archiver;
 pub mod pattern_extractor;
 pub mod pruner;
@@ -39,11 +42,13 @@ pub use conflict_resolver::{
 pub use corrections_abstractor::{
     AbstractionLlm, AbstractionStats, CorrectionsAbstractor, LlmCorrectionsAbstractor,
 };
-pub use decay::{DecayConfig, DecayEngine, PruneCandidate};
+pub use decay::{
+    ContradictionPropagationConfig, ContradictionPropagationStats, DecayConfig, DecayEngine,
+    PruneCandidate,
+};
 pub use orphan_archiver::{OrphanArchiver, OrphanArchiverStats};
 pub use pattern_extractor::{
     LlmPatternExtractor, PatternExtractLlm, PatternExtractor, PatternResponse, PatternStats,
-    PatternStep,
 };
 pub use pruner::{PruneStats, Pruner};
 pub use synthesizer::{

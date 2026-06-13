@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::util::parse_llm_json;
-use crate::{LlmClientConfig, MemoryLlmFactory, QueryGateConfig};
+use crate::{CachedLlmClient, LlmClientConfig, MemoryLlmFactory, QueryGateConfig};
 use agent_runtime::llm::ChatMessage;
 
 /// Decision returned by the gate. Drives whether (and how) hybrid search runs.
@@ -155,23 +155,22 @@ Output: {\"decision\": \"split\", \"subqueries\": [\"user location address\", \"
 /// `QueryGateConfig::model_id` is parsed and held for the future when the
 /// factory grows that knob, but it has no effect today.
 pub struct LlmQueryGate {
-    factory: Arc<dyn MemoryLlmFactory>,
+    client: CachedLlmClient,
 }
 
 impl LlmQueryGate {
     pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
-        Self { factory }
+        // Small token budget: the JSON envelope is tiny (~80 tokens worst case).
+        Self {
+            client: CachedLlmClient::new(factory, LlmClientConfig::new(0.0, 256)),
+        }
     }
 }
 
 #[async_trait]
 impl QueryGateLlm for LlmQueryGate {
     async fn reformulate(&self, raw_input: &str) -> Result<GateResponse, String> {
-        // Small token budget: the JSON envelope is tiny (~80 tokens worst case).
-        let client = self
-            .factory
-            .build_client(LlmClientConfig::new(0.0, 256))
-            .await?;
+        let client = self.client.get().await?;
         let messages = vec![
             ChatMessage::system(GATE_SYSTEM_PROMPT.to_string()),
             ChatMessage::user(raw_input.to_string()),

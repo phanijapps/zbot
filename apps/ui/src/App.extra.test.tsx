@@ -3,6 +3,7 @@
 // Tests the default App export and VersionBadge/ResearchV2Redirect internals.
 // ============================================================================
 
+import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -33,6 +34,7 @@ vi.mock("./features/research-v2", () => ({ ResearchPage: () => <div>ResearchPage
 vi.mock("./features/mission-control", () => ({ MissionControlPage: () => <div>MissionControlPage</div> }));
 vi.mock("./components/AccentPicker", () => ({ AccentPicker: () => <button aria-label="theme accent">theme</button> }));
 
+import { initializeTransport } from "@/services/transport";
 import App from "./App";
 
 // jsdom doesn't implement matchMedia — provide a minimal stub for Sonner/Toaster
@@ -51,6 +53,7 @@ Object.defineProperty(window, "matchMedia", {
 });
 
 beforeEach(() => {
+  vi.mocked(initializeTransport).mockClear();
   health.mockReset();
   connect.mockReset();
   disconnect.mockReset();
@@ -76,6 +79,23 @@ describe("App — initialization flow", () => {
     // The setup page redirect means we end up on the app shell
     // Just check that the error state is NOT showing
     expect(screen.queryByText(/connection failed/i)).toBeNull();
+  });
+
+  it("does not duplicate initialization calls under React StrictMode", async () => {
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText(/connecting to gateway/i)).toBeNull();
+    });
+
+    expect(initializeTransport).toHaveBeenCalledTimes(1);
+    expect(health).toHaveBeenCalledTimes(1);
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("v1.0.0")).toBeInTheDocument();
   });
 
   it("shows error state when health check fails", async () => {

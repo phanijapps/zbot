@@ -88,9 +88,70 @@ pub struct DecayCandidate {
 /// One hit returned by `KnowledgeGraphStore::search_entities_by_name_embedding`.
 /// `distance` is L2-squared on normalized vectors — convert to cosine
 /// similarity at the caller via `1 - distance / 2`.
+///
+/// `id` was added in Phase H-4 so the recall pipeline can seed
+/// `compute_lca_path` directly; backends that pre-date this field
+/// should default it to `String::new()` and the LCA step skips empty
+/// ids automatically.
+///
+/// `confidence` was added in MEM-001 Part B-1 so recall step-4 can
+/// weight hits by the entity's current confidence (which now reacts
+/// to fact-level contradictions via Part A propagation). Backends
+/// that pre-date this field should default it to `1.0` so the
+/// weighting is a no-op until they populate it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityNameEmbeddingHit {
+    #[serde(default)]
+    pub id: String,
     pub name: String,
     pub entity_type: String,
     pub distance: f32,
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
+}
+
+fn default_confidence() -> f64 {
+    1.0
+}
+
+/// One hit returned by `KnowledgeGraphStore::list_inter_cluster_relations`
+/// (Phase H-4 follow-up). Captures the fields the recall consumer
+/// needs to render the edge into a `ScoredItem`. Callers filter on
+/// `epistemic_class = 'current'` at the SQL layer so we don't carry
+/// bi-temporal / lifecycle columns through this hit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterClusterRelationHit {
+    pub id: String,
+    pub source_entity_id: String,
+    pub target_entity_id: String,
+    pub relationship_type: String,
+    pub layer: i64,
+}
+
+/// Hierarchical-memory summary returned by
+/// `KnowledgeGraphStore::hierarchy_summary`. Powers the Observatory
+/// pill + slideover; structured so the consumer can render layer
+/// counts, total inter-cluster edges, and a handful of representative
+/// aggregates without a second round-trip.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HierarchySummary {
+    /// `(layer, count)` pairs sorted ascending by layer.
+    pub layer_counts: Vec<(i64, usize)>,
+    /// Total `is_inter_cluster = 1` edges across all layers.
+    pub inter_cluster_relations: usize,
+    /// Top-N aggregates by `member_count`, descending. Capped by the
+    /// caller's `top_n` argument.
+    pub top_aggregates: Vec<AggregateSummary>,
+}
+
+/// One row in `HierarchySummary.top_aggregates`. Description comes
+/// from `kg_entities.properties` JSON (the aggregate's LLM-synthesised
+/// or singleton fallback description).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregateSummary {
+    pub id: String,
+    pub name: String,
+    pub layer: i64,
+    pub member_count: usize,
+    pub description: String,
 }

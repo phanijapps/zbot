@@ -20,8 +20,9 @@ pub use belief_contradiction::{
 pub use error::{StoreError, StoreResult};
 pub use extracted::ExtractedKnowledge;
 pub use knowledge_graph::{
-    DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit, GraphView, KnowledgeGraphStore,
-    RelationshipContext, StrategyCandidate,
+    AggregateSummary, DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit,
+    EntityWithEmbedding, GraphView, HierarchySummary, InterClusterRelationHit, KgNodesForEpisodes,
+    KnowledgeGraphStore, LcaPath, RelationshipContext, StrategyCandidate, WeightedTraversalHit,
 };
 pub use memory_facts::{
     MemoryAggregateStats, MemoryFactStore, MemoryHealthMetrics, SkillIndexRow, StrategyFactInsert,

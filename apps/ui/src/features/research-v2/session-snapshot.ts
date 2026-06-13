@@ -321,7 +321,6 @@ function extractArtifactHints(messages: SessionMessage[]): ArtifactHint[] {
   }
   return out;
 }
-
 // -----------------------------------------------------------------------------
 // Artifacts — /artifacts endpoint wins; respond hints fill in on empty.
 // -----------------------------------------------------------------------------
@@ -361,4 +360,3 @@ function dedupeRefs(refs: ResearchArtifactRef[]): ResearchArtifactRef[] {
   }
   return out;
 }
-

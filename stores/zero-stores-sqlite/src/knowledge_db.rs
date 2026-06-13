@@ -47,8 +47,30 @@ impl r2d2::CustomizeConnection<Connection, rusqlite::Error> for KnowledgeConnect
             mmap_bytes = self.mmap_bytes,
         ))?;
         load_sqlite_vec(conn)?;
+        register_math_udfs(conn)?;
         Ok(())
     }
+}
+
+/// MEM-004: register the math UDFs the DecayEngine needs for bulk
+/// UPDATE statements. rusqlite's `bundled` feature ships SQLite
+/// without `SQLITE_ENABLE_MATH_FUNCTIONS`, so `exp()` isn't natively
+/// available. We register a tiny Rust-side `exp(x)` so the bulk
+/// confidence-decay UPDATE can do the math server-side without
+/// pulling every row into Rust first. Pure, deterministic, no I/O —
+/// safe to call from any query.
+fn register_math_udfs(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.create_scalar_function(
+        "exp",
+        1,
+        rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC
+            | rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+        |ctx| {
+            let x: f64 = ctx.get(0)?;
+            Ok(x.exp())
+        },
+    )?;
+    Ok(())
 }
 
 impl KnowledgeDatabase {

@@ -429,6 +429,22 @@ export interface DistillationConfig {
   model?: string | null;
 }
 
+/** Ward-curator model configuration (Phase C consolidation LLM call) */
+export interface CuratorConfig {
+  /** Provider ID override. null = inherit from orchestrator */
+  providerId?: string | null;
+  /** Model override. null = inherit from orchestrator */
+  model?: string | null;
+}
+
+/** Intent-analysis model configuration (every root prompt) */
+export interface IntentAnalysisConfig {
+  /** Provider ID override. null = inherit from orchestrator */
+  providerId?: string | null;
+  /** Model override. null = inherit from orchestrator */
+  model?: string | null;
+}
+
 // ============================================================================
 // Session State (snapshot API for reconnection)
 // ============================================================================
@@ -497,6 +513,10 @@ export interface ExecutionSettings {
   orchestrator?: OrchestratorConfig;
   /** Distillation model configuration (inherits from orchestrator by default) */
   distillation?: DistillationConfig;
+  /** Ward-curator (Phase C consolidation) model — inherits from orchestrator by default */
+  curator?: CuratorConfig;
+  /** Intent-analysis model (every root prompt) — inherits from orchestrator by default */
+  intentAnalysis?: IntentAnalysisConfig;
   /** Default multimodal (vision) model for the multimodal_analyze tool */
   multimodal?: MultimodalConfig;
   /** Opt-in feature flags (gate beta UI surfaces and experimental behavior) */
@@ -585,6 +605,7 @@ export interface LogSession {
   tool_call_count: number;
   error_count: number;
   duration_ms?: number;
+  subagent_count?: number;
   child_session_ids: string[];
   /**
    * Execution mode persisted on the underlying `sessions` row. `"fast"`
@@ -686,12 +707,54 @@ export interface SessionWithExecutions {
   subagent_count: number;
 }
 
+/** Minimal execution token slice for selected Mission Control detail */
+export interface MissionControlExecutionSummary {
+  execution_id: string;
+  agent_id: string;
+  delegation_type: DelegationType;
+  tokens_in: number;
+  tokens_out: number;
+  child_session_id?: string;
+}
+
+/** Bounded Mission Control session row */
+export interface MissionControlSessionSummary {
+  conversation_id: string;
+  root_execution_id: string;
+  status: SessionStateStatus;
+  source: TriggerSource;
+  root_agent_id: string;
+  title?: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  total_tokens_in: number;
+  total_tokens_out: number;
+  subagent_count: number;
+  mode?: string | null;
+}
+
+/** Per-execution token slices for one selected Mission Control session */
+export interface MissionControlSessionTokens {
+  conversation_id: string;
+  root_execution_id: string;
+  total_tokens_in: number;
+  total_tokens_out: number;
+  executions: MissionControlExecutionSummary[];
+}
+
 /** Filter for querying sessions */
 export interface SessionFilter {
   status?: SessionStateStatus;
   root_agent_id?: string;
   from_time?: string;
   to_time?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** Filter for Mission Control summary rows */
+export interface MissionControlFilter {
   limit?: number;
   offset?: number;
 }
@@ -814,11 +877,26 @@ export interface ConversationEvent extends StreamEvent {
  * file list. `modified_at` is RFC3339 (or empty string for deletions).
  */
 export interface GlobalEvent extends StreamEvent {
-  type: "stats_update" | "session_notification" | "customization_file_changed";
+  type:
+    | "stats_update"
+    | "session_notification"
+    | "customization_file_changed"
+    | "recall_trace";
   /** Present when type is "customization_file_changed". */
   path?: string;
   /** Present when type is "customization_file_changed". RFC3339, or "" for deletions. */
   modified_at?: string;
+  // ---- recall_trace fields (Observatory v2 Phase 3) ----
+  /** Agent that ran the recall. */
+  agent_id?: string;
+  /** L0 entity ids the graph-ANN step seeded on. */
+  seed_entity_ids?: string[];
+  /** L1+ aggregate ids of the LCA walk (seed parents up to and including the LCA). */
+  seed_aggregate_ids?: string[];
+  /** LCA aggregate id when the seeds share a common ancestor. */
+  lca_aggregate_id?: string;
+  /** Number of ScoredItems that survived ranking. */
+  surfaced_item_count?: number;
 }
 
 /**

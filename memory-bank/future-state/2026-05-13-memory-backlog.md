@@ -8,40 +8,17 @@
 
 ## MEM-001 — Phase 4b: Contradiction propagation + recall traversal weighting
 
-**Status:** Pending
-**Severity:** Medium (only when symptom appears)
-**Trigger:** Either (a) you observe the agent acting on schemas that have been contradicted in newer memory facts, OR (b) recall starts returning entities/relationships whose confidence has decayed to near-zero. Symptom: agent uses stale knowledge despite explicit corrections; or low-confidence noise pollutes recall results.
+**Status:** ✅ **Fully closed** — all three parts shipped on develop.
+- **Part A — Contradiction propagation from facts to KG nodes:** ✅ Done (PR #177).
+- **Part B-1 — Step-4 graph-ANN weighting by entity confidence:** ✅ Done (PR #178).
+- **Part B-2 — Confidence-aware hop-walking traversal:** ✅ Done (this PR).
 
-### Scope
+**What's live now:**
+1. **Part A.** When the sleep cycle runs, the DecayEngine lists distinct `source_episode_id` values from `memory_facts` rows where `contradicted_by IS NOT NULL`, finds kg_entities + kg_relationships sharing those episodes, and applies `confidence = MAX(min_floor, confidence * decay_factor)`. Defaults: `decay_factor=0.9`, `min_floor=0.05`, `lookback_hours=24`. Cycle stats expose the propagation counts.
+2. **Part B-1.** Recall step-4 (graph-ANN over `kg_name_index`) joins `kg_entities.confidence`, drops hits below `min_kg_confidence` (default 0.1), and multiplies surviving scores by entity confidence. Filter applies to the seed-id set fed to the hierarchy LCA surface too.
+3. **Part B-2.** New recall step 4b: confidence-aware BFS traversal from the top-3 graph-ANN seeds. Recursive CTE filters edges below `min_kg_confidence`, accumulates an `edge_confidence_product`, and recall scores each hit as `hop_decay^hop × edge_confidence_product × entity_confidence`. Shortest-hop-wins dedup; ties go to higher edge-confidence product. Capped at `max_graph_facts` (default 5), agent-scoped, archival rows + edges excluded. `provenance.source = "kg_traversal"` distinguishes traversal hits from seed ANN hits.
 
-Two independent extensions on top of the Phase 4 foundation.
-
-**Part A — Contradiction propagation from facts to KG nodes**
-- When `memory_facts.contradicted_by` is set on a fact, locate the KG entities and relationships referenced by that fact's `source_episode_ids`
-- Decay their `confidence` proportionally (e.g. `× 0.9` for an indirect contradiction)
-- Optionally populate the `evidence TEXT` column (already provisioned in Phase 4 foundation) with a JSON record of the contradicting fact IDs
-
-**Part B — Recall traversal weighting by confidence**
-- In `gateway/gateway-execution/src/recall/mod.rs` graph-traversal block, multiply hop weight by `kg_relationships.confidence` (currently only `hop_decay^depth` is used)
-- In the same path, filter out entities/relationships below a threshold (e.g. `confidence < 0.1`)
-- Add a `min_kg_confidence: f64` field to `KgDecayConfig` or `GraphTraversalConfig` for the threshold
-
-### Files affected
-
-- `gateway/gateway-execution/src/sleep/decay.rs` — new method `propagate_fact_contradictions(agent_id) -> PropagationStats`
-- `stores/zero-stores/src/knowledge_graph.rs` + sqlite impl — new method to locate entities/relationships by episode IDs, plus a method to apply a multiplicative confidence reduction
-- `gateway/gateway-execution/src/recall/mod.rs` — graph traversal block + filter
-- `gateway/gateway-services/src/recall_config.rs` — new fields
-- `gateway/gateway-execution/src/sleep/worker.rs` — wire propagation into cycle, add stats fields
-- `docs/memory-slides.html` + tracking doc — sync per [[feedback-memory-docs-keep-in-sync]]
-
-### Effort
-
-~6 tasks, similar shape to Phase 4 (TDD per task, subagent-driven execution, two-stage review). 1 day focused work.
-
-### Dependencies
-
-None. Phase 4 foundation is sufficient. The `evidence` column is already in place to record propagation provenance.
+**Effect.** A contradicted fact decays the entities + edges from its source episode (Part A); recall then drops those entities below threshold (B-1) and stops walking through their edges (B-2). The graph reacts to corrections without waiting on the 90-day half-life.
 
 ---
 
@@ -116,7 +93,7 @@ None. Phase 4 foundation done.
 
 ## MEM-003 — ConflictResolver: cache LLM client across pair judgments
 
-**Status:** Pending. (Note: Phase D's `MemoryLlmFactory` abstraction makes implementing this easier — the factory can cache the client.)
+**Status:** ✅ Done. Shipped via the `CachedLlmClient` helper in `gateway-memory/src/llm_factory.rs` — every production Llm* impl (`LlmConflictJudge`, `LlmCorrectionsAbstractor`, `LlmSynthesizer`, `LlmBeliefSynthesizer`, `LlmContradictionJudge`, `LlmPatternExtractor`, `LlmPairwiseVerifier`, `LlmAggregateEntity`, `LlmQueryGate`) now caches its client lazily via `tokio::sync::OnceCell`. Errors are not memoized (transient factory failures retry on next call). 3 unit tests cover the cache contract (build-once across many gets, no error memoization, concurrent first-call coalescence).
 **Severity:** Low (perf nit)
 **Trigger:** Observed judge-call latency exceeds expectation, OR a single sleep cycle examines >20 pairs and you notice the cycle takes noticeably longer than expected.
 
@@ -140,7 +117,7 @@ Same pattern for the other LLM impls in `sleep/`.
 
 ## MEM-004 — DecayEngine: bulk UPDATE via SQLite math extension
 
-**Status:** Pending
+**Status:** ✅ Done. Single bulk `UPDATE … SET confidence = MAX(?, confidence * exp(-? * (julianday('now') - julianday(last_seen_at)))) WHERE …` replaces the historical SELECT+compute+UPDATE loop. SQLite's `exp()` is registered as a Rust-side scalar UDF on every pooled connection — rusqlite's `bundled` feature ships SQLite without `SQLITE_ENABLE_MATH_FUNCTIONS`, so we register `exp(x) = x.exp()` via `create_scalar_function` (deterministic, no I/O) and use it in the bulk decay UPDATE. The decay path is now one SQL round-trip regardless of row count. Tested at 1 / 90 / 180 days against the canonical formula.
 **Severity:** Low (perf nit)
 **Trigger:** Observed sleep-cycle duration exceeds 10 seconds, OR `kg_entities` row count exceeds 10,000.
 

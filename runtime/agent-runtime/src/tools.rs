@@ -22,6 +22,7 @@ pub mod delegate;
 pub mod error;
 pub mod registry;
 pub mod respond;
+pub mod run_procedure;
 
 pub use builtin::{FileSystemContext, NoFileSystemContext};
 pub use context::ToolContext;
@@ -29,6 +30,7 @@ pub use delegate::DelegateTool;
 pub use error::{ToolError as ToolExecError, ToolResult as ToolExecResult};
 pub use registry::ToolRegistry;
 pub use respond::RespondTool;
+pub use run_procedure::RunProcedureTool;
 
 // Re-export from types
 pub use crate::types::ToolCall;

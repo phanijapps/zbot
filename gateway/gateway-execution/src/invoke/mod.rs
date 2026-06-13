@@ -17,12 +17,14 @@ mod stream_event_processor;
 mod token_tracking;
 mod tool_call_accumulator;
 mod ward_scaffolding;
+pub mod ward_usage_adapter;
 pub mod working_memory;
 pub mod working_memory_middleware;
 
 pub use batch_writer::{spawn_batch_writer, spawn_batch_writer_with_repo, BatchWriterHandle};
 pub use executor::{
     collect_agents_summary, collect_skills_summary, resolve_thinking_flag, ExecutorBuilder,
+    RuntimeActorKind,
 };
 pub use micro_recall::{
     detect_triggers, execute_micro_recall, extract_new_entities, MicroRecallContext,

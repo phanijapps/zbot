@@ -122,6 +122,11 @@ pub struct ExecutionRunner {
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     steering_registry: Arc<agent_runtime::SteeringRegistry>,
     agent_result_bus: Arc<AgentResultBus>,
+    /// Trait-routed procedure store for the `run_procedure` tool — wired by AppState.
+    procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    /// Per-ward usage telemetry — every `ward:<name>` delegation bumps it,
+    /// the curator reads it. Wired by AppState via [`ExecutionRunnerConfig`].
+    ward_usage: Arc<gateway_services::WardUsage>,
     /// Pre-session setup delegate. Holds the dependency set needed by
     /// `invoke_with_callback`'s bootstrap phase, extracted here so
     /// `setup()` can be tested and read independently of the full runner.
@@ -151,6 +156,9 @@ pub struct ExecutionRunnerConfig {
     pub skill_service: Arc<gateway_services::SkillService>,
     pub log_service: Arc<LogService<DatabaseManager>>,
     pub state_service: Arc<StateService<DatabaseManager>>,
+    /// Per-ward usage telemetry — feeds the curator. Required so every
+    /// `ward:<name>` delegation can `bump_use` persistently.
+    pub ward_usage: Arc<gateway_services::WardUsage>,
 
     // --- Optional integrations ---
     pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
@@ -162,6 +170,11 @@ pub struct ExecutionRunnerConfig {
     pub bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
     pub bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
     pub embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+    /// Trait-routed procedure store for the `run_procedure` tool.
+    pub procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    /// Procedure recommendation tier thresholds (graduated promoted/advisory/tentative).
+    /// Wired from `settings.memory.procedureRecommendation` by AppState.
+    pub procedure_recommendation_cfg: gateway_memory::ProcedureRecommendationConfig,
 
     // --- Resource control ---
     pub max_parallel_agents: u32,
@@ -199,6 +212,8 @@ pub(super) struct ContinuationArgs<'a> {
     pub(super) kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
+    pub(super) procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    pub(super) ward_usage: Arc<gateway_services::WardUsage>,
 }
 
 /// Prepend recalled facts to `history` as a system message at position 0.
@@ -382,7 +397,10 @@ impl ExecutionRunner {
             bridge_registry,
             bridge_outbox,
             embedding_client,
+            procedure_store,
+            procedure_recommendation_cfg,
             max_parallel_agents,
+            ward_usage,
         } = config;
 
         // Create channel for delegation requests
@@ -428,6 +446,9 @@ impl ExecutionRunner {
             goal_adapter: None,
             steering_registry: Some(steering_registry.clone()),
             agent_result_bus: Some(agent_result_bus.clone()),
+            procedure_store: procedure_store.clone(),
+            procedure_recommendation_cfg,
+            ward_usage: ward_usage.clone(),
             event_bus: event_bus.clone(),
             handles: handles.clone(),
         };
@@ -462,6 +483,8 @@ impl ExecutionRunner {
             goal_adapter: None,
             steering_registry,
             agent_result_bus,
+            procedure_store,
+            ward_usage,
             bootstrap,
         };
 
@@ -556,6 +579,8 @@ impl ExecutionRunner {
             kg_episode_repo: self.kg_episode_repo.clone(),
             ingestion_adapter: self.ingestion_adapter.clone(),
             goal_adapter: self.goal_adapter.clone(),
+            procedure_store: self.procedure_store.clone(),
+            ward_usage: self.ward_usage.clone(),
         }
     }
 
@@ -589,6 +614,10 @@ impl ExecutionRunner {
             goal_adapter: self.goal_adapter.clone(),
             steering_registry: self.steering_registry.clone(),
             agent_result_bus: self.agent_result_bus.clone(),
+            ward_locks: std::sync::Arc::new(
+                std::sync::Mutex::new(std::collections::HashMap::new()),
+            ),
+            ward_usage: self.ward_usage.clone(),
         }
     }
 
@@ -859,6 +888,7 @@ impl ExecutionRunner {
             child_agent_id: crashed_exec.agent_id.clone(),
             child_execution_id: new_exec.id.clone(),
             task: task.clone(),
+            mode: None,
             context: None,
             max_iterations: None,
             output_schema: None,
@@ -1072,6 +1102,8 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         kg_episode_repo,
         ingestion_adapter,
         goal_adapter,
+        procedure_store,
+        ward_usage,
     } = args;
     // Generate a new conversation ID for this continuation turn
     let conversation_id = format!(
@@ -1189,6 +1221,16 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
     }
     if let Some(a) = goal_adapter {
         builder = builder.with_goal_adapter(a);
+    }
+    {
+        // Ward-curator observer (matches the bootstrap path's wiring).
+        let observer = std::sync::Arc::new(
+            crate::invoke::ward_usage_adapter::WardUsageAdapter::new(ward_usage.clone()),
+        );
+        builder = builder.with_ward_usage(observer);
+    }
+    if let Some(ps) = procedure_store.clone() {
+        builder = builder.with_procedure_store(ps);
     }
 
     let mut executor = builder

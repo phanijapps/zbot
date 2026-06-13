@@ -68,6 +68,15 @@ pub(super) struct InvokeBootstrap {
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     pub(super) steering_registry: Option<Arc<agent_runtime::SteeringRegistry>>,
     pub(super) agent_result_bus: Option<Arc<AgentResultBus>>,
+    /// Trait-routed procedure store used to build the executor's run_procedure tool.
+    pub(super) procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    /// Per-ward usage telemetry — feeds the curator and gets a
+    /// `created_by = "agent"` mark whenever the `ward` tool creates a new ward.
+    pub(super) ward_usage: Arc<gateway_services::WardUsage>,
+    /// Procedure recommendation tier thresholds. Threaded from settings.json
+    /// at AppState wiring time; default tiers if absent. See
+    /// `gateway_memory::ProcedureRecommendationConfig`.
+    pub(super) procedure_recommendation_cfg: gateway_memory::ProcedureRecommendationConfig,
     pub(super) event_bus: Arc<EventBus>,
     pub(super) handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
 }
@@ -137,6 +146,53 @@ struct IntentOutcome {
 // FREE FUNCTIONS
 // ============================================================================
 
+/// Root-agent tool inventory snapshot for procedure dispatchability gating.
+///
+/// Mirrors the conditional logic in `invoke::executor::ExecutorBuilder::
+/// build_tool_registry` for the `is_delegated == false` branch. Used by
+/// `analyze_intent` to decide whether a recalled procedure can be promoted
+/// from advisory text to an actionable `run_procedure` recommendation.
+///
+/// Drift risk: any new root tool added to `build_tool_registry` should be
+/// reflected here. Drift is non-fatal — an absent name simply blocks
+/// promotion of procedures that reference that tool (legacy advisory text
+/// still fires), so correctness is preserved, just opportunity is lost.
+fn root_orchestrator_tool_names(bootstrap: &InvokeBootstrap) -> Vec<String> {
+    let mut names: Vec<String> = vec![
+        "shell".to_string(),
+        "memory".to_string(),
+        "ward".to_string(),
+        "update_plan".to_string(),
+        "set_session_title".to_string(),
+        "grep".to_string(),
+        "respond".to_string(),
+        "delegate_to_agent".to_string(),
+        "multimodal_analyze".to_string(),
+    ];
+    if bootstrap.procedure_store.is_some() {
+        names.push("run_procedure".to_string());
+    }
+    if bootstrap.steering_registry.is_some() {
+        names.push("handoff_to_agent".to_string());
+        names.push("steer_agent".to_string());
+    }
+    names.push("list_session_agents".to_string());
+    if bootstrap.agent_result_bus.is_some() {
+        names.push("wait_agent".to_string());
+        names.push("kill_agent".to_string());
+    }
+    if bootstrap.kg_store.is_some() {
+        names.push("graph_query".to_string());
+    }
+    if bootstrap.ingestion_adapter.is_some() {
+        names.push("ingest".to_string());
+    }
+    if bootstrap.goal_adapter.is_some() {
+        names.push("goal".to_string());
+    }
+    names
+}
+
 fn format_corrections_block(facts: &[zero_stores_traits::MemoryFact]) -> Option<String> {
     if facts.is_empty() {
         return None;
@@ -159,6 +215,98 @@ fn format_goals_block(goals: &[agent_tools::GoalSummary]) -> Option<String> {
         })
         .collect();
     Some(format!("## Active Goals\n{}", lines.join("\n")))
+}
+
+/// Doctrine half of the graduation gate: true when a ward's `AGENTS.md`
+/// carries a real Purpose/Scope section (not a missing, empty, or stub
+/// file). The full gate also requires ≥1 promoted procedure — see
+/// [`ward_has_promoted_procedure`] and §8 of the ward-as-agent design.
+fn ward_doctrine_is_graduated(agents_md: &str) -> bool {
+    agents_md.contains("## Purpose")
+}
+
+/// Procedure half of the graduation gate (§8): a ward graduates to
+/// warm-routable only with ≥1 promoted procedure — one proven, reusable
+/// capability — on top of its doctrine. Returns `true` when no procedure
+/// store is wired (the requirement cannot be evaluated, so it must not block
+/// graduation) and `false` on a store error.
+async fn ward_has_promoted_procedure(
+    store: Option<&Arc<dyn zero_stores_traits::ProcedureStore>>,
+    ward: &str,
+) -> bool {
+    let Some(store) = store else {
+        return true;
+    };
+    match store.list_by_ward(ward, 1).await {
+        Ok(procs) => !procs.is_empty(),
+        Err(e) => {
+            tracing::warn!(
+                ward = %ward,
+                error = %e,
+                "Procedure lookup failed; treating ward as not graduated"
+            );
+            false
+        }
+    }
+}
+
+/// Enumerate the wards on disk, each as `"<name> — <purpose blurb>"` (or just
+/// `"<name>"` when the AGENTS.md has no Purpose section). Feeds the intent
+/// classifier the real ward list so it reuses an existing ward instead of
+/// inventing a near-duplicate name (P5 anti-fragmentation).
+fn list_existing_wards(paths: &SharedVaultPaths) -> Vec<String> {
+    let mut wards: Vec<String> = Vec::new();
+    let Ok(entries) = std::fs::read_dir(paths.wards_dir()) else {
+        return wards;
+    };
+    for entry in entries.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let agents_md = match std::fs::read_to_string(entry.path().join("AGENTS.md")) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let name = entry.file_name().to_string_lossy().to_string();
+        wards.push(match ward_purpose_blurb(&agents_md) {
+            Some(blurb) => format!("{name} — {blurb}"),
+            None => name,
+        });
+    }
+    wards.sort();
+    wards
+}
+
+/// Extract a one-line scope blurb from a ward's AGENTS.md `## Purpose`
+/// section — its body lines collapsed and truncated. `None` when absent.
+fn ward_purpose_blurb(agents_md: &str) -> Option<String> {
+    let mut lines = agents_md.lines();
+    lines
+        .by_ref()
+        .find(|l| l.trim_start().starts_with("## Purpose"))?;
+    let mut blurb = String::new();
+    for line in lines {
+        if line.trim_start().starts_with("## ") {
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !blurb.is_empty() {
+            blurb.push(' ');
+        }
+        blurb.push_str(trimmed);
+        if blurb.chars().count() >= 200 {
+            break;
+        }
+    }
+    let blurb: String = blurb.chars().take(200).collect();
+    if blurb.is_empty() {
+        None
+    } else {
+        Some(blurb)
+    }
 }
 
 // ============================================================================
@@ -604,14 +752,26 @@ impl InvokeBootstrap {
         if let Some(ref a) = self.goal_adapter {
             builder = builder.with_goal_adapter(a.clone());
         }
+        // Ward-curator observer — bumps `created_by=agent` whenever the
+        // `ward` tool creates a new ward dir. Always wired in production
+        // (WardUsage is a required ExecutionRunnerConfig field).
+        {
+            let observer = std::sync::Arc::new(
+                crate::invoke::ward_usage_adapter::WardUsageAdapter::new(self.ward_usage.clone()),
+            );
+            builder = builder.with_ward_usage(observer);
+        }
+        builder = builder.with_state_service(self.state_service.clone());
         if let Some(ref sr) = self.steering_registry {
             builder = builder.with_steering_registry(sr.clone());
         }
         if let Some(ref bus) = self.agent_result_bus {
             builder = builder
                 .with_agent_result_bus(bus.clone())
-                .with_state_service(self.state_service.clone())
                 .with_conversation_repo(self.conversation_repo.clone());
+        }
+        if let Some(ref ps) = self.procedure_store {
+            builder = builder.with_procedure_store(ps.clone());
         }
 
         // Intent analysis for root agent first turns only.
@@ -733,12 +893,37 @@ impl InvokeBootstrap {
             })
             .await;
 
-        // Build temporary LLM client for analysis.
+        // Build temporary LLM client for analysis. Per-task override:
+        // `settings.intent_analysis.{provider_id,model}` swaps the
+        // root-agent provider/model used for analysis. Empty values
+        // inherit (= what the root agent already resolved to). Lets
+        // users route this every-prompt call to a cheaper/faster model.
+        let exec_settings = gateway_services::SettingsService::new(self.paths.clone())
+            .get_execution_settings()
+            .unwrap_or_default();
+        let intent_cfg = exec_settings.intent_analysis;
+
+        let target_provider =
+            if let Some(id) = intent_cfg.provider_id.as_deref().filter(|s| !s.is_empty()) {
+                self.provider_service
+                    .get(id)
+                    .unwrap_or_else(|_| provider.clone())
+            } else {
+                provider.clone()
+            };
+        let target_model = intent_cfg
+            .model
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| agent.model.clone());
+
         let llm_config = agent_runtime::LlmConfig::new(
-            provider.base_url.clone(),
-            provider.api_key.clone(),
-            agent.model.clone(),
-            provider.id.clone().unwrap_or_else(|| provider.name.clone()),
+            target_provider.base_url.clone(),
+            target_provider.api_key.clone(),
+            target_model,
+            target_provider
+                .id
+                .clone()
+                .unwrap_or_else(|| target_provider.name.clone()),
         )
         .with_max_tokens(2048); // Intent analysis JSON is 1-2KB — keep max_tokens low for speed
 
@@ -764,12 +949,17 @@ impl InvokeBootstrap {
         let system_prompt =
             crate::middleware::intent_analysis::load_intent_analysis_prompt(&self.paths);
 
-        let analysis = match analyze_intent(
+        let tool_inventory = root_orchestrator_tool_names(self);
+        let existing_wards = list_existing_wards(&self.paths);
+        let mut analysis = match analyze_intent(
             &retrying,
             msg,
             fs.as_ref(),
             self.memory_recall.as_ref().map(|r| r.as_ref()),
             &system_prompt,
+            &tool_inventory,
+            Some(&self.procedure_recommendation_cfg),
+            &existing_wards,
         )
         .await
         {
@@ -786,6 +976,43 @@ impl InvokeBootstrap {
                 return None;
             }
         };
+
+        // The intent classifier's `action` is unreliable: ward semantic
+        // search frequently returns nothing, so the LLM is never shown the
+        // existing wards and defaults to `create_new` even for a ward that
+        // already exists. The filesystem is the source of truth.
+        //
+        // Graduation gate: a ward is warm-routable — delegated to as a
+        // ward-agent — only once it has GRADUATED. Graduation requires BOTH
+        // a real Purpose/Scope doctrine in AGENTS.md AND ≥1 promoted
+        // procedure (§8) — one proven, reusable capability. A ward missing
+        // either is still a scaffold; route cold so the planner builds it
+        // up. This overrides the classifier's guess in both directions.
+        let ward_dir = self.paths.ward_dir(&analysis.ward_recommendation.ward_name);
+        let doctrine_ok = std::fs::read_to_string(ward_dir.join("AGENTS.md"))
+            .map(|md| ward_doctrine_is_graduated(&md))
+            .unwrap_or(false);
+        let ward_graduated = doctrine_ok
+            && ward_has_promoted_procedure(
+                self.procedure_store.as_ref(),
+                &analysis.ward_recommendation.ward_name,
+            )
+            .await;
+        let authoritative_action = if ward_graduated {
+            "use_existing"
+        } else {
+            "create_new"
+        };
+        if analysis.ward_recommendation.action != authoritative_action {
+            tracing::info!(
+                ward = %analysis.ward_recommendation.ward_name,
+                classifier_action = %analysis.ward_recommendation.action,
+                corrected = authoritative_action,
+                graduated = ward_graduated,
+                "Correcting ward action from filesystem ground truth"
+            );
+            analysis.ward_recommendation.action = authoritative_action.to_string();
+        }
 
         tracing::info!(
             primary_intent = %analysis.primary_intent,
@@ -951,6 +1178,103 @@ mod tests {
     use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
 
     #[test]
+    fn ward_doctrine_is_graduated_true_for_canonical_agents_md() {
+        let md = "# automotive-research\n\n## Purpose / Scope\nIN — vehicles\n";
+        assert!(ward_doctrine_is_graduated(md));
+    }
+
+    #[test]
+    fn ward_doctrine_is_graduated_false_for_stub_or_old_format() {
+        assert!(!ward_doctrine_is_graduated(""));
+        assert!(!ward_doctrine_is_graduated("# automotive-research\n"));
+        assert!(!ward_doctrine_is_graduated(
+            "# automotive-research\n\n## Conventions\n- reuse core/\n"
+        ));
+    }
+
+    struct FakeProcStore {
+        ward_procs: usize,
+        fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl zero_stores_traits::ProcedureStore for FakeProcStore {
+        async fn list_by_ward(
+            &self,
+            _ward_id: &str,
+            limit: usize,
+        ) -> Result<Vec<serde_json::Value>, String> {
+            if self.fail {
+                return Err("store unavailable".to_string());
+            }
+            Ok((0..self.ward_procs.min(limit))
+                .map(|_| serde_json::json!({}))
+                .collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn graduation_procedure_gate() {
+        // No store wired — cannot evaluate, must not block graduation.
+        assert!(ward_has_promoted_procedure(None, "w").await);
+
+        // Doctrine present but zero procedures — not graduated.
+        let empty: Arc<dyn zero_stores_traits::ProcedureStore> = Arc::new(FakeProcStore {
+            ward_procs: 0,
+            fail: false,
+        });
+        assert!(!ward_has_promoted_procedure(Some(&empty), "w").await);
+
+        // At least one promoted procedure — graduated.
+        let stocked: Arc<dyn zero_stores_traits::ProcedureStore> = Arc::new(FakeProcStore {
+            ward_procs: 2,
+            fail: false,
+        });
+        assert!(ward_has_promoted_procedure(Some(&stocked), "w").await);
+
+        // Store error — conservatively treated as not graduated.
+        let broken: Arc<dyn zero_stores_traits::ProcedureStore> = Arc::new(FakeProcStore {
+            ward_procs: 5,
+            fail: true,
+        });
+        assert!(!ward_has_promoted_procedure(Some(&broken), "w").await);
+    }
+
+    #[test]
+    fn ward_purpose_blurb_extracts_purpose_section() {
+        let md = "# foo\n\n## Purpose / Scope\nIN — vehicles and the market\nOUT — repair\n\n## Folder map\n- x\n";
+        let blurb = ward_purpose_blurb(md).expect("blurb");
+        assert!(blurb.contains("IN — vehicles"));
+        assert!(!blurb.contains("Folder map"));
+    }
+
+    #[test]
+    fn ward_purpose_blurb_none_without_purpose() {
+        assert!(ward_purpose_blurb("# foo\n\n## Conventions\n- x\n").is_none());
+    }
+
+    #[test]
+    fn list_existing_wards_lists_ward_dirs_with_blurbs() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths: SharedVaultPaths =
+            std::sync::Arc::new(gateway_services::VaultPaths::new(dir.path().to_path_buf()));
+        let wards = paths.wards_dir();
+        std::fs::create_dir_all(wards.join("travel-planning")).unwrap();
+        std::fs::write(
+            wards.join("travel-planning/AGENTS.md"),
+            "# travel-planning\n\n## Purpose / Scope\nIN — city itineraries\n",
+        )
+        .unwrap();
+        // A directory without an AGENTS.md is not a real ward — skipped.
+        std::fs::create_dir_all(wards.join("no-doctrine")).unwrap();
+
+        let listed = list_existing_wards(&paths);
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].starts_with("travel-planning — "));
+        assert!(listed[0].contains("city itineraries"));
+    }
+
+    #[test]
     fn invoke_bootstrap_constructs_with_minimum_required_deps() {
         // Compile-as-assertion: locks in the field list as the dependency
         // contract. End-to-end coverage lives in the e2e suite (Tasks 7+8).
@@ -984,6 +1308,11 @@ mod tests {
             goal_adapter: None,
             steering_registry: None,
             agent_result_bus: None,
+            procedure_store: None,
+            procedure_recommendation_cfg: gateway_memory::ProcedureRecommendationConfig::default(),
+            ward_usage: Arc::new(gateway_services::WardUsage::new(
+                std::env::temp_dir().join("zbot-test-wards"),
+            )),
             event_bus: Arc::new(EventBus::new()),
             handles,
         };

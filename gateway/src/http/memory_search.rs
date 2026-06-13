@@ -23,7 +23,11 @@ use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Instant;
-use zero_stores_domain::{SessionEpisode, WikiHit};
+use zero_stores_domain::{RouteHint, RouteSourceKind, SessionEpisode, WikiHit};
+
+fn route_hint_value(hint: RouteHint) -> Value {
+    serde_json::to_value(hint).unwrap_or_else(|_| Value::Null)
+}
 
 /// Request body for unified search.
 #[derive(Debug, Deserialize)]
@@ -100,6 +104,8 @@ fn store_unavailable() -> HandlerError {
 
 fn wiki_hit_to_value(hit: WikiHit) -> Value {
     let snippet: String = hit.article.content.chars().take(240).collect();
+    let route_hint = RouteHint::new(hit.article.ward_id.clone(), RouteSourceKind::WikiArticle)
+        .with_memory_id(hit.article.id.clone());
     json!({
         "id": hit.article.id,
         "ward_id": hit.article.ward_id,
@@ -108,10 +114,21 @@ fn wiki_hit_to_value(hit: WikiHit) -> Value {
         "updated_at": hit.article.updated_at,
         "score": hit.score,
         "match_source": hit.match_source,
+        "route_hint": route_hint_value(route_hint),
     })
 }
 
 fn procedure_to_value(proc: zero_stores_domain::Procedure, score: f64) -> Value {
+    let route_hint = proc
+        .ward_id
+        .as_ref()
+        .map(|ward| {
+            route_hint_value(
+                RouteHint::new(ward.clone(), RouteSourceKind::Procedure)
+                    .with_memory_id(proc.id.clone()),
+            )
+        })
+        .unwrap_or(Value::Null);
     json!({
         "id": proc.id,
         "agent_id": proc.agent_id,
@@ -125,10 +142,14 @@ fn procedure_to_value(proc: zero_stores_domain::Procedure, score: f64) -> Value 
         "updated_at": proc.updated_at,
         "score": score,
         "match_source": "vec",
+        "route_hint": route_hint,
     })
 }
 
 fn episode_to_value(ep: SessionEpisode, score: Option<f64>, source: &str) -> Value {
+    let route_hint = RouteHint::new(ep.ward_id.clone(), RouteSourceKind::Episode)
+        .with_memory_id(ep.id.clone())
+        .with_session_id(Some(ep.session_id.clone()));
     let mut v = json!({
         "id": ep.id,
         "session_id": ep.session_id,
@@ -141,6 +162,7 @@ fn episode_to_value(ep: SessionEpisode, score: Option<f64>, source: &str) -> Val
         "token_cost": ep.token_cost,
         "created_at": ep.created_at,
         "match_source": source,
+        "route_hint": route_hint_value(route_hint),
     });
     if let (Value::Object(ref mut m), Some(s)) = (&mut v, score) {
         m.insert("score".into(), json!(s));
@@ -149,6 +171,10 @@ fn episode_to_value(ep: SessionEpisode, score: Option<f64>, source: &str) -> Val
 }
 
 fn fact_to_value(fact: zero_stores_domain::MemoryFact, source: &str, score: Option<f64>) -> Value {
+    let route_hint = RouteHint::new(fact.ward_id.clone(), RouteSourceKind::Fact)
+        .with_memory_id(fact.id.clone())
+        .with_session_id(fact.session_id.clone())
+        .with_source_path(fact.source_ref.clone());
     let mut v = json!({
         "id": fact.id,
         "session_id": fact.session_id,
@@ -165,6 +191,7 @@ fn fact_to_value(fact: zero_stores_domain::MemoryFact, source: &str, score: Opti
         "pinned": fact.pinned,
         "epistemic_class": fact.epistemic_class,
         "match_source": source,
+        "route_hint": route_hint_value(route_hint),
     });
     if let (Value::Object(ref mut m), Some(s)) = (&mut v, score) {
         m.insert("score".into(), json!(s));
@@ -559,6 +586,9 @@ mod helpers_tests {
         assert_eq!(v["match_source"], "fts");
         assert_eq!(v["title"], "Index");
         assert_eq!(v["ward_id"], "lab");
+        assert_eq!(v["route_hint"]["ward_id"], "lab");
+        assert_eq!(v["route_hint"]["source_kind"], "wiki_article");
+        assert_eq!(v["route_hint"]["memory_id"], "wiki-1");
     }
 
     #[test]
@@ -568,6 +598,9 @@ mod helpers_tests {
         assert_eq!(v["match_source"], "vec");
         assert_eq!(v["name"], "build");
         assert_eq!(v["success_count"], 5);
+        assert_eq!(v["route_hint"]["ward_id"], "lab");
+        assert_eq!(v["route_hint"]["source_kind"], "procedure");
+        assert_eq!(v["route_hint"]["memory_id"], "proc-1");
     }
 
     #[test]
@@ -576,6 +609,9 @@ mod helpers_tests {
         assert_eq!(v["match_source"], "vec");
         assert_eq!(v["score"], 0.5);
         assert_eq!(v["task_summary"], "fixed bug");
+        assert_eq!(v["route_hint"]["ward_id"], "lab");
+        assert_eq!(v["route_hint"]["source_kind"], "episode");
+        assert_eq!(v["route_hint"]["session_id"], "sess-1");
     }
 
     #[test]
@@ -592,6 +628,9 @@ mod helpers_tests {
         assert_eq!(v["match_source"], "fts");
         assert_eq!(v["agent_id"], "root");
         assert_eq!(v["pinned"], false);
+        assert_eq!(v["route_hint"]["ward_id"], "lab");
+        assert_eq!(v["route_hint"]["source_kind"], "fact");
+        assert_eq!(v["route_hint"]["memory_id"], "fact-1");
     }
 
     #[test]

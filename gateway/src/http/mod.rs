@@ -18,6 +18,7 @@ mod events;
 mod gateway_bus;
 mod graph;
 mod health;
+mod hierarchy;
 mod ingest;
 mod mcps;
 mod memory;
@@ -36,6 +37,8 @@ mod tools;
 mod upload;
 mod ward_actions;
 mod ward_content;
+mod ward_curator;
+mod ward_usage;
 mod webhooks;
 
 use crate::config::GatewayConfig;
@@ -219,6 +222,7 @@ pub fn create_http_router(
             get(embeddings::list_ollama_models),
         )
         .route("/api/embeddings/configure", post(embeddings::configure))
+        .route("/api/embeddings/reindex", post(embeddings::reindex))
         // Memory endpoints
         .route("/api/memory", get(memory::list_all_memory_facts))
         .route(
@@ -226,6 +230,7 @@ pub fn create_http_router(
             get(memory::search_all_memory_facts).post(memory_search::memory_search),
         )
         .route("/api/memory/consolidate", post(memory::consolidate))
+        .route("/api/procedures/dedupe", post(memory::dedupe_procedures))
         .route("/api/memory/stats", get(memory::stats))
         .route("/api/memory/health", get(memory::health))
         .route(
@@ -264,6 +269,16 @@ pub fn create_http_router(
             "/api/contradictions/:contradiction_id/resolve",
             post(beliefs::resolve_contradiction),
         )
+        // Ward curator — per-ward usage telemetry (Phase A.3) +
+        // heuristic cleanup endpoint (Phase B). Spec:
+        // 2026-05-23-ward-curator-spec.md. Under /api/curator/ rather
+        // than /api/wards/curator to avoid colliding with /api/wards/:ward_id.
+        .route("/api/curator/usage", get(ward_usage::list_usage))
+        .route("/api/curator/usage/:ward", get(ward_usage::get_usage))
+        .route("/api/curator/usage/:ward/pin", post(ward_usage::set_pinned))
+        .route("/api/curator/cleanup", post(ward_curator::cleanup))
+        .route("/api/curator/restore", post(ward_curator::restore))
+        .route("/api/curator/consolidate", post(ward_curator::consolidate))
         // Ward listing (Memory Tab Command Deck — Task 9)
         .route("/api/wards", get(ward_content::list_wards))
         // Ward content aggregator (Memory Tab Command Deck — Task 5)
@@ -338,6 +353,8 @@ pub fn create_http_router(
             "/api/belief-network/activity",
             get(belief_network::get_activity),
         )
+        // Hierarchical-memory observability (Phase H-3/H-4 follow-up)
+        .route("/api/hierarchy/stats", get(hierarchy::get_stats))
         // Distillation endpoints
         .route("/api/distillation/status", get(graph::distillation_status))
         .route(

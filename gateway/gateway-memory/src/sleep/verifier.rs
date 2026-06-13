@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::sleep::compactor::PairwiseVerifier;
 use crate::util::parse_llm_json;
-use crate::{LlmClientConfig, MemoryLlmFactory};
+use crate::{CachedLlmClient, LlmClientConfig, MemoryLlmFactory};
 
 #[derive(Debug, Deserialize)]
 struct VerifierResponse {
@@ -24,23 +24,21 @@ struct VerifierResponse {
 /// LLM-backed pairwise verifier. Defaults to deny on any failure so a
 /// flaky network or bad response never causes a wrong merge.
 pub struct LlmPairwiseVerifier {
-    factory: Arc<dyn MemoryLlmFactory>,
+    client: CachedLlmClient,
 }
 
 impl LlmPairwiseVerifier {
     pub fn new(factory: Arc<dyn MemoryLlmFactory>) -> Self {
-        Self { factory }
+        Self {
+            client: CachedLlmClient::new(factory, LlmClientConfig::new(0.0, 128)),
+        }
     }
 }
 
 #[async_trait]
 impl PairwiseVerifier for LlmPairwiseVerifier {
     async fn should_merge(&self, a: &Entity, b: &Entity) -> bool {
-        let client = match self
-            .factory
-            .build_client(LlmClientConfig::new(0.0, 128))
-            .await
-        {
+        let client = match self.client.get().await {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!(error = %e, "verifier: build_client failed; default deny");

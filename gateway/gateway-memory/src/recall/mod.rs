@@ -29,8 +29,11 @@ pub use scored_item::{intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, S
 use std::sync::Arc;
 
 use crate::{MmrConfig, RecallConfig};
-use agent_runtime::llm::embedding::EmbeddingClient;
+use agent_runtime::llm::embedding::{EmbeddingClient, EmbeddingError};
 use zero_stores_domain::{MemoryFact, Procedure, ScoredFact};
+
+const MAX_RECALL_EMBED_QUERY_CHARS: usize = 500;
+const RETRY_RECALL_EMBED_QUERY_CHARS: usize = 384;
 
 /// Retrieves relevant memory facts for injection at session start.
 ///
@@ -57,6 +60,11 @@ pub struct MemoryRecall {
     /// MMR diversity reranking. When `None` or `enabled = false`,
     /// `recall_unified` is byte-for-byte identical to pre-MMR behavior.
     mmr_config: Option<MmrConfig>,
+    /// Observatory v2 (Phase 3) — optional EventBus for emitting
+    /// `RecallTrace` telemetry. When `None` (tests, headless invocations),
+    /// recall stays silent. Production wiring attaches this in
+    /// `MemoryServices::new()`.
+    event_bus: Option<Arc<gateway_events::EventBus>>,
     config: Arc<RecallConfig>,
 }
 
@@ -78,8 +86,16 @@ impl MemoryRecall {
             belief_store: None,
             query_gate: None,
             mmr_config: None,
+            event_bus: None,
             config,
         }
+    }
+
+    /// Wire the EventBus so `recall_unified` can emit `RecallTrace`
+    /// telemetry for the Observatory v2 canvas. When unset, recall is
+    /// byte-for-byte identical to its pre-Phase-3 behavior.
+    pub fn set_event_bus(&mut self, bus: Arc<gateway_events::EventBus>) {
+        self.event_bus = Some(bus);
     }
 
     /// Wire the belief store so `recall_unified` surfaces beliefs
@@ -398,12 +414,153 @@ impl MemoryRecall {
                 _ => Vec::new(),
             };
 
-        // 4. Graph ANN over the entity name embedding index.
-        let graph_items: Vec<ScoredItem> = match (self.kg_store.as_ref(), query_emb.as_ref()) {
-            (Some(store), Some(emb)) => adapters::graph_ann_to_items(store, emb, 10, agent_id)
-                .await
-                .unwrap_or_default(),
-            _ => Vec::new(),
+        // 4. Graph ANN over the entity name embedding index. We share
+        // the raw hit set with step 5c (hierarchy LCA) so both surfaces
+        // use the same seed entities without a second ANN query.
+        //
+        // MEM-001 Part B-1: hits below `min_kg_confidence` are dropped
+        // before scoring (low-confidence noise that would clutter
+        // recall — including entities decayed by Part A contradiction
+        // propagation). The score of surviving hits is multiplied by
+        // entity confidence so a 0.9-confidence hit at cosine 0.8 wins
+        // over a 0.4-confidence hit at the same cosine. Filter applies
+        // to seed_ids too, so the hierarchy LCA surface (step 5c) is
+        // consistent with what recall actually shows.
+        let min_kg_conf = self.config.graph_traversal.min_kg_confidence;
+        let (graph_items, graph_seed_ids): (Vec<ScoredItem>, Vec<zero_stores::types::EntityId>) =
+            match (self.kg_store.as_ref(), query_emb.as_ref()) {
+                (Some(store), Some(emb)) => match store
+                    .search_entities_by_name_embedding(agent_id, emb, 10)
+                    .await
+                {
+                    Ok(raw_hits) => {
+                        let hits: Vec<_> = raw_hits
+                            .into_iter()
+                            .filter(|h| h.confidence >= min_kg_conf)
+                            .collect();
+                        let seed_ids: Vec<zero_stores::types::EntityId> = hits
+                            .iter()
+                            .filter(|h| !h.id.is_empty())
+                            .map(|h| zero_stores::types::EntityId(h.id.clone()))
+                            .collect();
+                        let items: Vec<ScoredItem> = hits
+                            .into_iter()
+                            .enumerate()
+                            .map(|(idx, hit)| {
+                                // Mirror graph_ann_to_items scoring exactly,
+                                // plus the B-1 entity-confidence multiplier.
+                                let cosine = 1.0 - (hit.distance as f64) / 2.0;
+                                let rank_one = (idx as f64) + 1.0;
+                                let score = (1.0 / rank_one) * cosine * hit.confidence;
+                                ScoredItem {
+                                    kind: ItemKind::GraphNode,
+                                    id: format!("graph:{}", hit.name),
+                                    content: format!(
+                                        "Entity: {} [{}] (cosine ~ {cosine:.2}, conf ~ {:.2})",
+                                        hit.name, hit.entity_type, hit.confidence
+                                    ),
+                                    score,
+                                    provenance: Provenance {
+                                        source: "kg_name_index".to_string(),
+                                        source_id: hit.name,
+                                        session_id: None,
+                                        ward_id: None,
+                                    },
+                                    route_hint: None,
+                                }
+                            })
+                            .collect();
+                        (items, seed_ids)
+                    }
+                    Err(_) => (Vec::new(), Vec::new()),
+                },
+                _ => (Vec::new(), Vec::new()),
+            };
+
+        // 4b. Confidence-weighted graph traversal from top seeds
+        // (MEM-001 Part B-2). For each top-3 graph-ANN seed, walk
+        // `kg_relationships` outward up to `max_hops`, skipping edges
+        // below `min_kg_confidence`. Score each hit as
+        //   hop_decay^hop * edge_confidence_product * entity_confidence
+        // Dedupe by entity_id (best score wins), exclude entities
+        // already surfaced as seeds, cap at `max_graph_facts`. Disabled
+        // when `graph_traversal.enabled = false` or `max_hops = 0`.
+        let traversal_max_hops = self.config.graph_traversal.max_hops as usize;
+        let traversal_hop_decay = self.config.graph_traversal.hop_decay;
+        let traversal_cap = self.config.graph_traversal.max_graph_facts;
+        let traversal_enabled =
+            self.config.graph_traversal.enabled && traversal_max_hops > 0 && traversal_cap > 0;
+
+        let traversal_items: Vec<ScoredItem> = if traversal_enabled {
+            match self.kg_store.as_ref() {
+                Some(store) if !graph_seed_ids.is_empty() => {
+                    let already_surfaced: std::collections::HashSet<String> =
+                        graph_seed_ids.iter().map(|e| e.0.clone()).collect();
+                    // Bound traversal cost: walk from the top-3 seeds
+                    // only. Beyond that the marginal value drops fast.
+                    let mut best_by_id: std::collections::HashMap<String, ScoredItem> =
+                        std::collections::HashMap::new();
+                    for seed in graph_seed_ids.iter().take(3) {
+                        let hits = store
+                            .traverse_weighted(
+                                seed,
+                                agent_id,
+                                traversal_max_hops,
+                                min_kg_conf,
+                                traversal_cap.saturating_mul(2),
+                            )
+                            .await
+                            .unwrap_or_default();
+                        for h in hits {
+                            if already_surfaced.contains(&h.entity_id.0) {
+                                continue;
+                            }
+                            let score = traversal_hop_decay.powi(h.hop as i32)
+                                * h.edge_confidence_product
+                                * h.entity_confidence;
+                            let item = ScoredItem {
+                                kind: ItemKind::GraphNode,
+                                id: format!("graph:{}", h.name),
+                                content: format!(
+                                    "Entity: {} [{}] (hop {}, edge ~ {:.2}, conf ~ {:.2})",
+                                    h.name,
+                                    h.entity_type,
+                                    h.hop,
+                                    h.edge_confidence_product,
+                                    h.entity_confidence
+                                ),
+                                score,
+                                provenance: Provenance {
+                                    source: "kg_traversal".to_string(),
+                                    source_id: h.name,
+                                    session_id: None,
+                                    ward_id: None,
+                                },
+                                route_hint: None,
+                            };
+                            best_by_id
+                                .entry(h.entity_id.0)
+                                .and_modify(|prev| {
+                                    if item.score > prev.score {
+                                        *prev = item.clone();
+                                    }
+                                })
+                                .or_insert(item);
+                        }
+                    }
+                    let mut out: Vec<ScoredItem> = best_by_id.into_values().collect();
+                    out.sort_by(|a, b| {
+                        b.score
+                            .partial_cmp(&a.score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    out.truncate(traversal_cap);
+                    out
+                }
+                _ => Vec::new(),
+            }
+        } else {
+            Vec::new()
         };
 
         // 5a. Previous episodes in this ward (chain continuity).
@@ -431,6 +588,13 @@ impl MemoryRecall {
                     session_id: None,
                     ward_id: ward_id.map(String::from),
                 },
+                route_hint: ward_id.map(|ward| {
+                    zero_stores_domain::RouteHint::new(
+                        ward.to_string(),
+                        zero_stores_domain::RouteSourceKind::Goal,
+                    )
+                    .with_memory_id(g.id.clone())
+                }),
             })
             .collect();
 
@@ -458,14 +622,134 @@ impl MemoryRecall {
             _ => Vec::new(),
         };
 
+        // 5c. Hierarchical-memory LCA path (Phase H-4 / LeanRAG).
+        // Opportunistic: when the hierarchy hasn't been built yet,
+        // `compute_lca_path` returns an empty result and this list
+        // stays empty — no extra cost beyond the parent-pointer walk.
+        // Seeds reuse the graph-ANN top-K from step 4 so we don't
+        // double-query the kg_name_index. Category weight uses the
+        // `pattern` slot (0.9) per `project_hierarchical_memory_plan.md`
+        // — conservative until empirical validation justifies a bump.
+        //
+        // 5d (follow-up): once we have the LCA path entities, also fetch
+        // any inter-cluster relations whose both endpoints sit on the
+        // path. That's the "lean" part of LeanRAG — the edges between
+        // sibling abstractions that explain how they relate.
+        let (hier_items, hier_relation_items): (Vec<ScoredItem>, Vec<ScoredItem>) =
+            match (self.kg_store.as_ref(), graph_seed_ids.is_empty()) {
+                (Some(store), false) => {
+                    match store.compute_lca_path(agent_id, &graph_seed_ids).await {
+                        Ok(lca) => {
+                            let weight = self.config.category_weight("pattern");
+                            let entity_items: Vec<ScoredItem> = lca
+                                .path_entities
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, id)| {
+                                    // Higher-layer entities (closer to the LCA)
+                                    // rank slightly higher in the per-source
+                                    // order; downstream RRF takes over for
+                                    // cross-source fusion.
+                                    let raw = 1.0 / (1.0 + idx as f64);
+                                    let mut item =
+                                        adapters::hier_entity_to_item(id, lca.max_layer, raw);
+                                    item.score *= weight;
+                                    item
+                                })
+                                .collect();
+
+                            // Fetch the inter-cluster edges between path
+                            // entities. Empty path ⇒ skip the query (the trait
+                            // method short-circuits on empty input anyway, but
+                            // skipping at the call site saves an async hop).
+                            let relation_items: Vec<ScoredItem> = if lca.path_entities.is_empty() {
+                                Vec::new()
+                            } else {
+                                match store
+                                    .list_inter_cluster_relations(agent_id, &lca.path_entities)
+                                    .await
+                                {
+                                    Ok(edges) => edges
+                                        .into_iter()
+                                        .enumerate()
+                                        .map(|(idx, hit)| {
+                                            let raw = 1.0 / (1.0 + idx as f64);
+                                            let mut item = adapters::hier_relation_to_item(
+                                                &hit.id,
+                                                &hit.source_entity_id,
+                                                &hit.target_entity_id,
+                                                &hit.relationship_type,
+                                                hit.layer,
+                                                raw,
+                                            );
+                                            item.score *= weight;
+                                            item
+                                        })
+                                        .collect(),
+                                    Err(_) => Vec::new(),
+                                }
+                            };
+                            (entity_items, relation_items)
+                        }
+                        Err(_) => (Vec::new(), Vec::new()),
+                    }
+                }
+                _ => (Vec::new(), Vec::new()),
+            };
+
+        // Observatory v2 Phase 3 — broadcast a RecallTrace telemetry
+        // event so the dashboard can light up the consulted clusters in
+        // real time. Best-effort: bus may not be wired (tests, headless
+        // bootstrap), and `publish_sync` is non-blocking.
+        if let Some(bus) = self.event_bus.as_ref() {
+            let seed_entity_ids: Vec<String> = graph_seed_ids.iter().map(|e| e.0.clone()).collect();
+            // The LCA path's `path_entities` is the union of every
+            // seed's ancestry chain up to (and including) the LCA.
+            // For the visualisation we treat them all as
+            // "aggregates the agent touched" — close enough to give
+            // the live walk a target without an extra trait round-trip.
+            let (seed_aggregate_ids, lca_aggregate_id): (Vec<String>, Option<String>) =
+                match (self.kg_store.as_ref(), graph_seed_ids.is_empty()) {
+                    (Some(store), false) => {
+                        match store.compute_lca_path(agent_id, &graph_seed_ids).await {
+                            Ok(lca) => (
+                                lca.path_entities.iter().map(|e| e.0.clone()).collect(),
+                                lca.lca.map(|e| e.0),
+                            ),
+                            Err(_) => (Vec::new(), None),
+                        }
+                    }
+                    _ => (Vec::new(), None),
+                };
+            let surfaced_item_count = (fact_items.len()
+                + wiki_items.len()
+                + procedure_items.len()
+                + graph_items.len()
+                + traversal_items.len()
+                + belief_items.len()
+                + hier_items.len()
+                + hier_relation_items.len()) as u32;
+            bus.publish_sync(gateway_events::GatewayEvent::RecallTrace {
+                agent_id: agent_id.to_string(),
+                conversation_id: None,
+                seed_entity_ids,
+                seed_aggregate_ids,
+                lca_aggregate_id,
+                surfaced_item_count,
+            });
+        }
+
         // Intent boost on non-goal lists.
         let mut all_lists = vec![
             fact_items,
             wiki_items,
             procedure_items,
             graph_items,
+            traversal_items,
             episode_items,
             belief_items,
+            hier_items,
+            hier_relation_items,
         ];
         for list in &mut all_lists {
             intent_boost(list, active_goals);
@@ -508,7 +792,12 @@ impl MemoryRecall {
                 let store = self.memory_store.as_ref()?;
                 store.get_fact_embedding(&item.id).await.ok().flatten()
             }
-            ItemKind::Belief | ItemKind::Wiki | ItemKind::Procedure | ItemKind::GraphNode => {
+            ItemKind::Belief
+            | ItemKind::Wiki
+            | ItemKind::Procedure
+            | ItemKind::GraphNode
+            | ItemKind::HierEntity
+            | ItemKind::HierRelation => {
                 let client = self.embedding_client.as_ref()?;
                 match client.embed(&[item.content.as_str()]).await {
                     Ok(mut v) if !v.is_empty() => Some(v.remove(0)),
@@ -561,15 +850,48 @@ impl MemoryRecall {
     /// Embed a query string for vector search.
     async fn embed_query(&self, text: &str) -> Option<Vec<f32>> {
         let client = self.embedding_client.as_ref()?;
+        let attempts = recall_embedding_queries(text);
+        if attempts
+            .first()
+            .is_some_and(|embedding_text| embedding_text.chars().count() < text.chars().count())
+        {
+            tracing::warn!(
+                recall_embed_input_too_long = true,
+                original_chars = text.chars().count(),
+                bounded_chars = attempts[0].chars().count(),
+                max_chars = MAX_RECALL_EMBED_QUERY_CHARS,
+                "Recall embedding input exceeded hygiene cap; embedding bounded query"
+            );
+        }
 
-        match client.embed(&[text]).await {
-            Ok(mut embeddings) if !embeddings.is_empty() => Some(embeddings.remove(0)),
-            Ok(_) => None,
-            Err(e) => {
-                tracing::warn!("Failed to embed query for recall: {}", e);
-                None
+        for (attempt_idx, embedding_text) in attempts.iter().enumerate() {
+            match client.embed(&[embedding_text.as_str()]).await {
+                Ok(mut embeddings) if !embeddings.is_empty() => return Some(embeddings.remove(0)),
+                Ok(_) => return None,
+                Err(e)
+                    if attempt_idx == 0
+                        && attempts.len() > 1
+                        && is_embedding_context_length_error(&e) =>
+                {
+                    tracing::warn!(
+                        recall_embed_retry_context_too_long = true,
+                        error = %e,
+                        retry_chars = attempts[1].chars().count(),
+                        "Recall embedding provider rejected bounded query; retrying smaller query"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        recall_embed_failed = true,
+                        error = %e,
+                        "Failed to embed query for recall; continuing with lexical recall"
+                    );
+                    return None;
+                }
             }
         }
+
+        None
     }
 
     /// Run one hybrid search call against the trait-routed memory store.
@@ -637,6 +959,36 @@ impl MemoryRecall {
     }
 }
 
+fn recall_embedding_queries(text: &str) -> Vec<String> {
+    let primary = bounded_recall_embedding_query(text, MAX_RECALL_EMBED_QUERY_CHARS);
+    let retry = bounded_recall_embedding_query(text, RETRY_RECALL_EMBED_QUERY_CHARS);
+    if primary == retry {
+        vec![primary]
+    } else {
+        vec![primary, retry]
+    }
+}
+
+fn bounded_recall_embedding_query(text: &str, max_chars: usize) -> String {
+    let compact = compact_recall_embedding_query(text);
+    if compact.chars().count() <= max_chars {
+        return compact;
+    }
+    compact.chars().take(max_chars).collect()
+}
+
+fn compact_recall_embedding_query(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn is_embedding_context_length_error(error: &EmbeddingError) -> bool {
+    let msg = error.to_string().to_ascii_lowercase();
+    (msg.contains("input length") && msg.contains("context length"))
+        || msg.contains("maximum context")
+        || msg.contains("too many tokens")
+        || msg.contains("context window")
+}
+
 /// Apply class-aware penalty to a scored fact based on its epistemic class
 /// and whether it has been superseded (`superseded_by` set).
 ///
@@ -700,6 +1052,7 @@ mod tests {
                 session_id: None,
                 ward_id: None,
             },
+            route_hint: None,
         }
     }
 
@@ -855,6 +1208,14 @@ mod tests {
             !results.iter().any(|i| i.id == "low"),
             "chess procedures should be suppressed"
         );
+    }
+
+    #[test]
+    fn bounded_recall_embedding_query_caps_oversized_input() {
+        let long = "x".repeat(MAX_RECALL_EMBED_QUERY_CHARS + 500);
+        let bounded = bounded_recall_embedding_query(&long, MAX_RECALL_EMBED_QUERY_CHARS);
+
+        assert_eq!(bounded.chars().count(), MAX_RECALL_EMBED_QUERY_CHARS);
     }
 
     #[test]
@@ -1049,6 +1410,134 @@ mod tests {
         fn model_name(&self) -> String {
             "test".to_string()
         }
+    }
+
+    struct LengthCheckingEmbed {
+        max_chars: usize,
+        seen: Mutex<Vec<usize>>,
+    }
+
+    impl LengthCheckingEmbed {
+        fn new(max_chars: usize) -> Arc<Self> {
+            Arc::new(Self {
+                max_chars,
+                seen: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn seen_lengths(&self) -> Vec<usize> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl EmbeddingClient for LengthCheckingEmbed {
+        async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            for text in texts {
+                let chars = text.chars().count();
+                self.seen.lock().unwrap().push(chars);
+                if chars > self.max_chars {
+                    return Err(EmbeddingError::ApiError(format!(
+                        "input length exceeds context length: {chars}"
+                    )));
+                }
+            }
+            Ok(texts.iter().map(|_| vec![1.0_f32, 0.0, 0.0]).collect())
+        }
+
+        fn dimensions(&self) -> usize {
+            3
+        }
+
+        fn model_name(&self) -> String {
+            "length-checking".to_string()
+        }
+    }
+
+    struct FailingEmbed;
+
+    #[async_trait]
+    impl EmbeddingClient for FailingEmbed {
+        async fn embed(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            Err(EmbeddingError::ApiError(
+                "input length exceeds context length".to_string(),
+            ))
+        }
+
+        fn dimensions(&self) -> usize {
+            384
+        }
+
+        fn model_name(&self) -> String {
+            "failing".to_string()
+        }
+    }
+
+    #[tokio::test]
+    async fn recall_unified_bounds_query_before_embedding_provider_call() {
+        let embed = LengthCheckingEmbed::new(MAX_RECALL_EMBED_QUERY_CHARS);
+        let embed_dyn: Arc<dyn EmbeddingClient> = embed.clone();
+        let recall = MemoryRecall::new(Some(embed_dyn), Arc::new(RecallConfig::default()));
+
+        let long_query = "memory hygiene ".repeat(400);
+        let _ = recall
+            .recall_unified("agent", &long_query, None, &[], 5)
+            .await
+            .unwrap();
+
+        let seen = embed.seen_lengths();
+        assert_eq!(seen, vec![MAX_RECALL_EMBED_QUERY_CHARS]);
+    }
+
+    #[tokio::test]
+    async fn recall_unified_retries_smaller_query_after_provider_context_error() {
+        let embed = LengthCheckingEmbed::new(RETRY_RECALL_EMBED_QUERY_CHARS);
+        let embed_dyn: Arc<dyn EmbeddingClient> = embed.clone();
+        let recall = MemoryRecall::new(Some(embed_dyn), Arc::new(RecallConfig::default()));
+
+        let long_query = "memory hygiene ".repeat(400);
+        let _ = recall
+            .recall_unified("agent", &long_query, None, &[], 5)
+            .await
+            .unwrap();
+
+        let seen = embed.seen_lengths();
+        assert_eq!(
+            seen,
+            vec![MAX_RECALL_EMBED_QUERY_CHARS, RETRY_RECALL_EMBED_QUERY_CHARS]
+        );
+    }
+
+    #[tokio::test]
+    async fn recall_unified_keeps_fts_results_when_embedding_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = make_memory_store_with_embedder(&tmp, Arc::new(DirectionalEmbed)).await;
+        store
+            .save_fact(
+                "agent",
+                "domain",
+                "memory.hygiene",
+                "memory hygiene guard should still be found by lexical recall",
+                0.95,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let mut recall = MemoryRecall::new(Some(Arc::new(FailingEmbed)), relaxed_recall_config());
+        recall.set_memory_store(store);
+
+        let out = recall
+            .recall_unified("agent", "memory hygiene guard", None, &[], 10)
+            .await
+            .unwrap();
+
+        assert!(
+            out.iter().any(|item| item.id == "fact:memory.hygiene"
+                || item.content.contains("memory hygiene guard")),
+            "FTS result should survive embedding failure: {out:?}"
+        );
     }
 
     /// In-memory belief store that returns a fixed list from
@@ -1635,5 +2124,34 @@ mod tests {
             .await
             .unwrap();
         assert!(out.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // H-4: hierarchical-memory LCA recall integration
+    // -----------------------------------------------------------------
+    //
+    // The KnowledgeGraphStore trait has 25+ required methods so a
+    // crate-local stub becomes 200+ lines of `Ok(Default::default())`.
+    // We rely instead on the focused tests below + the unit tests
+    // sitting next to the SQLite impl (zero-stores-sqlite::kg::storage
+    // `lca_*` family) for end-to-end coverage. The recall pipeline's
+    // H-4 branch is also exercised indirectly by the existing
+    // recall_unified_* tests above (which all pass after H-4 lands).
+
+    /// When no `kg_store` is wired, the LCA branch must short-circuit
+    /// — recall behaviour is byte-for-byte unchanged from pre-H-4.
+    #[tokio::test]
+    async fn recall_unified_does_not_query_lca_when_kg_store_absent() {
+        let config = Arc::new(RecallConfig::default());
+        let embed: Arc<dyn EmbeddingClient> = Arc::new(TestEmbed);
+        let recall = MemoryRecall::new(Some(embed), config);
+        let out = recall
+            .recall_unified("ag", "anything", None, &[], 20)
+            .await
+            .unwrap();
+        assert!(
+            !out.iter().any(|i| matches!(i.kind, ItemKind::HierEntity)),
+            "no kg_store wired ⇒ no HierEntity items"
+        );
     }
 }

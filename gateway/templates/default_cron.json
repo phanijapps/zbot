@@ -12,5 +12,25 @@
       "source": "default_cron.json",
       "purpose": "cleanup"
     }
+  },
+  {
+    "id": "ward-curator-cleanup-weekly",
+    "name": "Ward curator weekly cleanup",
+    "schedule": "0 0 3 * * 1",
+    "kind": "http",
+    "agent_id": "",
+    "message": "",
+    "http": {
+      "url": "http://localhost:18791/api/curator/cleanup",
+      "method": "POST",
+      "body": {}
+    },
+    "respond_to": [],
+    "enabled": true,
+    "timezone": null,
+    "metadata": {
+      "source": "default_cron.json",
+      "purpose": "ward-curator-layer-1"
+    }
   }
 ]

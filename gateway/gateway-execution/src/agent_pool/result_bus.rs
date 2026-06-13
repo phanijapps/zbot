@@ -3,12 +3,14 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use tokio::sync::oneshot;
 
+#[derive(Debug)]
 pub struct AgentResult {
     pub execution_id: String,
     pub agent_id: String,
     pub response: String,
 }
 
+#[derive(Debug)]
 pub enum AgentWaitError {
     Timeout,
     Crashed { error: String },
@@ -97,5 +99,156 @@ impl AgentResultBus {
             }));
         }
         had_handle
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handle::ExecutionHandle;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn resolve_unblocks_pending_waiter() {
+        let bus = AgentResultBus::new();
+        let rx = bus.register_waiter("exec-1");
+        bus.resolve("exec-1", "researcher", "found 5 sources");
+        let result = rx.await.expect("channel open").expect("ok variant");
+        assert_eq!(result.execution_id, "exec-1");
+        assert_eq!(result.agent_id, "researcher");
+        assert_eq!(result.response, "found 5 sources");
+    }
+
+    #[tokio::test]
+    async fn reject_unblocks_pending_waiter_with_crashed_error() {
+        let bus = AgentResultBus::new();
+        let rx = bus.register_waiter("exec-2");
+        bus.reject(
+            "exec-2",
+            AgentWaitError::Crashed {
+                error: "shell failed".into(),
+            },
+        );
+        let err = rx.await.expect("channel open").expect_err("err variant");
+        match err {
+            AgentWaitError::Crashed { error } => assert_eq!(error, "shell failed"),
+            other => panic!("expected Crashed, got {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    #[test]
+    fn resolve_without_waiter_is_a_noop() {
+        // Fast-path case from the design doc: agent finished before any
+        // wait_agent registered. resolve drops silently rather than
+        // panicking; the wait_agent fast-path reads the result from the
+        // StateService instead.
+        let bus = AgentResultBus::new();
+        bus.resolve("exec-no-waiter", "x", "ignored");
+        // No assertion needed — must simply not panic. Re-registering
+        // afterwards should work cleanly (state was cleaned up).
+        let _rx = bus.register_waiter("exec-no-waiter");
+    }
+
+    #[test]
+    fn reject_without_waiter_is_a_noop() {
+        let bus = AgentResultBus::new();
+        bus.reject(
+            "exec-no-waiter",
+            AgentWaitError::Crashed { error: "x".into() },
+        );
+    }
+
+    #[tokio::test]
+    async fn second_register_replaces_first_waiter_silently() {
+        // Two consecutive register_waiter calls on the same execution_id
+        // can happen if a tool retry hits the bus before the first
+        // resolve. The second call's receiver wins; the first's is
+        // dropped (its sender is replaced, sender.send → Err on
+        // closed receiver, but we never send on the dropped sender).
+        let bus = AgentResultBus::new();
+        let _rx1 = bus.register_waiter("exec-3");
+        let rx2 = bus.register_waiter("exec-3");
+        bus.resolve("exec-3", "writer", "done");
+        let r = rx2.await.expect("channel open").expect("ok");
+        assert_eq!(r.response, "done");
+    }
+
+    #[test]
+    fn kill_stops_handle_and_returns_true() {
+        let bus = AgentResultBus::new();
+        let handle = ExecutionHandle::new(10);
+        bus.register_handle("exec-4", handle.clone());
+        assert!(!handle.is_stop_requested());
+
+        let killed = bus.kill("exec-4");
+        assert!(killed, "kill should return true when a handle was present");
+        assert!(
+            handle.is_stop_requested(),
+            "kill must trigger handle.stop()"
+        );
+    }
+
+    #[test]
+    fn kill_returns_false_when_no_handle_registered() {
+        let bus = AgentResultBus::new();
+        let killed = bus.kill("exec-unknown");
+        assert!(!killed);
+    }
+
+    #[tokio::test]
+    async fn kill_unblocks_pending_waiter_with_crashed_error() {
+        let bus = AgentResultBus::new();
+        let handle = ExecutionHandle::new(10);
+        bus.register_handle("exec-5", handle);
+        let rx = bus.register_waiter("exec-5");
+
+        bus.kill("exec-5");
+
+        let err = rx.await.expect("channel open").expect_err("err variant");
+        match err {
+            AgentWaitError::Crashed { error } => {
+                assert!(error.contains("killed by orchestrator"));
+            }
+            _ => panic!("expected Crashed variant from kill"),
+        }
+    }
+
+    #[test]
+    fn resolve_cleans_up_execution_handles_map() {
+        // After resolve, kill on the same execution_id should return
+        // false — the handle entry was removed.
+        let bus = AgentResultBus::new();
+        bus.register_handle("exec-6", ExecutionHandle::new(10));
+        bus.resolve("exec-6", "x", "y");
+        assert!(!bus.kill("exec-6"));
+    }
+
+    #[test]
+    fn reject_cleans_up_execution_handles_map() {
+        let bus = AgentResultBus::new();
+        bus.register_handle("exec-7", ExecutionHandle::new(10));
+        bus.reject("exec-7", AgentWaitError::Timeout);
+        assert!(!bus.kill("exec-7"));
+    }
+
+    #[tokio::test]
+    async fn many_concurrent_waiters_on_distinct_ids_resolve_independently() {
+        // Confirms there's no cross-talk between execution_ids when
+        // multiple waiters are outstanding.
+        let bus = Arc::new(AgentResultBus::new());
+        let rx1 = bus.register_waiter("a");
+        let rx2 = bus.register_waiter("b");
+        let rx3 = bus.register_waiter("c");
+
+        bus.resolve("b", "ag-b", "from-b");
+        bus.resolve("a", "ag-a", "from-a");
+        bus.resolve("c", "ag-c", "from-c");
+
+        let r1 = rx1.await.unwrap().unwrap();
+        let r2 = rx2.await.unwrap().unwrap();
+        let r3 = rx3.await.unwrap().unwrap();
+        assert_eq!(r1.response, "from-a");
+        assert_eq!(r2.response, "from-b");
+        assert_eq!(r3.response, "from-c");
     }
 }

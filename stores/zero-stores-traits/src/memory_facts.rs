@@ -570,4 +570,20 @@ pub trait MemoryFactStore: Send + Sync {
     ) -> Result<Vec<MemoryFact>, String> {
         Ok(Vec::new())
     }
+
+    /// Distinct `source_episode_id` values from `memory_facts` rows where
+    /// `contradicted_by IS NOT NULL` and `updated_at > since`. Used by
+    /// the DecayEngine (MEM-001 Part A) to propagate contradictions from
+    /// facts down to the KG entities and relationships that were
+    /// extracted from the same episodes. NULL `source_episode_id`s and
+    /// duplicates are dropped. Empty `since` (epoch) returns the full
+    /// history. Default: empty so backends that haven't implemented
+    /// yet just disable contradiction propagation.
+    async fn list_contradicted_fact_episode_ids(
+        &self,
+        _agent_id: &str,
+        _since: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
 }

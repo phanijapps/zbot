@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
+use crate::sleep::hierarchy_builder::HierarchyBuilder;
 use crate::sleep::{
     BeliefContradictionDetector, BeliefSynthesizer, Compactor, ConflictResolver,
     CorrectionsAbstractor, DecayEngine, OrphanArchiver, PatternExtractor, Pruner,
@@ -41,6 +42,12 @@ pub struct SleepOps {
     /// timestamped snapshot here for the Observatory UI to read. `None`
     /// is the legacy code path — recording is skipped entirely.
     pub belief_network_activity: Option<Arc<RecentBeliefNetworkActivity>>,
+    /// Hierarchical-memory builder (Phase H-3). When `Some`, runs after
+    /// the Compactor each cycle: clusters layer-N entities, synthesises
+    /// layer-N+1 aggregates, and writes inter-cluster relations gated
+    /// by connectivity strength λ. When `None`, the cycle is unchanged
+    /// — hierarchy is opt-in via `MemorySettings.hierarchy.enabled`.
+    pub hierarchy_builder: Option<Arc<HierarchyBuilder>>,
 }
 
 /// Background worker that orchestrates the full sleep-time pipeline.
@@ -135,6 +142,7 @@ impl SleepTimeWorker {
 pub struct CycleStats {
     pub candidates_considered: u64,
     pub merges_performed: u64,
+    pub merges_skipped_by_verifier: u64,
     pub synthesis_facts_inserted: u64,
     pub synthesis_facts_bumped: u64,
     pub patterns_inserted: u64,
@@ -148,10 +156,21 @@ pub struct CycleStats {
     pub orphans_failed: u64,
     pub kg_entities_decayed: u64,
     pub kg_relationships_decayed: u64,
+    /// MEM-001 Part A — contradicted-fact episodes processed this cycle.
+    pub contradiction_episodes_processed: u64,
+    /// MEM-001 Part A — KG entities whose confidence was multiplicatively
+    /// decayed because they were extracted from contradicted-fact episodes.
+    pub contradiction_entities_decayed: u64,
+    /// MEM-001 Part A — KG relationships decayed the same way.
+    pub contradiction_relationships_decayed: u64,
     /// Belief Network — Phase B-1.
     pub beliefs_synthesized: u64,
     /// Belief Network — Phase B-2: contradictions inserted (logical + tension).
     pub belief_contradictions_detected: u64,
+    /// Hierarchy — Phase H-3: total aggregate entities written across layers.
+    pub hierarchy_aggregates_created: u64,
+    /// Hierarchy — Phase H-3: inter-cluster relations written (LeanRAG λ>τ).
+    pub hierarchy_inter_cluster_relations: u64,
 }
 
 async fn run_cycle(
@@ -170,6 +189,39 @@ async fn run_cycle(
     let compaction_stats = compactor.run(&run_id, agent_id).await;
     stats.candidates_considered = compaction_stats.candidates_considered;
     stats.merges_performed = compaction_stats.merges_performed;
+    stats.merges_skipped_by_verifier = compaction_stats.merges_skipped_by_verifier;
+
+    // Hierarchical memory (Phase H-3) — runs immediately after the
+    // Compactor so it doesn't cluster near-duplicate noise. Opt-in;
+    // a `None` field leaves the cycle byte-for-byte unchanged.
+    if let Some(hb) = ops.hierarchy_builder.as_ref() {
+        let h_stats = hb.run_for_agent(agent_id).await;
+        stats.hierarchy_aggregates_created = h_stats.aggregates_created;
+        stats.hierarchy_inter_cluster_relations = h_stats.inter_cluster_relations_created;
+        // Always emit an info-level summary so operators can confirm
+        // the builder actually ran and see why it stopped — without
+        // this line, a PoolTooSmall exit was indistinguishable from
+        // "the builder was never constructed" in the logs.
+        tracing::info!(
+            %run_id,
+            agent_id,
+            stopped_reason = ?h_stats.stopped_reason,
+            layers_built = h_stats.layers_built,
+            aggregates_created = h_stats.aggregates_created,
+            singletons_promoted = h_stats.singletons_promoted,
+            inter_cluster_relations = h_stats.inter_cluster_relations_created,
+            llm_calls = h_stats.llm_calls,
+            errors = h_stats.errors,
+            "hierarchy builder cycle complete"
+        );
+        if h_stats.errors > 0 {
+            tracing::warn!(
+                %run_id,
+                errors = h_stats.errors,
+                "hierarchy builder cycle had non-fatal errors"
+            );
+        }
+    }
 
     // Synthesis — operates on post-compaction state. Conservative: failure is
     // logged and the cycle continues.
@@ -204,6 +256,28 @@ async fn run_cycle(
         .await;
     stats.kg_entities_decayed = kg_decay_stats.entities_decayed;
     stats.kg_relationships_decayed = kg_decay_stats.relationships_decayed;
+
+    // MEM-001 Part A — propagate fact-level contradictions down to the
+    // KG entities and relationships sharing the same source episodes.
+    // No-op when the engine wasn't wired with a fact store. Lookback
+    // is `now - lookback_hours`; pre-bi-temporal databases will simply
+    // process more rows on first run, which is fine because the SQL
+    // is bounded by `contradicted_by IS NOT NULL`.
+    let prop_lookback =
+        chrono::Utc::now() - chrono::Duration::hours(decay_engine.contradiction_lookback_hours());
+    let prop_stats = decay_engine
+        .propagate_fact_contradictions(agent_id, prop_lookback)
+        .await;
+    stats.contradiction_episodes_processed = prop_stats.episodes_processed;
+    stats.contradiction_entities_decayed = prop_stats.entities_decayed;
+    stats.contradiction_relationships_decayed = prop_stats.relationships_decayed;
+    if prop_stats.errors > 0 {
+        tracing::warn!(
+            %run_id,
+            errors = prop_stats.errors,
+            "contradiction propagation had non-fatal errors"
+        );
+    }
 
     let candidates = decay_engine.list_prune_candidates(agent_id).await;
     stats.prune_candidates = candidates.len() as u64;
@@ -291,6 +365,7 @@ async fn run_cycle(
         %run_id,
         candidates_considered = stats.candidates_considered,
         merges = stats.merges_performed,
+        merges_skipped_by_verifier = stats.merges_skipped_by_verifier,
         synthesis_inserted = stats.synthesis_facts_inserted,
         synthesis_bumped = stats.synthesis_facts_bumped,
         patterns_inserted = stats.patterns_inserted,
@@ -332,9 +407,9 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::tempdir;
     use zero_stores::KnowledgeGraphStore;
+    use zero_stores_sqlite::SqliteKgStore;
     use zero_stores_sqlite::kg::storage::GraphStorage;
     use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
-    use zero_stores_sqlite::SqliteKgStore;
     use zero_stores_sqlite::{
         CompactionRepository, DatabaseManager, KnowledgeDatabase, MemoryRepository,
         ProcedureRepository,
@@ -440,6 +515,7 @@ mod tests {
         )
         .await;
         assert_eq!(stats.merges_performed, 0);
+        assert_eq!(stats.merges_skipped_by_verifier, 0);
         assert_eq!(stats.synthesis_facts_inserted, 0);
         assert_eq!(stats.patterns_inserted, 0);
     }
@@ -495,6 +571,8 @@ mod tests {
             procedure_store,
             compaction_store.clone(),
             Arc::new(RecordingPatternLlm),
+            None,
+            Vec::new(),
         ));
         let archiver_kg_store: Arc<dyn KnowledgeGraphStore> =
             Arc::new(SqliteKgStore::new(h.graph.clone()));
@@ -514,6 +592,7 @@ mod tests {
             belief_synthesizer: None,
             belief_contradiction_detector: None,
             belief_network_activity: None,
+            hierarchy_builder: None,
         };
         let stats = run_cycle(
             "test",
@@ -610,6 +689,8 @@ mod tests {
             procedure_store,
             compaction_store.clone(),
             counter.clone(),
+            None,
+            Vec::new(),
         ));
         let ops = SleepOps {
             synthesizer: Some(synth),
@@ -620,6 +701,7 @@ mod tests {
             belief_synthesizer: None,
             belief_contradiction_detector: None,
             belief_network_activity: None,
+            hierarchy_builder: None,
         };
         let stats = run_cycle(
             "test",

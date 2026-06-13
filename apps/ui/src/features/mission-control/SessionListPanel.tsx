@@ -93,7 +93,7 @@ function SessionRow({ session, active, tokens, onSelect }: SessionRowProps) {
   const status = mapStatusVariant(session.status);
   const title = session.title || session.agent_name || session.session_id;
   const duration = formatDuration(session.duration_ms);
-  const subagentCount = session.child_session_ids?.length ?? 0;
+  const subagentCount = session.subagent_count ?? session.child_session_ids?.length ?? 0;
 
   return (
     <button

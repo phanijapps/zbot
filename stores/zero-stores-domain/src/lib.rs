@@ -26,6 +26,7 @@ pub mod kg_ops;
 pub mod memory_fact;
 pub mod message;
 pub mod procedure;
+pub mod route_hint;
 pub mod session_episode;
 pub mod wiki;
 
@@ -35,11 +36,12 @@ pub use distillation_ops::{DistillationStats, UndistilledSession};
 pub use goal::Goal;
 pub use kg_episode::{EpisodeSource, KgEpisode};
 pub use kg_ops::{
-    DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit, GraphView, RelationshipContext,
-    StrategyCandidate,
+    AggregateSummary, DecayCandidate, DuplicateCandidate, EntityNameEmbeddingHit, GraphView,
+    HierarchySummary, InterClusterRelationHit, RelationshipContext, StrategyCandidate,
 };
 pub use memory_fact::{MemoryFact, ScoredFact, StrategyFactInsert, StrategyFactMatch};
 pub use message::Message;
-pub use procedure::{PatternProcedureInsert, Procedure, ProcedureSummary};
+pub use procedure::{PatternProcedureInsert, PatternStep, Procedure, ProcedureSummary};
+pub use route_hint::{RouteHint, RouteSourceKind};
 pub use session_episode::{ScoredEpisode, SessionEpisode, SuccessfulEpisode};
 pub use wiki::{WikiArticle, WikiHit};

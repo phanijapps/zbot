@@ -7,7 +7,7 @@ pub mod services;
 pub mod sleep;
 pub mod util;
 
-pub use llm_factory::{LlmClientConfig, MemoryLlmFactory};
+pub use llm_factory::{CachedLlmClient, LlmClientConfig, MemoryLlmFactory};
 pub use services::{MemoryServices, MemoryServicesConfig};
 pub use util::{parse_llm_json, strip_code_fence};
 
@@ -41,7 +41,7 @@ pub use sleep::corrections_abstractor::{
 pub use sleep::decay::{DecayConfig, DecayEngine, KgDecayStats, PruneCandidate};
 pub use sleep::orphan_archiver::{OrphanArchiver, OrphanArchiverStats};
 pub use sleep::pattern_extractor::{
-    PatternExtractLlm, PatternExtractor, PatternInput, PatternResponse, PatternStats, PatternStep,
+    PatternExtractLlm, PatternExtractor, PatternInput, PatternResponse, PatternStats,
 };
 pub use sleep::pruner::{PruneStats, Pruner};
 pub use sleep::synthesizer::{
@@ -89,6 +89,18 @@ pub struct GraphTraversalConfig {
     pub max_hops: u8,
     pub hop_decay: f64,
     pub max_graph_facts: usize,
+    /// MEM-001 Part B-1 — minimum `kg_entities.confidence` for a hit to
+    /// survive the recall step-4 graph-ANN filter. Hits below this
+    /// threshold are dropped before scoring (low-confidence noise that
+    /// would clutter recall without contributing). `0.0` disables the
+    /// filter entirely — useful when migrating from older databases
+    /// where confidence values haven't decayed yet.
+    #[serde(default = "default_min_kg_confidence")]
+    pub min_kg_confidence: f64,
+}
+
+fn default_min_kg_confidence() -> f64 {
+    0.1
 }
 
 impl Default for GraphTraversalConfig {
@@ -98,6 +110,7 @@ impl Default for GraphTraversalConfig {
             max_hops: 2,
             hop_decay: 0.6,
             max_graph_facts: 5,
+            min_kg_confidence: default_min_kg_confidence(),
         }
     }
 }
@@ -384,6 +397,20 @@ pub struct MemorySettings {
     /// identical to pre-MMR behavior.
     #[serde(default)]
     pub mmr: MmrConfig,
+    /// Hierarchical-memory builder (Phase H-3). Opt-in (`enabled: false`
+    /// by default). When enabled, an extra sleep-time worker clusters
+    /// the current layer-N entities, synthesises layer-N+1 aggregates
+    /// via an LLM, and writes LeanRAG-style inter-cluster relations
+    /// between them. See `project_hierarchical_memory_plan.md`.
+    #[serde(default)]
+    pub hierarchy: HierarchySettings,
+    /// Procedure recommendation gating. Controls when intent_analysis
+    /// surfaces a learned procedure to the root agent and how strongly.
+    /// Graduated tiers (promoted / advisory / tentative) trade off
+    /// recall-similarity against accumulated `success_count` evidence —
+    /// stronger framing for procedures that are both relevant AND proven.
+    #[serde(default)]
+    pub procedure_recommendation: ProcedureRecommendationConfig,
 }
 
 pub fn default_corrections_abstractor_interval_hours() -> u32 {
@@ -402,6 +429,161 @@ impl Default for MemorySettings {
             query_gate: QueryGateConfig::default(),
             belief_network: BeliefNetworkConfig::default(),
             mmr: MmrConfig::default(),
+            hierarchy: HierarchySettings::default(),
+            procedure_recommendation: ProcedureRecommendationConfig::default(),
+        }
+    }
+}
+
+// ============================================================================
+// PROCEDURE RECOMMENDATION CONFIG
+// Three-tier gating for surfacing learned procedures in the root agent's
+// system prompt. Higher tiers use stronger language; matches that don't
+// clear any tier are silent.
+// ============================================================================
+
+/// Per-tier threshold pair. Procedure must clear BOTH the score floor (vec
+/// similarity from `recall_procedures`) AND the success_count floor to
+/// trigger that tier's framing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcedureTierConfig {
+    /// Minimum vec-similarity score (strict >). Range typically 0.0-1.0.
+    pub score_floor: f64,
+    /// Minimum success_count (>=). Captures accumulated invocation evidence.
+    pub success_floor: i32,
+}
+
+/// Procedure recommendation gating with graduated tiers.
+///
+/// Three tiers, evaluated top-down. The first tier whose floors are met
+/// determines the framing in the root agent's system prompt:
+///   * `promoted` — actionable "Recommended action: run_procedure(...)" block
+///   * `advisory` — legacy "Proven Procedure Available" advisory text
+///   * `tentative` — gentle "Possibly relevant procedure" FYI
+///
+/// A procedure that clears none of the tiers is silent (no surfacing at all).
+/// Set `enabled: false` to disable surfacing entirely.
+///
+/// Tuning rationale:
+///   * `promoted` is the explicit call to action with a `run_procedure(...)`
+///     call template — reserved for high-confidence, well-evidenced matches.
+///   * `advisory` is the historical surface; preserves prior behavior for
+///     procedures with at least one corroborating session.
+///   * `tentative` exists to bootstrap fresh procedures (sc=1 from distillation)
+///     into the recommendation surface — the LLM sees the option but isn't
+///     pushed. Successful invocation bumps sc and auto-promotes to advisory
+///     on the next similar request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcedureRecommendationConfig {
+    /// Master switch. Default: `true`.
+    #[serde(default = "default_proc_rec_enabled")]
+    pub enabled: bool,
+    /// Strongest tier — call-to-action block with a literal `run_procedure(...)` template.
+    #[serde(default = "default_promoted_tier")]
+    pub promoted: ProcedureTierConfig,
+    /// Middle tier — advisory block describing a proven procedure.
+    #[serde(default = "default_advisory_tier")]
+    pub advisory: ProcedureTierConfig,
+    /// Lowest tier — gentle FYI for fresh procedures (sc=1) so they can mature.
+    #[serde(default = "default_tentative_tier")]
+    pub tentative: ProcedureTierConfig,
+}
+
+fn default_proc_rec_enabled() -> bool {
+    true
+}
+fn default_promoted_tier() -> ProcedureTierConfig {
+    ProcedureTierConfig {
+        score_floor: 0.85,
+        success_floor: 3,
+    }
+}
+fn default_advisory_tier() -> ProcedureTierConfig {
+    ProcedureTierConfig {
+        score_floor: 0.70,
+        success_floor: 2,
+    }
+}
+fn default_tentative_tier() -> ProcedureTierConfig {
+    ProcedureTierConfig {
+        score_floor: 0.70,
+        success_floor: 1,
+    }
+}
+
+impl Default for ProcedureRecommendationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_proc_rec_enabled(),
+            promoted: default_promoted_tier(),
+            advisory: default_advisory_tier(),
+            tentative: default_tentative_tier(),
+        }
+    }
+}
+
+/// Hierarchical-memory configuration (Phase H-3). Toggled by a master
+/// `enabled` flag; when off, the sleep-time `HierarchyBuilder` is never
+/// constructed and the existing recall path is byte-for-byte unchanged.
+///
+/// All tuning knobs map 1:1 onto `sleep::hierarchy_builder::HierarchyConfig`
+/// fields — see that struct's docs for the per-knob semantics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HierarchySettings {
+    /// Master switch. Default: `false`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Minimum hours between cycles. Default: 24.
+    #[serde(default = "default_hierarchy_interval_hours")]
+    pub interval_hours: u32,
+    /// Hard cap on layers built per cycle. Default: 4.
+    #[serde(default = "default_hierarchy_max_layers")]
+    pub max_layers: u32,
+    /// Target K-means cluster size (k ≈ n / target). Default: 20.
+    #[serde(default = "default_hierarchy_cluster_target_size")]
+    pub cluster_target_size: usize,
+    /// Connectivity strength λ threshold above which inter-cluster
+    /// relations are synthesised. Default: 3.
+    #[serde(default = "default_inter_cluster_relation_threshold")]
+    pub inter_cluster_relation_threshold: usize,
+    /// Hard cap on LLM calls per cycle (sum of aggregate + relation
+    /// synthesis). Default: 50.
+    #[serde(default = "default_hierarchy_llm_budget")]
+    pub llm_budget_per_cycle: u32,
+}
+
+pub fn default_hierarchy_interval_hours() -> u32 {
+    24
+}
+
+pub fn default_hierarchy_max_layers() -> u32 {
+    4
+}
+
+pub fn default_hierarchy_cluster_target_size() -> usize {
+    20
+}
+
+pub fn default_inter_cluster_relation_threshold() -> usize {
+    3
+}
+
+pub fn default_hierarchy_llm_budget() -> u32 {
+    50
+}
+
+impl Default for HierarchySettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_hours: default_hierarchy_interval_hours(),
+            max_layers: default_hierarchy_max_layers(),
+            cluster_target_size: default_hierarchy_cluster_target_size(),
+            inter_cluster_relation_threshold: default_inter_cluster_relation_threshold(),
+            llm_budget_per_cycle: default_hierarchy_llm_budget(),
         }
     }
 }
@@ -771,6 +953,58 @@ mod tests {
         assert!(config.temporal_decay.enabled); // entirely default
     }
 
+    // ------------------------------------------------------------------
+    // MEM-001 Part B-1 — min_kg_confidence default + serde round-trip
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn min_kg_confidence_default_is_zero_point_one() {
+        let c = RecallConfig::default();
+        assert!(
+            (c.graph_traversal.min_kg_confidence - 0.1).abs() < 1e-9,
+            "min_kg_confidence default must be 0.1"
+        );
+    }
+
+    #[test]
+    fn min_kg_confidence_can_be_overridden_via_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(
+            path.join("recall_config.json"),
+            r#"{"graph_traversal": {"min_kg_confidence": 0.5}}"#,
+        )
+        .unwrap();
+        let config = RecallConfig::load_from_path(dir.path());
+        assert!(
+            (config.graph_traversal.min_kg_confidence - 0.5).abs() < 1e-9,
+            "min_kg_confidence override should take effect"
+        );
+        // Other fields stay at their compiled defaults.
+        assert_eq!(config.graph_traversal.max_hops, 2);
+    }
+
+    #[test]
+    fn min_kg_confidence_missing_key_falls_back_to_default() {
+        // Older recall_config.json files won't have the field — verify
+        // serde's `default = "..."` attribute fills in the compiled value
+        // rather than failing to deserialize.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(
+            path.join("recall_config.json"),
+            r#"{"graph_traversal": {"max_hops": 3}}"#,
+        )
+        .unwrap();
+        let config = RecallConfig::load_from_path(dir.path());
+        assert!(
+            (config.graph_traversal.min_kg_confidence - 0.1).abs() < 1e-9,
+            "missing key should fall back to 0.1 default"
+        );
+    }
+
     #[test]
     fn category_weight_known_and_unknown() {
         let config = RecallConfig::default();
@@ -1011,5 +1245,57 @@ mod tests {
         assert_eq!(m.query_gate.max_subquery_len, 200);
         assert_eq!(m.query_gate.timeout_ms, 3000);
         assert!(m.query_gate.model_id.is_none());
+    }
+
+    #[test]
+    fn hierarchy_settings_default_is_disabled() {
+        let cfg = HierarchySettings::default();
+        assert!(!cfg.enabled, "hierarchy must default to disabled");
+        assert_eq!(cfg.interval_hours, 24);
+        assert_eq!(cfg.max_layers, 4);
+        assert_eq!(cfg.cluster_target_size, 20);
+        assert_eq!(cfg.inter_cluster_relation_threshold, 3);
+        assert_eq!(cfg.llm_budget_per_cycle, 50);
+    }
+
+    #[test]
+    fn memory_settings_default_hierarchy_disabled() {
+        let m = MemorySettings::default();
+        assert!(!m.hierarchy.enabled);
+    }
+
+    #[test]
+    fn hierarchy_settings_deserialises_camel_case() {
+        let json = r#"{
+            "enabled": true,
+            "intervalHours": 12,
+            "maxLayers": 3,
+            "clusterTargetSize": 30,
+            "interClusterRelationThreshold": 5,
+            "llmBudgetPerCycle": 100
+        }"#;
+        let cfg: HierarchySettings = serde_json::from_str(json).unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.interval_hours, 12);
+        assert_eq!(cfg.max_layers, 3);
+        assert_eq!(cfg.cluster_target_size, 30);
+        assert_eq!(cfg.inter_cluster_relation_threshold, 5);
+        assert_eq!(cfg.llm_budget_per_cycle, 100);
+    }
+
+    #[test]
+    fn memory_settings_with_hierarchy_block_round_trips() {
+        let json = r#"{
+            "hierarchy": {
+                "enabled": true,
+                "maxLayers": 2
+            }
+        }"#;
+        let m: MemorySettings = serde_json::from_str(json).unwrap();
+        assert!(m.hierarchy.enabled);
+        assert_eq!(m.hierarchy.max_layers, 2);
+        // unspecified fields keep defaults
+        assert_eq!(m.hierarchy.interval_hours, 24);
+        assert_eq!(m.hierarchy.cluster_target_size, 20);
     }
 }

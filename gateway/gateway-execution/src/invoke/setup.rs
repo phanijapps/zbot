@@ -2,6 +2,7 @@
 //!
 //! Provider resolution and agent loading utilities for execution setup.
 
+use crate::delegation::DelegationMode;
 use agent_tools::ToolSettings;
 use gateway_services::providers::Provider;
 use gateway_services::{AgentService, ProviderService, SettingsService, SharedVaultPaths};
@@ -253,13 +254,20 @@ impl<'a> AgentLoader<'a> {
         &self,
         agent_id: &str,
     ) -> Result<(gateway_services::agents::Agent, Provider), String> {
+        // Ward-as-agent: a `ward:<name>` id synthesizes the agent from the
+        // ward directory instead of loading `agents/<id>/`. The ward IS the
+        // agent — no on-disk agent folder.
+        if let Some(ward_name) = agent_id.strip_prefix("ward:") {
+            return self.synthesize_ward_agent(ward_name);
+        }
+
         // Try loading existing agent first
         match self.agent_service.get(agent_id).await {
             Ok(mut agent) => {
                 // Append OS context and shards so pre-configured agents
                 // also know platform commands (PowerShell vs bash, etc.)
                 agent.instructions =
-                    append_system_context(&agent.instructions, &self.paths, SubagentRole::Executor);
+                    append_system_context_without_rules(&agent.instructions, &self.paths);
                 let provider = self.provider_resolver.get_or_default(&agent.provider_id)?;
                 Ok((agent, provider))
             }
@@ -300,6 +308,114 @@ impl<'a> AgentLoader<'a> {
         }
     }
 
+    /// Synthesize a ward-agent for a `ward:<name>` delegation target.
+    ///
+    /// The ward IS the agent — no on-disk `agents/<id>/` folder. The system
+    /// prompt is a generated identity line + the standard system-context
+    /// shards + the ward's `AGENTS.md` doctrine. There is no `ZBOT.md`.
+    ///
+    /// P1 scope: the ward directory must already exist; creating a ward is
+    /// the cold path's job. A missing directory is an error here.
+    fn synthesize_ward_agent(
+        &self,
+        ward_name: &str,
+    ) -> Result<(gateway_services::agents::Agent, Provider), String> {
+        let ward_dir = self.paths.ward_dir(ward_name);
+        if !ward_dir.is_dir() {
+            return Err(format!(
+                "ward '{}' has no directory at {}",
+                ward_name,
+                ward_dir.display()
+            ));
+        }
+
+        let doctrine = std::fs::read_to_string(ward_dir.join("AGENTS.md")).unwrap_or_default();
+
+        let mut identity = format!(
+            "You are the `{ward}` ward-agent — you own the `{ward}` domain end \
+             to end. Given ONE task you plan AND execute it to completion in \
+             this single delegation, then return a result. The caller does not \
+             orchestrate your steps.\n",
+            ward = ward_name
+        );
+        identity.push_str(
+            "\n## First-turn protocol\n\
+             1. ward(action=\"use\") — land in your ward directory.\n\
+             2. recall — pull this ward's procedures, facts and past episodes \
+             for the task.\n\
+             3. Plan — take the cheapest route recall supports: replay a \
+             matching promoted procedure with run_procedure; adapt a partial \
+             match into a step plan; or, if nothing matches, decompose the \
+             task into steps yourself, binding each step to a tool, skill, or \
+             sub-delegation.\n\
+             4. Execute the plan step by step — act, observe, adjust.\n\
+             5. respond using the Handoff schema in your doctrine below.\n\
+             \n\
+             If the task falls outside your Purpose / Scope, do not attempt \
+             it — call `respond` with a single line: \
+             `RESULT: OUT_OF_SCOPE — <one-line reason>`.\n\
+             If the task is within your Purpose / Scope but you lack a \
+             tool, skill, or MCP needed to finish it, do not fake a \
+             partial result — call `respond` with a single line: \
+             `RESULT: CAPABILITY_MISSING — <the missing capability>`.\n",
+        );
+        let instructions =
+            compose_ward_agent_instructions(&identity, &self.paths, ward_name, &doctrine);
+
+        // Ward-agent LLM config resolves in three tiers: the ward's own
+        // `config.yaml` overrides the orchestrator (Settings > Advanced >
+        // Orchestrator), which in turn falls back to the provider default.
+        // A `null` provider/model in `config.yaml` inherits the orchestrator,
+        // so an untouched ward behaves exactly as before.
+        let orch = self
+            .settings
+            .and_then(|s| s.get_execution_settings().ok())
+            .map(|s| s.orchestrator)
+            .unwrap_or_default();
+        let ward_cfg = load_or_seed_ward_config(&ward_dir);
+        let provider_id = ward_cfg
+            .provider
+            .filter(|p| !p.is_empty())
+            .or_else(|| orch.provider_id.filter(|p| !p.is_empty()));
+        let provider = match &provider_id {
+            Some(id) => self.provider_resolver.get_or_default(id)?,
+            None => self.provider_resolver.get_default()?,
+        };
+        let model = ward_cfg
+            .model
+            .filter(|m| !m.is_empty())
+            .or_else(|| orch.model.filter(|m| !m.is_empty()))
+            .unwrap_or_else(|| provider.default_model().to_string());
+
+        let agent = gateway_services::agents::Agent {
+            id: format!("ward:{ward_name}"),
+            name: ward_name.to_string(),
+            display_name: format!("Ward Agent: {ward_name}"),
+            description: format!("Ward-agent for the {ward_name} ward"),
+            agent_type: Some("ward".to_string()),
+            provider_id: provider.id.clone().unwrap_or_default(),
+            model,
+            temperature: orch.temperature,
+            max_tokens: orch.max_tokens,
+            thinking_enabled: orch.thinking_enabled,
+            voice_recording_enabled: false,
+            system_instruction: None,
+            instructions,
+            mcps: vec![],
+            skills: vec![],
+            middleware: None,
+            created_at: None,
+        };
+
+        tracing::info!(
+            ward = ward_name,
+            instructions_bytes = agent.instructions.len(),
+            doctrine_bytes = doctrine.len(),
+            "Synthesized ward-agent for delegation"
+        );
+        Ok((agent, provider))
+    }
+
     /// Get the provider resolver.
     pub fn provider_resolver(&self) -> &ProviderResolver<'a> {
         &self.provider_resolver
@@ -320,38 +436,87 @@ pub enum SubagentRole {
 }
 
 /// Detect subagent role from task description.
-pub fn detect_subagent_role(_agent_id: &str, task: &str) -> SubagentRole {
+pub fn detect_subagent_role(agent_id: &str, task: &str) -> SubagentRole {
+    let agent_lower = agent_id.to_lowercase();
     let task_lower = task.to_lowercase();
-    let review_signals = [
-        "review",
-        "validate",
-        "verify",
-        "evaluate",
-        "check quality",
-        "assess",
-        "qa",
-        "audit",
-    ];
-    if review_signals.iter().any(|s| task_lower.contains(s)) {
-        SubagentRole::Reviewer
-    } else {
-        SubagentRole::Executor
+
+    if is_reviewer_agent(&agent_lower) {
+        return SubagentRole::Reviewer;
     }
+    if has_execution_signal(&task_lower) {
+        return SubagentRole::Executor;
+    }
+    if has_read_only_review_signal(&task_lower) {
+        return SubagentRole::Reviewer;
+    }
+    if is_execution_agent(&agent_lower) {
+        return SubagentRole::Executor;
+    }
+    if has_review_signal(&task_lower) {
+        return SubagentRole::Reviewer;
+    }
+
+    SubagentRole::Executor
 }
 
-pub fn subagent_rules(role: SubagentRole) -> &'static str {
+fn is_reviewer_agent(agent_lower: &str) -> bool {
+    agent_lower == "reviewer-agent"
+        || agent_lower.contains("reviewer")
+        || agent_lower.contains("review-agent")
+}
+
+fn is_execution_agent(agent_lower: &str) -> bool {
+    [
+        "builder-agent",
+        "research-agent",
+        "planner-agent",
+        "writing-agent",
+        "code-agent",
+    ]
+    .contains(&agent_lower)
+}
+
+fn has_execution_signal(task_lower: &str) -> bool {
+    [
+        "find ", "fetch", "scrape", "write", "create", "run ", "parse", "extract", "generate",
+        "save", "build", "load", "search", "gather", "collect",
+    ]
+    .iter()
+    .any(|signal| task_lower.contains(signal))
+}
+
+fn has_read_only_review_signal(task_lower: &str) -> bool {
+    [
+        "read-only review",
+        "review without changing",
+        "review without editing",
+        "inspect and report",
+        "report defects",
+        "do not write",
+        "no shell",
+        "no file changes",
+        "result: approved",
+        "result: defects",
+        "quality review",
+    ]
+    .iter()
+    .any(|signal| task_lower.contains(signal))
+}
+
+fn has_review_signal(task_lower: &str) -> bool {
+    ["review", "audit"]
+        .iter()
+        .any(|signal| task_lower.contains(signal))
+}
+
+pub fn subagent_rules(role: SubagentRole, mode: DelegationMode) -> &'static str {
     match role {
-        SubagentRole::Executor => {
-            "\n\n# RULES\n\
-            First: enter ward, read AGENTS.md + memory-bank/core_docs.md. Reuse core/ — never recreate.\n\
-            Execute with write_file + edit_file + shell. Extract reusable functions to core/ when done.\n\
-            Respond with: files created, commands run, errors.\n"
-        }
+        SubagentRole::Executor => executor_rules(mode),
         SubagentRole::Reviewer => {
             "\n\n# --- SUBAGENT RULES ---\n\
             You are reviewing work produced by another agent. Think critically and independently.\n\
             1. Read the specs and the implementation carefully before forming opinions.\n\
-            2. Run the code and examine actual output — don't trust claims.\n\
+            2. Inspect source files, provided context, and command output already produced by executor/root agents.\n\
             3. Evaluate with domain expertise — are values reasonable? Is data complete?\n\
             4. Report your findings in structured format.\n\n\
             ## Report Format\n\
@@ -360,6 +525,32 @@ pub fn subagent_rules(role: SubagentRole) -> &'static str {
             or\n\
             RESULT: DEFECTS\n\
             - {file_or_output}: {issue} (severity: high|medium|low)\n"
+        }
+    }
+}
+
+fn executor_rules(mode: DelegationMode) -> &'static str {
+    match mode {
+        DelegationMode::DirectArtifact => {
+            "\n\n# RULES: direct_artifact\n\
+            Create the exact requested output files first. Do not read unrelated documentation or root workspace docs.\n\
+            Use write_file/edit_file/shell as needed, verify the files exist, and respond with artifact paths, commands run, and errors.\n"
+        }
+        DelegationMode::WardHygiene => {
+            "\n\n# RULES: ward_hygiene\n\
+            Enter the ward and fill only missing or empty AGENTS.md and memory-bank/{ward.md,structure.md,core_docs.md} files.\n\
+            Preserve non-empty ward doctrine. Respond with updated paths, checks run, and errors.\n"
+        }
+        DelegationMode::WardBackedBuild => {
+            "\n\n# RULES: ward_backed_build\n\
+            Read the supplied ward_snapshot and only the relevant ward files before coding. Reuse registered primitives before creating new ones.\n\
+            Execute with write_file/edit_file/shell and update memory-bank/core_docs.md only for new reusable primitives or changed reusable structure.\n\
+            Respond with files changed, commands run, memory updates, and errors.\n"
+        }
+        DelegationMode::StepExecutor => {
+            "\n\n# RULES: step_executor\n\
+            Execute the delegated step spec exactly: read Goal, Inputs, Outputs, Acceptance, and any Paths table before writing.\n\
+            Write outputs to the specified paths, run acceptance checks, update required summaries/manifests, and respond with step result paths and errors.\n"
         }
     }
 }
@@ -379,11 +570,13 @@ pub fn append_system_context(
     let os_context =
         std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md")).unwrap_or_default();
 
-    // Rules: only append if not already present (delegated agents prepend rules in spawn.rs)
+    // Rules: only append if not already present (delegated agents prepend
+    // mode-specific rules in spawn.rs). Direct non-root loads use the
+    // conservative ward-backed posture.
     let rules = if instructions.contains("# RULES") {
         "" // Already prepended by spawn.rs
     } else {
-        subagent_rules(role)
+        subagent_rules(role, DelegationMode::WardBackedBuild)
     };
 
     // Memory shard for all agents — subagents are knowledge readers AND writers
@@ -413,6 +606,25 @@ pub fn append_system_context(
     )
 }
 
+fn append_system_context_without_rules(instructions: &str, paths: &SharedVaultPaths) -> String {
+    let os_context =
+        std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md")).unwrap_or_default();
+    let memory_shard = gateway_templates::Templates::get("shards/memory_learning.md")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .unwrap_or_default();
+    let curation_shard = gateway_templates::Templates::get("shards/ward_curation.md")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .unwrap_or_default();
+    let ctx_shard = gateway_templates::Templates::get("shards/session_ctx.md")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .unwrap_or_default();
+
+    format!(
+        "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}\n\n{}\n\n{}",
+        instructions, os_context, memory_shard, curation_shard, ctx_shard
+    )
+}
+
 fn build_specialist_instructions(agent_id: &str, paths: &SharedVaultPaths) -> String {
     let role_preamble = generate_role_preamble(agent_id);
 
@@ -436,6 +648,74 @@ fn build_specialist_instructions(agent_id: &str, paths: &SharedVaultPaths) -> St
         "{}\n\n{}\n\n{}\n\n{}",
         role_preamble, os_context, tooling, ctx_shard
     )
+}
+
+/// Compose a ward-agent's system prompt: identity line → system-context
+/// shards → ward doctrine (`AGENTS.md`). The doctrine is framed under a
+/// delimited header so the model can tell identity from conventions; an
+/// empty doctrine (fresh ward) omits the section. Free function so the
+/// composition is unit-testable without the agent/provider plumbing.
+fn compose_ward_agent_instructions(
+    identity: &str,
+    paths: &SharedVaultPaths,
+    ward_name: &str,
+    doctrine: &str,
+) -> String {
+    let mut instructions = append_system_context_without_rules(identity.trim(), paths);
+    if !doctrine.trim().is_empty() {
+        instructions.push_str(&format!(
+            "\n\n# --- WARD DOCTRINE: {ward_name} ---\n\n{}\n",
+            doctrine.trim()
+        ));
+    }
+    instructions
+}
+
+/// Per-ward LLM config from `wards/<ward>/config.yaml`. Each `None` field
+/// inherits the orchestrator setting — see [`load_or_seed_ward_config`].
+#[derive(Debug, Default, serde::Deserialize)]
+struct WardConfig {
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// Default `config.yaml` seeded into a ward the first time it runs as a
+/// ward-agent. Every field is `null`, so the ward inherits the orchestrator
+/// until the user edits it.
+const DEFAULT_WARD_CONFIG_YAML: &str = "\
+# Per-ward LLM config. A null field inherits the orchestrator setting
+# (Settings > Advanced > Orchestrator). Set provider/model to override.
+provider: null
+model: null
+";
+
+/// Read `wards/<ward>/config.yaml`, or seed it with [`DEFAULT_WARD_CONFIG_YAML`]
+/// and return the all-`None` default. A malformed file logs a warning and
+/// falls back to the default rather than failing the delegation.
+fn load_or_seed_ward_config(ward_dir: &std::path::Path) -> WardConfig {
+    let path = ward_dir.join("config.yaml");
+    match std::fs::read_to_string(&path) {
+        Ok(raw) => serde_yaml::from_str(&raw).unwrap_or_else(|e| {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "Malformed ward config.yaml; inheriting orchestrator config"
+            );
+            WardConfig::default()
+        }),
+        Err(_) => {
+            if let Err(e) = std::fs::write(&path, DEFAULT_WARD_CONFIG_YAML) {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "Failed to seed ward config.yaml"
+                );
+            }
+            WardConfig::default()
+        }
+    }
 }
 
 /// Generate a role-specific preamble based on the agent name.
@@ -496,6 +776,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ward_config_seeds_default_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = load_or_seed_ward_config(dir.path());
+        assert!(cfg.provider.is_none());
+        assert!(cfg.model.is_none());
+        // The seed file is written so the user can edit it to override.
+        let written = std::fs::read_to_string(dir.path().join("config.yaml")).unwrap();
+        assert!(written.contains("provider: null"));
+        assert!(written.contains("model: null"));
+    }
+
+    #[test]
+    fn ward_config_seeded_file_reparses_to_all_none() {
+        // The seeded `null` fields must round-trip back to `None`.
+        let dir = tempfile::tempdir().unwrap();
+        let _ = load_or_seed_ward_config(dir.path());
+        let cfg = load_or_seed_ward_config(dir.path());
+        assert!(cfg.provider.is_none() && cfg.model.is_none());
+    }
+
+    #[test]
+    fn ward_config_reads_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.yaml"),
+            "provider: provider-openai\nmodel: gpt-4o\n",
+        )
+        .unwrap();
+        let cfg = load_or_seed_ward_config(dir.path());
+        assert_eq!(cfg.provider.as_deref(), Some("provider-openai"));
+        assert_eq!(cfg.model.as_deref(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn ward_config_malformed_falls_back_to_default() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.yaml"),
+            "provider: [not, a, string\n",
+        )
+        .unwrap();
+        let cfg = load_or_seed_ward_config(dir.path());
+        assert!(cfg.provider.is_none() && cfg.model.is_none());
+    }
+
+    #[test]
     fn test_format_agent_display_name() {
         assert_eq!(format_agent_display_name("python-coder"), "Python Coder");
         assert_eq!(
@@ -534,5 +860,32 @@ mod tests {
     fn test_generate_role_preamble_generic() {
         let preamble = generate_role_preamble("helper-bot");
         assert!(preamble.contains("specialist agent"));
+    }
+
+    #[test]
+    fn compose_ward_agent_instructions_places_identity_then_doctrine() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let paths: SharedVaultPaths =
+            Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
+        paths.ensure_dirs_exist().unwrap();
+        let out = compose_ward_agent_instructions(
+            "You are the maritime ward-agent.",
+            &paths,
+            "maritime",
+            "## Purpose\nVessel tracking.",
+        );
+        assert!(out.starts_with("You are the maritime ward-agent."));
+        assert!(out.contains("# --- WARD DOCTRINE: maritime ---"));
+        assert!(out.contains("Vessel tracking."));
+    }
+
+    #[test]
+    fn compose_ward_agent_instructions_omits_empty_doctrine() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let paths: SharedVaultPaths =
+            Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
+        paths.ensure_dirs_exist().unwrap();
+        let out = compose_ward_agent_instructions("identity line", &paths, "maritime", "   ");
+        assert!(!out.contains("WARD DOCTRINE"));
     }
 }

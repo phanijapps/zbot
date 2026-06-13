@@ -298,6 +298,31 @@ pub async fn configure(
     Ok(Sse::new(s).keep_alive(KeepAlive::default()))
 }
 
+// ============================================================================
+// POST /api/embeddings/reindex
+// ============================================================================
+
+/// Unconditionally rebuild every vec0 index table from its source rows.
+///
+/// `configure` only reindexes when the backend dimension or model changed.
+/// This rebuilds on demand — use it to backfill indexes that drifted out of
+/// sync with their source tables (e.g. `kg_name_index` after entities were
+/// stored before write-time name embedding existed).
+pub async fn reindex(
+    State(state): State<AppState>,
+) -> Result<Json<zero_stores::ReindexReport>, (StatusCode, String)> {
+    let kg_store = state.kg_store.clone().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "knowledge graph store not available".to_string(),
+    ))?;
+    let dim = state.embedding_service.dimensions();
+    kg_store
+        .reindex_embeddings(dim)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

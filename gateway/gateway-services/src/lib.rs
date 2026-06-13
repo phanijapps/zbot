@@ -25,6 +25,8 @@ pub mod providers;
 pub mod recall_config;
 pub mod settings;
 pub mod skills;
+pub mod ward_curator;
+pub mod ward_usage;
 pub mod watcher;
 
 pub use agent_registry::AgentRegistry;
@@ -43,11 +45,17 @@ pub use plugin_service::PluginService;
 pub use providers::ProviderService;
 pub use recall_config::{KgDecayConfig, RecallConfig};
 pub use settings::{
-    AppSettings, ChatConfig, DistillationConfig, ExecutionSettings, MemorySettings,
-    MultimodalConfig, OrchestratorConfig, SettingsService,
+    AppSettings, ChatConfig, CuratorConfig, DistillationConfig, ExecutionSettings,
+    IntentAnalysisConfig, MemorySettings, MultimodalConfig, OrchestratorConfig, SettingsService,
 };
 pub use skills::{
     Skill, SkillFileInfo, SkillFrontmatter, SkillService, SkillSource, WardAgentsMdConfig,
     WardSetup,
 };
+pub use ward_curator::{
+    AppliedAction, ApplyStatus, CleanupReport, CleanupRequest, ConsolidateRequest,
+    ConsolidationAction, ConsolidationPlan, ConsolidationReport, RestoreReport, RestoreRequest,
+    Transition, WardCandidate, WardCurator,
+};
+pub use ward_usage::{WardProvenance, WardRecord, WardState, WardUsage, WardUsageMap};
 pub use watcher::{FileWatcher, WatchConfig};

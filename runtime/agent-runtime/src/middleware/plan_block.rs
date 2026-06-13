@@ -16,7 +16,6 @@
 //! itself survives any future compaction because:
 //!
 //!   - `ContextEditingMiddleware` clears `tool` messages, not `system`
-//!   - `compact_messages` (executor) preserves all system messages
 //!   - `SummarizationMiddleware` (when/if it fires) will not touch
 //!     messages flagged `is_summary = true` — the block is flagged as
 //!     `is_summary` because it IS a compacted representation of the

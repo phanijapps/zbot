@@ -296,6 +296,12 @@ pub struct UpdateExecutionSettingsRequest {
     /// Distillation (memory extraction) model configuration
     #[serde(default)]
     pub distillation: Option<gateway_services::DistillationConfig>,
+    /// Ward-curator model configuration (Phase C consolidation LLM call)
+    #[serde(default)]
+    pub curator: Option<gateway_services::CuratorConfig>,
+    /// Intent-analysis model configuration (every root prompt)
+    #[serde(default)]
+    pub intent_analysis: Option<gateway_services::IntentAnalysisConfig>,
     /// Default multimodal (vision) model configuration
     #[serde(default)]
     pub multimodal: Option<gateway_services::MultimodalConfig>,
@@ -341,6 +347,8 @@ impl UpdateExecutionSettingsRequest {
             subagent_non_streaming: self.subagent_non_streaming,
             orchestrator: self.orchestrator.unwrap_or_default(),
             distillation: self.distillation.unwrap_or_default(),
+            curator: self.curator.unwrap_or_default(),
+            intent_analysis: self.intent_analysis.unwrap_or_default(),
             multimodal: self.multimodal.unwrap_or_default(),
             feature_flags: self.feature_flags,
 
@@ -494,6 +502,8 @@ mod tests {
             subagent_non_streaming: false,
             orchestrator: None,
             distillation: None,
+            curator: None,
+            intent_analysis: None,
             multimodal: None,
             memory: None,
             feature_flags: std::collections::HashMap::new(),

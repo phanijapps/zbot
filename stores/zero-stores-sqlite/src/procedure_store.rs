@@ -81,6 +81,10 @@ impl ProcedureStore for GatewayProcedureStore {
         self.repo.increment_failure(id)
     }
 
+    async fn dedupe_procedures_by_name(&self) -> Result<usize, String> {
+        self.repo.dedupe_by_name()
+    }
+
     async fn procedure_stats(&self) -> Result<ProcedureStats, String> {
         // ProcedureRepository doesn't expose a global count; defer to default.
         Ok(ProcedureStats::default())
@@ -118,6 +122,52 @@ impl ProcedureStore for GatewayProcedureStore {
         })
     }
 
+    async fn get_procedure_by_name(
+        &self,
+        agent_id: &str,
+        name: &str,
+    ) -> Result<Option<Procedure>, String> {
+        let agent_id = agent_id.to_string();
+        let name = name.to_string();
+        self.repo.db().with_connection(|conn| {
+            let r = conn.query_row(
+                "SELECT id, agent_id, ward_id, name, description, trigger_pattern,
+                        steps, parameters, success_count, failure_count,
+                        avg_duration_ms, avg_token_cost, last_used,
+                        created_at, updated_at
+                 FROM procedures
+                 WHERE agent_id = ?1 AND name = ?2
+                 LIMIT 1",
+                params![agent_id, name],
+                |row| {
+                    Ok(Procedure {
+                        id: row.get(0)?,
+                        agent_id: row.get(1)?,
+                        ward_id: row.get(2)?,
+                        name: row.get(3)?,
+                        description: row.get(4)?,
+                        trigger_pattern: row.get(5)?,
+                        steps: row.get(6)?,
+                        parameters: row.get(7)?,
+                        success_count: row.get(8)?,
+                        failure_count: row.get(9)?,
+                        avg_duration_ms: row.get(10)?,
+                        avg_token_cost: row.get(11)?,
+                        last_used: row.get(12)?,
+                        embedding: None,
+                        created_at: row.get(13)?,
+                        updated_at: row.get(14)?,
+                    })
+                },
+            );
+            match r {
+                Ok(p) => Ok(Some(p)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e),
+            }
+        })
+    }
+
     async fn insert_pattern_procedure(
         &self,
         req: PatternProcedureInsert,
@@ -133,12 +183,12 @@ impl ProcedureStore for GatewayProcedureStore {
             trigger_pattern: req.trigger_pattern,
             steps: req.steps_json,
             parameters: req.parameters_json,
-            success_count: 1,
+            success_count: req.success_count,
             failure_count: 0,
             avg_duration_ms: None,
             avg_token_cost: None,
             last_used: None,
-            embedding: None,
+            embedding: req.embedding,
             created_at: now.clone(),
             updated_at: now,
         };

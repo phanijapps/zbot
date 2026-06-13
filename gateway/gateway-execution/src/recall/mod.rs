@@ -82,6 +82,12 @@ fn non_belief_tag(kind: &ItemKind) -> &'static str {
         // helper due to future refactoring, fall back to a sensible tag
         // rather than panicking — the heading already disambiguates.
         ItemKind::Belief => "belief",
+        // Hierarchy entities also have their own heading; fall back
+        // to a `topic` tag for forward compatibility.
+        ItemKind::HierEntity => "topic",
+        // Inter-cluster edges between aggregates — same topical
+        // heading as `HierEntity`, distinguished by the `edge` tag.
+        ItemKind::HierRelation => "edge",
     }
 }
 
@@ -101,6 +107,7 @@ mod tests {
                 session_id: None,
                 ward_id: None,
             },
+            route_hint: None,
         }
     }
 

@@ -26,6 +26,7 @@ pub mod artifacts;
 pub mod composite_provider;
 pub mod config;
 pub mod continuation;
+pub mod curator;
 pub mod delegation;
 pub mod distillation;
 pub mod events;

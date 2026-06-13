@@ -389,10 +389,10 @@
 
   <!-- ============= SLIDE 1 — TITLE ============= -->
   <section class="slide title-slide active">
-    <div class="title-eyebrow">// agentzero / memory subsystem</div>
+    <div class="title-eyebrow">// agentzero / memory subsystem · schema v31</div>
     <h1 class="title">How zbot<br>remembers<span class="accent">.</span></h1>
-    <p class="title-sub">flat fragments + knowledge graph + a recall pipeline that decides what the agent reads next</p>
-    <div class="title-meta">storage<span class="dot">●</span>recall<span class="dot">●</span>rescore<span class="dot">●</span>graph<span class="dot">●</span>lifecycle</div>
+    <p class="title-sub">flat fragments + knowledge graph + belief network + hierarchical memory + a recall pipeline that decides what the agent reads next</p>
+    <div class="title-meta">overview<span class="dot">●</span>agent interaction<span class="dot">●</span>technical architecture<span class="dot">●</span>remaining details</div>
   </section>
 
   <!-- ============= SLIDE 2 — METAPHOR ============= -->
@@ -572,6 +572,275 @@
         <p class="caption"><strong>The knowledge graph</strong> answers <em>"what is connected to what?"</em> Entities and typed edges, each with their own confidence and last-seen timestamp.</p>
         <p class="caption">They're linked by <span class="mono">source_episode_ids</span> — provenance back to the conversation that produced both. Recall matches a fragment, then walks the graph outward to find related ones.</p>
         <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:18px"><strong style="color:var(--accent)">Fragments carry the content. The graph carries the shape.</strong></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE NEW — MEMORY ARCHITECTURE (how agents interact) ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">SECTION 2</span> &nbsp;/&nbsp; memory architecture &middot; how agents interact</div>
+    <div class="split">
+      <div class="svg-frame" data-label="agent &times; memory">
+        <svg viewBox="0 0 680 460" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- AGENT pill -->
+          <g>
+            <rect x="260" y="20" width="160" height="42" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.5"/>
+            <text x="340" y="46" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="13" fill="#a3ff5c" letter-spacing="2">AGENT</text>
+          </g>
+
+          <!-- READ ARROWS down -->
+          <g stroke="#a3ff5c" stroke-width="1.2" opacity="0.7">
+            <path d="M340 62 L340 90" marker-end="url(#arr)"/>
+          </g>
+
+          <!-- SESSION-BOOTSTRAP READ block -->
+          <g transform="translate(40,100)">
+            <rect width="600" height="178" rx="3" fill="#131a24" stroke="#233042" stroke-width="1"/>
+            <text x="14" y="22" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="2">SESSION-BOOTSTRAP READ &middot; ordered, prepended to prompt</text>
+
+            <g font-family="JetBrains Mono, monospace" font-size="11" fill="#e7ecf3">
+              <rect x="14" y="36" width="160" height="28" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1"/>
+              <text x="22" y="54">1 &middot; ## Last Session</text>
+
+              <rect x="180" y="36" width="120" height="28" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1"/>
+              <text x="188" y="54">2 &middot; ## Goals</text>
+
+              <rect x="306" y="36" width="180" height="28" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1"/>
+              <text x="314" y="54">3 &middot; ## Corrections</text>
+
+              <rect x="492" y="36" width="94" height="28" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1"/>
+              <text x="500" y="54" fill="#a3ff5c">4 &middot; Beliefs</text>
+
+              <rect x="14" y="74" width="280" height="28" rx="2" fill="#0c1118" stroke="#233042" stroke-width="1"/>
+              <text x="22" y="92" fill="#8a97a9">5 &middot; ## Context from Last Session</text>
+
+              <rect x="300" y="74" width="286" height="28" rx="2" fill="#0c1118" stroke="#233042" stroke-width="1"/>
+              <text x="308" y="92" fill="#8a97a9">6 &middot; ## Recalled Context (user query)</text>
+            </g>
+
+            <text x="14" y="128" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="2">MID-SESSION PULSE</text>
+            <g font-family="Inter, sans-serif" font-size="11" fill="#8a97a9">
+              <text x="14" y="148">every 5 turns &middot; recall fires with latest exchange as query</text>
+              <text x="14" y="164">novelty &ge; 0.3 &rarr; new fragments inject; otherwise no-op</text>
+            </g>
+          </g>
+
+          <!-- WRITE ARROWS up -->
+          <g stroke="#a3ff5c" stroke-width="1.2" opacity="0.7">
+            <path d="M340 290 L340 320"/>
+          </g>
+
+          <!-- WRITE PATHS block -->
+          <g transform="translate(40,300)">
+            <rect width="600" height="140" rx="3" fill="#131a24" stroke="#233042" stroke-width="1"/>
+            <text x="14" y="22" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="2">WRITE PATHS</text>
+
+            <g transform="translate(14,36)">
+              <rect width="180" height="92" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1"/>
+              <text x="12" y="20" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">implicit</text>
+              <text x="12" y="38" font-family="Inter, sans-serif" font-size="11" fill="#e7ecf3">post-session distiller</text>
+              <text x="12" y="56" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">walks transcript, writes</text>
+              <text x="12" y="70" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">facts &middot; entities &middot; edges</text>
+              <text x="12" y="84" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">+ handoff at session end</text>
+            </g>
+
+            <g transform="translate(210,36)">
+              <rect width="180" height="92" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1"/>
+              <text x="12" y="20" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">explicit</text>
+              <text x="12" y="38" font-family="Inter, sans-serif" font-size="11" fill="#e7ecf3">memory(action=&hellip;)</text>
+              <text x="12" y="56" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">agent calls set | save_fact</text>
+              <text x="12" y="70" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">mid-session, durably</text>
+            </g>
+
+            <g transform="translate(406,36)">
+              <rect width="180" height="92" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="1"/>
+              <text x="12" y="20" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">human-curated</text>
+              <text x="12" y="38" font-family="Inter, sans-serif" font-size="11" fill="#e7ecf3">/memory + /observatory</text>
+              <text x="12" y="56" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">inspect &middot; edit &middot; supersede</text>
+              <text x="12" y="70" font-family="Inter, sans-serif" font-size="10" fill="#8a97a9">resolve contradictions</text>
+            </g>
+          </g>
+
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#a3ff5c"/>
+            </marker>
+          </defs>
+        </svg>
+      </div>
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:28px;margin:0 0 18px;letter-spacing:-0.01em;line-height:1.15">What the agent sees, asks, and writes.</h3>
+        <p class="caption" style="font-size:15px;margin-bottom:18px">Three surfaces. The first runs automatically every session. The second is a single <span class="mono">memory</span> tool with six actions. The third is the human curator's UI.</p>
+
+        <div class="config-note" style="margin-top:0">
+          <span style="color:var(--ink);font-weight:500">the <span class="k">memory</span> tool &middot; one tool, six actions</span>
+        </div>
+        <table style="width:100%;border-collapse:collapse;margin-top:12px;font-family:'JetBrains Mono',monospace;font-size:11px">
+          <tbody>
+            <tr><td style="padding:4px 12px 4px 0;color:#a3ff5c;width:120px">get</td><td style="padding:4px 0;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">look up a fragment by key</td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#a3ff5c">set</td><td style="padding:4px 0;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">write / update a fragment by key</td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#a3ff5c">save_fact</td><td style="padding:4px 0;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">write category-tagged fact + confidence</td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#a3ff5c">recall</td><td style="padding:4px 0;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">hybrid search; supports <span style="color:var(--ink-dim)" class="mono">as_of</span>, <span class="mono" style="color:var(--ink-dim)">ward</span></td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#a3ff5c">belief</td><td style="padding:4px 0;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">look up belief by subject (B-net only)</td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#a3ff5c">contradictions</td><td style="padding:4px 0;color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12px">list unresolved pairs (B-net only)</td></tr>
+          </tbody>
+        </table>
+
+        <p class="caption" style="font-size:13px;color:var(--ink-dim);margin-top:18px">Ward-scoped by <span class="mono">partition_id</span>. Recall applies a <span class="mono">&times;1.3</span> affinity boost when the candidate's ward matches the active session's ward, so a maritime-tracking conversation pulls maritime-tracking memory, not finance.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SLIDE NEW — TECHNICAL ARCHITECTURE (the layers) ============= -->
+  <section class="slide">
+    <div class="slide-tag"><span class="accent">SECTION 3</span> &nbsp;/&nbsp; technical architecture &middot; the layers</div>
+    <div class="split">
+      <div class="svg-frame" data-label="layered view">
+        <svg viewBox="0 0 680 480" xmlns="http://www.w3.org/2000/svg" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- UI LAYER -->
+          <g transform="translate(20,20)">
+            <text x="0" y="14" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="2">UI &middot; apps/ui</text>
+            <rect x="0" y="22" width="640" height="50" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1"/>
+            <g font-family="JetBrains Mono, monospace" font-size="11" fill="#e7ecf3">
+              <rect x="14" y="34" width="148" height="26" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="0.8"/>
+              <text x="22" y="51">/memory</text>
+              <text x="84" y="51" fill="#8a97a9" font-size="9">facts &middot; beliefs &middot; contras</text>
+
+              <rect x="174" y="34" width="148" height="26" rx="2" fill="#0c1118" stroke="#a3ff5c" stroke-width="0.8"/>
+              <text x="182" y="51">/observatory</text>
+              <text x="262" y="51" fill="#8a97a9" font-size="9">graph &middot; b-net strip</text>
+
+              <rect x="334" y="34" width="148" height="26" rx="2" fill="#0c1118" stroke="#233042" stroke-width="0.8"/>
+              <text x="342" y="51" fill="#8a97a9">settings</text>
+              <text x="402" y="51" fill="#4a5468" font-size="9">memory toggles</text>
+
+              <rect x="494" y="34" width="132" height="26" rx="2" fill="#0c1118" stroke="#233042" stroke-width="0.8"/>
+              <text x="502" y="51" fill="#8a97a9">slideover</text>
+              <text x="568" y="51" fill="#4a5468" font-size="9">b-net detail</text>
+            </g>
+          </g>
+
+          <!-- HTTP API LAYER -->
+          <g transform="translate(20,92)">
+            <text x="0" y="14" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="2">HTTP &middot; gateway/src/http</text>
+            <rect x="0" y="22" width="640" height="62" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1"/>
+            <g font-family="JetBrains Mono, monospace" font-size="10" fill="#e7ecf3">
+              <text x="14" y="40">/api/beliefs/&#123;agent_id&#125;</text>
+              <text x="14" y="56" fill="#8a97a9" font-size="9">list / detail / source-fact links</text>
+
+              <text x="220" y="40">/api/contradictions/*</text>
+              <text x="220" y="56" fill="#8a97a9" font-size="9">list &middot; POST /:id/resolve</text>
+
+              <text x="420" y="40">/api/belief-network/*</text>
+              <text x="420" y="56" fill="#8a97a9" font-size="9">stats &middot; activity</text>
+
+              <text x="14" y="74" fill="#4a5468" font-size="9">503 when execution.memory.beliefNetwork.enabled = false &middot; UI surfaces &laquo;enable in Settings&raquo; copy</text>
+            </g>
+          </g>
+
+          <!-- GATEWAY-MEMORY LAYER -->
+          <g transform="translate(20,176)">
+            <text x="0" y="14" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="2">CORE &middot; gateway/gateway-memory</text>
+            <rect x="0" y="22" width="640" height="138" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1.2"/>
+
+            <!-- recall pipeline -->
+            <g font-family="JetBrains Mono, monospace" font-size="10">
+              <text x="14" y="42" fill="#a3ff5c" letter-spacing="1.2">RECALL PIPELINE</text>
+              <text x="14" y="58" fill="#e7ecf3" font-size="9">embed &rarr; (gate) &rarr; FTS5 + vec-cosine &rarr; RRF &rarr; merge w/ wiki+graph+belief &rarr; rescore &rarr; (MMR) &rarr; (rerank) &rarr; min-score &rarr; bi-temporal filter</text>
+            </g>
+
+            <line x1="14" y1="68" x2="626" y2="68" stroke="#233042" stroke-width="0.6"/>
+
+            <!-- sleep cycle -->
+            <g font-family="JetBrains Mono, monospace" font-size="9">
+              <text x="14" y="84" fill="#a3ff5c" letter-spacing="1.2" font-size="10">SLEEP CYCLE &middot; hourly (event-driven for propagation)</text>
+              <g fill="#e7ecf3">
+                <rect x="14" y="92" width="74" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="20" y="105">compactor</text>
+                <rect x="92" y="92" width="80" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="98" y="105">synthesizer</text>
+                <rect x="176" y="92" width="100" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="182" y="105">pattern-extract</text>
+                <rect x="280" y="92" width="110" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="286" y="105">corr-abstractor</text>
+                <rect x="394" y="92" width="100" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="400" y="105">conflict-resolv</text>
+                <rect x="498" y="92" width="60" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="504" y="105">decay</text>
+                <rect x="562" y="92" width="64" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="568" y="105">orph-arch</text>
+
+                <rect x="14" y="114" width="60" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="20" y="127">pruner</text>
+                <rect x="78" y="114" width="90" height="18" rx="2" fill="#0c1118" stroke="#a3ff5c"/>
+                <text x="84" y="127" fill="#a3ff5c">belief-synth</text>
+                <rect x="172" y="114" width="100" height="18" rx="2" fill="#0c1118" stroke="#a3ff5c"/>
+                <text x="178" y="127" fill="#a3ff5c">contra-detect</text>
+                <rect x="276" y="114" width="110" height="18" rx="2" fill="#0c1118" stroke="#a3ff5c"/>
+                <text x="282" y="127" fill="#a3ff5c">belief-propagator</text>
+                <rect x="390" y="114" width="70" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="396" y="127">verifier</text>
+                <rect x="464" y="114" width="90" height="18" rx="2" fill="#0c1118" stroke="#233042"/>
+                <text x="470" y="127">b-net activity</text>
+              </g>
+            </g>
+          </g>
+
+          <!-- STORAGE LAYER -->
+          <g transform="translate(20,328)">
+            <text x="0" y="14" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a5468" letter-spacing="2">STORAGE &middot; SQLite &middot; schema v30</text>
+            <rect x="0" y="22" width="430" height="132" rx="3" fill="#131a24" stroke="#a3ff5c" stroke-width="1"/>
+            <text x="14" y="42" font-family="JetBrains Mono, monospace" font-size="11" fill="#a3ff5c">knowledge.db</text>
+            <g font-family="JetBrains Mono, monospace" font-size="9" fill="#8a97a9">
+              <text x="14" y="60">memory_facts</text>
+              <text x="14" y="74">memory_facts_fts (FTS5)</text>
+              <text x="14" y="88">memory_facts_index (sqlite-vec)</text>
+              <text x="14" y="102">kg_entities &middot; kg_relationships</text>
+              <text x="14" y="116">kg_episodes &middot; session_episodes</text>
+              <text x="220" y="60" fill="#a3ff5c">kg_beliefs</text>
+              <text x="220" y="74">  (+embedding @ v30)</text>
+              <text x="220" y="88" fill="#a3ff5c">kg_belief_contradictions</text>
+              <text x="220" y="102">compaction_log</text>
+              <text x="220" y="116">goals &middot; goal_progress</text>
+            </g>
+
+            <rect x="446" y="22" width="194" height="132" rx="3" fill="#131a24" stroke="#233042" stroke-width="1"/>
+            <text x="460" y="42" font-family="JetBrains Mono, monospace" font-size="11" fill="#8a97a9">conversations.db</text>
+            <g font-family="Inter, sans-serif" font-size="10" fill="#4a5468">
+              <text x="460" y="62">daily log &middot; separate</text>
+              <text x="460" y="78">memory never touches</text>
+              <text x="460" y="94">directly &mdash; only via</text>
+              <text x="460" y="110">ConversationStore trait</text>
+            </g>
+
+            <text x="0" y="170" font-family="JetBrains Mono, monospace" font-size="9" fill="#4a5468" letter-spacing="1.5">every row carries valid_from / valid_until &middot; point-in-time recall falls out for free</text>
+          </g>
+
+          <!-- arrows between layers -->
+          <g stroke="#a3ff5c" stroke-width="0.8" opacity="0.4">
+            <path d="M340 72 L340 92"/>
+            <path d="M340 156 L340 176"/>
+            <path d="M340 316 L340 328"/>
+          </g>
+        </svg>
+      </div>
+      <div>
+        <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:28px;margin:0 0 18px;letter-spacing:-0.01em;line-height:1.15">Four layers. One memory.</h3>
+        <p class="caption" style="font-size:15px;margin-bottom:14px">UI talks to HTTP; HTTP talks to <span class="mono">gateway-memory</span>; <span class="mono">gateway-memory</span> owns the recall pipeline + sleep cycle and reads/writes SQLite. Every layer is replaceable; the storage trait decouples memory from any specific chat backend.</p>
+
+        <div class="config-note" style="margin-top:14px">
+          <span style="color:var(--ink);font-weight:500">what's new at v30</span>
+        </div>
+        <ul style="margin:10px 0 0 0;padding:0;list-style:none;font-family:'Inter',sans-serif;font-size:13px;color:var(--ink-dim);line-height:1.7">
+          <li><span class="mono" style="color:var(--accent)">v27</span> &nbsp;<span class="mono">kg_beliefs</span> &mdash; synthesised stances per subject</li>
+          <li><span class="mono" style="color:var(--accent)">v28</span> &nbsp;<span class="mono">kg_belief_contradictions</span> &mdash; first-class disagreement</li>
+          <li><span class="mono" style="color:var(--accent)">v29</span> &nbsp;<span class="mono">kg_beliefs.stale</span> &mdash; B-3 propagation flag</li>
+          <li><span class="mono" style="color:var(--accent)">v30</span> &nbsp;<span class="mono">kg_beliefs.embedding</span> &mdash; B-4 semantic recall</li>
+          <li><span class="mono" style="color:var(--ink-faint)">v26</span> &nbsp;<span class="mono">kg_relationships</span> bi-temporal columns</li>
+          <li><span class="mono" style="color:var(--ink-faint)">v25</span> &nbsp;<span class="mono">memory_facts.valid_from</span> backfill</li>
+        </ul>
+
+        <p class="caption" style="font-size:13px;color:var(--ink-dim);margin-top:18px"><strong style="color:var(--accent)">Highlighted workers</strong> in the diagram are the Belief Network trio &mdash; synthesiser, contradiction detector, propagator. Propagator is event-driven; everything else runs on the hourly cycle.</p>
       </div>
     </div>
   </section>
@@ -775,10 +1044,12 @@
         <h3 style="font-family:'JetBrains Mono',monospace;font-weight:500;font-size:28px;margin:0 0 22px;letter-spacing:-0.01em;line-height:1.15">Entities and edges,<br>each with their own life.</h3>
         <p class="caption">Both ends of an edge and the edge itself carry independent <strong>confidence</strong> and <strong>last_seen_at</strong>. None is renewed on recall — only when the entity actually shows up in a new conversation.</p>
         <p class="caption"><strong>Confidence decays</strong> exponentially against last_seen_at, with a default half-life of <span class="mono">90 days</span> for both entities and relationships. Floored at <span class="mono">min_confidence = 0.01</span>; rows touched within <span class="mono">24h</span> are skipped.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px"><strong>Contradiction propagation</strong> (MEM-001 Part A): when a <span class="mono">memory_facts.contradicted_by</span> is set, the entities and relationships that came from the same source episode get a multiplicative confidence hit (<span class="mono">× 0.9</span> by default, floored at <span class="mono">0.05</span>). The graph reacts to fact-level corrections without waiting for the time-decay half-life.</p>
         <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px">Orphan entities (no relationships, old last_seen_at) are flagged and archived. Archived rows are never deleted — just hidden from recall.</p>
         <div class="config-note">
           <span class="k">recall_config.json</span> &rarr; <span class="k">kg_decay</span><br>
-          <span class="k">entity_half_life_days: 90</span> &middot; <span class="k">relationship_half_life_days: 90</span> &middot; <span class="k">min_confidence: 0.01</span>
+          <span class="k">entity_half_life_days: 90</span> &middot; <span class="k">relationship_half_life_days: 90</span> &middot; <span class="k">min_confidence: 0.01</span><br>
+          <span class="k">decay_factor: 0.9</span> &middot; <span class="k">min_floor: 0.05</span> &middot; <span class="k">lookback_hours: 24</span> &nbsp;<span style="color:var(--ink-dim)">// contradiction propagation</span>
         </div>
       </div>
     </div>
@@ -1034,7 +1305,7 @@ belief B: "User works at OpenAI"
         </table>
         <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong>Budget cap</strong> per cycle (default 20 LLM calls). Pairs are processed largest-neighborhood first. Already-evaluated pairs skip.</p>
         <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">B-3 propagation</strong> closes the loop: when a fact is superseded or decays below <span class="mono">factConfidenceDropThreshold</span> (default 0.3), dependent beliefs respond inline — sole-source beliefs retract; multi-source mark stale + re-synthesize next cycle. Event-driven, not polling.</p>
-        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">B-4 recall integration</strong> surfaces beliefs in the agent's context window. Embeddings stored as BLOB on row (no vec0 table — belief count is bounded). New <span class="mono">ItemKind::Belief</span>, category weight <span class="mono">1.5</span> (conservative; reconsider post-validation). Rendered as <span class="mono">## Active Beliefs</span> distinct from <span class="mono">## Recalled Context</span>. Phases B-5/B-6 (UI) build on top.</p>
+        <p class="caption" style="margin-top:14px;font-size:13px;color:var(--ink-dim)"><strong style="color:var(--accent)">B-4 recall integration</strong> surfaces beliefs in the agent's context window. Embeddings stored as BLOB on row (no vec0 table — belief count is bounded). New <span class="mono">ItemKind::Belief</span>, category weight <span class="mono">1.5</span> (conservative; reconsider post-validation). Rendered as <span class="mono">## Active Beliefs</span> distinct from <span class="mono">## Recalled Context</span>. <strong style="color:var(--accent)">B-5</strong> (Memory tab: Beliefs / Contradictions sub-tabs + resolver) and <strong style="color:var(--accent)">B-6</strong> (Observatory: totals strip + details slideover with worker cards, activity feed, propagation chain) are now shipped.</p>
       </div>
     </div>
   </section>
@@ -1279,9 +1550,11 @@ belief B: "User works at OpenAI"
         <p class="caption">For each top fragment, follow <span class="mono">source_episode_ids</span> to the entities it referenced. From those, walk outward along <span class="mono">kg_relationships</span>.</p>
         <p class="caption">Each hop multiplies relevance by <span class="mono">hop_decay = 0.6</span>. Direct neighbors weigh 0.6×; two hops out weigh 0.36×. Capped at <span class="mono">max_graph_facts = 5</span>.</p>
         <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px">A query about commit hygiene matches one correction; the traversal pulls in <em>git workflow</em>, <em>code review</em>, <em>release process</em> — even though none of those words appeared in the query.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px"><strong>Hit weighting (MEM-001 Part B-1):</strong> graph-ANN hits below <span class="mono">min_kg_confidence = 0.1</span> are dropped, and surviving hits get their score multiplied by <span class="mono">kg_entities.confidence</span>. So when contradiction propagation (Part A) decays a contradicted entity, recall actually downweights it — high-confidence entities at the same cosine outrank low-confidence ones.</p>
+        <p class="caption" style="color:var(--ink-dim);font-size:14px;margin-top:14px"><strong>Edge weighting (MEM-001 Part B-2):</strong> the actual hop-walk also honours edge confidence. The recursive CTE skips relationships below <span class="mono">min_kg_confidence</span>, multiplies an <span class="mono">edge_confidence_product</span> along each path, and scores each reachable entity as <span class="mono">hop_decay^hop × edge_confidence_product × entity_confidence</span>. Shortest-hop wins on dedup; ties go to the higher-confidence path. MEM-001 fully closed.</p>
         <div class="config-note">
           <span class="k">recall_config.json</span> &rarr; <span class="k">graph_traversal</span><br>
-          <span class="k">max_hops: 2</span> &middot; <span class="k">hop_decay: 0.6</span> &middot; <span class="k">max_graph_facts: 5</span>
+          <span class="k">max_hops: 2</span> &middot; <span class="k">hop_decay: 0.6</span> &middot; <span class="k">max_graph_facts: 5</span> &middot; <span class="k">min_kg_confidence: 0.1</span>
         </div>
       </div>
     </div>

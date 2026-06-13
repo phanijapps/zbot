@@ -19,6 +19,7 @@ import { reduceQuickChat, type QuickChatAction } from "./reducer";
 import {
   mapGatewayEventToQuickChatAction,
   mapGatewayEventToPillEvent,
+  mapTurnCompleteFinalMessage,
 } from "./event-map";
 
 // ---------------------------------------------------------------------------
@@ -121,6 +122,14 @@ function makeEventHandler(
   dispatch: Dispatch<QuickChatAction>
 ) {
   return (event: ConversationEvent) => {
+    // When the agent used the `respond` tool, the gateway delivers the
+    // final answer in `turn_complete.final_message` rather than as a
+    // bare `respond` event or as streaming tokens. Populate the bubble
+    // BEFORE the TURN_COMPLETE action so the user sees the answer in
+    // the same render as the status flipping back to idle.
+    const respondFromComplete = mapTurnCompleteFinalMessage(event);
+    if (respondFromComplete) dispatch(respondFromComplete);
+
     const action = mapGatewayEventToQuickChatAction(event);
     if (action) dispatch(action);
     const pillEv = mapGatewayEventToPillEvent(event);

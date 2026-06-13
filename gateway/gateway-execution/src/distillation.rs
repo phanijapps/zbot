@@ -597,6 +597,8 @@ impl SessionDistiller {
         // Phase E6c: trait-routed. Block is a no-op when kg_store
         // isn't wired (defensive — production composition always
         // wires it).
+        let mut kg_relationships_stored = 0_i32;
+        let mut kg_relationships_dropped = 0_i32;
         if self.kg_store.is_some() {
             // Build entity map for relationship resolution
             let mut entity_map: std::collections::HashMap<String, String> =
@@ -621,10 +623,13 @@ impl SessionDistiller {
                             ee.name.clone(),
                         );
                         entity.properties = ee.properties.clone();
-                        entity_map.insert(ee.name.clone(), entity.id.clone());
-
-                        if let Err(e) = self.store_knowledge_one_entity(agent_id, entity).await {
-                            tracing::warn!(entity = %ee.name, error = %e, "Failed to store entity");
+                        match self.store_knowledge_one_entity(agent_id, entity).await {
+                            Ok(id) => {
+                                entity_map.insert(ee.name.clone(), id);
+                            }
+                            Err(e) => {
+                                tracing::warn!(entity = %ee.name, error = %e, "Failed to store entity");
+                            }
                         }
                     }
                 }
@@ -648,6 +653,16 @@ impl SessionDistiller {
                 let target_id = self
                     .resolve_relationship_endpoint(agent_id, &er.target, &mut entity_map)
                     .await;
+                let (Some(source_id), Some(target_id)) = (source_id, target_id) else {
+                    kg_relationships_dropped += 1;
+                    tracing::warn!(
+                        source = %er.source,
+                        target = %er.target,
+                        kg_relationship_dropped = true,
+                        "Dropped relationship because one or both endpoints were not persisted"
+                    );
+                    continue;
+                };
 
                 let relationship = Relationship::new(
                     agent_id.to_string(),
@@ -664,7 +679,16 @@ impl SessionDistiller {
                         source = %er.source, target = %er.target,
                         error = %e, "Failed to store relationship"
                     );
+                } else {
+                    kg_relationships_stored += 1;
                 }
+            }
+            if kg_relationships_dropped > 0 {
+                tracing::warn!(
+                    kg_relationship_dropped_count = kg_relationships_dropped,
+                    kg_relationship_stored_count = kg_relationships_stored,
+                    "Distillation dropped relationships with unresolved endpoints"
+                );
             }
         }
 
@@ -701,54 +725,12 @@ impl SessionDistiller {
 
         // 6b. Store extracted procedure (if any) through the trait surface.
         if let Some(ref procedure) = response.procedure {
-            if self.procedure_store.is_some() {
-                let ward_id = self
-                    .conversation_repo
-                    .get_session_ward_id(session_id)
-                    .unwrap_or(None);
-
-                let steps_json = serde_json::to_string(&procedure.steps).unwrap_or_default();
-                let params_json = procedure
-                    .parameters
-                    .as_ref()
-                    .map(|p| serde_json::to_string(p).unwrap_or_default());
-
-                let proc = zero_stores_sqlite::Procedure {
-                    id: format!("proc-{}", uuid::Uuid::new_v4()),
-                    agent_id: agent_id.to_string(),
-                    ward_id: ward_id.or_else(|| Some("__global__".to_string())),
-                    name: procedure.name.clone(),
-                    description: procedure.description.clone(),
-                    trigger_pattern: procedure.trigger_pattern.clone(),
-                    steps: steps_json,
-                    parameters: params_json,
-                    success_count: 1,
-                    failure_count: 0,
-                    avg_duration_ms: None,
-                    avg_token_cost: None,
-                    last_used: Some(chrono::Utc::now().to_rfc3339()),
-                    embedding: None,
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                    updated_at: chrono::Utc::now().to_rfc3339(),
-                };
-
-                let upsert_res = match &self.procedure_store {
-                    Some(store) => match serde_json::to_value(&proc) {
-                        Ok(v) => store.upsert_procedure(v, None).await,
-                        Err(e) => Err(format!("encode procedure: {e}")),
-                    },
-                    None => Err("no procedure store wired".to_string()),
-                };
-
-                match upsert_res {
-                    Ok(()) => tracing::info!(
-                        name = %procedure.name, "Stored procedure from session"
-                    ),
-                    Err(e) => tracing::warn!(
-                        name = %procedure.name, error = %e, "Failed to store procedure"
-                    ),
-                }
-            }
+            let ward_id = self
+                .conversation_repo
+                .get_session_ward_id(session_id)
+                .unwrap_or(None);
+            self.process_procedure_upsert(agent_id, ward_id, procedure)
+                .await;
         }
 
         let duration_ms = started.elapsed().as_millis() as i64;
@@ -758,7 +740,7 @@ impl SessionDistiller {
             session_id,
             response.facts.len() as i32,
             response.entities.len() as i32,
-            response.relationships.len() as i32,
+            kg_relationships_stored,
             episode_created,
             duration_ms,
         )
@@ -1568,19 +1550,15 @@ impl SessionDistiller {
         &self,
         agent_id: &str,
         entity: Entity,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let store = self
             .kg_store
             .as_ref()
             .ok_or_else(|| "no kg store wired".to_string())?;
-        let knowledge = zero_stores::ExtractedKnowledge {
-            entities: vec![entity],
-            relationships: vec![],
-        };
         store
-            .store_knowledge(agent_id, knowledge)
+            .upsert_entity(agent_id, entity)
             .await
-            .map(|_| ())
+            .map(|id| id.0)
             .map_err(|e| e.to_string())
     }
 
@@ -1594,12 +1572,8 @@ impl SessionDistiller {
             .kg_store
             .as_ref()
             .ok_or_else(|| "no kg store wired".to_string())?;
-        let knowledge = zero_stores::ExtractedKnowledge {
-            entities: vec![],
-            relationships: vec![rel],
-        };
         store
-            .store_knowledge(agent_id, knowledge)
+            .upsert_relationship(agent_id, rel)
             .await
             .map(|_| ())
             .map_err(|e| e.to_string())
@@ -1608,20 +1582,21 @@ impl SessionDistiller {
     /// Resolve a relationship endpoint (source/target name) to a real
     /// entity id. Lookup order: cached `entity_map` -> trait
     /// `find_entity_by_name` -> auto-create a stub of type `custom("unknown")`
-    /// so the FK constraint on `relationship` is satisfied. Never fails;
-    /// stub-insert errors are logged but the stub id is still returned.
+    /// so the FK constraint on `relationship` is satisfied. Returns `None`
+    /// when a stub cannot be persisted; callers must drop the relationship
+    /// instead of writing an FK-invalid edge.
     async fn resolve_relationship_endpoint(
         &self,
         agent_id: &str,
         name: &str,
         entity_map: &mut std::collections::HashMap<String, String>,
-    ) -> String {
+    ) -> Option<String> {
         if let Some(id) = entity_map.get(name) {
-            return id.clone();
+            return Some(id.clone());
         }
         if let Some(existing_id) = self.find_entity_by_name(agent_id, name).await {
             entity_map.insert(name.to_string(), existing_id.clone());
-            return existing_id;
+            return Some(existing_id);
         }
         // Nothing found — create a stub so the relationship can be persisted.
         let stub = Entity::new(
@@ -1629,25 +1604,98 @@ impl SessionDistiller {
             EntityType::Custom("unknown".to_string()),
             name.to_string(),
         );
-        let stub_id = stub.id.clone();
-        if let Err(e) = self
-            .store_knowledge_one_entity(agent_id, stub.clone())
-            .await
-        {
+        if let Err(e) = self.store_knowledge_one_entity(agent_id, stub).await {
             tracing::warn!(
                 name = %name,
                 error = %e,
                 "Failed to auto-create stub entity for relationship endpoint"
             );
-        } else {
+            None
+        } else if let Some(stub_id) = self.find_entity_by_name(agent_id, name).await {
             tracing::debug!(
                 name = %name,
                 id = %stub_id,
                 "Auto-created stub entity for undeclared relationship endpoint"
             );
+            entity_map.insert(name.to_string(), stub_id.clone());
+            Some(stub_id)
+        } else {
+            tracing::warn!(
+                name = %name,
+                kg_relationship_dropped = true,
+                "Auto-created stub entity could not be resolved after persistence"
+            );
+            None
         }
-        entity_map.insert(name.to_string(), stub_id.clone());
-        stub_id
+    }
+
+    // =========================================================================
+    // Procedure upsert
+    // =========================================================================
+
+    /// Build the `Procedure` row and route it through the trait-routed
+    /// `procedure_store`. Embeds `{name}\n{description}` before upsert so
+    /// the SQLite `procedures_index` vec0 table is populated. Mirrors the
+    /// `PatternExtractor` embed shape for consistency across the two
+    /// write paths. Graceful: when `embed_text` returns `None` (no client
+    /// or embed failure) the upsert proceeds with `None` and only
+    /// vec-similarity recall is lost — identical to today's behavior.
+    /// No-op when `procedure_store` is unwired.
+    async fn process_procedure_upsert(
+        &self,
+        agent_id: &str,
+        ward_id: Option<String>,
+        procedure: &ExtractedProcedure,
+    ) {
+        let Some(store) = self.procedure_store.as_ref() else {
+            return;
+        };
+
+        let steps_json = serde_json::to_string(&procedure.steps).unwrap_or_default();
+        let params_json = procedure
+            .parameters
+            .as_ref()
+            .map(|p| serde_json::to_string(p).unwrap_or_default());
+
+        let proc = zero_stores_sqlite::Procedure {
+            id: format!("proc-{}", uuid::Uuid::new_v4()),
+            agent_id: agent_id.to_string(),
+            ward_id: ward_id.or_else(|| Some("__global__".to_string())),
+            name: procedure.name.clone(),
+            description: procedure.description.clone(),
+            trigger_pattern: procedure.trigger_pattern.clone(),
+            steps: steps_json,
+            parameters: params_json,
+            // Distillation synthesizes from a single completed session, so the
+            // evidence count is 1. PatternExtractor seeds at 2 because it
+            // requires a matched pair. Either way, see `default_initial_success_count`
+            // for why this is intentional rather than hardcoded.
+            success_count: 1,
+            failure_count: 0,
+            avg_duration_ms: None,
+            avg_token_cost: None,
+            last_used: Some(chrono::Utc::now().to_rfc3339()),
+            embedding: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let embed_input = format!("{}\n{}", procedure.name, procedure.description);
+        let embedding = self.embed_text(&embed_input).await;
+
+        let upsert_res = match serde_json::to_value(&proc) {
+            Ok(v) => store.upsert_procedure(v, embedding).await,
+            Err(e) => Err(format!("encode procedure: {e}")),
+        };
+
+        match upsert_res {
+            Ok(()) => tracing::info!(
+                name = %procedure.name, "Stored procedure from session"
+            ),
+            Err(e) => tracing::warn!(
+                name = %procedure.name, error = %e, "Failed to store procedure"
+            ),
+        }
     }
 
     // =========================================================================
@@ -1698,27 +1746,31 @@ fn resolve_relationship_endpoint(
     agent_id: &str,
     name: &str,
     entity_map: &mut std::collections::HashMap<String, String>,
-) -> String {
+) -> Option<String> {
     if let Some(id) = entity_map.get(name) {
-        return id.clone();
+        return Some(id.clone());
     }
     if let Ok(Some(existing_id)) = graph.find_entity_by_name(agent_id, name) {
         entity_map.insert(name.to_string(), existing_id.clone());
-        return existing_id;
+        return Some(existing_id);
     }
     let stub = Entity::new(
         agent_id.to_string(),
         EntityType::Custom("unknown".to_string()),
         name.to_string(),
     );
-    let stub_id = stub.id.clone();
     let knowledge = knowledge_graph::types::ExtractedKnowledge {
         entities: vec![stub],
         relationships: vec![],
     };
-    let _ = graph.store_knowledge(agent_id, knowledge);
+    if graph.store_knowledge(agent_id, knowledge).is_err() {
+        return None;
+    }
+    let Ok(Some(stub_id)) = graph.find_entity_by_name(agent_id, name) else {
+        return None;
+    };
     entity_map.insert(name.to_string(), stub_id.clone());
-    stub_id
+    Some(stub_id)
 }
 
 /// Canonicalize a relationship extracted by the LLM — fix common direction
@@ -2213,7 +2265,7 @@ mod tests {
             map.insert("India".to_string(), "entity-india-id-42".to_string());
 
             let id = resolve_relationship_endpoint(&graph, "agent-x", "India", &mut map);
-            assert_eq!(id, "entity-india-id-42");
+            assert_eq!(id.as_deref(), Some("entity-india-id-42"));
             // No new map key — hit was a read.
             assert_eq!(map.len(), 1);
         }
@@ -2240,7 +2292,11 @@ mod tests {
 
             let mut map = HashMap::new();
             let id = resolve_relationship_endpoint(&graph, "agent-x", "India", &mut map);
-            assert_eq!(id, existing_id, "must reuse the pre-existing entity id");
+            assert_eq!(
+                id.as_deref(),
+                Some(existing_id.as_str()),
+                "must reuse the pre-existing entity id"
+            );
             // Cached into the map so subsequent endpoints in the same turn
             // don't re-query the DB for the same name.
             assert_eq!(map.get("India"), Some(&existing_id));
@@ -2252,6 +2308,7 @@ mod tests {
             let mut map = HashMap::new();
 
             let id = resolve_relationship_endpoint(&graph, "agent-x", "Oil", &mut map);
+            let id = id.expect("stub should be persisted and resolved");
             assert!(!id.is_empty());
             // The stub is persisted — find_entity_by_name must now return it.
             let looked_up = graph.find_entity_by_name("agent-x", "Oil").unwrap();
@@ -2556,5 +2613,153 @@ mod tests {
         assert!(is_agent_name("Planner-Agent")); // case insensitive
         assert!(!is_agent_name("portfolio-analysis"));
         assert!(!is_agent_name("yfinance"));
+    }
+
+    // ------------------------------------------------------------------------
+    // Task 3: verify procedure upsert path populates the embedding.
+    //
+    // Regression for the latent gap where `distillation.rs` called
+    // `upsert_procedure(v, None)`. With Tasks 1+2 done on the
+    // PatternExtractor side, this is the second write path that needed
+    // the same fix — procedures from session distillation must arrive
+    // at the store with an embedding so the SQLite `procedures_index`
+    // vec0 table gets populated.
+    // ------------------------------------------------------------------------
+    mod procedure_upsert {
+        use super::*;
+
+        use agent_runtime::llm::embedding::{EmbeddingClient, EmbeddingError};
+        use async_trait::async_trait;
+        use gateway_services::{ProviderService, VaultPaths};
+        use serde_json::Value;
+        use std::sync::Arc;
+        use std::sync::Mutex;
+        use tempfile::tempdir;
+        use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+        use zero_stores_traits::ProcedureStore;
+
+        /// `ProcedureStore` that captures every `upsert_procedure` call so
+        /// the test can assert on the inserted shape + embedding.
+        #[derive(Default)]
+        struct CapturingProcedureStore {
+            upserts: Mutex<Vec<(Value, Option<Vec<f32>>)>>,
+        }
+
+        #[async_trait]
+        impl ProcedureStore for CapturingProcedureStore {
+            async fn upsert_procedure(
+                &self,
+                procedure: Value,
+                embedding: Option<Vec<f32>>,
+            ) -> Result<(), String> {
+                self.upserts.lock().unwrap().push((procedure, embedding));
+                Ok(())
+            }
+        }
+
+        /// Embedding client that always returns a fixed-length vector.
+        struct FixedEmbeddingClient {
+            vec: Vec<f32>,
+        }
+
+        #[async_trait]
+        impl EmbeddingClient for FixedEmbeddingClient {
+            async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+                Ok(texts.iter().map(|_| self.vec.clone()).collect())
+            }
+            fn dimensions(&self) -> usize {
+                self.vec.len()
+            }
+            fn model_name(&self) -> String {
+                "test-fixed".into()
+            }
+        }
+
+        fn setup_distiller(
+            store: Arc<CapturingProcedureStore>,
+            embed: Arc<FixedEmbeddingClient>,
+        ) -> SessionDistiller {
+            let dir = tempdir().unwrap();
+            let paths = Arc::new(VaultPaths::new(dir.keep()));
+            std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
+            let db = Arc::new(DatabaseManager::new(paths.clone()).unwrap());
+            let conversation_repo = Arc::new(ConversationRepository::new(db));
+            let provider_service = Arc::new(ProviderService::new(paths.clone()));
+
+            let mut distiller = SessionDistiller::new(
+                provider_service,
+                Some(embed as Arc<dyn EmbeddingClient>),
+                conversation_repo,
+                paths,
+                None,
+            );
+            distiller.set_procedure_store(store as Arc<dyn ProcedureStore>);
+            distiller
+        }
+
+        fn sample_procedure() -> ExtractedProcedure {
+            ExtractedProcedure {
+                name: "expected_name".to_string(),
+                description: "investigate the thing then summarise it".to_string(),
+                steps: vec![ProcedureStep {
+                    action: "do_something".to_string(),
+                    agent: None,
+                    task_template: None,
+                    note: None,
+                }],
+                parameters: None,
+                trigger_pattern: Some("when X happens".to_string()),
+            }
+        }
+
+        #[tokio::test]
+        async fn distillation_writes_procedure_with_embedding() {
+            let store = Arc::new(CapturingProcedureStore::default());
+            let embed = Arc::new(FixedEmbeddingClient {
+                vec: vec![0.25_f32; 384],
+            });
+            let distiller = setup_distiller(store.clone(), embed);
+
+            let procedure = sample_procedure();
+            distiller
+                .process_procedure_upsert("agent-x", Some("ward-y".to_string()), &procedure)
+                .await;
+
+            let upserts = store.upserts.lock().unwrap();
+            assert_eq!(upserts.len(), 1, "exactly one upsert expected");
+            let (value, embedding) = &upserts[0];
+            assert_eq!(value["name"].as_str(), Some("expected_name"));
+            assert!(
+                embedding.is_some(),
+                "procedure was upserted without embedding"
+            );
+            assert_eq!(embedding.as_ref().unwrap().len(), 384);
+        }
+
+        #[tokio::test]
+        async fn distillation_procedure_upsert_handles_missing_embedding_client() {
+            // Same path but no embedding client wired — confirms graceful
+            // degradation: the upsert still happens, embedding is None.
+            let store = Arc::new(CapturingProcedureStore::default());
+            let dir = tempdir().unwrap();
+            let paths = Arc::new(VaultPaths::new(dir.keep()));
+            std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
+            let db = Arc::new(DatabaseManager::new(paths.clone()).unwrap());
+            let conversation_repo = Arc::new(ConversationRepository::new(db));
+            let provider_service = Arc::new(ProviderService::new(paths.clone()));
+
+            let mut distiller =
+                SessionDistiller::new(provider_service, None, conversation_repo, paths, None);
+            distiller.set_procedure_store(store.clone() as Arc<dyn ProcedureStore>);
+
+            let procedure = sample_procedure();
+            distiller
+                .process_procedure_upsert("agent-x", None, &procedure)
+                .await;
+
+            let upserts = store.upserts.lock().unwrap();
+            assert_eq!(upserts.len(), 1);
+            assert!(upserts[0].1.is_none());
+        }
     }
 }

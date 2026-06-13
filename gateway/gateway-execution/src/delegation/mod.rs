@@ -21,6 +21,6 @@ pub use callback::{
     format_error_callback_message, handle_delegation_failure, handle_delegation_success,
     handle_subagent_completion, send_callback_to_parent,
 };
-pub use context::{DelegationContext, DelegationRequest};
+pub use context::{DelegationContext, DelegationMode, DelegationRequest};
 pub use registry::DelegationRegistry;
 pub use spawn::spawn_delegated_agent;

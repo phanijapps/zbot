@@ -230,19 +230,42 @@ impl Tool for LoadSkillTool {
 }
 
 impl LoadSkillTool {
+    fn canonical_skill_name(skill_name: &str) -> &str {
+        match skill_name {
+            "planning-highlevel" => "spec-builder",
+            "planning-decompose" => "plan-composer",
+            _ => skill_name,
+        }
+    }
+
+    fn missing_skill_hint(skill_name: &str) -> &'static str {
+        match skill_name {
+            "planning-highlevel" => {
+                " Legacy planner skill alias: use load_skill(skill=\"spec-builder\") or install the alias."
+            }
+            "planning-decompose" => {
+                " Legacy planner skill alias: use load_skill(skill=\"plan-composer\") or install the alias."
+            }
+            _ => {
+                " Call list_skills to inspect available skills, then retry with an installed skill name."
+            }
+        }
+    }
+
     /// Resolve a skill name to its on-disk directory. Walks every root
     /// returned by `FileSystemContext::skills_dirs()` in priority order
     /// (vault first, then `$HOME/.agents/skills` etc.) and returns the
     /// first root whose `<root>/<name>/SKILL.md` exists.
     fn resolve_skill_dir(&self, skill_name: &str) -> Result<std::path::PathBuf> {
         let roots = self.fs.skills_dirs();
+        let canonical_skill_name = Self::canonical_skill_name(skill_name);
         if roots.is_empty() {
             return Err(zero_core::ZeroError::Tool(
                 "Skills directory not configured".to_string(),
             ));
         }
         for root in &roots {
-            let candidate = root.join(skill_name);
+            let candidate = root.join(canonical_skill_name);
             if candidate.join("SKILL.md").exists() {
                 return Ok(candidate);
             }
@@ -252,9 +275,10 @@ impl LoadSkillTool {
             .map(|p| p.to_string_lossy().to_string())
             .collect();
         Err(zero_core::ZeroError::Tool(format!(
-            "Skill '{}' not found in any configured skills root (searched: {})",
+            "Skill '{}' not found in any configured skills root (searched: {}).{}",
             skill_name,
-            searched.join(", ")
+            searched.join(", "),
+            Self::missing_skill_hint(skill_name)
         )))
     }
 
@@ -264,6 +288,7 @@ impl LoadSkillTool {
             .get("skill")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'skill' parameter".to_string()))?;
+        let canonical_skill_name = Self::canonical_skill_name(skill_name);
 
         let skill_dir = self.resolve_skill_dir(skill_name)?;
         let skill_file = skill_dir.join("SKILL.md");
@@ -282,7 +307,10 @@ impl LoadSkillTool {
         let (metadata, instructions) = self.parse_skill_frontmatter(&content)?;
 
         // Store current skill in state for subsequent convenience file loads
-        ctx.set_state("skill:current_skill".to_string(), json!(skill_name));
+        ctx.set_state(
+            "skill:current_skill".to_string(),
+            json!(canonical_skill_name),
+        );
 
         // Track this skill load in the skill graph
         let tool_call_id = ctx.function_call_id();
@@ -548,6 +576,37 @@ mod tests {
             vault.path().join("shared"),
             "vault root takes priority over the agent root"
         );
+    }
+
+    #[test]
+    fn resolve_supports_legacy_planner_skill_aliases() {
+        let vault = TempDir::new().unwrap();
+        write_skill(vault.path(), "spec-builder", "first pass planner");
+        write_skill(vault.path(), "plan-composer", "second pass planner");
+        let tool = make_tool(vec![vault.path().to_path_buf()]);
+
+        let highlevel = tool
+            .resolve_skill_dir("planning-highlevel")
+            .expect("legacy highlevel alias resolves");
+        let decompose = tool
+            .resolve_skill_dir("planning-decompose")
+            .expect("legacy decompose alias resolves");
+
+        assert_eq!(highlevel, vault.path().join("spec-builder"));
+        assert_eq!(decompose, vault.path().join("plan-composer"));
+    }
+
+    #[test]
+    fn missing_legacy_planner_skill_error_names_recovery_skill() {
+        let vault = TempDir::new().unwrap();
+        let tool = make_tool(vec![vault.path().to_path_buf()]);
+
+        let err = tool
+            .resolve_skill_dir("planning-highlevel")
+            .expect_err("missing legacy alias should explain recovery");
+        let msg = format!("{err}");
+
+        assert!(msg.contains("spec-builder"), "got: {msg}");
     }
 
     #[test]

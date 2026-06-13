@@ -612,6 +612,52 @@ pub struct SessionWithExecutions {
     pub subagent_count: u32,
 }
 
+/// Minimal per-execution token/status slice for selected Mission Control detail.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissionControlExecutionSummary {
+    pub execution_id: String,
+    pub agent_id: String,
+    pub delegation_type: DelegationType,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child_session_id: Option<String>,
+}
+
+/// Bounded high-level session row used by Mission Control's initial page load.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissionControlSessionSummary {
+    /// The underlying `sessions.id` value (`sess-*`).
+    pub conversation_id: String,
+    /// Root `agent_executions.id` value. Existing log-detail APIs use this id.
+    pub root_execution_id: String,
+    pub status: SessionStatus,
+    pub source: TriggerSource,
+    pub root_agent_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+    pub total_tokens_in: u64,
+    pub total_tokens_out: u64,
+    pub subagent_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+}
+
+/// Per-execution token slices for one selected Mission Control session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissionControlSessionTokens {
+    pub conversation_id: String,
+    pub root_execution_id: String,
+    pub total_tokens_in: u64,
+    pub total_tokens_out: u64,
+    pub executions: Vec<MissionControlExecutionSummary>,
+}
+
 // ============================================================================
 // CHECKPOINT
 // ============================================================================
@@ -744,6 +790,16 @@ pub struct SessionFilter {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
+}
+
+/// Filter criteria for Mission Control summary rows.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MissionControlFilter {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
 }
 
 /// Filter criteria for querying executions.

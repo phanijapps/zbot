@@ -51,6 +51,7 @@ install-build:
 install: install-build
 	install -d $(BIN_DIR) $(DIST_DIR) $(UNIT_DIR)
 	install -m 755 target/release/zbotd $(BIN_DIR)/zbotd
+	install -m 755 target/release/zbot $(BIN_DIR)/zbot
 	rm -rf $(DIST_DIR)/* && cp -r $(UI_BUILD_DIR)/* $(DIST_DIR)/
 	@sed 's|@@BIN@@|$(BIN_DIR)/zbotd|g; s|@@DIST@@|$(DIST_DIR)|g; s|@@VERSION@@|$(VERSION)|g' \
 	    scripts/zbot.service.in > $(UNIT_DIR)/zbot.service
@@ -70,12 +71,14 @@ uninstall:
 	-systemctl --user disable zbot
 	rm -f $(UNIT_DIR)/zbot.service
 	rm -f $(BIN_DIR)/zbotd
+	rm -f $(BIN_DIR)/zbot
 	rm -rf $(PREFIX)/share/zbot
 	@# Best-effort cleanup of legacy install artifacts.
 	-systemctl --user stop agentzero 2>/dev/null
 	-systemctl --user disable agentzero 2>/dev/null
 	-rm -f $(UNIT_DIR)/agentzero.service
 	-rm -f $(BIN_DIR)/zerod
+	-rm -f $(BIN_DIR)/zero
 	-rm -rf $(PREFIX)/share/agentzero
 	systemctl --user daemon-reload
 	@echo ""

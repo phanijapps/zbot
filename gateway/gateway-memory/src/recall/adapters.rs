@@ -6,7 +6,8 @@
 //! consumed by `rrf_merge`.
 
 use crate::recall::scored_item::{ItemKind, Provenance, ScoredItem};
-use zero_stores_domain::{Belief, MemoryFact, Procedure, WikiArticle};
+use zero_stores::types::EntityId;
+use zero_stores_domain::{Belief, MemoryFact, Procedure, RouteHint, RouteSourceKind, WikiArticle};
 
 /// Project a [`MemoryFact`] into a [`ScoredItem`].
 ///
@@ -24,6 +25,12 @@ pub fn fact_to_item(fact: &MemoryFact, score: f64) -> ScoredItem {
             session_id: fact.session_id.clone(),
             ward_id: Some(fact.ward_id.clone()),
         },
+        route_hint: Some(
+            RouteHint::new(fact.ward_id.clone(), RouteSourceKind::Fact)
+                .with_memory_id(fact.id.clone())
+                .with_session_id(fact.session_id.clone())
+                .with_source_path(fact.source_ref.clone()),
+        ),
     }
 }
 
@@ -43,6 +50,10 @@ pub fn wiki_to_item(article: &WikiArticle, score: f64) -> ScoredItem {
             session_id: None,
             ward_id: Some(article.ward_id.clone()),
         },
+        route_hint: Some(
+            RouteHint::new(article.ward_id.clone(), RouteSourceKind::WikiArticle)
+                .with_memory_id(article.id.clone()),
+        ),
     }
 }
 
@@ -66,6 +77,60 @@ pub fn belief_to_item(belief: &Belief, score: f64) -> ScoredItem {
             session_id: None,
             ward_id: Some(belief.partition_id.clone()),
         },
+        route_hint: Some(
+            RouteHint::new(belief.partition_id.clone(), RouteSourceKind::Belief)
+                .with_memory_id(belief.id.clone()),
+        ),
+    }
+}
+
+/// Project a hierarchical-memory path entity into a [`ScoredItem`]
+/// (Phase H-4 / LeanRAG LCA recall).
+///
+/// `score` is a layer-aware default the caller assigns; the recall
+/// pipeline multiplies it by the configured category weight before
+/// fusion. The content carries the layer + entity id so the consumer
+/// formatter can render the topical map without re-querying the DB.
+pub fn hier_entity_to_item(id: &EntityId, layer: i64, score: f64) -> ScoredItem {
+    ScoredItem {
+        kind: ItemKind::HierEntity,
+        id: id.0.clone(),
+        content: format!("[topic L{layer}] {}", id.0),
+        score,
+        provenance: Provenance {
+            source: "kg_entities.hier".to_string(),
+            source_id: id.0.clone(),
+            session_id: None,
+            ward_id: None,
+        },
+        route_hint: None,
+    }
+}
+
+/// Project an inter-cluster relation (Phase H-4 follow-up) into a
+/// [`ScoredItem`]. Rendered next to `HierEntity` items under the
+/// topical map heading so the agent sees not only the abstraction
+/// chain but the edges connecting sibling abstractions.
+pub fn hier_relation_to_item(
+    id: &str,
+    source: &str,
+    target: &str,
+    relationship_type: &str,
+    layer: i64,
+    score: f64,
+) -> ScoredItem {
+    ScoredItem {
+        kind: ItemKind::HierRelation,
+        id: id.to_string(),
+        content: format!("[edge L{layer}] {source} —[{relationship_type}]→ {target}"),
+        score,
+        provenance: Provenance {
+            source: "kg_relationships.inter_cluster".to_string(),
+            source_id: id.to_string(),
+            session_id: None,
+            ward_id: None,
+        },
+        route_hint: None,
     }
 }
 
@@ -88,6 +153,9 @@ pub fn procedure_to_item(proc: &Procedure, score: f64) -> ScoredItem {
             session_id: None,
             ward_id: proc.ward_id.clone(),
         },
+        route_hint: proc.ward_id.as_ref().map(|ward| {
+            RouteHint::new(ward.clone(), RouteSourceKind::Procedure).with_memory_id(proc.id.clone())
+        }),
     }
 }
 
@@ -134,6 +202,7 @@ pub async fn graph_ann_to_items(
                 session_id: None,
                 ward_id: None,
             },
+            route_hint: None,
         });
     }
     Ok(out)
@@ -224,6 +293,11 @@ mod tests {
         assert_eq!(item.provenance.source_id, "fact-1");
         assert_eq!(item.provenance.session_id, Some("sess-42".to_string()));
         assert_eq!(item.provenance.ward_id, Some("ward-x".to_string()));
+        let hint = item.route_hint.expect("fact route hint");
+        assert_eq!(hint.ward_id, "ward-x");
+        assert_eq!(hint.source_kind, RouteSourceKind::Fact);
+        assert_eq!(hint.memory_id.as_deref(), Some("fact-1"));
+        assert_eq!(hint.session_id.as_deref(), Some("sess-42"));
     }
 
     #[test]
@@ -241,6 +315,10 @@ mod tests {
         assert_eq!(item.provenance.source_id, "wiki-1");
         assert_eq!(item.provenance.session_id, None);
         assert_eq!(item.provenance.ward_id, Some("ward-x".to_string()));
+        let hint = item.route_hint.expect("wiki route hint");
+        assert_eq!(hint.ward_id, "ward-x");
+        assert_eq!(hint.source_kind, RouteSourceKind::WikiArticle);
+        assert_eq!(hint.memory_id.as_deref(), Some("wiki-1"));
     }
 
     #[test]
@@ -259,5 +337,9 @@ mod tests {
         assert_eq!(item.provenance.source_id, "proc-1");
         assert_eq!(item.provenance.session_id, None);
         assert_eq!(item.provenance.ward_id, Some("ward-x".to_string()));
+        let hint = item.route_hint.expect("procedure route hint");
+        assert_eq!(hint.ward_id, "ward-x");
+        assert_eq!(hint.source_kind, RouteSourceKind::Procedure);
+        assert_eq!(hint.memory_id.as_deref(), Some("proc-1"));
     }
 }

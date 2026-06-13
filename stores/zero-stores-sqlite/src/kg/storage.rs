@@ -10,6 +10,54 @@ use knowledge_graph::types::{
 use rusqlite::{params, Connection};
 use std::sync::Arc;
 
+/// Row tuple from `search_entities_by_name_embedding`:
+/// `(entity_id, name, entity_type, distance, confidence)`. Aliased to
+/// keep the trait wrapper signature within clippy's `type_complexity`
+/// budget. `confidence` was added in MEM-001 Part B-1.
+type EntityNameAnnHit = (String, String, String, f32, f64);
+
+/// Row returned by `traverse_weighted_sync` (MEM-001 Part B-2). The
+/// caller dedupes to one entry per `entity_id` — multiple paths from
+/// the seed produce multiple rows, the trait wrapper picks the
+/// shortest hop and ties on the highest edge-confidence product.
+#[derive(Debug, Clone)]
+pub struct TraverseWeightedRow {
+    pub entity_id: String,
+    pub name: String,
+    pub entity_type: String,
+    pub hop: usize,
+    pub path: String,
+    pub entity_confidence: f64,
+    pub edge_confidence_product: f64,
+}
+
+/// Row tuple from `list_inter_cluster_relations`:
+/// `(id, source_entity_id, target_entity_id, relationship_type, layer)`.
+/// Aliased to keep the trait wrapper signature within clippy's
+/// `type_complexity` budget.
+type InterClusterRelationRow = (String, String, String, String, i64);
+
+/// Row tuple from `hierarchy_summary`'s top-aggregates query:
+/// `(id, name, layer, member_count, description)`. Same aliasing
+/// rationale as `InterClusterRelationRow`.
+type AggregateSummaryRow = (String, String, i64, usize, String);
+
+/// Return tuple from `hierarchy_summary`:
+/// `(layer_counts, inter_cluster_total, top_aggregates)`. Trait
+/// wrapper maps it into the public `HierarchySummary`.
+type HierarchySummaryRow = (Vec<(i64, usize)>, usize, Vec<AggregateSummaryRow>);
+
+/// Build a comma-separated list of positional placeholders for SQL
+/// `IN ()` clauses: `placeholder_list(2, 3)` → `"?2,?3,?4"`. Callers
+/// are responsible for binding the exact same number of parameters in
+/// the same positions.
+fn placeholder_list(start: usize, count: usize) -> String {
+    (start..start + count)
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// Convert a `GraphError` into a `rusqlite::Error` so that closures passed to
 /// `KnowledgeDatabase::with_connection` (which require `rusqlite::Result`) can
 /// propagate our higher-level errors. `with_connection` stringifies the result
@@ -490,17 +538,19 @@ impl GraphStorage {
     /// ANN search over `kg_name_index` (sqlite-vec virtual table) for the
     /// nearest entity names to `query_embedding`.
     ///
-    /// Returns tuples of `(name, entity_type, distance)` where `distance` is
-    /// the L2-squared distance from the vec0 index. For L2-normalized vectors,
-    /// cosine similarity ≈ `1 - distance / 2`. The query embedding MUST be
-    /// L2-normalized by the caller. Results are filtered to the caller's
-    /// agent plus `__global__` and ordered by ascending distance.
+    /// Returns rows of `(entity_id, name, entity_type, distance, confidence)`.
+    /// `distance` is the L2-squared distance from the vec0 index — for
+    /// L2-normalized vectors, cosine similarity ≈ `1 - distance / 2`. The
+    /// query embedding MUST be L2-normalized by the caller. Results are
+    /// filtered to the caller's agent plus `__global__` and ordered by
+    /// ascending distance. `confidence` is the current `kg_entities.confidence`
+    /// for downstream weighting (MEM-001 Part B-1).
     pub fn search_entities_by_name_embedding(
         &self,
         query_embedding: &[f32],
         top_k: usize,
         agent_id: &str,
-    ) -> GraphResult<Vec<(String, String, f32)>> {
+    ) -> GraphResult<Vec<EntityNameAnnHit>> {
         if query_embedding.is_empty() || top_k == 0 {
             return Ok(Vec::new());
         }
@@ -512,7 +562,7 @@ impl GraphStorage {
         // time. Pull top-K by distance, then filter against `kg_entities`.
         self.db
             .with_connection(|conn| {
-                (|| -> GraphResult<Vec<(String, String, f32)>> {
+                (|| -> GraphResult<Vec<EntityNameAnnHit>> {
                     let mut ann_stmt = conn
                         .prepare(
                             "SELECT entity_id, distance \
@@ -528,9 +578,12 @@ impl GraphStorage {
                         })
                         .map_err(GraphError::Database)?;
 
+                    // MEM-001 Part B-1: pull `confidence` alongside the
+                    // existing name + entity_type so recall can weight
+                    // hits by entity confidence and skip below threshold.
                     let mut lookup_stmt = conn
                         .prepare(
-                            "SELECT name, entity_type FROM kg_entities \
+                            "SELECT name, entity_type, confidence FROM kg_entities \
                              WHERE id = ?1 \
                                AND (agent_id = ?2 OR agent_id = '__global__')",
                         )
@@ -545,7 +598,8 @@ impl GraphStorage {
                         if let Some(r) = rows.next().map_err(GraphError::Database)? {
                             let name: String = r.get(0).map_err(GraphError::Database)?;
                             let etype: String = r.get(1).map_err(GraphError::Database)?;
-                            out.push((name, etype, dist));
+                            let confidence: f64 = r.get(2).map_err(GraphError::Database)?;
+                            out.push((entity_id, name, etype, dist, confidence));
                         }
                     }
                     Ok(out)
@@ -1258,6 +1312,126 @@ impl GraphStorage {
             .map_err(GraphError::Other)
     }
 
+    /// MEM-001 Part B-2 — confidence-aware BFS traversal for recall.
+    ///
+    /// Mirrors `traverse_sync`'s recursive CTE but:
+    /// 1. Filters edges where `confidence < min_edge_confidence` at the CTE
+    ///    level — contradicted / decayed relationships don't pollute recall.
+    /// 2. Carries an `edge_confidence_product` accumulator along each path
+    ///    (multiplicative across edges).
+    /// 3. Joins `kg_entities.confidence` so recall can weight the final
+    ///    score by the target entity's confidence too.
+    /// 4. Agent-scopes both relationships and entities (`__global__` is
+    ///    treated as cross-agent and included).
+    ///
+    /// Returns one row per path; the caller dedupes to one entry per
+    /// `entity_id` (shortest hop wins; tie-break by highest edge product).
+    /// The seed itself is excluded.
+    pub fn traverse_weighted_sync(
+        &self,
+        entity_id: &str,
+        agent_id: &str,
+        max_hops: u8,
+        min_edge_confidence: f64,
+        limit: usize,
+    ) -> GraphResult<Vec<TraverseWeightedRow>> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<TraverseWeightedRow>> {
+                    let sql = r#"
+                        WITH RECURSIVE graph_walk(entity_id, hop, path, visited, edge_conf_product) AS (
+                            SELECT ?1, 0, '', ?1, 1.0
+                            UNION ALL
+                            SELECT
+                                CASE WHEN r.source_entity_id = gw.entity_id
+                                     THEN r.target_entity_id
+                                     ELSE r.source_entity_id
+                                END,
+                                gw.hop + 1,
+                                CASE WHEN gw.path = '' THEN r.relationship_type
+                                     ELSE gw.path || ',' || r.relationship_type
+                                END,
+                                gw.visited || ',' ||
+                                    CASE WHEN r.source_entity_id = gw.entity_id
+                                         THEN r.target_entity_id
+                                         ELSE r.source_entity_id
+                                    END,
+                                gw.edge_conf_product * r.confidence
+                            FROM graph_walk gw
+                            JOIN kg_relationships r
+                                ON (r.source_entity_id = gw.entity_id
+                                    OR r.target_entity_id = gw.entity_id)
+                            WHERE gw.hop < ?2
+                              AND r.confidence >= ?3
+                              AND (r.agent_id = ?4 OR r.agent_id = '__global__')
+                              AND r.epistemic_class != 'archival'
+                              AND gw.visited NOT LIKE
+                                  '%' ||
+                                  CASE WHEN r.source_entity_id = gw.entity_id
+                                       THEN r.target_entity_id
+                                       ELSE r.source_entity_id
+                                  END || '%'
+                        )
+                        SELECT
+                            gw.entity_id,
+                            e.name,
+                            e.entity_type,
+                            gw.hop,
+                            gw.path,
+                            e.confidence,
+                            gw.edge_conf_product
+                        FROM graph_walk gw
+                        JOIN kg_entities e ON e.id = gw.entity_id
+                        WHERE gw.entity_id != ?1
+                          AND (e.agent_id = ?4 OR e.agent_id = '__global__')
+                          AND e.epistemic_class != 'archival'
+                        ORDER BY gw.hop ASC, gw.edge_conf_product DESC
+                        LIMIT ?5
+                    "#;
+                    let mut stmt = conn.prepare(sql).map_err(GraphError::Database)?;
+                    let rows = stmt
+                        .query_map(
+                            rusqlite::params![
+                                entity_id,
+                                max_hops as i64,
+                                min_edge_confidence,
+                                agent_id,
+                                limit as i64
+                            ],
+                            |row| {
+                                Ok((
+                                    row.get::<_, String>(0)?,
+                                    row.get::<_, String>(1)?,
+                                    row.get::<_, String>(2)?,
+                                    row.get::<_, i64>(3)?,
+                                    row.get::<_, String>(4)?,
+                                    row.get::<_, f64>(5)?,
+                                    row.get::<_, f64>(6)?,
+                                ))
+                            },
+                        )
+                        .map_err(GraphError::Database)?;
+                    let mut out = Vec::new();
+                    for row in rows {
+                        let (id, name, etype, hop, path, entity_conf, edge_conf_prod) =
+                            row.map_err(GraphError::Database)?;
+                        out.push(TraverseWeightedRow {
+                            entity_id: id,
+                            name,
+                            entity_type: etype,
+                            hop: hop as usize,
+                            path,
+                            entity_confidence: entity_conf,
+                            edge_confidence_product: edge_conf_prod,
+                        });
+                    }
+                    Ok(out)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
     /// Search entities by name with a result limit (LIKE match, case-insensitive).
     pub fn search_by_name(
         &self,
@@ -1404,6 +1578,672 @@ impl GraphStorage {
                 .map_err(graph_to_rusqlite)
             })
             .map_err(GraphError::Other)
+    }
+
+    /// Hierarchical-memory health snapshot — layer counts + total
+    /// inter-cluster edge count + top-N aggregates by member size.
+    /// Used by `GET /api/hierarchy/stats` (Observatory pill + slideover).
+    ///
+    /// One DB session, three queries: count-by-layer, total
+    /// inter-cluster relations, top-N aggregates ordered by
+    /// `member_count` parsed from `properties` JSON. Dual-matches
+    /// `agent_id` against `__global__` (same idiom as the other
+    /// hierarchy reads — base entities live under that sentinel).
+    ///
+    /// Returns a triple to keep the trait-wrapper signature simple;
+    /// the caller maps it to the public `HierarchySummary` shape.
+    pub fn hierarchy_summary(
+        &self,
+        agent_id: &str,
+        top_n: usize,
+    ) -> GraphResult<HierarchySummaryRow> {
+        let agent_id_for_db = agent_id.to_string();
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<HierarchySummaryRow> {
+                    let mut layer_stmt = conn
+                        .prepare(
+                            "SELECT layer, COUNT(*) FROM kg_entities \
+                             WHERE (agent_id = ?1 OR agent_id = '__global__') \
+                               AND epistemic_class = 'current' \
+                             GROUP BY layer ORDER BY layer ASC",
+                        )
+                        .map_err(GraphError::Database)?;
+                    let layer_counts: Vec<(i64, usize)> = layer_stmt
+                        .query_map(params![agent_id_for_db], |row| {
+                            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)? as usize))
+                        })
+                        .map_err(GraphError::Database)?
+                        .filter_map(Result::ok)
+                        .collect();
+
+                    let inter_cluster: i64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM kg_relationships \
+                             WHERE (agent_id = ?1 OR agent_id = '__global__') \
+                               AND is_inter_cluster = 1 \
+                               AND epistemic_class = 'current'",
+                            params![agent_id_for_db],
+                            |row| row.get(0),
+                        )
+                        .map_err(GraphError::Database)?;
+
+                    let top_aggregates: Vec<AggregateSummaryRow> = if top_n == 0 {
+                        Vec::new()
+                    } else {
+                        let mut agg_stmt = conn
+                            .prepare(
+                                "SELECT id, name, layer, properties \
+                                 FROM kg_entities \
+                                 WHERE (agent_id = ?1 OR agent_id = '__global__') \
+                                   AND layer > 0 \
+                                   AND epistemic_class = 'current' \
+                                 ORDER BY CAST(json_extract(properties, '$.member_count') AS INTEGER) DESC \
+                                 LIMIT ?2",
+                            )
+                            .map_err(GraphError::Database)?;
+                        let mapped = agg_stmt
+                            .query_map(params![agent_id_for_db, top_n as i64], |row| {
+                                let id: String = row.get(0)?;
+                                let name: String = row.get(1)?;
+                                let layer: i64 = row.get(2)?;
+                                let props_json: Option<String> = row.get(3)?;
+                                let (member_count, description) = match props_json {
+                                    Some(s) => {
+                                        let v: serde_json::Value = serde_json::from_str(&s)
+                                            .unwrap_or(serde_json::json!({}));
+                                        let mc = v
+                                            .get("member_count")
+                                            .and_then(|n| n.as_u64())
+                                            .unwrap_or(1)
+                                            as usize;
+                                        let desc = v
+                                            .get("description")
+                                            .and_then(|d| d.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        (mc, desc)
+                                    }
+                                    None => (1, String::new()),
+                                };
+                                Ok((id, name, layer, member_count, description))
+                            })
+                            .map_err(GraphError::Database)?;
+                        let collected: Vec<AggregateSummaryRow> =
+                            mapped.filter_map(Result::ok).collect();
+                        drop(agg_stmt);
+                        collected
+                    };
+
+                    Ok((layer_counts, inter_cluster as usize, top_aggregates))
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// List inter-cluster relations whose BOTH endpoints sit in
+    /// `entity_ids` (Phase H-4 follow-up).
+    ///
+    /// Used by recall step 5c after `compute_lca_path` to surface the
+    /// synthesised edges along the LCA path. Filters
+    /// `is_inter_cluster = 1` AND `epistemic_class = 'current'` AND
+    /// `agent_id` match. Empty input short-circuits to an empty
+    /// result (`IN ()` would be a SQL syntax error).
+    pub fn list_inter_cluster_relations(
+        &self,
+        agent_id: &str,
+        entity_ids: &[String],
+    ) -> GraphResult<Vec<InterClusterRelationRow>> {
+        if entity_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let n = entity_ids.len();
+        let src_in = placeholder_list(2, n);
+        let tgt_in = placeholder_list(2 + n, n);
+        // Dual-match `agent_id` against the queried agent OR `__global__`
+        // because base entities (and the relationships among them) are
+        // stored under `agent_id = '__global__'` by the cross-agent
+        // dedup convention. Without this, a daemon configured for
+        // `agent_id = 'root'` sees zero hierarchy data even when the
+        // graph is full. Same idiom as `search_entities_by_name_embedding`.
+        let sql = format!(
+            "SELECT id, source_entity_id, target_entity_id, relationship_type, layer \
+             FROM kg_relationships \
+             WHERE (agent_id = ?1 OR agent_id = '__global__') \
+               AND is_inter_cluster = 1 \
+               AND epistemic_class = 'current' \
+               AND source_entity_id IN ({src_in}) \
+               AND target_entity_id IN ({tgt_in})"
+        );
+
+        // Bind: agent_id, then the id list twice (once per IN).
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(1 + 2 * n);
+        params.push(Box::new(agent_id.to_string()));
+        for id in entity_ids {
+            params.push(Box::new(id.clone()));
+        }
+        for id in entity_ids {
+            params.push(Box::new(id.clone()));
+        }
+
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<InterClusterRelationRow>> {
+                    let mut stmt = conn.prepare(&sql).map_err(GraphError::Database)?;
+                    let rows = stmt
+                        .query_map(
+                            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                            |row| {
+                                Ok((
+                                    row.get::<_, String>(0)?,
+                                    row.get::<_, String>(1)?,
+                                    row.get::<_, String>(2)?,
+                                    row.get::<_, String>(3)?,
+                                    row.get::<_, i64>(4)?,
+                                ))
+                            },
+                        )
+                        .map_err(GraphError::Database)?;
+                    Ok(rows.filter_map(|r| r.ok()).collect())
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Count relationships bridging two entity clusters (Phase H-3c).
+    ///
+    /// Used by the future `HierarchyBuilder` sleep worker to decide
+    /// whether a cluster pair is "connected enough" to justify
+    /// synthesising an aggregate inter-cluster relation at the next
+    /// hierarchy layer (LeanRAG's λ > τ gate).
+    ///
+    /// Counts both directions (A→B and B→A). Only `epistemic_class =
+    /// 'current'` rows contribute. Empty clusters yield `0` without
+    /// running SQL (an empty `IN ()` list is a SQL syntax error). The
+    /// agent_id scope prevents cross-agent leakage.
+    pub fn connectivity_strength(
+        &self,
+        agent_id: &str,
+        cluster_a: &[String],
+        cluster_b: &[String],
+    ) -> GraphResult<usize> {
+        if cluster_a.is_empty() || cluster_b.is_empty() {
+            return Ok(0);
+        }
+
+        // Build two IN-list placeholder strings. Positions start at 2
+        // because position 1 is the agent_id; we then use each cluster
+        // twice (once per direction) to keep parameter binding linear.
+        let a_len = cluster_a.len();
+        let b_len = cluster_b.len();
+        // Positions: agent_id @ 1; cluster_a #1 @ 2..(2+a); cluster_b #1
+        // @ (2+a)..(2+a+b); cluster_b #2 @ (2+a+b)..(2+a+2b); cluster_a
+        // #2 @ (2+a+2b)..(2+2a+2b).
+        let a1_start = 2;
+        let b1_start = a1_start + a_len;
+        let b2_start = b1_start + b_len;
+        let a2_start = b2_start + b_len;
+
+        let a1 = placeholder_list(a1_start, a_len);
+        let b1 = placeholder_list(b1_start, b_len);
+        let b2 = placeholder_list(b2_start, b_len);
+        let a2 = placeholder_list(a2_start, a_len);
+
+        // Dual-match `agent_id`: same reason as
+        // `list_inter_cluster_relations` above. Base entities use
+        // `'__global__'` as their effective agent_id.
+        let sql = format!(
+            "SELECT COUNT(*) FROM kg_relationships \
+             WHERE (agent_id = ?1 OR agent_id = '__global__') \
+               AND epistemic_class = 'current' \
+               AND ( \
+                 (source_entity_id IN ({a1}) AND target_entity_id IN ({b1})) \
+                 OR \
+                 (source_entity_id IN ({b2}) AND target_entity_id IN ({a2})) \
+               )"
+        );
+
+        // Bind: agent_id, then a once, b twice, a again.
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+            Vec::with_capacity(1 + 2 * (a_len + b_len));
+        params.push(Box::new(agent_id.to_string()));
+        for id in cluster_a {
+            params.push(Box::new(id.clone()));
+        }
+        for id in cluster_b {
+            params.push(Box::new(id.clone()));
+        }
+        for id in cluster_b {
+            params.push(Box::new(id.clone()));
+        }
+        for id in cluster_a {
+            params.push(Box::new(id.clone()));
+        }
+
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<usize> {
+                    let count: i64 = conn
+                        .query_row(
+                            &sql,
+                            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                            |row| row.get(0),
+                        )
+                        .map_err(GraphError::Database)?;
+                    Ok(count as usize)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Promote a cluster of layer-N entities to a single aggregate at
+    /// layer N+1 (Phase H-3d). Atomic — wraps the insert/updates in a
+    /// transaction so a member cluster never half-points to its parent.
+    ///
+    /// Steps:
+    ///   1. INSERT the aggregate entity with `layer = layer`, the
+    ///      caller-supplied `name`, and `properties = {"description":
+    ///      ..., "aggregate": true}` so readers can spot aggregates by
+    ///      shape.
+    ///   2. UPDATE `parent_cluster_id` on each member to point to the
+    ///      new aggregate's id.
+    ///   3. If `embedding` is provided, INSERT into `kg_name_index` so
+    ///      the aggregate participates in semantic recall and in
+    ///      higher-layer clustering. A missing embedding is logged as
+    ///      a no-op (the aggregate exists but won't surface in vector
+    ///      search until a future reindex catches it).
+    ///
+    /// Returns the new aggregate's id. Members not found in
+    /// `kg_entities` are simply skipped — they don't fail the whole
+    /// operation, the parent_cluster_id update affects zero rows for
+    /// missing ids.
+    pub fn promote_cluster_to_aggregate(
+        &self,
+        agent_id: &str,
+        layer: i64,
+        members: &[String],
+        name: &str,
+        description: &str,
+        embedding: Option<Vec<f32>>,
+    ) -> GraphResult<String> {
+        let new_id = format!("agg-{}", uuid::Uuid::new_v4());
+        let norm_name = name.trim().to_lowercase();
+        let norm_hash = {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut h = DefaultHasher::new();
+            norm_name.hash(&mut h);
+            format!("{:x}", h.finish())
+        };
+        let properties = serde_json::json!({
+            "description": description,
+            "aggregate": true,
+            "member_count": members.len(),
+        })
+        .to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Clone for the closure (db.with_connection takes Fn so we
+        // can't move borrowed slices in directly).
+        let new_id_for_db = new_id.clone();
+        let members_for_db: Vec<String> = members.to_vec();
+        let agent_id_for_db = agent_id.to_string();
+        let name_for_db = name.to_string();
+
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<()> {
+                    let tx = conn.unchecked_transaction().map_err(GraphError::Database)?;
+
+                    tx.execute(
+                        "INSERT INTO kg_entities
+                            (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                             properties, first_seen_at, last_seen_at, mention_count,
+                             layer, parent_cluster_id)
+                         VALUES (?1, ?2, 'Concept', ?3, ?4, ?5, ?6, ?7, ?7, 1, ?8, NULL)",
+                        params![
+                            new_id_for_db,
+                            agent_id_for_db,
+                            name_for_db,
+                            norm_name,
+                            norm_hash,
+                            properties,
+                            now,
+                            layer,
+                        ],
+                    )
+                    .map_err(GraphError::Database)?;
+
+                    // Update each member's parent_cluster_id. We do
+                    // one statement per id (bounded — ~20 members
+                    // per cluster) which is cleaner than building a
+                    // dynamic IN-list and harder to get wrong.
+                    let mut update_stmt = tx
+                        .prepare("UPDATE kg_entities SET parent_cluster_id = ?1 WHERE id = ?2")
+                        .map_err(GraphError::Database)?;
+                    for member_id in &members_for_db {
+                        update_stmt
+                            .execute(params![new_id_for_db, member_id])
+                            .map_err(GraphError::Database)?;
+                    }
+                    drop(update_stmt);
+
+                    // Persist the aggregate's embedding into the
+                    // name-index table if the caller provided one.
+                    // The orchestrator skips this when no embedding
+                    // client is wired (or when synthesis failed).
+                    if let Some(emb) = embedding.as_ref() {
+                        if !emb.is_empty() {
+                            let embedding_json = serde_json::to_string(emb).map_err(|e| {
+                                GraphError::Other(format!("serialize embedding: {e}"))
+                            })?;
+                            tx.execute(
+                                "INSERT INTO kg_name_index (entity_id, name_embedding) \
+                                 VALUES (?1, ?2)",
+                                params![new_id_for_db, embedding_json],
+                            )
+                            .map_err(GraphError::Database)?;
+                        }
+                    }
+
+                    tx.commit().map_err(GraphError::Database)?;
+                    Ok(())
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)?;
+
+        Ok(new_id)
+    }
+
+    /// Compute the LCA of a set of seed entities by walking
+    /// `parent_cluster_id` upward (Phase H-4 / LeanRAG).
+    ///
+    /// Returns the LCA id, the union of all path entities (excluding
+    /// seeds themselves), and the LCA's layer. Empty input yields a
+    /// `(None, [], 0)` triple. The walk is capped at `MAX_LCA_WALK`
+    /// hops per seed so a parent-pointer cycle from a corrupt DB
+    /// can't run forever.
+    pub fn compute_lca_path(
+        &self,
+        agent_id: &str,
+        seed_entity_ids: &[String],
+    ) -> GraphResult<(Option<String>, Vec<String>, i64)> {
+        /// Hard cap on parent-pointer walks per seed. The plan allows
+        /// up to 4 layers, so anything beyond ~8 is a data-corruption
+        /// indicator we want to bail out of rather than loop on.
+        const MAX_LCA_WALK: usize = 16;
+
+        if seed_entity_ids.is_empty() {
+            return Ok((None, Vec::new(), 0));
+        }
+        if seed_entity_ids.len() == 1 {
+            // Single seed is its own LCA. Path excludes the seed
+            // itself (consistent with multi-seed semantics).
+            let id = seed_entity_ids[0].clone();
+            let layer = self.read_entity_layer(agent_id, &id)?.unwrap_or(0);
+            return Ok((Some(id), Vec::new(), layer));
+        }
+
+        let agent_id_for_db = agent_id.to_string();
+        let seeds_for_db: Vec<String> = seed_entity_ids.to_vec();
+
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<(Option<String>, Vec<String>, i64)> {
+                    // Build each seed's ancestry chain by repeatedly
+                    // looking up parent_cluster_id. We collect the
+                    // chain in order from the seed itself upward.
+                    let mut chains: Vec<Vec<String>> = Vec::with_capacity(seeds_for_db.len());
+                    let mut layer_of: std::collections::HashMap<String, i64> =
+                        std::collections::HashMap::new();
+
+                    // Dual-match `agent_id` against the queried agent or
+                    // `__global__` so the parent walk can cross the
+                    // cross-agent-dedup boundary. Without this the walk
+                    // terminates at the first `__global__` entity even
+                    // when its parent_cluster_id is set, breaking the LCA.
+                    let mut parent_stmt = conn
+                        .prepare(
+                            "SELECT parent_cluster_id, layer FROM kg_entities \
+                             WHERE id = ?1 \
+                               AND (agent_id = ?2 OR agent_id = '__global__')",
+                        )
+                        .map_err(GraphError::Database)?;
+
+                    for seed in &seeds_for_db {
+                        let mut chain: Vec<String> = vec![seed.clone()];
+                        let mut current = seed.clone();
+                        for _ in 0..MAX_LCA_WALK {
+                            let row: Option<(Option<String>, i64)> = parent_stmt
+                                .query_row(params![current, agent_id_for_db], |row| {
+                                    Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?))
+                                })
+                                .ok();
+                            let Some((parent_opt, layer)) = row else {
+                                break;
+                            };
+                            layer_of.insert(current.clone(), layer);
+                            let Some(parent) = parent_opt else {
+                                break;
+                            };
+                            chain.push(parent.clone());
+                            current = parent;
+                        }
+                        chains.push(chain);
+                    }
+                    drop(parent_stmt);
+
+                    // The LCA is the deepest (closest to seeds) entity
+                    // that appears in every chain. Algorithm: walk one
+                    // chain from the seed outward; the first entity
+                    // that's present in ALL other chains is the LCA.
+                    let lca_id = chains[0].iter().find(|candidate| {
+                        chains[1..].iter().all(|chain| chain.contains(*candidate))
+                    });
+
+                    let Some(lca_id) = lca_id.cloned() else {
+                        return Ok((None, Vec::new(), 0));
+                    };
+
+                    // Collect union of all chain entities up to (and
+                    // including) the LCA, then strip the seeds.
+                    let mut path: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    for chain in &chains {
+                        for id in chain {
+                            path.insert(id.clone());
+                            if *id == lca_id {
+                                break;
+                            }
+                        }
+                    }
+                    for seed in &seeds_for_db {
+                        path.remove(seed);
+                    }
+                    let mut path_vec: Vec<String> = path.into_iter().collect();
+                    path_vec.sort();
+                    let max_layer = layer_of.get(&lca_id).copied().unwrap_or(0);
+                    Ok((Some(lca_id), path_vec, max_layer))
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Helper for `compute_lca_path` to read a single entity's `layer`
+    /// (single-seed short-circuit). Returns `Ok(None)` when the entity
+    /// isn't found rather than erroring.
+    fn read_entity_layer(&self, agent_id: &str, id: &str) -> GraphResult<Option<i64>> {
+        let agent_id = agent_id.to_string();
+        let id = id.to_string();
+        self.db
+            .with_connection(|conn| {
+                let result: rusqlite::Result<i64> = conn.query_row(
+                    "SELECT layer FROM kg_entities \
+                     WHERE id = ?1 \
+                       AND (agent_id = ?2 OR agent_id = '__global__')",
+                    params![id, agent_id],
+                    |row| row.get(0),
+                );
+                Ok(result.ok())
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// List current-class entities at a specific hierarchy layer
+    /// paired with their name embeddings (Phase H-3e).
+    ///
+    /// Joins `kg_entities` against `kg_name_index` so entities
+    /// without an embedding are silently dropped — they can't
+    /// participate in K-means anyway. The orchestrator should log
+    /// the count discrepancy if it cares.
+    ///
+    /// `limit = 0` means "no limit".
+    pub fn list_entities_with_embeddings_at_layer(
+        &self,
+        agent_id: &str,
+        layer: i64,
+        limit: usize,
+    ) -> GraphResult<Vec<(String, Vec<f32>)>> {
+        let agent_id_for_db = agent_id.to_string();
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<(String, Vec<f32>)>> {
+                    // Dual-match: base entities live under
+                    // `agent_id = '__global__'` by the cross-agent
+                    // dedup convention. Without `OR agent_id = '__global__'`
+                    // a daemon configured for `agent_id = 'root'` sees
+                    // zero entities and the HierarchyBuilder cycles
+                    // exit with PoolTooSmall every time.
+                    let sql = if limit == 0 {
+                        "SELECT e.id, k.name_embedding
+                         FROM kg_entities e
+                         JOIN kg_name_index k ON k.entity_id = e.id
+                         WHERE (e.agent_id = ?1 OR e.agent_id = '__global__')
+                           AND e.layer = ?2
+                           AND e.epistemic_class = 'current'"
+                            .to_string()
+                    } else {
+                        "SELECT e.id, k.name_embedding
+                         FROM kg_entities e
+                         JOIN kg_name_index k ON k.entity_id = e.id
+                         WHERE (e.agent_id = ?1 OR e.agent_id = '__global__')
+                           AND e.layer = ?2
+                           AND e.epistemic_class = 'current'
+                         LIMIT ?3"
+                            .to_string()
+                    };
+
+                    let mut stmt = conn.prepare(&sql).map_err(GraphError::Database)?;
+
+                    // sqlite-vec stores embeddings as packed little-endian
+                    // f32 BLOBs. Reads come back as a `Vec<u8>` we decode
+                    // here — the same pattern as in `find_duplicate_candidates`
+                    // above. Mismatched-length BLOBs are skipped silently
+                    // (consistent with elsewhere — better than failing the
+                    // whole layer fetch over one corrupt row).
+                    fn decode_blob(blob: Vec<u8>) -> Option<Vec<f32>> {
+                        if blob.is_empty() || !blob.len().is_multiple_of(4) {
+                            return None;
+                        }
+                        Some(
+                            blob.chunks_exact(4)
+                                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                                .collect(),
+                        )
+                    }
+
+                    let rows: Vec<(String, Vec<f32>)> = if limit == 0 {
+                        let mapped = stmt
+                            .query_map(params![agent_id_for_db, layer], |row| {
+                                let id: String = row.get(0)?;
+                                let emb_blob: Vec<u8> = row.get(1)?;
+                                Ok((id, emb_blob))
+                            })
+                            .map_err(GraphError::Database)?;
+                        mapped
+                            .filter_map(|r| r.ok())
+                            .filter_map(|(id, blob)| decode_blob(blob).map(|v| (id, v)))
+                            .collect()
+                    } else {
+                        let mapped = stmt
+                            .query_map(params![agent_id_for_db, layer, limit as i64], |row| {
+                                let id: String = row.get(0)?;
+                                let emb_blob: Vec<u8> = row.get(1)?;
+                                Ok((id, emb_blob))
+                            })
+                            .map_err(GraphError::Database)?;
+                        mapped
+                            .filter_map(|r| r.ok())
+                            .filter_map(|(id, blob)| decode_blob(blob).map(|v| (id, v)))
+                            .collect()
+                    };
+
+                    Ok(rows)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Write a synthesised inter-cluster relation between two aggregate
+    /// entities at the same hierarchy layer (Phase H-3d).
+    ///
+    /// Sets `is_inter_cluster = 1` and `layer = layer` so recall (Phase
+    /// H-4) can distinguish hierarchy-synthesised edges from base ones.
+    /// The (source, target, type) triple inherits the existing
+    /// `UNIQUE` constraint on `kg_relationships` — calling this twice
+    /// with the same arguments returns the `UNIQUE` failure to the
+    /// caller, who should treat it as "already written" and move on.
+    pub fn write_inter_cluster_relation(
+        &self,
+        agent_id: &str,
+        layer: i64,
+        source_aggregate: &str,
+        target_aggregate: &str,
+        relationship_type: &str,
+    ) -> GraphResult<String> {
+        let new_id = format!("rel-agg-{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().to_rfc3339();
+
+        let new_id_for_db = new_id.clone();
+        let agent_id_for_db = agent_id.to_string();
+        let src_for_db = source_aggregate.to_string();
+        let tgt_for_db = target_aggregate.to_string();
+        let rel_type_for_db = relationship_type.to_string();
+
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<()> {
+                    conn.execute(
+                        "INSERT INTO kg_relationships
+                            (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                             epistemic_class, first_seen_at, last_seen_at, mention_count,
+                             layer, is_inter_cluster)
+                         VALUES (?1, ?2, ?3, ?4, ?5, 'current', ?6, ?6, 1, ?7, 1)",
+                        params![
+                            new_id_for_db,
+                            agent_id_for_db,
+                            src_for_db,
+                            tgt_for_db,
+                            rel_type_for_db,
+                            now,
+                            layer,
+                        ],
+                    )
+                    .map_err(GraphError::Database)?;
+                    Ok(())
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)?;
+
+        Ok(new_id)
     }
 
     /// List entities across all agents with optional filters and pagination.
@@ -3219,5 +4059,1389 @@ mod tests {
             "exactly one winner → target edge should remain"
         );
         assert_eq!(surviving[0].source_entity_id, "winner-c");
+    }
+
+    // -----------------------------------------------------------------
+    // connectivity_strength (Phase H-3c)
+    // -----------------------------------------------------------------
+
+    /// Seed entities + relationships directly via raw SQL so the test
+    /// controls entity IDs and edge classes precisely. The storage's
+    /// `store_knowledge` path normalises and assigns IDs, which makes
+    /// it awkward for tests that need stable cross-cluster references.
+    fn seed_entity_raw(storage: &GraphStorage, id: &str, agent_id: &str) {
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         first_seen_at, last_seen_at)
+                     VALUES (?1, ?2, 'Concept', ?1, ?1, ?1, datetime('now'), datetime('now'))",
+                    rusqlite::params![id, agent_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    fn seed_relationship_raw(
+        storage: &GraphStorage,
+        id: &str,
+        agent_id: &str,
+        src: &str,
+        tgt: &str,
+        epistemic_class: &str,
+    ) {
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_relationships
+                        (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                         epistemic_class, first_seen_at, last_seen_at)
+                     VALUES (?1, ?2, ?3, ?4, 'relates_to', ?5,
+                             datetime('now'), datetime('now'))",
+                    rusqlite::params![id, agent_id, src, tgt, epistemic_class],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn connectivity_strength_returns_zero_for_empty_clusters() {
+        let storage = create_test_storage();
+        let result = storage
+            .connectivity_strength("agent-cs", &[], &["a".into()])
+            .unwrap();
+        assert_eq!(result, 0, "empty cluster A → 0");
+        let result = storage
+            .connectivity_strength("agent-cs", &["a".into()], &[])
+            .unwrap();
+        assert_eq!(result, 0, "empty cluster B → 0");
+        let result = storage.connectivity_strength("agent-cs", &[], &[]).unwrap();
+        assert_eq!(result, 0, "both empty → 0");
+    }
+
+    #[test]
+    fn connectivity_strength_counts_both_directions() {
+        let storage = create_test_storage();
+        // Cluster A: e1, e2. Cluster B: e3, e4.
+        for id in ["e1", "e2", "e3", "e4"] {
+            seed_entity_raw(&storage, id, "agent-cs");
+        }
+        // Two A→B edges and one B→A edge.
+        seed_relationship_raw(&storage, "r1", "agent-cs", "e1", "e3", "current");
+        seed_relationship_raw(&storage, "r2", "agent-cs", "e2", "e4", "current");
+        seed_relationship_raw(&storage, "r3", "agent-cs", "e4", "e1", "current");
+
+        let cluster_a = vec!["e1".to_string(), "e2".to_string()];
+        let cluster_b = vec!["e3".to_string(), "e4".to_string()];
+
+        let result = storage
+            .connectivity_strength("agent-cs", &cluster_a, &cluster_b)
+            .unwrap();
+        assert_eq!(result, 3, "two A→B + one B→A must sum to 3, got {result}");
+    }
+
+    #[test]
+    fn connectivity_strength_ignores_intra_cluster_edges() {
+        let storage = create_test_storage();
+        for id in ["e1", "e2", "e3", "e4"] {
+            seed_entity_raw(&storage, id, "agent-cs");
+        }
+        // Within-cluster edges (e1 → e2, e3 → e4) must NOT count.
+        seed_relationship_raw(&storage, "r1", "agent-cs", "e1", "e2", "current");
+        seed_relationship_raw(&storage, "r2", "agent-cs", "e3", "e4", "current");
+        // One legitimate cross-cluster edge.
+        seed_relationship_raw(&storage, "r3", "agent-cs", "e1", "e3", "current");
+
+        let cluster_a = vec!["e1".to_string(), "e2".to_string()];
+        let cluster_b = vec!["e3".to_string(), "e4".to_string()];
+
+        let result = storage
+            .connectivity_strength("agent-cs", &cluster_a, &cluster_b)
+            .unwrap();
+        assert_eq!(result, 1, "only the cross-cluster edge counts");
+    }
+
+    #[test]
+    fn connectivity_strength_excludes_archival_edges() {
+        let storage = create_test_storage();
+        for id in ["e1", "e2", "e3"] {
+            seed_entity_raw(&storage, id, "agent-cs");
+        }
+        // Two cross-cluster edges with distinct endpoints (the UNIQUE
+        // constraint on (src, tgt, type) means we can't have two
+        // edges on the same triplet — use different endpoints for the
+        // current vs archived edge).
+        seed_relationship_raw(&storage, "r-current", "agent-cs", "e1", "e2", "current");
+        seed_relationship_raw(&storage, "r-archived", "agent-cs", "e1", "e3", "archival");
+
+        let cluster_a = vec!["e1".to_string()];
+        let cluster_b = vec!["e2".to_string(), "e3".to_string()];
+
+        let result = storage
+            .connectivity_strength("agent-cs", &cluster_a, &cluster_b)
+            .unwrap();
+        assert_eq!(
+            result, 1,
+            "only the current-class edge contributes; archival is filtered"
+        );
+    }
+
+    #[test]
+    fn connectivity_strength_scopes_by_agent_id() {
+        let storage = create_test_storage();
+        // Same logical entity IDs under two agents; relationships under
+        // a different agent must not leak into the queried agent's count.
+        for id in ["e1", "e2"] {
+            seed_entity_raw(&storage, id, "agent-a");
+            seed_entity_raw(&storage, &format!("{id}b"), "agent-b");
+        }
+        // agent-a has one cross-cluster edge.
+        seed_relationship_raw(&storage, "ra", "agent-a", "e1", "e2", "current");
+        // agent-b has two edges that would match if the agent filter
+        // weren't applied. Both endpoints share names with cluster A/B,
+        // but live under a different agent.
+        seed_relationship_raw(&storage, "rb1", "agent-b", "e1b", "e2b", "current");
+        seed_relationship_raw(&storage, "rb2", "agent-b", "e2b", "e1b", "current");
+
+        let cluster_a = vec!["e1".to_string()];
+        let cluster_b = vec!["e2".to_string()];
+
+        let result = storage
+            .connectivity_strength("agent-a", &cluster_a, &cluster_b)
+            .unwrap();
+        assert_eq!(result, 1, "agent-b edges must not leak into agent-a count");
+
+        // And the reverse — agent-b's count is independent of agent-a's.
+        let cluster_a_b = vec!["e1b".to_string()];
+        let cluster_b_b = vec!["e2b".to_string()];
+        let result = storage
+            .connectivity_strength("agent-b", &cluster_a_b, &cluster_b_b)
+            .unwrap();
+        assert_eq!(result, 2, "agent-b sees its own edges in both directions");
+    }
+
+    #[test]
+    fn connectivity_strength_zero_when_clusters_unconnected() {
+        let storage = create_test_storage();
+        for id in ["e1", "e2", "e3", "e4"] {
+            seed_entity_raw(&storage, id, "agent-cs");
+        }
+        // Edges only within each cluster.
+        seed_relationship_raw(&storage, "r1", "agent-cs", "e1", "e2", "current");
+        seed_relationship_raw(&storage, "r2", "agent-cs", "e3", "e4", "current");
+
+        let cluster_a = vec!["e1".to_string(), "e2".to_string()];
+        let cluster_b = vec!["e3".to_string(), "e4".to_string()];
+
+        let result = storage
+            .connectivity_strength("agent-cs", &cluster_a, &cluster_b)
+            .unwrap();
+        assert_eq!(result, 0, "disconnected clusters → 0");
+    }
+
+    // -----------------------------------------------------------------
+    // promote_cluster_to_aggregate + write_inter_cluster_relation (H-3d)
+    // -----------------------------------------------------------------
+
+    /// Read a single column from a single row by id. Convenience for
+    /// the H-3d tests below.
+    fn read_entity_field<T: rusqlite::types::FromSql>(
+        storage: &GraphStorage,
+        id: &str,
+        column: &str,
+    ) -> Option<T> {
+        let id_owned = id.to_string();
+        let column_owned = column.to_string();
+        let sql = format!("SELECT {column_owned} FROM kg_entities WHERE id = ?1");
+        storage
+            .db
+            .with_connection(|conn| {
+                let value: rusqlite::Result<T> =
+                    conn.query_row(&sql, rusqlite::params![id_owned], |row| row.get(0));
+                Ok(value.ok())
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn promote_cluster_creates_layer_n_plus_1_entity() {
+        let storage = create_test_storage();
+        for id in ["m1", "m2", "m3"] {
+            seed_entity_raw(&storage, id, "agent-h");
+        }
+        let members = vec!["m1".to_string(), "m2".to_string(), "m3".to_string()];
+
+        let agg_id = storage
+            .promote_cluster_to_aggregate(
+                "agent-h",
+                1,
+                &members,
+                "test aggregate",
+                "Three concepts grouped together for testing.",
+                None,
+            )
+            .unwrap();
+        assert!(
+            agg_id.starts_with("agg-"),
+            "aggregate id should have agg- prefix, got {agg_id}"
+        );
+
+        let layer: Option<i64> = read_entity_field(&storage, &agg_id, "layer");
+        assert_eq!(layer, Some(1), "aggregate must live at layer 1");
+
+        let parent: Option<String> = read_entity_field(&storage, &agg_id, "parent_cluster_id");
+        assert!(parent.is_none(), "fresh aggregate has no parent");
+
+        let name: Option<String> = read_entity_field(&storage, &agg_id, "name");
+        assert_eq!(name, Some("test aggregate".to_string()));
+
+        // Description is stored in properties JSON.
+        let props: Option<String> = read_entity_field(&storage, &agg_id, "properties");
+        let props_json: serde_json::Value =
+            serde_json::from_str(&props.expect("properties present")).unwrap();
+        assert_eq!(props_json["aggregate"], serde_json::json!(true));
+        assert_eq!(
+            props_json["description"],
+            serde_json::json!("Three concepts grouped together for testing.")
+        );
+        assert_eq!(props_json["member_count"], serde_json::json!(3));
+    }
+
+    #[test]
+    fn promote_cluster_updates_member_parent_pointers() {
+        let storage = create_test_storage();
+        for id in ["m1", "m2"] {
+            seed_entity_raw(&storage, id, "agent-h");
+        }
+
+        let agg_id = storage
+            .promote_cluster_to_aggregate(
+                "agent-h",
+                1,
+                &["m1".to_string(), "m2".to_string()],
+                "agg",
+                "desc",
+                None,
+            )
+            .unwrap();
+
+        for member in ["m1", "m2"] {
+            let parent: Option<String> = read_entity_field(&storage, member, "parent_cluster_id");
+            assert_eq!(
+                parent.as_deref(),
+                Some(agg_id.as_str()),
+                "{member} should point to the new aggregate"
+            );
+        }
+    }
+
+    #[test]
+    fn promote_cluster_persists_embedding_when_provided() {
+        let storage = create_test_storage();
+        seed_entity_raw(&storage, "m1", "agent-h");
+
+        // The kg_name_index vec0 table is declared with FLOAT[384] in
+        // the default-dimension init path. Padded fixture vector so
+        // the dimension check passes (test doesn't care about the
+        // actual values — only that the row exists).
+        let mut embedding = vec![0.0_f32; 384];
+        embedding[0] = 0.1;
+        embedding[1] = 0.2;
+        let agg_id = storage
+            .promote_cluster_to_aggregate(
+                "agent-h",
+                1,
+                &["m1".to_string()],
+                "agg",
+                "desc",
+                Some(embedding.clone()),
+            )
+            .unwrap();
+
+        // kg_name_index should have a row for the aggregate's id.
+        let agg_id_for_db = agg_id.clone();
+        let row_count: i64 = storage
+            .db
+            .with_connection(|conn| {
+                let count: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM kg_name_index WHERE entity_id = ?1",
+                        rusqlite::params![agg_id_for_db],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                Ok(count)
+            })
+            .unwrap();
+        assert_eq!(
+            row_count, 1,
+            "kg_name_index should have a row for the aggregate"
+        );
+    }
+
+    #[test]
+    fn promote_cluster_skips_embedding_when_none() {
+        let storage = create_test_storage();
+        seed_entity_raw(&storage, "m1", "agent-h");
+
+        let agg_id = storage
+            .promote_cluster_to_aggregate("agent-h", 1, &["m1".to_string()], "agg", "desc", None)
+            .unwrap();
+
+        let agg_id_for_db = agg_id.clone();
+        let row_count: i64 = storage
+            .db
+            .with_connection(|conn| {
+                let count: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM kg_name_index WHERE entity_id = ?1",
+                        rusqlite::params![agg_id_for_db],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                Ok(count)
+            })
+            .unwrap();
+        assert_eq!(row_count, 0, "no embedding → no kg_name_index row");
+    }
+
+    #[test]
+    fn promote_cluster_is_atomic_under_missing_members() {
+        // A member id that doesn't exist must not fail the whole
+        // operation. The aggregate still gets created; the missing
+        // member's UPDATE simply affects zero rows.
+        let storage = create_test_storage();
+        seed_entity_raw(&storage, "m1", "agent-h");
+
+        let agg_id = storage
+            .promote_cluster_to_aggregate(
+                "agent-h",
+                1,
+                &["m1".to_string(), "ghost".to_string()],
+                "agg",
+                "desc",
+                None,
+            )
+            .unwrap();
+
+        let layer: Option<i64> = read_entity_field(&storage, &agg_id, "layer");
+        assert_eq!(layer, Some(1));
+
+        let m1_parent: Option<String> = read_entity_field(&storage, "m1", "parent_cluster_id");
+        assert_eq!(m1_parent, Some(agg_id));
+    }
+
+    #[test]
+    fn write_inter_cluster_relation_sets_flag_and_layer() {
+        let storage = create_test_storage();
+        seed_entity_raw(&storage, "agg-a", "agent-h");
+        seed_entity_raw(&storage, "agg-b", "agent-h");
+
+        let rel_id = storage
+            .write_inter_cluster_relation("agent-h", 2, "agg-a", "agg-b", "encompasses")
+            .unwrap();
+        assert!(
+            rel_id.starts_with("rel-agg-"),
+            "inter-cluster relation id should have rel-agg- prefix, got {rel_id}"
+        );
+
+        let rel_id_for_db = rel_id.clone();
+        let (layer, is_inter, src, tgt, rtype): (i64, i64, String, String, String) = storage
+            .db
+            .with_connection(|conn| {
+                let row = conn
+                    .query_row(
+                        "SELECT layer, is_inter_cluster, source_entity_id, target_entity_id,
+                                relationship_type
+                         FROM kg_relationships WHERE id = ?1",
+                        rusqlite::params![rel_id_for_db],
+                        |row| {
+                            Ok((
+                                row.get::<_, i64>(0)?,
+                                row.get::<_, i64>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, String>(3)?,
+                                row.get::<_, String>(4)?,
+                            ))
+                        },
+                    )
+                    .unwrap();
+                Ok(row)
+            })
+            .unwrap();
+        assert_eq!(layer, 2);
+        assert_eq!(is_inter, 1);
+        assert_eq!(src, "agg-a");
+        assert_eq!(tgt, "agg-b");
+        assert_eq!(rtype, "encompasses");
+    }
+
+    /// Helper for H-3e: insert an entity at a non-zero layer with an
+    /// embedding row in kg_name_index. Used to seed layer-N fixtures
+    /// for the list-by-layer tests below.
+    fn seed_entity_at_layer(
+        storage: &GraphStorage,
+        id: &str,
+        agent_id: &str,
+        layer: i64,
+        embedding: Vec<f32>,
+    ) {
+        let id = id.to_string();
+        let agent_id = agent_id.to_string();
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         first_seen_at, last_seen_at, layer)
+                     VALUES (?1, ?2, 'Concept', ?1, ?1, ?1,
+                             datetime('now'), datetime('now'), ?3)",
+                    rusqlite::params![id, agent_id, layer],
+                )?;
+                let embedding_json = serde_json::to_string(&embedding).unwrap();
+                conn.execute(
+                    "INSERT INTO kg_name_index (entity_id, name_embedding) VALUES (?1, ?2)",
+                    rusqlite::params![id, embedding_json],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    fn padded_embedding(seed: f32) -> Vec<f32> {
+        let mut v = vec![0.0_f32; 384];
+        v[0] = seed;
+        v[1] = seed * 0.5;
+        v
+    }
+
+    #[test]
+    fn list_entities_with_embeddings_at_layer_returns_only_matching_layer() {
+        let storage = create_test_storage();
+        seed_entity_at_layer(&storage, "l0a", "agent-h", 0, padded_embedding(1.0));
+        seed_entity_at_layer(&storage, "l0b", "agent-h", 0, padded_embedding(2.0));
+        seed_entity_at_layer(&storage, "l1a", "agent-h", 1, padded_embedding(3.0));
+
+        let layer0 = storage
+            .list_entities_with_embeddings_at_layer("agent-h", 0, 0)
+            .unwrap();
+        let mut layer0_ids: Vec<_> = layer0.iter().map(|(id, _)| id.clone()).collect();
+        layer0_ids.sort();
+        assert_eq!(layer0_ids, vec!["l0a".to_string(), "l0b".to_string()]);
+
+        let layer1 = storage
+            .list_entities_with_embeddings_at_layer("agent-h", 1, 0)
+            .unwrap();
+        assert_eq!(layer1.len(), 1);
+        assert_eq!(layer1[0].0, "l1a");
+        assert!(
+            layer1[0].1.len() == 384,
+            "embedding round-trip preserves dimension"
+        );
+    }
+
+    #[test]
+    fn list_entities_with_embeddings_at_layer_scopes_by_agent_id() {
+        let storage = create_test_storage();
+        seed_entity_at_layer(&storage, "agA-e1", "agent-a", 0, padded_embedding(1.0));
+        seed_entity_at_layer(&storage, "agB-e1", "agent-b", 0, padded_embedding(2.0));
+
+        let rows = storage
+            .list_entities_with_embeddings_at_layer("agent-a", 0, 0)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "agA-e1");
+    }
+
+    /// Regression: base entities live under `agent_id = '__global__'` by
+    /// the cross-agent dedup convention in this codebase. The hierarchy
+    /// reads must dual-match so a daemon configured for `agent_id = 'root'`
+    /// can see them — without this, the builder hits PoolTooSmall on
+    /// every cycle even when the graph is full.
+    #[test]
+    fn list_entities_with_embeddings_at_layer_picks_up_global_rows() {
+        let storage = create_test_storage();
+        // Seed under __global__ (the prod convention).
+        seed_entity_at_layer(&storage, "g-e1", "__global__", 0, padded_embedding(1.0));
+        seed_entity_at_layer(&storage, "g-e2", "__global__", 0, padded_embedding(2.0));
+        // And one under a different agent_id to be sure cross-agent
+        // leak doesn't happen (the dual-match is `?1 OR '__global__'`,
+        // not "everything").
+        seed_entity_at_layer(
+            &storage,
+            "other-e1",
+            "agent-other",
+            0,
+            padded_embedding(3.0),
+        );
+
+        let rows = storage
+            .list_entities_with_embeddings_at_layer("root", 0, 0)
+            .unwrap();
+        let mut ids: Vec<_> = rows.iter().map(|(id, _)| id.clone()).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec!["g-e1".to_string(), "g-e2".to_string()],
+            "dual-match must pull __global__ rows but not other agents'"
+        );
+    }
+
+    /// Same regression for `connectivity_strength`: cross-cluster edges
+    /// stored under `__global__` must be counted when the queried agent
+    /// is `root`.
+    #[test]
+    fn connectivity_strength_picks_up_global_relationships() {
+        let storage = create_test_storage();
+        seed_entity_raw(&storage, "g-a", "__global__");
+        seed_entity_raw(&storage, "g-b", "__global__");
+        seed_relationship_raw(&storage, "r-global", "__global__", "g-a", "g-b", "current");
+
+        let result = storage
+            .connectivity_strength("root", &["g-a".to_string()], &["g-b".to_string()])
+            .unwrap();
+        assert_eq!(result, 1, "edge under __global__ must count for root");
+    }
+
+    /// Same regression for `compute_lca_path`: the parent-pointer walk
+    /// must cross the __global__ boundary so a layer-0 entity under
+    /// __global__ can reach a layer-1 aggregate.
+    #[test]
+    fn lca_walk_traverses_global_parent_pointers() {
+        let storage = create_test_storage();
+        seed_hier_entity(&storage, "agg-top", "__global__", 1, None);
+        seed_hier_entity(&storage, "g-a", "__global__", 0, Some("agg-top"));
+        seed_hier_entity(&storage, "g-b", "__global__", 0, Some("agg-top"));
+
+        let (lca, path, max_layer) = storage
+            .compute_lca_path("root", &["g-a".to_string(), "g-b".to_string()])
+            .unwrap();
+        assert_eq!(lca.as_deref(), Some("agg-top"));
+        assert_eq!(path, vec!["agg-top".to_string()]);
+        assert_eq!(max_layer, 1);
+    }
+
+    // -----------------------------------------------------------------
+    // hierarchy_summary (Observatory stats endpoint)
+    // -----------------------------------------------------------------
+
+    /// Seed an aggregate entity at a given layer with a JSON
+    /// `properties` blob carrying `member_count` + `description`.
+    /// Used by the summary tests below to control the top-N ordering.
+    fn seed_aggregate(
+        storage: &GraphStorage,
+        id: &str,
+        agent_id: &str,
+        name: &str,
+        layer: i64,
+        member_count: usize,
+        description: &str,
+    ) {
+        let id = id.to_string();
+        let agent_id = agent_id.to_string();
+        let name = name.to_string();
+        let description = description.to_string();
+        let props = serde_json::json!({
+            "aggregate": true,
+            "member_count": member_count,
+            "description": description,
+        })
+        .to_string();
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         properties, first_seen_at, last_seen_at, layer)
+                     VALUES (?1, ?2, 'Concept', ?3, ?3, ?3,
+                             ?4, datetime('now'), datetime('now'), ?5)",
+                    rusqlite::params![id, agent_id, name, props, layer],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn hierarchy_summary_groups_by_layer_and_orders_aggregates_by_member_count() {
+        let storage = create_test_storage();
+        // Layer 0 base entities (dual-match: stored under __global__).
+        for i in 0..5 {
+            seed_entity_raw(&storage, &format!("e{i}"), "__global__");
+        }
+        // Three aggregates at layer 1, two at layer 2.
+        seed_aggregate(&storage, "a1", "root", "small-cluster", 1, 5, "small");
+        seed_aggregate(
+            &storage,
+            "a2",
+            "root",
+            "huge-cluster",
+            1,
+            50,
+            "huge — should be ranked first",
+        );
+        seed_aggregate(&storage, "a3", "root", "medium-cluster", 1, 20, "medium");
+        seed_aggregate(&storage, "a4", "root", "top-l2-a", 2, 30, "top layer");
+        seed_aggregate(&storage, "a5", "root", "top-l2-b", 2, 25, "top layer");
+
+        // One inter-cluster edge between two layer-1 aggregates.
+        seed_relationship_raw(&storage, "ic1", "root", "a1", "a2", "current");
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "UPDATE kg_relationships SET is_inter_cluster = 1, layer = 1 \
+                     WHERE id = ?1",
+                    rusqlite::params!["ic1"],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let (layer_counts, inter_cluster, top_aggs) =
+            storage.hierarchy_summary("root", 10).unwrap();
+
+        // Layer counts: layer 0 = 5 (under __global__, dual-matched);
+        // layer 1 = 3; layer 2 = 2.
+        assert_eq!(
+            layer_counts,
+            vec![(0, 5), (1, 3), (2, 2)],
+            "layer_counts must group correctly + include __global__ rows"
+        );
+
+        // Total inter-cluster edges = 1.
+        assert_eq!(inter_cluster, 1);
+
+        // Top aggregates ordered by member_count DESC. Layer 0
+        // entities are excluded (layer > 0 filter).
+        let names: Vec<&str> = top_aggs.iter().map(|t| t.1.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "huge-cluster",
+                "top-l2-a",
+                "top-l2-b",
+                "medium-cluster",
+                "small-cluster",
+            ],
+            "aggregates must order by member_count DESC across layers"
+        );
+
+        // First entry has the right shape end-to-end.
+        let huge = &top_aggs[0];
+        assert_eq!(huge.0, "a2");
+        assert_eq!(huge.1, "huge-cluster");
+        assert_eq!(huge.2, 1, "layer");
+        assert_eq!(huge.3, 50, "member_count");
+        assert!(huge.4.contains("ranked first"), "description preserved");
+    }
+
+    #[test]
+    fn hierarchy_summary_top_n_zero_skips_aggregate_query() {
+        let storage = create_test_storage();
+        seed_aggregate(&storage, "a1", "root", "agg-1", 1, 10, "");
+        seed_aggregate(&storage, "a2", "root", "agg-2", 1, 20, "");
+
+        let (_layers, _ic, top) = storage.hierarchy_summary("root", 0).unwrap();
+        assert!(top.is_empty(), "top_n=0 must return zero aggregate rows");
+    }
+
+    #[test]
+    fn hierarchy_summary_top_n_caps_results() {
+        let storage = create_test_storage();
+        for i in 0..5 {
+            seed_aggregate(
+                &storage,
+                &format!("a{i}"),
+                "root",
+                &format!("agg-{i}"),
+                1,
+                (5 - i) * 10,
+                "",
+            );
+        }
+        let (_layers, _ic, top) = storage.hierarchy_summary("root", 2).unwrap();
+        assert_eq!(top.len(), 2, "top_n must cap the result set");
+        // Highest member_count first.
+        assert_eq!(top[0].1, "agg-0");
+        assert_eq!(top[1].1, "agg-1");
+    }
+
+    #[test]
+    fn hierarchy_summary_empty_db_returns_empty_layer_list() {
+        let storage = create_test_storage();
+        let (layers, inter_cluster, top) = storage.hierarchy_summary("root", 10).unwrap();
+        assert!(layers.is_empty());
+        assert_eq!(inter_cluster, 0);
+        assert!(top.is_empty());
+    }
+
+    #[test]
+    fn list_entities_with_embeddings_at_layer_skips_entities_without_embedding() {
+        let storage = create_test_storage();
+        seed_entity_at_layer(&storage, "with-emb", "agent-h", 0, padded_embedding(1.0));
+        // Insert an entity WITHOUT a kg_name_index row.
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         first_seen_at, last_seen_at, layer)
+                     VALUES ('no-emb', 'agent-h', 'Concept', 'x', 'x', 'x',
+                             datetime('now'), datetime('now'), 0)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let rows = storage
+            .list_entities_with_embeddings_at_layer("agent-h", 0, 0)
+            .unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "entity without kg_name_index row must be skipped"
+        );
+        assert_eq!(rows[0].0, "with-emb");
+    }
+
+    #[test]
+    fn list_entities_with_embeddings_at_layer_respects_limit() {
+        let storage = create_test_storage();
+        for i in 0..5 {
+            seed_entity_at_layer(
+                &storage,
+                &format!("e{i}"),
+                "agent-h",
+                0,
+                padded_embedding(i as f32),
+            );
+        }
+
+        let unbounded = storage
+            .list_entities_with_embeddings_at_layer("agent-h", 0, 0)
+            .unwrap();
+        assert_eq!(unbounded.len(), 5, "limit=0 means no limit");
+
+        let bounded = storage
+            .list_entities_with_embeddings_at_layer("agent-h", 0, 2)
+            .unwrap();
+        assert_eq!(bounded.len(), 2);
+    }
+
+    #[test]
+    fn list_entities_with_embeddings_at_layer_excludes_archival_entities() {
+        let storage = create_test_storage();
+        seed_entity_at_layer(&storage, "current", "agent-h", 0, padded_embedding(1.0));
+        // Same shape as seed_entity_at_layer but with epistemic_class='archival'.
+        let archival_emb = serde_json::to_string(&padded_embedding(2.0)).unwrap();
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         epistemic_class, first_seen_at, last_seen_at, layer)
+                     VALUES ('archived', 'agent-h', 'Concept', 'x', 'x', 'x',
+                             'archival', datetime('now'), datetime('now'), 0)",
+                    [],
+                )?;
+                conn.execute(
+                    "INSERT INTO kg_name_index (entity_id, name_embedding) VALUES (?1, ?2)",
+                    rusqlite::params!["archived", archival_emb],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let rows = storage
+            .list_entities_with_embeddings_at_layer("agent-h", 0, 0)
+            .unwrap();
+        assert_eq!(rows.len(), 1, "only current-class entities count");
+        assert_eq!(rows[0].0, "current");
+    }
+
+    // -----------------------------------------------------------------
+    // compute_lca_path (Phase H-4a)
+    // -----------------------------------------------------------------
+
+    /// Seed an entity at `layer` with the given `parent_cluster_id`
+    /// (None = top-level). Used by the LCA tests below.
+    fn seed_hier_entity(
+        storage: &GraphStorage,
+        id: &str,
+        agent_id: &str,
+        layer: i64,
+        parent: Option<&str>,
+    ) {
+        let id = id.to_string();
+        let agent_id = agent_id.to_string();
+        let parent = parent.map(String::from);
+        storage
+            .db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         first_seen_at, last_seen_at, layer, parent_cluster_id)
+                     VALUES (?1, ?2, 'Concept', ?1, ?1, ?1,
+                             datetime('now'), datetime('now'), ?3, ?4)",
+                    rusqlite::params![id, agent_id, layer, parent],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn lca_empty_seeds_yields_empty_result() {
+        let storage = create_test_storage();
+        let (lca, path, max_layer) = storage.compute_lca_path("agent-lca", &[]).unwrap();
+        assert!(lca.is_none());
+        assert!(path.is_empty());
+        assert_eq!(max_layer, 0);
+    }
+
+    #[test]
+    fn lca_single_seed_is_its_own_lca() {
+        let storage = create_test_storage();
+        seed_hier_entity(&storage, "e1", "agent-lca", 0, None);
+        let (lca, path, max_layer) = storage
+            .compute_lca_path("agent-lca", &["e1".to_string()])
+            .unwrap();
+        assert_eq!(lca.as_deref(), Some("e1"));
+        assert!(
+            path.is_empty(),
+            "path excludes the seed; single-seed path must be empty"
+        );
+        assert_eq!(max_layer, 0);
+    }
+
+    #[test]
+    fn lca_seeds_with_no_parents_have_no_common_ancestor() {
+        let storage = create_test_storage();
+        seed_hier_entity(&storage, "a", "agent-lca", 0, None);
+        seed_hier_entity(&storage, "b", "agent-lca", 0, None);
+        let (lca, path, max_layer) = storage
+            .compute_lca_path("agent-lca", &["a".to_string(), "b".to_string()])
+            .unwrap();
+        assert!(lca.is_none(), "two unparented seeds share no LCA");
+        assert!(path.is_empty());
+        assert_eq!(max_layer, 0);
+    }
+
+    #[test]
+    fn lca_two_seeds_under_same_parent_resolves_at_layer_1() {
+        let storage = create_test_storage();
+        // agg-1 (layer 1) parent of both a, b (layer 0)
+        seed_hier_entity(&storage, "agg-1", "agent-lca", 1, None);
+        seed_hier_entity(&storage, "a", "agent-lca", 0, Some("agg-1"));
+        seed_hier_entity(&storage, "b", "agent-lca", 0, Some("agg-1"));
+
+        let (lca, path, max_layer) = storage
+            .compute_lca_path("agent-lca", &["a".to_string(), "b".to_string()])
+            .unwrap();
+        assert_eq!(lca.as_deref(), Some("agg-1"));
+        assert_eq!(
+            path,
+            vec!["agg-1".to_string()],
+            "path contains just the LCA (seeds excluded)"
+        );
+        assert_eq!(max_layer, 1);
+    }
+
+    #[test]
+    fn lca_three_seeds_across_two_layers_resolves_at_layer_2() {
+        let storage = create_test_storage();
+        // Hierarchy:
+        //   top (L2)
+        //     ├── mid-1 (L1)
+        //     │     ├── a (L0)
+        //     │     └── b (L0)
+        //     └── mid-2 (L1)
+        //           └── c (L0)
+        // LCA(a, c) = top; LCA(a, b) = mid-1.
+        seed_hier_entity(&storage, "top", "agent-lca", 2, None);
+        seed_hier_entity(&storage, "mid-1", "agent-lca", 1, Some("top"));
+        seed_hier_entity(&storage, "mid-2", "agent-lca", 1, Some("top"));
+        seed_hier_entity(&storage, "a", "agent-lca", 0, Some("mid-1"));
+        seed_hier_entity(&storage, "b", "agent-lca", 0, Some("mid-1"));
+        seed_hier_entity(&storage, "c", "agent-lca", 0, Some("mid-2"));
+
+        // a, b → mid-1
+        let (lca, path, max_layer) = storage
+            .compute_lca_path("agent-lca", &["a".to_string(), "b".to_string()])
+            .unwrap();
+        assert_eq!(lca.as_deref(), Some("mid-1"));
+        assert_eq!(path, vec!["mid-1".to_string()]);
+        assert_eq!(max_layer, 1);
+
+        // a, c → top, path also contains both mids
+        let (lca, mut path, max_layer) = storage
+            .compute_lca_path("agent-lca", &["a".to_string(), "c".to_string()])
+            .unwrap();
+        assert_eq!(lca.as_deref(), Some("top"));
+        path.sort();
+        assert_eq!(
+            path,
+            vec!["mid-1".to_string(), "mid-2".to_string(), "top".to_string()]
+        );
+        assert_eq!(max_layer, 2);
+    }
+
+    #[test]
+    fn lca_walk_terminates_on_corrupt_parent_cycle() {
+        // Two seeds, one with a cycle in its parent chain. The walk
+        // must bail out at MAX_LCA_WALK rather than hang. The cycle
+        // means the seed eventually re-visits an ancestor but never
+        // hits the other seed's chain — result: no LCA, no panic.
+        let storage = create_test_storage();
+        seed_hier_entity(&storage, "x", "agent-lca", 1, Some("y"));
+        seed_hier_entity(&storage, "y", "agent-lca", 2, Some("x")); // cycle x→y→x
+        seed_hier_entity(&storage, "z", "agent-lca", 0, None);
+
+        let (lca, path, _) = storage
+            .compute_lca_path("agent-lca", &["x".to_string(), "z".to_string()])
+            .unwrap();
+        assert!(lca.is_none(), "z has no parent — no common ancestor");
+        assert!(path.is_empty());
+    }
+
+    #[test]
+    fn lca_scopes_by_agent_id() {
+        let storage = create_test_storage();
+        // Agent A: a, b → agg-A
+        seed_hier_entity(&storage, "agg-A", "agent-A", 1, None);
+        seed_hier_entity(&storage, "a", "agent-A", 0, Some("agg-A"));
+        seed_hier_entity(&storage, "b", "agent-A", 0, Some("agg-A"));
+        // Agent B has its own hierarchy with no overlap.
+        seed_hier_entity(&storage, "agg-B", "agent-B", 1, None);
+        seed_hier_entity(&storage, "p", "agent-B", 0, Some("agg-B"));
+
+        let (lca_a, _, _) = storage
+            .compute_lca_path("agent-A", &["a".to_string(), "b".to_string()])
+            .unwrap();
+        assert_eq!(lca_a.as_deref(), Some("agg-A"));
+
+        // Querying agent-A with an agent-B entity returns no LCA —
+        // the parent walk filters by agent_id, so p's parent pointer
+        // is invisible under agent-A.
+        let (lca_cross, _, _) = storage
+            .compute_lca_path("agent-A", &["a".to_string(), "p".to_string()])
+            .unwrap();
+        assert!(
+            lca_cross.is_none(),
+            "cross-agent seeds must not share an LCA"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // list_inter_cluster_relations (Phase H-4 follow-up)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn list_inter_cluster_relations_empty_input_yields_empty() {
+        let storage = create_test_storage();
+        let out = storage
+            .list_inter_cluster_relations("agent-h", &[])
+            .unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn list_inter_cluster_relations_returns_only_marked_rows_in_set() {
+        let storage = create_test_storage();
+        for id in ["agg-a", "agg-b", "agg-c"] {
+            seed_entity_raw(&storage, id, "agent-h");
+        }
+        // One inter-cluster edge (the kind we want).
+        storage
+            .write_inter_cluster_relation("agent-h", 2, "agg-a", "agg-b", "encompasses")
+            .unwrap();
+        // One ordinary base edge — must NOT come back.
+        seed_relationship_raw(&storage, "r-base", "agent-h", "agg-a", "agg-c", "current");
+
+        let ids = vec![
+            "agg-a".to_string(),
+            "agg-b".to_string(),
+            "agg-c".to_string(),
+        ];
+        let out = storage
+            .list_inter_cluster_relations("agent-h", &ids)
+            .unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].1, "agg-a"); // source
+        assert_eq!(out[0].2, "agg-b"); // target
+        assert_eq!(out[0].3, "encompasses");
+        assert_eq!(out[0].4, 2); // layer
+    }
+
+    #[test]
+    fn list_inter_cluster_relations_excludes_edges_outside_id_set() {
+        let storage = create_test_storage();
+        for id in ["agg-a", "agg-b", "agg-c"] {
+            seed_entity_raw(&storage, id, "agent-h");
+        }
+        // Edge between agg-a and agg-c — but agg-c is not in our query set.
+        storage
+            .write_inter_cluster_relation("agent-h", 2, "agg-a", "agg-c", "encompasses")
+            .unwrap();
+
+        let ids = vec!["agg-a".to_string(), "agg-b".to_string()];
+        let out = storage
+            .list_inter_cluster_relations("agent-h", &ids)
+            .unwrap();
+        assert!(
+            out.is_empty(),
+            "edge whose target is outside the queried set must not surface"
+        );
+    }
+
+    #[test]
+    fn list_inter_cluster_relations_scopes_by_agent_id() {
+        let storage = create_test_storage();
+        for id in ["agg-a", "agg-b"] {
+            seed_entity_raw(&storage, id, "agent-a");
+            seed_entity_raw(&storage, &format!("{id}-b"), "agent-b");
+        }
+        storage
+            .write_inter_cluster_relation("agent-a", 2, "agg-a", "agg-b", "shares")
+            .unwrap();
+        storage
+            .write_inter_cluster_relation("agent-b", 2, "agg-a-b", "agg-b-b", "shares")
+            .unwrap();
+
+        let ids = vec!["agg-a".to_string(), "agg-b".to_string()];
+        let out = storage
+            .list_inter_cluster_relations("agent-a", &ids)
+            .unwrap();
+        assert_eq!(out.len(), 1, "agent-b's edge must not leak into agent-a");
+    }
+
+    #[test]
+    fn write_inter_cluster_relation_rejects_duplicate_triple() {
+        let storage = create_test_storage();
+        seed_entity_raw(&storage, "agg-a", "agent-h");
+        seed_entity_raw(&storage, "agg-b", "agent-h");
+
+        storage
+            .write_inter_cluster_relation("agent-h", 2, "agg-a", "agg-b", "encompasses")
+            .unwrap();
+
+        // Same (src, tgt, type) — UNIQUE constraint fires.
+        let result =
+            storage.write_inter_cluster_relation("agent-h", 2, "agg-a", "agg-b", "encompasses");
+        assert!(
+            result.is_err(),
+            "second write with same (src, tgt, type) must fail with UNIQUE"
+        );
+
+        // Same (src, tgt) with a different type — allowed.
+        let _other = storage
+            .write_inter_cluster_relation("agent-h", 2, "agg-a", "agg-b", "differs-from")
+            .unwrap();
+    }
+
+    // ============================================================================
+    // MEM-001 Part B-1 — search_entities_by_name_embedding returns confidence
+    // ============================================================================
+
+    #[test]
+    fn search_entities_by_name_embedding_returns_entity_confidence() {
+        let storage = create_test_storage();
+        let agent = "agent-b1";
+
+        // The default vec0 dimension in the test DB is 384 (see schema
+        // initialisation). Insert one entity with a non-default
+        // confidence (0.42) + its all-zero vec row at that dim. The
+        // vector doesn't need to be meaningful — KNN against the same
+        // all-zero query returns it as the closest (and only) hit.
+        const DIM: usize = 384;
+        let now = chrono::Utc::now().to_rfc3339();
+        storage
+            .knowledge_db()
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         epistemic_class, confidence, mention_count, access_count,
+                         first_seen_at, last_seen_at)
+                     VALUES ('e1', ?1, 'Concept', 'Alice', 'alice', 'h-alice',
+                             'current', 0.42, 1, 0, ?2, ?2)",
+                    rusqlite::params![agent, now],
+                )?;
+                let vec_json = serde_json::to_string(&vec![0.0_f32; DIM]).unwrap();
+                conn.execute(
+                    "INSERT INTO kg_name_index(entity_id, name_embedding) VALUES ('e1', ?1)",
+                    rusqlite::params![vec_json],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let query = vec![0.0_f32; DIM];
+
+        let hits = storage
+            .search_entities_by_name_embedding(&query, 5, agent)
+            .expect("search ok");
+
+        assert_eq!(hits.len(), 1, "expected one hit, got {hits:?}");
+        let (_id, name, _etype, _dist, confidence) = &hits[0];
+        assert_eq!(name, "Alice");
+        assert!(
+            (confidence - 0.42).abs() < 1e-6,
+            "expected confidence 0.42, got {confidence}"
+        );
+    }
+
+    // ========================================================================
+    // MEM-001 Part B-2 — traverse_weighted_sync tests
+    // ========================================================================
+
+    fn insert_b2_entity(
+        storage: &GraphStorage,
+        id: &str,
+        agent: &str,
+        confidence: f64,
+        epistemic_class: &str,
+    ) {
+        let now = chrono::Utc::now().to_rfc3339();
+        storage
+            .knowledge_db()
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_entities
+                        (id, agent_id, entity_type, name, normalized_name, normalized_hash,
+                         epistemic_class, confidence, mention_count, access_count,
+                         first_seen_at, last_seen_at)
+                     VALUES (?1, ?2, 'Concept', ?1, ?1, ?1, ?3, ?4, 1, 0, ?5, ?5)",
+                    rusqlite::params![id, agent, epistemic_class, confidence, now],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)] // 8 args in a test helper is fine.
+    fn insert_b2_relationship(
+        storage: &GraphStorage,
+        id: &str,
+        agent: &str,
+        src: &str,
+        tgt: &str,
+        rel_type: &str,
+        confidence: f64,
+        epistemic_class: &str,
+    ) {
+        let now = chrono::Utc::now().to_rfc3339();
+        storage
+            .knowledge_db()
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO kg_relationships
+                        (id, agent_id, source_entity_id, target_entity_id, relationship_type,
+                         epistemic_class, confidence, mention_count, access_count,
+                         first_seen_at, last_seen_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 0, ?8, ?8)",
+                    rusqlite::params![
+                        id,
+                        agent,
+                        src,
+                        tgt,
+                        rel_type,
+                        epistemic_class,
+                        confidence,
+                        now
+                    ],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn traverse_weighted_returns_direct_neighbor() {
+        let storage = create_test_storage();
+        let agent = "agent-b2";
+
+        insert_b2_entity(&storage, "seed", agent, 1.0, "current");
+        insert_b2_entity(&storage, "neighbor", agent, 0.7, "current");
+        insert_b2_relationship(
+            &storage,
+            "r1",
+            agent,
+            "seed",
+            "neighbor",
+            "RelatedTo",
+            0.9,
+            "current",
+        );
+
+        let rows = storage
+            .traverse_weighted_sync("seed", agent, 2, 0.0, 10)
+            .expect("ok");
+        assert_eq!(rows.len(), 1, "expected one neighbor, got {rows:?}");
+        let r = &rows[0];
+        assert_eq!(r.entity_id, "neighbor");
+        assert_eq!(r.hop, 1);
+        assert!((r.entity_confidence - 0.7).abs() < 1e-6);
+        assert!((r.edge_confidence_product - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn traverse_weighted_filters_low_confidence_edges() {
+        let storage = create_test_storage();
+        let agent = "agent-b2";
+
+        insert_b2_entity(&storage, "seed", agent, 1.0, "current");
+        insert_b2_entity(&storage, "near", agent, 0.8, "current");
+        insert_b2_entity(&storage, "far", agent, 0.8, "current");
+        // High-confidence edge to "near"; low-confidence edge to "far".
+        insert_b2_relationship(
+            &storage,
+            "r-near",
+            agent,
+            "seed",
+            "near",
+            "RelatedTo",
+            0.9,
+            "current",
+        );
+        insert_b2_relationship(
+            &storage, "r-far", agent, "seed", "far", "WorksFor", 0.05, "current",
+        );
+
+        let rows = storage
+            .traverse_weighted_sync("seed", agent, 1, 0.5, 10)
+            .expect("ok");
+        let ids: Vec<&str> = rows.iter().map(|r| r.entity_id.as_str()).collect();
+        assert_eq!(ids, vec!["near"], "low-confidence edge should be dropped");
+    }
+
+    #[test]
+    fn traverse_weighted_two_hops_accumulates_edge_product() {
+        let storage = create_test_storage();
+        let agent = "agent-b2";
+
+        insert_b2_entity(&storage, "seed", agent, 1.0, "current");
+        insert_b2_entity(&storage, "mid", agent, 0.9, "current");
+        insert_b2_entity(&storage, "leaf", agent, 0.6, "current");
+        insert_b2_relationship(
+            &storage,
+            "r1",
+            agent,
+            "seed",
+            "mid",
+            "RelatedTo",
+            0.8,
+            "current",
+        );
+        insert_b2_relationship(
+            &storage, "r2", agent, "mid", "leaf", "Contains", 0.5, "current",
+        );
+
+        let rows = storage
+            .traverse_weighted_sync("seed", agent, 2, 0.0, 10)
+            .expect("ok");
+        let leaf = rows
+            .iter()
+            .find(|r| r.entity_id == "leaf")
+            .expect("leaf should be reachable at hop 2");
+        assert_eq!(leaf.hop, 2);
+        assert!(
+            (leaf.edge_confidence_product - (0.8 * 0.5)).abs() < 1e-6,
+            "edge product should be 0.8 * 0.5 = 0.4, got {}",
+            leaf.edge_confidence_product
+        );
+    }
+
+    #[test]
+    fn traverse_weighted_excludes_archival_entities_and_edges() {
+        let storage = create_test_storage();
+        let agent = "agent-b2";
+
+        insert_b2_entity(&storage, "seed", agent, 1.0, "current");
+        insert_b2_entity(&storage, "archived-target", agent, 0.7, "archival");
+        insert_b2_entity(&storage, "current-target", agent, 0.7, "current");
+        insert_b2_relationship(
+            &storage,
+            "r-arch",
+            agent,
+            "seed",
+            "archived-target",
+            "X",
+            0.9,
+            "current",
+        );
+        insert_b2_relationship(
+            &storage,
+            "r-archedge",
+            agent,
+            "seed",
+            "current-target",
+            "Y",
+            0.9,
+            "archival",
+        );
+
+        let rows = storage
+            .traverse_weighted_sync("seed", agent, 1, 0.0, 10)
+            .expect("ok");
+        assert!(
+            rows.is_empty(),
+            "archival rows + archival edges both excluded: got {rows:?}"
+        );
+    }
+
+    #[test]
+    fn traverse_weighted_agent_scope_blocks_cross_agent() {
+        let storage = create_test_storage();
+
+        insert_b2_entity(&storage, "seed", "agent-a", 1.0, "current");
+        insert_b2_entity(&storage, "other", "agent-b", 0.8, "current");
+        insert_b2_relationship(
+            &storage, "r-x", "agent-b", "seed", "other", "X", 0.9, "current",
+        );
+
+        let rows = storage
+            .traverse_weighted_sync("seed", "agent-a", 1, 0.0, 10)
+            .expect("ok");
+        assert!(
+            rows.is_empty(),
+            "agent-b's edge shouldn't be visible from agent-a: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn traverse_weighted_global_agent_visible_to_any_agent() {
+        let storage = create_test_storage();
+
+        insert_b2_entity(&storage, "seed", "agent-a", 1.0, "current");
+        insert_b2_entity(&storage, "shared", "__global__", 0.8, "current");
+        insert_b2_relationship(
+            &storage,
+            "r-g",
+            "__global__",
+            "seed",
+            "shared",
+            "Z",
+            0.9,
+            "current",
+        );
+
+        let rows = storage
+            .traverse_weighted_sync("seed", "agent-a", 1, 0.0, 10)
+            .expect("ok");
+        let ids: Vec<&str> = rows.iter().map(|r| r.entity_id.as_str()).collect();
+        assert_eq!(ids, vec!["shared"], "__global__ rows must be reachable");
     }
 }
