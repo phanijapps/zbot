@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -55,9 +56,33 @@ export function VaultPage() {
   const splitRef = useRef<HTMLDivElement | null>(null);
   const resizeStartRef = useRef({ clientX: 0, width: DEFAULT_EXPLORER_WIDTH });
 
+  const loadWards = useCallback(async () => {
+    setWardState("loading");
+    setWardError(null);
+    const transport = await getTransport();
+    const result = await transport.listVaultWards();
+    if (!result.success || !result.data) {
+      setWardState("error");
+      setWardError(result.error ?? "Failed to load wards");
+      return;
+    }
+    setWards(result.data.wards);
+    setWardState("idle");
+  }, []);
+
+  const activateWard = useCallback((ward: VaultWard) => {
+    setSelectedWard(ward);
+    setRootStats({ directoryCount: 0, fileCount: 0 });
+  }, []);
+
+  const resetWardExplorer = useCallback(() => {
+    setSelectedWard(null);
+    setRootStats({ directoryCount: 0, fileCount: 0 });
+  }, []);
+
   useEffect(() => {
     void loadWards();
-  }, []);
+  }, [loadWards]);
 
   useEffect(() => {
     if (!isResizingExplorer) return;
@@ -100,26 +125,7 @@ export function VaultPage() {
     } else {
       resetWardExplorer();
     }
-  }, [requestedWardId, selectedWard?.id, wardState, wards]);
-
-  async function loadWards() {
-    setWardState("loading");
-    setWardError(null);
-    const transport = await getTransport();
-    const result = await transport.listVaultWards();
-    if (!result.success || !result.data) {
-      setWardState("error");
-      setWardError(result.error ?? "Failed to load wards");
-      return;
-    }
-    setWards(result.data.wards);
-    setWardState("idle");
-  }
-
-  function activateWard(ward: VaultWard) {
-    setSelectedWard(ward);
-    setRootStats({ directoryCount: 0, fileCount: 0 });
-  }
+  }, [activateWard, requestedWardId, resetWardExplorer, selectedWard, wardState, wards]);
 
   function selectWard(ward: VaultWard) {
     setSearchParams({ ward: ward.id });
@@ -134,11 +140,6 @@ export function VaultPage() {
     if (!selectedWard) return;
     const transport = await getTransport();
     await transport.openWard(selectedWard.id);
-  }
-
-  function resetWardExplorer() {
-    setSelectedWard(null);
-    setRootStats({ directoryCount: 0, fileCount: 0 });
   }
 
   function returnToWards() {

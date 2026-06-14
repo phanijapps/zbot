@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { FolderOpen, Folder, PanelLeftClose, Search, X } from "lucide-react";
 import { getTransport } from "@/services/transport";
 import type { VaultNode, VaultWard } from "@/services/transport/types";
@@ -43,6 +43,43 @@ export function WardVaultExplorer({
   const treeGenerationRef = useRef(0);
   const searchRequestRef = useRef(0);
 
+  const loadTree = useCallback(async (wardId: string, path: string, generation: number) => {
+    setTreeError(null);
+    setLoadingPaths((current) => new Set(current).add(path));
+    const transport = await getTransport();
+    const result = await transport.getVaultTree(wardId, path);
+    if (treeGenerationRef.current !== generation) return;
+    setLoadingPaths((current) => {
+      const next = new Set(current);
+      next.delete(path);
+      return next;
+    });
+    if (!result.success || !result.data) {
+      setTreeError(result.error ?? "Failed to load directory");
+      return;
+    }
+    const data = result.data;
+    setChildrenByPath((current) => ({ ...current, [path]: data.children }));
+    setTruncatedByPath((current) => ({ ...current, [path]: data.truncated }));
+  }, []);
+
+  const searchVaultFiles = useCallback(async (wardId: string, query: string, request: number) => {
+    const transport = await getTransport();
+    const result = await transport.searchVaultFiles(wardId, query, 30);
+    if (searchRequestRef.current !== request || ward.id !== wardId) return;
+    if (!result.success || !result.data) {
+      setSearchState("error");
+      setSearchError(result.error ?? "Failed to search files");
+      setSearchResults([]);
+      setSearchTruncated(false);
+      return;
+    }
+    setSearchState("idle");
+    setSearchError(null);
+    setSearchResults(result.data.matches);
+    setSearchTruncated(result.data.truncated);
+  }, [ward.id]);
+
   useEffect(() => {
     const generation = treeGenerationRef.current + 1;
     treeGenerationRef.current = generation;
@@ -59,7 +96,7 @@ export function WardVaultExplorer({
     setSearchTruncated(false);
     onRootStatsChange?.({ directoryCount: 0, fileCount: 0 });
     void loadTree(ward.id, "", generation);
-  }, [ward.id]);
+  }, [loadTree, onRootStatsChange, ward.id]);
 
   useEffect(() => {
     const rootChildren = childrenByPath[""] ?? [];
@@ -89,27 +126,7 @@ export function WardVaultExplorer({
       void searchVaultFiles(ward.id, query, request);
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [searchQuery, ward.id]);
-
-  async function loadTree(wardId: string, path: string, generation: number) {
-    setTreeError(null);
-    setLoadingPaths((current) => new Set(current).add(path));
-    const transport = await getTransport();
-    const result = await transport.getVaultTree(wardId, path);
-    if (treeGenerationRef.current !== generation) return;
-    setLoadingPaths((current) => {
-      const next = new Set(current);
-      next.delete(path);
-      return next;
-    });
-    if (!result.success || !result.data) {
-      setTreeError(result.error ?? "Failed to load directory");
-      return;
-    }
-    const data = result.data;
-    setChildrenByPath((current) => ({ ...current, [path]: data.children }));
-    setTruncatedByPath((current) => ({ ...current, [path]: data.truncated }));
-  }
+  }, [searchQuery, searchVaultFiles, ward.id]);
 
   async function toggleDirectory(node: VaultNode) {
     const isOpen = expanded.has(node.path);
@@ -122,23 +139,6 @@ export function WardVaultExplorer({
     if (!isOpen && childrenByPath[node.path] == null) {
       await loadTree(ward.id, node.path, treeGenerationRef.current);
     }
-  }
-
-  async function searchVaultFiles(wardId: string, query: string, request: number) {
-    const transport = await getTransport();
-    const result = await transport.searchVaultFiles(wardId, query, 30);
-    if (searchRequestRef.current !== request || ward.id !== wardId) return;
-    if (!result.success || !result.data) {
-      setSearchState("error");
-      setSearchError(result.error ?? "Failed to search files");
-      setSearchResults([]);
-      setSearchTruncated(false);
-      return;
-    }
-    setSearchState("idle");
-    setSearchError(null);
-    setSearchResults(result.data.matches);
-    setSearchTruncated(result.data.truncated);
   }
 
   return (
