@@ -4,7 +4,7 @@
 // Vertical zones, top to bottom:
 //   1. Header  — drawer toggle · title · ward chip + new + stop
 //   2. Pill strip — StatusPill (centered)
-//   3. Body    — scrollable column (max 880 px, centred)
+//   3. Body    — scrollable column, with an optional ward vault rail
 //   4. Artifact strip — live chips, hidden when state.artifacts is empty (R14d)
 //   5. Composer — ChatInput pinned at the bottom
 //
@@ -271,7 +271,7 @@ export function ResearchPage() {
   const isLanding = state.turns.length === 0 && state.sessionId === null;
 
   return (
-    <div className="research-page">
+    <div className={`research-page${researchWard ? " research-page--with-vault" : ""}${vaultCollapsed ? " research-page--vault-collapsed" : ""}`}>
       <ResearchHeader
         state={state}
         onOpenDrawer={() => setDrawerOpen(true)}
