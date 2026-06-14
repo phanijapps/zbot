@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FolderOpen, Menu, Plus, Square } from "lucide-react";
+import { FolderOpen, Menu, PanelLeftOpen, Plus, Square } from "lucide-react";
 import { toast } from "sonner";
 import { ChatInput, type UploadedFile } from "../chat/ChatInput";
 import { HeroInput } from "../chat/HeroInput";
@@ -32,6 +32,9 @@ import { useSessionsList } from "./useSessionsList";
 import { getTransport } from "@/services/transport";
 import type { ResearchArtifactRef, ResearchSessionState } from "./types";
 import type { Artifact } from "@/services/transport/types";
+import { WardVaultExplorer } from "../vault/WardVaultExplorer";
+import { VaultFileSlideOut } from "../vault/VaultFileSlideOut";
+import { useVaultFilePreview } from "../vault/useVaultFilePreview";
 import "./research.css";
 
 // --- Title derivation --------------------------------------------------------
@@ -198,6 +201,15 @@ export function ResearchPage() {
   const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [viewingArtifact, setViewingArtifact] = useState<Artifact | null>(null);
+  const [vaultCollapsed, setVaultCollapsed] = useState(false);
+  const researchWard = state.wardId && state.wardName
+    ? { id: state.wardId, name: state.wardName }
+    : null;
+  const {
+    selectedFile: selectedVaultFile,
+    selectFile: selectVaultFile,
+    clearSelectedFile: clearSelectedVaultFile,
+  } = useVaultFilePreview(researchWard?.id ?? null);
 
   // Reflect the session title in the browser tab + refresh the drawer list
   // when the server pushes a new title (so the sidebar row renames live).
@@ -285,7 +297,31 @@ export function ResearchPage() {
         onDelete={deleteSession}
       />
 
-      <div className="research-page__body">
+      <div className={`research-page__body${researchWard ? " research-page__body--with-vault" : ""}${vaultCollapsed ? " research-page__body--vault-collapsed" : ""}`}>
+        {researchWard ? (
+          <>
+            <div className={`research-page__vault-shell${vaultCollapsed ? " research-page__vault-shell--collapsed" : ""}`}>
+              <WardVaultExplorer
+                ward={researchWard}
+                selectedPath={selectedVaultFile?.node.path ?? null}
+                onSelectFile={(node) => void selectVaultFile(node)}
+                onCollapse={() => setVaultCollapsed(true)}
+                ariaLabel="Research ward vault explorer"
+              />
+            </div>
+            {vaultCollapsed ? (
+              <button
+                type="button"
+                className="research-page__vault-toggle"
+                onClick={() => setVaultCollapsed(false)}
+                aria-label={`Expand ward vault explorer for ${researchWard.name}`}
+              >
+                <PanelLeftOpen size={16} />
+                <span>{researchWard.name}</span>
+              </button>
+            ) : null}
+          </>
+        ) : null}
         <div className="research-page__column">
           <MainColumn state={state} onSend={sendMessage} />
         </div>
@@ -304,6 +340,13 @@ export function ResearchPage() {
         <ArtifactSlideOut
           artifact={viewingArtifact}
           onClose={() => setViewingArtifact(null)}
+        />
+      )}
+
+      {selectedVaultFile && (
+        <VaultFileSlideOut
+          selected={selectedVaultFile}
+          onClose={clearSelectedVaultFile}
         />
       )}
     </div>
