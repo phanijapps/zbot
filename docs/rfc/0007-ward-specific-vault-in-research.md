@@ -1,6 +1,6 @@
 # RFC-0007: Ward-Specific Vault Explorer in Research
 
-- **Status:** Draft
+- **Status:** Open
 - **Author:** phanijapps
 - **Approver:** phanijapps
 - **Date opened:** 2026-06-14
@@ -24,20 +24,20 @@ Decisions requested:
 
 1. Add a Research-local ward explorer after `state.wardId` is known.
    Recommended: accept, because the ward is the research workspace and should be
-   visible beside the session output. Default if no objection by 2026-06-14:
+   visible beside the session output. Default if no objection by 2026-06-21:
    embed it.
 2. Use the existing `/api/vault/*` endpoints and typed transport calls as the
    first implementation path. Recommended: accept, because the Vault API already
    enforces local-only, ward-relative, read-only filesystem access. Default if
-   no objection by 2026-06-14: reuse it, with permission for a small adapter or
+   no objection by 2026-06-21: reuse it, with permission for a small adapter or
    narrow new API only if extraction proves awkward.
 3. Clicked files should open in a slide-out preview rather than replacing the
    research transcript. Recommended: accept, because Research remains the primary
    work surface and file inspection is contextual. Default if no objection by
-   2026-06-14: slide-out preview.
+   2026-06-21: slide-out preview.
 4. Bind the explorer to the session/root ward, not arbitrary child-agent ward
    changes. Recommended: accept, because the existing Research state tracks the
-   root/session ward. Default if no objection by 2026-06-14: one active ward per
+   root/session ward. Default if no objection by 2026-06-21: one active ward per
    research session.
 
 ## Problem & goals
@@ -266,8 +266,8 @@ Spike / de-risk result:
 
 Repo precedent:
 
-- [RFC-0006](0006-vault-obsidian-style-ward-browser.md) approved the shape of
-  a read-only Vault browser with ward-relative APIs, fuzzy file search, and safe
+- [RFC-0006](0006-vault-obsidian-style-ward-browser.md) proposed the shape of a
+  read-only Vault browser with ward-relative APIs, fuzzy file search, and safe
   preview behavior.
 - `docs/specs/vault-ward-browser/spec.md` records the shipped constraints:
   read-only V1, local-only `/api/vault/*`, path validation, excludes, file
@@ -299,15 +299,6 @@ External prior art:
 1. Should the Research explorer be expanded by default on desktop once a ward
    exists? Recommended default: yes on desktop, collapsed/toggleable on narrow
    screens. Owner: phanijapps. Decide-by: implementation spec.
-2. Should the existing ward chip continue navigating to `/vault?ward=<ward>` or
-   toggle/focus the embedded explorer? Recommended default: keep navigation for
-   full Vault and add a separate panel toggle if needed. Owner: phanijapps.
-   Decide-by: implementation spec.
-3. Should V1 include a new API adapter if direct reuse is verbose?
-   Recommended default: allow only if it delegates to the same Vault policy and
-   carries tests proving no policy fork. Owner: phanijapps. Decide-by:
-   implementation PR.
-
 ## Follow-on artifacts
 
 - Spec: `docs/specs/ward-vault-in-research/`
