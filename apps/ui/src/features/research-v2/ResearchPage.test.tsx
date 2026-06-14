@@ -51,6 +51,7 @@ vi.mock("sonner", () => ({
 interface MockResearchHook {
   state: ResearchSessionState;
   pillState: PillState;
+  wardVaultRevision: number;
   sendMessage: ReturnType<typeof vi.fn>;
   stopAgent: ReturnType<typeof vi.fn>;
   startNewResearch: ReturnType<typeof vi.fn>;
@@ -103,6 +104,7 @@ function makeIdleResearch(): MockResearchHook {
   return {
     state,
     pillState,
+    wardVaultRevision: 0,
     sendMessage: vi.fn(),
     stopAgent: vi.fn(),
     startNewResearch: vi.fn(),
@@ -319,6 +321,60 @@ describe("<ResearchPage>", () => {
     await waitFor(() => expect(getVaultTreeMock).toHaveBeenCalledWith("stock-analysis", ""));
     expect(screen.getAllByText("stock-analysis").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("research-lab")).toBeNull();
+  });
+
+  it("keeps a just-created ward pending instead of surfacing the first root 404", async () => {
+    getVaultTreeMock.mockResolvedValueOnce({
+      success: false,
+      error: "HTTP 404: Not Found",
+    });
+    researchRef.current = {
+      ...makeIdleResearch(),
+      state: {
+        ...makeIdleResearch().state,
+        sessionId: "sess-1",
+        wardId: "fresh-ward",
+        wardName: "fresh-ward",
+      },
+    };
+
+    renderPage();
+
+    expect(await screen.findByText("Waiting for ward files...")).toBeTruthy();
+    expect(screen.queryByText("HTTP 404: Not Found")).toBeNull();
+  });
+
+  it("refreshes the ward explorer when the hook reports a vault revision change", async () => {
+    const base = makeIdleResearch();
+    researchRef.current = {
+      ...base,
+      state: {
+        ...base.state,
+        sessionId: "sess-1",
+        wardId: "stock-analysis",
+        wardName: "stock-analysis",
+      },
+      wardVaultRevision: 0,
+    };
+    const { rerender } = renderPage();
+    await waitFor(() => expect(getVaultTreeMock).toHaveBeenCalledTimes(1));
+
+    researchRef.current = {
+      ...researchRef.current,
+      wardVaultRevision: 1,
+    };
+    rerender(
+      <MemoryRouter initialEntries={["/research-v2"]}>
+        <Routes>
+          <Route path="/research-v2" element={<ResearchPage />} />
+          <Route path="/research-v2/:id" element={<ResearchPage />} />
+          <Route path="/vault" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(getVaultTreeMock).toHaveBeenCalledTimes(2));
+    expect(getVaultTreeMock).toHaveBeenLastCalledWith("stock-analysis", "");
   });
 
   it("fuzzy-searches only the Research ward and opens Markdown in a Vault slide-out", async () => {

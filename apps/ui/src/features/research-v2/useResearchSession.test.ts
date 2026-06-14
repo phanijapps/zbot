@@ -401,6 +401,82 @@ describe("useResearchSession — subscription ordering (R14a)", () => {
     expect(subscribeConversation).toHaveBeenCalledTimes(2);
     expect(executeAgent).toHaveBeenCalledTimes(1);
   });
+
+  it("bumps the ward vault revision after successful write/edit tool results", async () => {
+    const { result } = renderHook(() => useResearchSession(), {
+      wrapper: routerWrapper(TEST_INITIAL_PATH),
+    });
+    await act(async () => {
+      await result.current.sendMessage("create files");
+    });
+
+    const onEvent = subscribeConversation.mock.calls[0][1].onEvent;
+    expect(result.current.wardVaultRevision).toBe(0);
+
+    act(() => {
+      onEvent({
+        type: "tool_call",
+        timestamp: Date.now(),
+        session_id: "sess-1",
+        execution_id: "exec-1",
+        tool_call_id: "call-write",
+        tool: "write_file",
+        args: { path: "report.md" },
+      } as ConversationEvent);
+      onEvent({
+        type: "tool_result",
+        timestamp: Date.now(),
+        session_id: "sess-1",
+        execution_id: "exec-1",
+        tool_call_id: "call-write",
+        result: "ok",
+      } as ConversationEvent);
+    });
+    expect(result.current.wardVaultRevision).toBe(1);
+
+    act(() => {
+      onEvent({
+        type: "tool_call",
+        timestamp: Date.now(),
+        session_id: "sess-1",
+        execution_id: "exec-1",
+        tool_call_id: "call-read",
+        tool: "read",
+        args: { path: "report.md" },
+      } as ConversationEvent);
+      onEvent({
+        type: "tool_result",
+        timestamp: Date.now(),
+        session_id: "sess-1",
+        execution_id: "exec-1",
+        tool_call_id: "call-read",
+        result: "ok",
+      } as ConversationEvent);
+    });
+    expect(result.current.wardVaultRevision).toBe(1);
+
+    act(() => {
+      onEvent({
+        type: "tool_call",
+        timestamp: Date.now(),
+        session_id: "sess-1",
+        execution_id: "exec-1",
+        tool_call_id: "call-edit",
+        tool: "edit_file",
+        args: { path: "report.md" },
+      } as ConversationEvent);
+      onEvent({
+        type: "tool_result",
+        timestamp: Date.now(),
+        session_id: "sess-1",
+        execution_id: "exec-1",
+        tool_call_id: "call-edit",
+        result: "",
+        error: "missing file",
+      } as ConversationEvent);
+    });
+    expect(result.current.wardVaultRevision).toBe(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

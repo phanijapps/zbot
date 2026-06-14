@@ -13,6 +13,7 @@ export interface WardVaultRootStats {
 
 export function WardVaultExplorer({
   ward,
+  refreshKey = 0,
   selectedPath,
   onSelectFile,
   onRootStatsChange,
@@ -22,6 +23,7 @@ export function WardVaultExplorer({
   ariaLabel = "Vault explorer",
 }: {
   ward: VaultWard;
+  refreshKey?: unknown;
   selectedPath: string | null;
   onSelectFile: (node: VaultNode) => void;
   onRootStatsChange?: (stats: WardVaultRootStats) => void;
@@ -35,6 +37,7 @@ export function WardVaultExplorer({
   const [expanded, setExpanded] = useState<Set<string>>(new Set([""]));
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set());
   const [treeError, setTreeError] = useState<string | null>(null);
+  const [rootPending, setRootPending] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchState, setSearchState] = useState<LoadState>("idle");
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -42,6 +45,17 @@ export function WardVaultExplorer({
   const [searchTruncated, setSearchTruncated] = useState(false);
   const treeGenerationRef = useRef(0);
   const searchRequestRef = useRef(0);
+  const didMountRefreshRef = useRef(false);
+  const childrenByPathRef = useRef(childrenByPath);
+  const expandedRef = useRef(expanded);
+
+  useEffect(() => {
+    childrenByPathRef.current = childrenByPath;
+  }, [childrenByPath]);
+
+  useEffect(() => {
+    expandedRef.current = expanded;
+  }, [expanded]);
 
   const loadTree = useCallback(async (wardId: string, path: string, generation: number) => {
     setTreeError(null);
@@ -55,10 +69,17 @@ export function WardVaultExplorer({
       return next;
     });
     if (!result.success || !result.data) {
+      if (path === "" && isNotFoundError(result.error)) {
+        setRootPending(true);
+        setChildrenByPath((current) => ({ ...current, "": [] }));
+        setTruncatedByPath((current) => ({ ...current, "": false }));
+        return;
+      }
       setTreeError(result.error ?? "Failed to load directory");
       return;
     }
     const data = result.data;
+    if (path === "") setRootPending(false);
     setChildrenByPath((current) => ({ ...current, [path]: data.children }));
     setTruncatedByPath((current) => ({ ...current, [path]: data.truncated }));
   }, []);
@@ -83,12 +104,14 @@ export function WardVaultExplorer({
   useEffect(() => {
     const generation = treeGenerationRef.current + 1;
     treeGenerationRef.current = generation;
+    didMountRefreshRef.current = false;
     searchRequestRef.current += 1;
     setChildrenByPath({});
     setTruncatedByPath({});
     setExpanded(new Set([""]));
     setLoadingPaths(new Set());
     setTreeError(null);
+    setRootPending(false);
     setSearchQuery("");
     setSearchState("idle");
     setSearchError(null);
@@ -97,6 +120,22 @@ export function WardVaultExplorer({
     onRootStatsChange?.({ directoryCount: 0, fileCount: 0 });
     void loadTree(ward.id, "", generation);
   }, [loadTree, onRootStatsChange, ward.id]);
+
+  useEffect(() => {
+    if (!didMountRefreshRef.current) {
+      didMountRefreshRef.current = true;
+      return;
+    }
+    const generation = treeGenerationRef.current + 1;
+    treeGenerationRef.current = generation;
+    setTreeError(null);
+    const currentChildrenByPath = childrenByPathRef.current;
+    const paths = [...expandedRef.current].filter((path) => path === "" || currentChildrenByPath[path] != null);
+    if (paths.length === 0) paths.push("");
+    for (const path of paths) {
+      void loadTree(ward.id, path, generation);
+    }
+  }, [loadTree, refreshKey, ward.id]);
 
   useEffect(() => {
     const rootChildren = childrenByPath[""] ?? [];
@@ -195,12 +234,20 @@ export function WardVaultExplorer({
           onSelectFile={onSelectFile}
           depth={1}
         />
+        {rootPending ? (
+          <p className="vault-state vault-state--inline">Waiting for ward files...</p>
+        ) : null}
         {truncatedByPath[""] ? (
           <p className="vault-state vault-state--inline">Directory truncated at 1,000 entries.</p>
         ) : null}
       </div>
     </aside>
   );
+}
+
+function isNotFoundError(error: string | undefined): boolean {
+  if (!error) return false;
+  return error.includes("HTTP 404") || error.toLowerCase().includes("not found");
 }
 
 function VaultSearchBox({

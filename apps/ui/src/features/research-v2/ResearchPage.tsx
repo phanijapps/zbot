@@ -191,7 +191,7 @@ function MainColumn({ state, onSend }: MainColumnProps) {
 // --- Page --------------------------------------------------------------------
 
 export function ResearchPage() {
-  const { state, pillState, sendMessage, stopAgent, startNewResearch, getFullArtifact } =
+  const { state, pillState, wardVaultRevision, sendMessage, stopAgent, startNewResearch, getFullArtifact } =
     useResearchSession();
   const { sessions, refresh: refreshSessions, deleteSession } = useSessionsList({
     onAfterDelete: (deletedId) => {
@@ -303,6 +303,7 @@ export function ResearchPage() {
             <div className={`research-page__vault-shell${vaultCollapsed ? " research-page__vault-shell--collapsed" : ""}`}>
               <WardVaultExplorer
                 ward={researchWard}
+                refreshKey={wardVaultRevision}
                 selectedPath={selectedVaultFile?.node.path ?? null}
                 onSelectFile={(node) => void selectVaultFile(node)}
                 onCollapse={() => setVaultCollapsed(true)}
