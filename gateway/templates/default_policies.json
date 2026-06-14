@@ -75,12 +75,5 @@
     "content": "Default output is markdown or plain text. Generate HTML/Tailwind ONLY when the user explicitly asks for a report, dashboard, or visual deliverable — and only after the planner has emitted an HTML step. For analysis questions ('is X overvalued?', 'summarize Y'), never generate HTML. Ambiguity defaults to markdown.",
     "confidence": 0.7,
     "pinned": false
-  },
-  {
-    "category": "user",
-    "key": "user.profile",
-    "content": "I am a private person, just call me Mr Z.",
-    "confidence": 0.95,
-    "pinned": true
   }
 ]

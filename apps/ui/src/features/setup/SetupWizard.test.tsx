@@ -17,7 +17,15 @@ vi.mock('@/services/transport', () => ({
 }));
 
 // Mock all child steps so they render a simple sentinel
-vi.mock('./steps/NameStep', () => ({ NameStep: () => <div>NameStep</div> }));
+vi.mock('./steps/NameStep', () => ({
+  NameStep: ({ agentName, aboutMe }: { agentName: string; aboutMe: string }) => (
+    <div>
+      NameStep
+      <span data-testid="agent-name">{agentName}</span>
+      <span data-testid="about-me">{aboutMe}</span>
+    </div>
+  ),
+}));
 vi.mock('./steps/ProvidersStep', () => ({ ProvidersStep: () => <div>ProvidersStep</div> }));
 vi.mock('./steps/SkillsStep', () => ({ SkillsStep: () => <div>SkillsStep</div> }));
 vi.mock('./steps/McpStep', () => ({ McpStep: () => <div>McpStep</div> }));
@@ -133,6 +141,61 @@ describe('SetupWizard', () => {
     await waitFor(() => screen.getByText('NameStep'));
     // NameStep is mocked — we just verify the wizard loaded without error
     expect(screen.getByText('NameStep')).toBeInTheDocument();
+  });
+
+  it('starts with a soul preset and no legacy Mr Z profile', async () => {
+    render(<SetupWizard />);
+    await waitFor(() => screen.getByText('NameStep'));
+    expect(screen.getByTestId('agent-name').textContent).toBe('Mindful Companion');
+    expect(screen.getByTestId('about-me').textContent).toBe('');
+  });
+
+  it('ignores the legacy Mr Z profile during hydration', async () => {
+    listAllMemory.mockResolvedValue({
+      success: true,
+      data: {
+        facts: [{
+          id: 'legacy-profile',
+          agent_id: 'root',
+          scope: 'agent',
+          category: 'user',
+          key: 'user.profile',
+          content: 'I am a private person, just call me Mr Z.',
+          confidence: 0.95,
+          mention_count: 1,
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+        }],
+        total: 1,
+      },
+    });
+    render(<SetupWizard />);
+    await waitFor(() => screen.getByText('NameStep'));
+    expect(screen.getByTestId('about-me').textContent).toBe('');
+  });
+
+  it('hydrates a user-provided profile', async () => {
+    listAllMemory.mockResolvedValue({
+      success: true,
+      data: {
+        facts: [{
+          id: 'user-profile',
+          agent_id: 'root',
+          scope: 'agent',
+          category: 'user',
+          key: 'user.profile',
+          content: 'I prefer concise technical answers.',
+          confidence: 0.95,
+          mention_count: 1,
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+        }],
+        total: 1,
+      },
+    });
+    render(<SetupWizard />);
+    await waitFor(() => screen.getByText('NameStep'));
+    expect(screen.getByTestId('about-me').textContent).toBe('I prefer concise technical answers.');
   });
 
   it('hydrates from agents list when no execution settings', async () => {
