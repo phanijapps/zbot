@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef, type Dispatch } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, type Dispatch } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { getTransport } from "@/services/transport";
 import type {
@@ -16,6 +16,7 @@ import { mapGatewayEventToResearchAction, mapGatewayEventToPillEvent } from "./e
 import { snapshotSession } from "./session-snapshot";
 
 const ROOT_AGENT_ID = "root";
+const FILE_MUTATION_TOOLS = new Set(["write_file", "edit_file"]);
 // Client-owned conv_id prefix. Research has no `/api/chat/init`, so the UI
 // mints the id and subscribes to it BEFORE invoke — that ordering is what
 // lets the first token reach the UI (R14a).
@@ -72,6 +73,8 @@ function respondActionFromDelegationCompleted(
 interface EventHandlerCtx {
   pillSink: PillEventSink;
   dispatch: Dispatch<ResearchAction>;
+  fileMutationToolIdsRef: { current: Set<string> };
+  onWardFileMutation: () => void;
   /** Called once per root `agent_completed` — used to re-snapshot. */
   onRootAgentCompleted: (executionId: string) => void;
   /** Called (debounced) when a self-heal reconcile should run — e.g. a
@@ -95,6 +98,7 @@ function makeEventHandler(ctx: EventHandlerCtx) {
     if (synthesizedChildRespond) ctx.dispatch(synthesizedChildRespond);
     const pillEv = mapGatewayEventToPillEvent(event);
     if (pillEv) ctx.pillSink.push(pillEv);
+    handleWardFileMutation(raw, ctx.fileMutationToolIdsRef, ctx.onWardFileMutation);
     // R14f: re-snapshot on root agent_completed to backfill anything WS dropped
     // (session title, artifacts, subagent completions, per-turn respond).
     handleRootAgentCompleted(raw, ctx.onRootAgentCompleted);
@@ -106,6 +110,33 @@ function makeEventHandler(ctx: EventHandlerCtx) {
     // same hint so a second subagent in the same session also heals.
     handleReconcileHint(raw, ctx.onReconcileHint);
   };
+}
+
+function toolCallIdOf(raw: Record<string, unknown>): string | null {
+  const id = raw["tool_call_id"] ?? raw["tool_id"];
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
+
+function handleWardFileMutation(
+  raw: Record<string, unknown>,
+  fileMutationToolIdsRef: { current: Set<string> },
+  onWardFileMutation: () => void,
+): void {
+  const type = raw["type"];
+  const id = toolCallIdOf(raw);
+  if (!id) return;
+  if (type === "tool_call") {
+    const tool = raw["tool_name"] ?? raw["tool"];
+    if (typeof tool === "string" && FILE_MUTATION_TOOLS.has(tool)) {
+      fileMutationToolIdsRef.current.add(id);
+    }
+    return;
+  }
+  if (type !== "tool_result" || !fileMutationToolIdsRef.current.has(id)) return;
+  fileMutationToolIdsRef.current.delete(id);
+  const error = raw["error"];
+  if (typeof error === "string" && error.length > 0) return;
+  onWardFileMutation();
 }
 
 function handleReconcileHint(
@@ -288,6 +319,7 @@ export function useResearchSession() {
   const { sessionId: urlSessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
   const [state, dispatch] = useReducer(reduceResearch, EMPTY_RESEARCH_STATE);
+  const [wardVaultRevision, setWardVaultRevision] = useState(0);
   const { state: pillState, sink: pillSink } = useStatusPill();
 
   const hydratedForSessionRef = useRef<string | null>(null); // one-shot hydration guard (StrictMode)
@@ -314,6 +346,10 @@ export function useResearchSession() {
   // Guard against redundant re-snapshots when agent_completed fires more than
   // once for the same root execution (WS redelivery or duplicate dispatch).
   const resnapshotForExecRef = useRef<string | null>(null);
+  const fileMutationToolIdsRef = useRef<Set<string>>(new Set());
+  const bumpWardVaultRevision = useCallback(() => {
+    setWardVaultRevision((current) => current + 1);
+  }, []);
 
   // --- Hydrate an EXISTING session (only when URL carries one) ---
   useEffect(() => {
@@ -355,7 +391,12 @@ export function useResearchSession() {
     };
     const onReconcileHint = makeDebouncedReconcile(sid, dispatch, latestArtifactsRef);
     const onEvent = makeEventHandler({
-      pillSink, dispatch, onRootAgentCompleted, onReconcileHint,
+      pillSink,
+      dispatch,
+      fileMutationToolIdsRef,
+      onWardFileMutation: bumpWardVaultRevision,
+      onRootAgentCompleted,
+      onReconcileHint,
     });
     // Tear down any prior session-id subscription, then register the new one.
     teardownSubscription({
@@ -393,7 +434,7 @@ export function useResearchSession() {
     };
     // pillSink has stable identity; dispatch is stable; intentional exhaustive-deps skip.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.sessionId, state.status]);
+  }, [state.sessionId, state.status, bumpWardVaultRevision]);
 
   // --- Sync URL when the backend hands us a session id ---
   useEffect(() => {
@@ -465,7 +506,12 @@ export function useResearchSession() {
         scheduleReconcile(sid, dispatch, latestArtifactsRef, reconcileTimerRef);
       };
       const onEvent = makeEventHandler({
-        pillSink, dispatch, onRootAgentCompleted, onReconcileHint,
+        pillSink,
+        dispatch,
+        fileMutationToolIdsRef,
+        onWardFileMutation: bumpWardVaultRevision,
+        onRootAgentCompleted,
+        onReconcileHint,
       });
       try {
         await ensureSubscription(convId, onEvent, refs);
@@ -511,6 +557,8 @@ export function useResearchSession() {
     teardownSubscription({ subscribedConvIdRef, unsubscribeRef });
     pillSink.push({ kind: "reset" });
     dispatch({ type: "RESET" });
+    setWardVaultRevision(0);
+    fileMutationToolIdsRef.current.clear();
     hydratedForSessionRef.current = null;
     resnapshotForExecRef.current = null;
     navigate("/research", { replace: true });
@@ -525,5 +573,5 @@ export function useResearchSession() {
   // hydrateFromSnapshot (on open + on root agent_completed).
   const getFullArtifact = useCallback((id: string): Artifact | undefined => latestArtifactsRef.current.find((a) => a.id === id), []);
 
-  return { state, pillState, sendMessage, stopAgent, startNewResearch, toggleThinking, getFullArtifact };
+  return { state, pillState, wardVaultRevision, sendMessage, stopAgent, startNewResearch, toggleThinking, getFullArtifact };
 }

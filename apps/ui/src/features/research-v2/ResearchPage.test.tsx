@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 import { ResearchPage } from "./ResearchPage";
 import type { ResearchSessionState } from "./types";
@@ -9,11 +10,22 @@ type DeleteSessionResult =
   | { success: true; data?: void }
   | { success: false; error: string };
 
-const { toastErrorMock, listArtifactsMock, deleteSessionMock, listLogSessionsMock } = vi.hoisted(() => ({
+const {
+  toastErrorMock,
+  listArtifactsMock,
+  deleteSessionMock,
+  listLogSessionsMock,
+  getVaultTreeMock,
+  searchVaultFilesMock,
+  getVaultFileMock,
+} = vi.hoisted(() => ({
   toastErrorMock: vi.fn(),
   listArtifactsMock: vi.fn(),
   deleteSessionMock: vi.fn<(sessionId: string) => Promise<DeleteSessionResult>>(),
   listLogSessionsMock: vi.fn(),
+  getVaultTreeMock: vi.fn(),
+  searchVaultFilesMock: vi.fn(),
+  getVaultFileMock: vi.fn(),
 }));
 
 vi.mock("@/services/transport", async () => {
@@ -25,6 +37,9 @@ vi.mock("@/services/transport", async () => {
       getArtifactContentUrl: () => "about:blank",
       deleteSession: deleteSessionMock,
       listLogSessions: listLogSessionsMock,
+      getVaultTree: getVaultTreeMock,
+      searchVaultFiles: searchVaultFilesMock,
+      getVaultFile: getVaultFileMock,
     }),
   };
 });
@@ -36,6 +51,7 @@ vi.mock("sonner", () => ({
 interface MockResearchHook {
   state: ResearchSessionState;
   pillState: PillState;
+  wardVaultRevision: number;
   sendMessage: ReturnType<typeof vi.fn>;
   stopAgent: ReturnType<typeof vi.fn>;
   startNewResearch: ReturnType<typeof vi.fn>;
@@ -88,6 +104,7 @@ function makeIdleResearch(): MockResearchHook {
   return {
     state,
     pillState,
+    wardVaultRevision: 0,
     sendMessage: vi.fn(),
     stopAgent: vi.fn(),
     startNewResearch: vi.fn(),
@@ -136,6 +153,66 @@ describe("<ResearchPage>", () => {
     deleteSessionMock.mockResolvedValue({ success: true });
     listLogSessionsMock.mockClear();
     listLogSessionsMock.mockResolvedValue({ success: true, data: [] });
+    getVaultTreeMock.mockClear();
+    getVaultTreeMock.mockImplementation((_wardId: string, path = "") => Promise.resolve({
+      success: true,
+      data: {
+        ward_id: "stock-analysis",
+        path,
+        truncated: false,
+        children: path === "" ? [
+          {
+            ward_id: "stock-analysis",
+            path: "reports",
+            name: "reports",
+            kind: "directory",
+            previewable: false,
+          },
+          {
+            ward_id: "stock-analysis",
+            path: "deck.ppt",
+            name: "deck.ppt",
+            kind: "file",
+            extension: "ppt",
+            size: 128,
+            previewable: false,
+          },
+        ] : [],
+      },
+    }));
+    searchVaultFilesMock.mockClear();
+    searchVaultFilesMock.mockResolvedValue({
+      success: true,
+      data: {
+        ward_id: "stock-analysis",
+        query: "valuation",
+        truncated: false,
+        matches: [
+          {
+            ward_id: "stock-analysis",
+            path: "reports/valuation.md",
+            name: "valuation.md",
+            kind: "file",
+            extension: "md",
+            size: 11,
+            previewable: true,
+          },
+        ],
+      },
+    });
+    getVaultFileMock.mockClear();
+    getVaultFileMock.mockResolvedValue({
+      success: true,
+      data: {
+        kind: "text",
+        ward_id: "stock-analysis",
+        path: "reports/valuation.md",
+        name: "valuation.md",
+        extension: "md",
+        size: 11,
+        content: "# Valuation",
+      },
+    });
     // window.confirm is a browser-level primitive — force-accept so the
     // onAfterDelete code path is exercised without hitting jsdom's "confirm
     // is not implemented" stub.
@@ -212,6 +289,160 @@ describe("<ResearchPage>", () => {
       expect(screen.getByTestId("location").textContent).toBe("/vault?ward=stock-analysis");
     });
     expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("does not render or load the ward Vault explorer before a ward exists", () => {
+    researchRef.current = {
+      ...makeIdleResearch(),
+      state: { ...makeIdleResearch().state, sessionId: "sess-1" },
+    };
+    renderPage();
+
+    expect(screen.queryByLabelText("Research ward vault explorer")).toBeNull();
+    expect(getVaultTreeMock).not.toHaveBeenCalled();
+    expect(searchVaultFilesMock).not.toHaveBeenCalled();
+    expect(getVaultFileMock).not.toHaveBeenCalled();
+  });
+
+  it("renders the ward-scoped Vault explorer and keeps sibling wards out of Research", async () => {
+    researchRef.current = {
+      ...makeIdleResearch(),
+      state: {
+        ...makeIdleResearch().state,
+        sessionId: "sess-1",
+        wardId: "stock-analysis",
+        wardName: "stock-analysis",
+      },
+    };
+
+    renderPage();
+
+    expect(await screen.findByLabelText("Research ward vault explorer")).toBeTruthy();
+    await waitFor(() => expect(getVaultTreeMock).toHaveBeenCalledWith("stock-analysis", ""));
+    expect(screen.getAllByText("stock-analysis").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("research-lab")).toBeNull();
+  });
+
+  it("keeps a just-created ward pending instead of surfacing the first root 404", async () => {
+    getVaultTreeMock.mockResolvedValueOnce({
+      success: false,
+      error: "HTTP 404: Not Found",
+    });
+    researchRef.current = {
+      ...makeIdleResearch(),
+      state: {
+        ...makeIdleResearch().state,
+        sessionId: "sess-1",
+        wardId: "fresh-ward",
+        wardName: "fresh-ward",
+      },
+    };
+
+    renderPage();
+
+    expect(await screen.findByText("Waiting for ward files...")).toBeTruthy();
+    expect(screen.queryByText("HTTP 404: Not Found")).toBeNull();
+  });
+
+  it("refreshes the ward explorer when the hook reports a vault revision change", async () => {
+    const base = makeIdleResearch();
+    researchRef.current = {
+      ...base,
+      state: {
+        ...base.state,
+        sessionId: "sess-1",
+        wardId: "stock-analysis",
+        wardName: "stock-analysis",
+      },
+      wardVaultRevision: 0,
+    };
+    const { rerender } = renderPage();
+    await waitFor(() => expect(getVaultTreeMock).toHaveBeenCalledTimes(1));
+
+    researchRef.current = {
+      ...researchRef.current,
+      wardVaultRevision: 1,
+    };
+    rerender(
+      <MemoryRouter initialEntries={["/research-v2"]}>
+        <Routes>
+          <Route path="/research-v2" element={<ResearchPage />} />
+          <Route path="/research-v2/:id" element={<ResearchPage />} />
+          <Route path="/vault" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(getVaultTreeMock).toHaveBeenCalledTimes(2));
+    expect(getVaultTreeMock).toHaveBeenLastCalledWith("stock-analysis", "");
+  });
+
+  it("fuzzy-searches only the Research ward and opens Markdown in a Vault slide-out", async () => {
+    const user = userEvent.setup();
+    researchRef.current = {
+      ...makeIdleResearch(),
+      state: {
+        ...makeIdleResearch().state,
+        sessionId: "sess-1",
+        wardId: "stock-analysis",
+        wardName: "stock-analysis",
+      },
+    };
+
+    renderPage();
+
+    await user.type(await screen.findByRole("searchbox", { name: "Fuzzy search files in stock-analysis" }), "valuation");
+    await waitFor(() => expect(searchVaultFilesMock).toHaveBeenCalledWith("stock-analysis", "valuation", 30));
+    await user.click(await screen.findByRole("button", { name: /valuation\.md/i }));
+
+    await waitFor(() => expect(getVaultFileMock).toHaveBeenCalledWith("stock-analysis", "reports/valuation.md"));
+    expect(await screen.findByRole("heading", { name: "Valuation" })).toBeTruthy();
+    expect(screen.getByPlaceholderText("Type a message...")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Close preview" }));
+    expect(screen.queryByRole("heading", { name: "Valuation" })).toBeNull();
+    expect(screen.getByPlaceholderText("Type a message...")).toBeTruthy();
+  });
+
+  it("shows non-previewable ward files without reading file content", async () => {
+    const user = userEvent.setup();
+    researchRef.current = {
+      ...makeIdleResearch(),
+      state: {
+        ...makeIdleResearch().state,
+        sessionId: "sess-1",
+        wardId: "stock-analysis",
+        wardName: "stock-analysis",
+      },
+    };
+
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: /deck\.ppt/i }));
+    expect(await screen.findByText("Preview not available for .ppt files.")).toBeTruthy();
+    expect(getVaultFileMock).not.toHaveBeenCalled();
+  });
+
+  it("collapses and expands the Research ward explorer without losing search state", async () => {
+    const user = userEvent.setup();
+    researchRef.current = {
+      ...makeIdleResearch(),
+      state: {
+        ...makeIdleResearch().state,
+        sessionId: "sess-1",
+        wardId: "stock-analysis",
+        wardName: "stock-analysis",
+      },
+    };
+
+    renderPage();
+
+    const search = await screen.findByRole("searchbox", { name: "Fuzzy search files in stock-analysis" });
+    await user.type(search, "valuation");
+    await user.click(screen.getByRole("button", { name: "Collapse vault explorer" }));
+    await user.click(screen.getByRole("button", { name: /expand ward vault explorer/i }));
+
+    expect(screen.getByRole("searchbox", { name: "Fuzzy search files in stock-analysis" })).toHaveValue("valuation");
   });
 
   it("shows Stop button only while running and fires stopAgent on click", () => {

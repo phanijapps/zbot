@@ -401,6 +401,82 @@ describe("useResearchSession — subscription ordering (R14a)", () => {
     expect(subscribeConversation).toHaveBeenCalledTimes(2);
     expect(executeAgent).toHaveBeenCalledTimes(1);
   });
+
+  it("bumps the ward vault revision after successful write/edit tool results", async () => {
+    const { result } = renderHook(() => useResearchSession(), {
+      wrapper: routerWrapper(TEST_INITIAL_PATH),
+    });
+    await act(async () => {
+      await result.current.sendMessage("create files");
+    });
+
+    const onEvent = subscribeConversation.mock.calls[0][1].onEvent;
+    expect(result.current.wardVaultRevision).toBe(0);
+
+    act(() => {
+      onEvent({
+        type: "tool_call",
+        timestamp: Date.now(),
+        session_id: "sess-1",
+        execution_id: "exec-1",
+        tool_call_id: "call-write",
+        tool: "write_file",
+        args: { path: "report.md" },
+      } as ConversationEvent);
+      onEvent({
+        type: "tool_result",
+        timestamp: Date.now(),
+        session_id: "sess-1",
+        execution_id: "exec-1",
+        tool_call_id: "call-write",
+        result: "ok",
+      } as ConversationEvent);
+    });
+    expect(result.current.wardVaultRevision).toBe(1);
+
+    act(() => {
+      onEvent({
+        type: "tool_call",
+        timestamp: Date.now(),
+        session_id: "sess-1",
+        execution_id: "exec-1",
+        tool_call_id: "call-read",
+        tool: "read",
+        args: { path: "report.md" },
+      } as ConversationEvent);
+      onEvent({
+        type: "tool_result",
+        timestamp: Date.now(),
+        session_id: "sess-1",
+        execution_id: "exec-1",
+        tool_call_id: "call-read",
+        result: "ok",
+      } as ConversationEvent);
+    });
+    expect(result.current.wardVaultRevision).toBe(1);
+
+    act(() => {
+      onEvent({
+        type: "tool_call",
+        timestamp: Date.now(),
+        session_id: "sess-1",
+        execution_id: "exec-1",
+        tool_call_id: "call-edit",
+        tool: "edit_file",
+        args: { path: "report.md" },
+      } as ConversationEvent);
+      onEvent({
+        type: "tool_result",
+        timestamp: Date.now(),
+        session_id: "sess-1",
+        execution_id: "exec-1",
+        tool_call_id: "call-edit",
+        result: "",
+        error: "missing file",
+      } as ConversationEvent);
+    });
+    expect(result.current.wardVaultRevision).toBe(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -435,6 +511,21 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
       success: true,
       data: [makeArtifact("a1", EXISTING_SESSION)],
     });
+    getSessionState.mockResolvedValueOnce({
+      success: true,
+      data: {
+        session: { id: EXISTING_SESSION, title: null, status: "completed", startedAt: "", durationMs: 0, tokenCount: 0, model: null },
+        userMessage: null,
+        phase: "completed",
+        response: null,
+        intentAnalysis: null,
+        ward: { name: "stock-analysis" },
+        recalledFacts: [],
+        plan: [],
+        subagents: [],
+        isLive: false,
+      },
+    });
 
     const { result } = renderHook(() => useResearchSession(), {
       wrapper: routerWrapper(`/research/${EXISTING_SESSION}`),
@@ -448,6 +539,8 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
 
     expect(result.current.state.sessionId).toBe(EXISTING_SESSION);
     expect(result.current.state.title).toBe("Hydrated title");
+    expect(result.current.state.wardId).toBe("stock-analysis");
+    expect(result.current.state.wardName).toBe("stock-analysis");
     // The single hydrated user message becomes one SessionTurn carrying it.
     expect(result.current.state.turns).toHaveLength(1);
     expect(result.current.state.turns[0].userMessage.content).toBe("old prompt");
