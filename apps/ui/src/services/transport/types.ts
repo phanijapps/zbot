@@ -1316,6 +1316,68 @@ export interface WardContent {
   counts: WardContentCounts;
 }
 
+// ============================================================================
+// Vault — read-only ward filesystem browser
+// ============================================================================
+
+export interface VaultWard {
+  id: string;
+  name: string;
+}
+
+export interface VaultWardsResponse {
+  wards: VaultWard[];
+}
+
+export type VaultNodeKind = "directory" | "file";
+
+export interface VaultNode {
+  ward_id: string;
+  path: string;
+  name: string;
+  kind: VaultNodeKind;
+  extension?: string | null;
+  size?: number | null;
+  modified_at?: string | null;
+  previewable: boolean;
+}
+
+export interface VaultTreeResponse {
+  ward_id: string;
+  path: string;
+  children: VaultNode[];
+  truncated: boolean;
+}
+
+export interface VaultSearchResponse {
+  ward_id: string;
+  query: string;
+  matches: VaultNode[];
+  truncated: boolean;
+}
+
+export interface VaultTextFileResponse {
+  kind: "text";
+  ward_id: string;
+  path: string;
+  name: string;
+  extension: string;
+  size: number;
+  modified_at?: string | null;
+  content: string;
+}
+
+export interface VaultOfficeFileResponse {
+  kind: "office";
+  ward_id: string;
+  path: string;
+  extension: "docx" | "pptx";
+  contentType: string;
+  data: ArrayBuffer;
+}
+
+export type VaultFileResponse = VaultTextFileResponse | VaultOfficeFileResponse;
+
 /** Request body for POST /api/memory/search (unified hybrid search). */
 export interface HybridSearchRequest {
   query: string;

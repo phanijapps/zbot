@@ -76,6 +76,11 @@ import type {
   MemoryFilter,
   MemoryListResponse,
   WardContent,
+  VaultFileResponse,
+  VaultOfficeFileResponse,
+  VaultSearchResponse,
+  VaultTreeResponse,
+  VaultWardsResponse,
   HybridSearchRequest,
   HybridSearchResponse,
   // Graph types
@@ -1484,6 +1489,69 @@ export class HttpTransport implements Transport {
     return this.get<WardContent>(
       `/api/wards/${encodeURIComponent(wardId)}/content`
     );
+  }
+
+  async listVaultWards(): Promise<TransportResult<VaultWardsResponse>> {
+    return this.get<VaultWardsResponse>("/api/vault/wards");
+  }
+
+  async getVaultTree(wardId: string, path = ""): Promise<TransportResult<VaultTreeResponse>> {
+    const params = new URLSearchParams();
+    if (path) params.set("path", path);
+    const query = params.toString();
+    return this.get<VaultTreeResponse>(
+      `/api/vault/wards/${encodeURIComponent(wardId)}/tree${query ? `?${query}` : ""}`
+    );
+  }
+
+  async searchVaultFiles(wardId: string, query: string, limit = 30): Promise<TransportResult<VaultSearchResponse>> {
+    const params = new URLSearchParams({ q: query });
+    if (limit > 0) params.set("limit", String(limit));
+    return this.get<VaultSearchResponse>(
+      `/api/vault/wards/${encodeURIComponent(wardId)}/search?${params.toString()}`
+    );
+  }
+
+  async getVaultFile(wardId: string, path: string): Promise<TransportResult<VaultFileResponse>> {
+    if (!this.config) {
+      return { success: false, error: "Transport not initialized" };
+    }
+    const params = new URLSearchParams({ path });
+    const url = `${this.config.httpUrl}/api/vault/wards/${encodeURIComponent(wardId)}/file?${params.toString()}`;
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!response.ok) {
+        return {
+          success: false,
+          error: `HTTP ${response.status}: ${response.statusText}`,
+        };
+      }
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        return { success: true, data: await response.json() as VaultFileResponse };
+      }
+      const extension = path.split(".").pop()?.toLowerCase();
+      if (extension !== "docx" && extension !== "pptx") {
+        return { success: false, error: "Unsupported Vault binary file response" };
+      }
+      const office: VaultOfficeFileResponse = {
+        kind: "office",
+        ward_id: response.headers.get("x-vault-ward-id") || wardId,
+        path: response.headers.get("x-vault-path") || path,
+        extension,
+        contentType,
+        data: await response.arrayBuffer(),
+      };
+      return { success: true, data: office };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   async openWard(wardId: string): Promise<TransportResult<{ path: string }>> {

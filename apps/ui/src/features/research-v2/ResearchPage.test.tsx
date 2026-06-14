@@ -1,22 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 import { ResearchPage } from "./ResearchPage";
 import type { ResearchSessionState } from "./types";
 import type { PillState } from "../shared/statusPill";
-
-// Mock the transport so ward-chip open clicks don't fire real HTTP.
-// Use vi.hoisted so mocks are constructed before vi.mock factories run.
-type OpenWardResult =
-  | { success: true; data: { path: string } }
-  | { success: false; error: string };
 
 type DeleteSessionResult =
   | { success: true; data?: void }
   | { success: false; error: string };
 
-const { openWardMock, toastErrorMock, listArtifactsMock, deleteSessionMock, listLogSessionsMock } = vi.hoisted(() => ({
-  openWardMock: vi.fn<(wardId: string) => Promise<OpenWardResult>>(),
+const { toastErrorMock, listArtifactsMock, deleteSessionMock, listLogSessionsMock } = vi.hoisted(() => ({
   toastErrorMock: vi.fn(),
   listArtifactsMock: vi.fn(),
   deleteSessionMock: vi.fn<(sessionId: string) => Promise<DeleteSessionResult>>(),
@@ -28,7 +21,6 @@ vi.mock("@/services/transport", async () => {
   return {
     ...actual,
     getTransport: async () => ({
-      openWard: openWardMock,
       listSessionArtifacts: listArtifactsMock,
       getArtifactContentUrl: () => "about:blank",
       deleteSession: deleteSessionMock,
@@ -115,12 +107,18 @@ vi.mock("./useSessionsList", () => ({
   },
 }));
 
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location">{location.pathname + location.search}</div>;
+}
+
 function renderPage() {
   return render(
     <MemoryRouter initialEntries={["/research-v2"]}>
       <Routes>
         <Route path="/research-v2" element={<ResearchPage />} />
         <Route path="/research-v2/:id" element={<ResearchPage />} />
+        <Route path="/vault" element={<LocationProbe />} />
       </Routes>
     </MemoryRouter>
   );
@@ -131,8 +129,6 @@ describe("<ResearchPage>", () => {
     researchRef.current = makeIdleResearch();
     listRef.current = { sessions: [], loading: false, refresh: vi.fn(), deleteSession: vi.fn() };
     lastListOptsRef.current = {};
-    openWardMock.mockClear();
-    openWardMock.mockResolvedValue({ success: true, data: { path: "/vault/wards/x" } });
     toastErrorMock.mockClear();
     listArtifactsMock.mockClear();
     listArtifactsMock.mockResolvedValue({ success: true, data: [] });
@@ -191,17 +187,17 @@ describe("<ResearchPage>", () => {
       },
     };
     renderPage();
-    const btn = screen.getByRole("button", { name: /open ward folder/i });
+    const btn = screen.getByRole("button", { name: /open ward in vault/i });
     expect(btn).toBeTruthy();
     expect(btn.tagName).toBe("BUTTON");
   });
 
   it("ward chip is NOT rendered when wardName is null", () => {
     renderPage();
-    expect(screen.queryByRole("button", { name: /open ward folder/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /open ward in vault/i })).toBeNull();
   });
 
-  it("clicking the ward chip calls transport.openWard with the ward id", async () => {
+  it("clicking the ward chip navigates to the selected ward in Vault", async () => {
     researchRef.current = {
       ...makeIdleResearch(),
       state: {
@@ -211,30 +207,11 @@ describe("<ResearchPage>", () => {
       },
     };
     renderPage();
-    fireEvent.click(screen.getByRole("button", { name: /open ward folder/i }));
+    fireEvent.click(screen.getByRole("button", { name: /open ward in vault/i }));
     await waitFor(() => {
-      expect(openWardMock).toHaveBeenCalledWith("stock-analysis");
+      expect(screen.getByTestId("location").textContent).toBe("/vault?ward=stock-analysis");
     });
     expect(toastErrorMock).not.toHaveBeenCalled();
-  });
-
-  it("shows a toast when transport.openWard fails", async () => {
-    openWardMock.mockResolvedValueOnce({ success: false, error: "boom" });
-    researchRef.current = {
-      ...makeIdleResearch(),
-      state: {
-        ...makeIdleResearch().state,
-        wardId: "stock-analysis",
-        wardName: "stock-analysis",
-      },
-    };
-    renderPage();
-    fireEvent.click(screen.getByRole("button", { name: /open ward folder/i }));
-    await waitFor(() => {
-      expect(toastErrorMock).toHaveBeenCalled();
-    });
-    const msg = String(toastErrorMock.mock.calls[0][0]);
-    expect(msg).toContain("boom");
   });
 
   it("shows Stop button only while running and fires stopAgent on click", () => {
