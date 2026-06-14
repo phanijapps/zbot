@@ -15,6 +15,8 @@ UI_BUILD_DIR := dist
 # line in the file is `[workspace.package].version` — every other crate
 # inherits it via `version.workspace = true`.
 VERSION := $(shell awk -F\" '/^version[[:space:]]*=/ {print $$2; exit}' Cargo.toml)
+BUILD_DATE := $(shell date -u +%Y-%m-%d)
+BUILD_TIMESTAMP := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Resolve a vault path that mirrors the daemon's runtime resolution
 # (`dirs::document_dir().or_else(home_dir).join("zbot")`). Used for the
@@ -37,7 +39,7 @@ help:
 	@echo "  make clean      - cargo clean + rm -rf $(UI_BUILD_DIR)"
 
 build:
-	cargo build --release
+	ZBOT_BUILD_DATE=$(BUILD_DATE) ZBOT_BUILD_TIMESTAMP=$(BUILD_TIMESTAMP) cargo build --release
 	cd apps/ui && npm install && npm run build
 
 # Same as `build` but exports `ZBOT_INSTALL=1` so the daemon's and CLI's
@@ -45,7 +47,7 @@ build:
 # version. Resulting binary reports e.g. `2026.5.3.develop` instead of
 # the bare `2026.5.3` a plain `cargo build` produces.
 install-build:
-	ZBOT_INSTALL=1 cargo build --release
+	ZBOT_INSTALL=1 ZBOT_BUILD_DATE=$(BUILD_DATE) ZBOT_BUILD_TIMESTAMP=$(BUILD_TIMESTAMP) cargo build --release
 	cd apps/ui && npm install && npm run build
 
 install: install-build

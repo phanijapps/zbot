@@ -83,7 +83,8 @@ pub async fn run_turn(
                 out.flush()?;
             }
             ServerMessage::ToolCall { tool, .. } => {
-                let line = format!("\n{}{}{}\n",
+                let line = format!(
+                    "\n{}{}{}\n",
                     indent,
                     style::tool_marker(&format!("▸ {tool}"), cfg.color, Style::Dim),
                     "",
@@ -102,7 +103,11 @@ pub async fn run_turn(
                     let _ = io::stderr().write_all(line.as_bytes());
                 }
             }
-            ServerMessage::TokenUsage { tokens_in, tokens_out, .. } => {
+            ServerMessage::TokenUsage {
+                tokens_in,
+                tokens_out,
+                ..
+            } => {
                 summary.tokens_in = tokens_in;
                 summary.tokens_out = tokens_out;
             }

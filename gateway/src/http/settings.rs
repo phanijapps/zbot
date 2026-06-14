@@ -4,7 +4,7 @@
 
 use crate::state::AppState;
 use agent_tools::ToolSettings;
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{Json, extract::State, http::StatusCode};
 use gateway_services::{ExecutionSettings, LogSettings};
 use serde::{Deserialize, Serialize};
 
@@ -468,7 +468,7 @@ pub async fn update_network_settings(
                     data: None,
                     error: Some(e),
                 }),
-            ))
+            ));
         }
     };
     current.network = new_cfg.clone();

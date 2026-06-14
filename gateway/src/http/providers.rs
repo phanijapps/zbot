@@ -4,11 +4,11 @@
 // ============================================================================
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 
 use crate::services::providers::{ModelConfig, Provider};

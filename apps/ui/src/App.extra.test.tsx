@@ -98,6 +98,23 @@ describe("App — initialization flow", () => {
     expect(screen.getByText("v1.0.0")).toBeInTheDocument();
   });
 
+  it("renders build date metadata from health in the version badge", async () => {
+    health.mockResolvedValue({
+      success: true,
+      data: {
+        status: "ok",
+        version: "2026.5.3.develop",
+        buildDate: "2026-06-14",
+        buildTimestamp: "2026-06-14T15:30:00Z",
+      },
+    });
+
+    render(<App />);
+
+    const badge = await screen.findByText("v2026.5.3.develop (2026-06-14 15:30:00Z)");
+    expect(badge).toHaveAttribute("title", "z-bot 2026.5.3.develop built 2026-06-14T15:30:00Z");
+  });
+
   it("shows error state when health check fails", async () => {
     health.mockResolvedValue({ success: false, error: "daemon not running" });
     render(<App />);

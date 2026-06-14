@@ -32,7 +32,10 @@ impl DaemonClient {
             .user_agent(concat!("zbot/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("reqwest::Client should always build");
-        Self { http, base: cfg.daemon_url }
+        Self {
+            http,
+            base: cfg.daemon_url,
+        }
     }
 
     /// `GET /api/health` — startup smoke test.
@@ -68,10 +71,7 @@ impl DaemonClient {
             .await
             .with_context(|| format!("POST {url}"))?;
         if !resp.status().is_success() {
-            return Err(anyhow!(
-                "/api/chat/init returned HTTP {}",
-                resp.status()
-            ));
+            return Err(anyhow!("/api/chat/init returned HTTP {}", resp.status()));
         }
         let body: ChatInit = resp.json().await.context("parse /api/chat/init body")?;
         Ok(body)
@@ -87,10 +87,7 @@ impl DaemonClient {
             .await
             .with_context(|| format!("DELETE {url}"))?;
         if !resp.status().is_success() {
-            return Err(anyhow!(
-                "/api/chat/session returned HTTP {}",
-                resp.status()
-            ));
+            return Err(anyhow!("/api/chat/session returned HTTP {}", resp.status()));
         }
         Ok(())
     }
