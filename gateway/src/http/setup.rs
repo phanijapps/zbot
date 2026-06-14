@@ -3,7 +3,7 @@
 //! Lightweight endpoints for the first-time setup wizard.
 
 use crate::state::AppState;
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{Json, extract::State, http::StatusCode};
 use serde::Serialize;
 
 /// GET /api/setup/status — lightweight check for setup redirect logic.

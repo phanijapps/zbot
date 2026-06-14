@@ -2,7 +2,7 @@
 //! to the Settings UI.
 
 use crate::state::AppState;
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{Json, extract::State, http::StatusCode};
 use discovery::NetworkInfo;
 use serde::Serialize;
 

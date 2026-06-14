@@ -7,9 +7,9 @@
 
 use crate::state::AppState;
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use zero_stores_domain::MemoryFact;
@@ -472,6 +472,52 @@ pub async fn create_memory_fact(
             }),
         )
     })?;
+
+    if request.pinned && request.category == "user" && request.key == "user.profile" {
+        let existing_profiles = memory_store
+            .list_memory_facts(Some(&agent_id), Some("user"), Some("agent"), 100, 0)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to list existing user profile facts: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Failed to list existing user profile facts: {}", e),
+                    }),
+                )
+            })?;
+
+        for existing in existing_profiles {
+            let existing: MemoryFact = match serde_json::from_value(existing) {
+                Ok(fact) => fact,
+                Err(e) => {
+                    tracing::warn!(
+                        "memory fact row decode failed while replacing user profile: {e}"
+                    );
+                    continue;
+                }
+            };
+
+            if existing.key == "user.profile" && existing.ward_id == fact.ward_id {
+                memory_store
+                    .delete_memory_fact(&existing.id)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to replace existing user profile fact: {}", e);
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                error: format!(
+                                    "Failed to replace existing user profile fact: {}",
+                                    e
+                                ),
+                            }),
+                        )
+                    })?;
+            }
+        }
+    }
+
     memory_store
         .upsert_typed_fact(fact_value, None)
         .await

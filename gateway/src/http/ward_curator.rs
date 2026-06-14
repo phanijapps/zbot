@@ -11,8 +11,8 @@
 
 use std::sync::Arc;
 
-use agent_runtime::llm::{openai::OpenAiClient, LlmClient, LlmConfig};
-use axum::{body::Bytes, extract::State, http::StatusCode, response::IntoResponse, Json};
+use agent_runtime::llm::{LlmClient, LlmConfig, openai::OpenAiClient};
+use axum::{Json, body::Bytes, extract::State, http::StatusCode, response::IntoResponse};
 use gateway_execution::curator::consolidate_wards;
 use gateway_services::{
     CleanupReport, CleanupRequest, ConsolidateRequest, ConsolidationReport, RestoreReport,

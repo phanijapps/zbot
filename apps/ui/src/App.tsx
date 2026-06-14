@@ -49,6 +49,8 @@ interface AppInitResult {
   connected: boolean;
   error?: string;
   version?: string;
+  buildDate?: string;
+  buildTimestamp?: string;
 }
 
 // ============================================================================
@@ -66,17 +68,35 @@ function ResearchV2Redirect() {
  * daemon's reported version. Hidden while the fetch is in flight or on
  * failure (rather than showing a placeholder) so the bar stays clean.
  *
- * Branch-suffixed versions (e.g. `2026.5.3.develop`) come straight from
- * the build.rs that runs on `make install` / `scripts/install.sh`. Plain
- * `cargo build` reports the bare `2026.5.3`.
+ * Branch-suffixed versions and build metadata come from the daemon's
+ * compile-time `/api/health` response.
  */
-function VersionBadge({ version }: { version?: string | null }) {
+function VersionBadge({
+  version,
+  buildDate,
+  buildTimestamp,
+}: {
+  version?: string | null;
+  buildDate?: string | null;
+  buildTimestamp?: string | null;
+}) {
   if (!version) return null;
+  const buildLabel = buildTimestamp ? formatBuildTimestamp(buildTimestamp) : buildDate;
+  const label = buildLabel ? `v${version} (${buildLabel})` : `v${version}`;
+  const title = buildTimestamp
+    ? `z-bot ${version} built ${buildTimestamp}`
+    : buildDate
+      ? `z-bot ${version} built ${buildDate}`
+      : `z-bot ${version}`;
   return (
-    <span className="topbar__version" title={`z-bot ${version}`}>
-      v{version}
+    <span className="topbar__version" title={title}>
+      {label}
     </span>
   );
+}
+
+function formatBuildTimestamp(value: string) {
+  return value.replace("T", " ");
 }
 
 function App() {
@@ -87,6 +107,8 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const [daemonVersion, setDaemonVersion] = useState<string | null>(null);
+  const [daemonBuildDate, setDaemonBuildDate] = useState<string | null>(null);
+  const [daemonBuildTimestamp, setDaemonBuildTimestamp] = useState<string | null>(null);
   const initPromiseRef = useRef<Promise<AppInitResult> | null>(null);
 
   useEffect(() => {
@@ -108,6 +130,8 @@ function App() {
       return {
         connected: true,
         version: healthResult.data?.version,
+        buildDate: healthResult.data?.buildDate,
+        buildTimestamp: healthResult.data?.buildTimestamp,
       };
     };
 
@@ -127,6 +151,8 @@ function App() {
         setError(null);
         setConnectionStatus({ connected: true });
         setDaemonVersion(result.version ?? null);
+        setDaemonBuildDate(result.buildDate ?? null);
+        setDaemonBuildTimestamp(result.buildTimestamp ?? null);
       }
       setIsInitializing(false);
     });
@@ -139,6 +165,8 @@ function App() {
   const handleRetry = () => {
     setError(null);
     setDaemonVersion(null);
+    setDaemonBuildDate(null);
+    setDaemonBuildTimestamp(null);
     setIsInitializing(true);
     initPromiseRef.current = null;
     setRetryCount(c => c + 1);
@@ -204,7 +232,12 @@ function App() {
           {/* Main app with sidebar */}
           <Route path="/*" element={
             <SetupGuard>
-              <WebAppShell connectionStatus={connectionStatus} version={daemonVersion}>
+              <WebAppShell
+                connectionStatus={connectionStatus}
+                version={daemonVersion}
+                buildDate={daemonBuildDate}
+                buildTimestamp={daemonBuildTimestamp}
+              >
                 <Routes>
                   <Route path="/" element={<Navigate to="/research" replace />} />
                   <Route path="/mission-control" element={<MissionControlPage />} />
@@ -248,6 +281,8 @@ interface WebAppShellProps {
   children: React.ReactNode;
   connectionStatus: ConnectionStatus;
   version?: string | null;
+  buildDate?: string | null;
+  buildTimestamp?: string | null;
 }
 
 // Flat top-bar nav — no groups, no Main/Manage/System split.
@@ -273,7 +308,13 @@ export const navItems: NavItem[] = [
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
-export function WebAppShell({ children, connectionStatus, version }: WebAppShellProps) {
+export function WebAppShell({
+  children,
+  connectionStatus,
+  version,
+  buildDate,
+  buildTimestamp,
+}: WebAppShellProps) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const location = useLocation();
   // Close the mobile sheet whenever the route changes.
@@ -309,7 +350,7 @@ export function WebAppShell({ children, connectionStatus, version }: WebAppShell
         </nav>
 
         <div className="topbar__right">
-          <VersionBadge version={version} />
+          <VersionBadge version={version} buildDate={buildDate} buildTimestamp={buildTimestamp} />
           <AccentPicker />
           <div className="connection-status">
             <div className={`connection-status__dot ${

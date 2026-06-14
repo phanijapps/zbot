@@ -1421,6 +1421,12 @@ components:
         version:
           type: string
           example: 0.1.0
+        buildDate:
+          type: string
+          example: "2026-06-14"
+        buildTimestamp:
+          type: string
+          example: "2026-06-14T15:30:00Z"
 
     StatusResponse:
       type: object
@@ -1428,6 +1434,10 @@ components:
         status:
           type: string
         version:
+          type: string
+        buildDate:
+          type: string
+        buildTimestamp:
           type: string
         agents:
           type: integer

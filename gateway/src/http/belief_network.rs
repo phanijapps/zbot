@@ -14,8 +14,8 @@
 
 use crate::state::AppState;
 use axum::{
-    extract::{Query, State},
     Json,
+    extract::{Query, State},
 };
 use chrono::{DateTime, Utc};
 use gateway_memory::{

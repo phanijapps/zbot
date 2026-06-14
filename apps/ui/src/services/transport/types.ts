@@ -148,11 +148,16 @@ export interface SessionMessagesQuery {
 export interface HealthResponse {
   status: string;
   version: string;
+  buildDate?: string;
+  buildTimestamp?: string;
   uptime: number;
 }
 
 export interface StatusResponse {
   status: string;
+  version?: string;
+  buildDate?: string;
+  buildTimestamp?: string;
   websocket_port: number;
   http_port: number;
   active_connections: number;

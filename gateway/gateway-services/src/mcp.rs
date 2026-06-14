@@ -110,19 +110,31 @@ impl McpService {
             .ok_or_else(|| format!("MCP server not found: {}", id))
     }
 
-    /// Get multiple MCP server configurations by IDs.
+    /// Get multiple MCP server configurations by ID or display name.
     ///
-    /// Returns only the configs that exist and are enabled.
-    /// Missing or disabled configs are silently skipped.
+    /// Returns only the configs that exist and are enabled. ID matches are the
+    /// canonical path, but name matches keep older/manual agent configs working.
+    /// Missing or disabled configs are skipped with a warning.
     pub fn get_multiple(&self, ids: &[String]) -> Vec<McpServerConfig> {
         let Ok(configs) = self.list() else {
             return vec![];
         };
 
-        configs
+        let matched = configs
             .into_iter()
-            .filter(|c| ids.contains(&c.id()) && c.enabled())
-            .collect()
+            .filter(|c| c.enabled() && ids.iter().any(|id| mcp_ref_matches(c, id)))
+            .collect::<Vec<_>>();
+
+        for requested_id in ids {
+            if !matched.iter().any(|c| mcp_ref_matches(c, requested_id)) {
+                tracing::warn!(
+                    mcp_ref = %requested_id,
+                    "Configured MCP reference did not match an enabled server by ID or name"
+                );
+            }
+        }
+
+        matched
     }
 
     /// Save MCP server configurations to disk and update cache.
@@ -243,5 +255,78 @@ impl McpService {
                 enabled: *enabled,
             },
         }
+    }
+}
+
+fn mcp_ref_matches(config: &McpServerConfig, requested: &str) -> bool {
+    config.id() == requested || config.name() == requested
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::paths::VaultPaths;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    fn service() -> (tempfile::TempDir, McpService) {
+        let dir = tempdir().unwrap();
+        let paths = Arc::new(VaultPaths::new(dir.path().to_path_buf()));
+        let service = McpService::new(paths);
+        (dir, service)
+    }
+
+    fn stdio(id: Option<&str>, name: &str, enabled: bool) -> McpServerConfig {
+        McpServerConfig::Stdio {
+            id: id.map(str::to_string),
+            name: name.to_string(),
+            description: "desc".to_string(),
+            command: "npx".to_string(),
+            args: vec!["server".to_string()],
+            env: None,
+            enabled,
+            validated: None,
+        }
+    }
+
+    #[test]
+    fn get_multiple_matches_enabled_server_by_id() {
+        let (_dir, service) = service();
+        service
+            .save(&[
+                stdio(Some("brave-search"), "Brave Search", true),
+                stdio(Some("time"), "Time", true),
+            ])
+            .unwrap();
+
+        let found = service.get_multiple(&["brave-search".to_string()]);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id(), "brave-search");
+    }
+
+    #[test]
+    fn get_multiple_matches_enabled_server_by_display_name() {
+        let (_dir, service) = service();
+        service
+            .save(&[stdio(Some("brave-search"), "Brave Search", true)])
+            .unwrap();
+
+        let found = service.get_multiple(&["Brave Search".to_string()]);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id(), "brave-search");
+    }
+
+    #[test]
+    fn get_multiple_skips_disabled_name_match() {
+        let (_dir, service) = service();
+        service
+            .save(&[stdio(Some("brave-search"), "Brave Search", false)])
+            .unwrap();
+
+        let found = service.get_multiple(&["Brave Search".to_string()]);
+
+        assert!(found.is_empty());
     }
 }

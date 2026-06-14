@@ -6,9 +6,9 @@ use crate::services::mcp::McpServerSummary;
 use crate::state::AppState;
 use agent_runtime::McpServerConfig;
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

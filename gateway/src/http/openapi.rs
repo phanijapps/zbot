@@ -3,7 +3,7 @@
 //! Serves OpenAPI specification and Swagger UI.
 
 use axum::{
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{Html, IntoResponse, Response},
 };
 
