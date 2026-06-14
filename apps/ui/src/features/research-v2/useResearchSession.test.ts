@@ -435,6 +435,21 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
       success: true,
       data: [makeArtifact("a1", EXISTING_SESSION)],
     });
+    getSessionState.mockResolvedValueOnce({
+      success: true,
+      data: {
+        session: { id: EXISTING_SESSION, title: null, status: "completed", startedAt: "", durationMs: 0, tokenCount: 0, model: null },
+        userMessage: null,
+        phase: "completed",
+        response: null,
+        intentAnalysis: null,
+        ward: { name: "stock-analysis" },
+        recalledFacts: [],
+        plan: [],
+        subagents: [],
+        isLive: false,
+      },
+    });
 
     const { result } = renderHook(() => useResearchSession(), {
       wrapper: routerWrapper(`/research/${EXISTING_SESSION}`),
@@ -448,6 +463,8 @@ describe("useResearchSession — snapshot flow (R14f)", () => {
 
     expect(result.current.state.sessionId).toBe(EXISTING_SESSION);
     expect(result.current.state.title).toBe("Hydrated title");
+    expect(result.current.state.wardId).toBe("stock-analysis");
+    expect(result.current.state.wardName).toBe("stock-analysis");
     // The single hydrated user message becomes one SessionTurn carrying it.
     expect(result.current.state.turns).toHaveLength(1);
     expect(result.current.state.turns[0].userMessage.content).toBe("old prompt");
