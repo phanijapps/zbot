@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { getTransport } from "@/services/transport";
 import type { ProviderResponse, McpServerConfig } from "@/services/transport";
-import { NAME_PRESETS } from "./presets";
+import { DEFAULT_NAME_PRESET, NAME_PRESETS } from "./presets";
 import { HelpBox } from "@/components/HelpBox";
 import { StepIndicator } from "./components/StepIndicator";
 import { WizardNav } from "./components/WizardNav";
@@ -64,11 +64,13 @@ function reducer(state: WizardState, action: WizardAction): WizardState {
   }
 }
 
+const LEGACY_DEFAULT_USER_PROFILE = "I am a private person, just call me Mr Z.";
+
 const initialState: WizardState = {
   currentStep: 1,
-  agentName: "Bhrami Software Engineer",
-  namePreset: "bhrami",
-  aboutMe: "I am a private person, just call me Mr Z.",
+  agentName: DEFAULT_NAME_PRESET.name,
+  namePreset: DEFAULT_NAME_PRESET.id,
+  aboutMe: "",
   providers: [],
   defaultProviderId: "",
   enabledSkillIds: [],
@@ -122,7 +124,7 @@ export function SetupWizard() {
           const memRes = await transport.listAllMemory({ category: "user" as any, limit: 20 });
           if (memRes.success && memRes.data && memRes.data.facts) {
             const profileFact = memRes.data.facts.find((f) => f.key === "user.profile");
-            if (profileFact) {
+            if (profileFact && profileFact.content.trim() !== LEGACY_DEFAULT_USER_PROFILE) {
               hydrated.aboutMe = profileFact.content;
             }
           }

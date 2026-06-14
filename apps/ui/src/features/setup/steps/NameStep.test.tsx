@@ -5,11 +5,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { NameStep } from "./NameStep";
-import { NAME_PRESETS } from "../presets";
+import { DEFAULT_NAME_PRESET, NAME_PRESETS } from "../presets";
 
 const defaultProps = {
-  agentName: "z-Bot",
-  namePreset: "zbot",
+  agentName: DEFAULT_NAME_PRESET.name,
+  namePreset: DEFAULT_NAME_PRESET.id,
   aboutMe: "",
   onChange: vi.fn(),
   onAboutMeChange: vi.fn(),
@@ -36,10 +36,8 @@ describe("NameStep", () => {
   it("calls onChange when a preset is clicked", () => {
     const onChange = vi.fn();
     render(<NameStep {...defaultProps} onChange={onChange} />);
-    // Click the z-Bot preset (id: "zbot")
-    const zBot = NAME_PRESETS.find((p) => p.id === "zbot")!;
-    fireEvent.click(screen.getByText(zBot.name));
-    expect(onChange).toHaveBeenCalledWith(zBot.name, "zbot");
+    fireEvent.click(screen.getByText(DEFAULT_NAME_PRESET.name));
+    expect(onChange).toHaveBeenCalledWith(DEFAULT_NAME_PRESET.name, DEFAULT_NAME_PRESET.id);
   });
 
   it("calls onChange with empty name and 'custom' when Custom preset is clicked", () => {
@@ -69,8 +67,7 @@ describe("NameStep", () => {
   it("handles Enter keydown on a preset", () => {
     const onChange = vi.fn();
     render(<NameStep {...defaultProps} onChange={onChange} />);
-    const zBot = NAME_PRESETS.find((p) => p.id === "zbot")!;
-    const presetEl = screen.getByText(zBot.name).closest("[role='button']")!;
+    const presetEl = screen.getByText(DEFAULT_NAME_PRESET.name).closest("[role='button']")!;
     fireEvent.keyDown(presetEl, { key: "Enter" });
     expect(onChange).toHaveBeenCalled();
   });
@@ -78,16 +75,14 @@ describe("NameStep", () => {
   it("handles Space keydown on a preset", () => {
     const onChange = vi.fn();
     render(<NameStep {...defaultProps} onChange={onChange} />);
-    const zBot = NAME_PRESETS.find((p) => p.id === "zbot")!;
-    const presetEl = screen.getByText(zBot.name).closest("[role='button']")!;
+    const presetEl = screen.getByText(DEFAULT_NAME_PRESET.name).closest("[role='button']")!;
     fireEvent.keyDown(presetEl, { key: " " });
     expect(onChange).toHaveBeenCalled();
   });
 
   it("marks selected preset with active class", () => {
-    render(<NameStep {...defaultProps} namePreset="zbot" />);
-    const zBot = NAME_PRESETS.find((p) => p.id === "zbot")!;
-    const presetEl = screen.getByText(zBot.name).closest(".name-preset")!;
+    render(<NameStep {...defaultProps} namePreset={DEFAULT_NAME_PRESET.id} />);
+    const presetEl = screen.getByText(DEFAULT_NAME_PRESET.name).closest(".name-preset")!;
     expect(presetEl.className).toContain("name-preset--selected");
   });
 });

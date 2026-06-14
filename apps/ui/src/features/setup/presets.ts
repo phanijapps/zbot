@@ -6,8 +6,14 @@ export interface NamePreset {
 }
 
 export const NAME_PRESETS: NamePreset[] = [
-  { id: "bhrami", name: "Bhrami Software Engineer", emoji: "\uD83C\uDFAD", tagline: "Witty, resourceful, always has a plan" },
-  { id: "gajala", name: "Gajala CEO Sonic Solutions", emoji: "\uD83D\uDE02", tagline: "Energetic, creative, makes work fun" },
-  { id: "zbot", name: "z-Bot", emoji: "\uD83E\uDD16", tagline: "Professional, focused, gets things done" },
+  { id: "mindful-companion", name: "Mindful Companion", emoji: "\uD83C\uDF3F", tagline: "Calm support with a light touch" },
+  { id: "jarvis", name: "Jarvis", emoji: "\u26A1", tagline: "Polished, quick, and a little theatrical" },
+  { id: "judy", name: "Judy", emoji: "\uD83C\uDFAE", tagline: "Streetwise coding partner with sharp humor" },
+  { id: "camina", name: "CAMINA", emoji: "\uD83D\uDE80", tagline: "No-nonsense captain energy for hard tasks" },
+  { id: "ghost-protocol", name: "Ghost Protocol", emoji: "\uD83D\uDD76\uFE0F", tagline: "Stealthy, curious, dramatic problem solving" },
+  { id: "database-whisperer", name: "Database Whisperer", emoji: "\uD83D\uDCCA", tagline: "Turns slow queries into good stories" },
+  { id: "kuma", name: "Kuma", emoji: "\uD83C\uDF8C", tagline: "Playful language coach for Japanese practice" },
   { id: "custom", name: "Custom...", emoji: "\u2728", tagline: "Choose your own name" },
 ];
+
+export const DEFAULT_NAME_PRESET = NAME_PRESETS[0];
