@@ -169,6 +169,26 @@ If you'd rather keep the daemon loopback-only, toggle **Expose to LAN** off in S
 
 **Heads up for upgraders:** prior versions only listened on `127.0.0.1`. After this release the daemon listens on `0.0.0.0` by default.
 
+### Public tunnel with ngrok
+
+Docker users can enable the `ngrok` compose profile. For a z-Bot daemon running
+directly on a dedicated machine, use the host launcher:
+
+```bash
+# zbotd must already be running on this machine.
+NGROK_AUTHTOKEN=<your-token> ./scripts/expose-ngrok.sh
+
+# Optional reserved ngrok domain:
+NGROK_AUTHTOKEN=<your-token> ./scripts/expose-ngrok.sh --domain example.ngrok.app
+```
+
+The script checks `http://127.0.0.1:18791/api/health` before opening the tunnel
+and then runs `ngrok http http://127.0.0.1:18791`. The public ngrok URL serves
+the web UI, REST API, and WebSocket endpoint at `/ws`.
+
+This exposes your local daemon on the public internet. Only share the ngrok URL
+with trusted clients, and use ngrok-side access controls when needed.
+
 ## Architecture
 
 ```
