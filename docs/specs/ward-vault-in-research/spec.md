@@ -72,34 +72,34 @@ proceeding; *Never do* is a hard rule, even under time pressure.
 
 ## Acceptance Criteria
 
-- [ ] A Research session with `wardId` and `wardName` renders a two-column body:
+- [x] A Research session with `wardId` and `wardName` renders a two-column body:
   left ward Vault explorer/search, right existing Research UI.
-- [ ] A Research session without a ward keeps the current single-column
+- [x] A Research session without a ward keeps the current single-column
   experience and does not call Vault tree/search/file APIs.
-- [ ] Opening an existing `/research/:sessionId` whose snapshot contains a ward
+- [x] Opening an existing `/research/:sessionId` whose snapshot contains a ward
   renders the same ward-scoped explorer after snapshot hydration.
-- [ ] When live `ward_changed` sets the session ward during new research, the
+- [x] When live `ward_changed` sets the session ward during new research, the
   embedded explorer appears and loads only that ward root.
-- [ ] The embedded explorer tree never lists sibling wards; it shows only the
+- [x] The embedded explorer tree never lists sibling wards; it shows only the
   selected ward root and its child directories/files.
-- [ ] Fuzzy file search in Research calls
+- [x] Fuzzy file search in Research calls
   `searchVaultFiles(<session ward id>, query, 30)` and renders only results from
   that ward.
-- [ ] Clicking a previewable tree node or search result opens a Research-local
+- [x] Clicking a previewable tree node or search result opens a Research-local
   slide-out preview and calls `getVaultFile(<session ward id>, path)`.
-- [ ] Markdown previews use the shared Markdown renderer; text/code render as
+- [x] Markdown previews use the shared Markdown renderer; text/code render as
   escaped read-only source; `.html` renders in a sandboxed preview iframe;
   `.docx` and `.pptx` use the existing Office preview helper.
-- [ ] Non-previewable `.doc` and `.ppt` entries show metadata/non-previewable
+- [x] Non-previewable `.doc` and `.ppt` entries show metadata/non-previewable
   state and do not call `getVaultFile`.
-- [ ] Closing the file preview returns focus to Research with transcript,
+- [x] Closing the file preview returns focus to Research with transcript,
   artifact strip, and composer still visible.
-- [ ] The embedded explorer can be collapsed and expanded without losing the
+- [x] The embedded explorer can be collapsed and expanded without losing the
   selected ward, tree state, search query, or selected file.
-- [ ] The top-level ward chip still navigates to `/vault?ward=<wardId>`.
-- [ ] Existing `/vault` behavior and tests continue to pass after extracting
+- [x] The top-level ward chip still navigates to `/vault?ward=<wardId>`.
+- [x] Existing `/vault` behavior and tests continue to pass after extracting
   reusable Vault explorer/preview components.
-- [ ] `docs/specs/README.md` lists Ward Vault In Research as an active spec.
+- [x] `docs/specs/README.md` lists Ward Vault In Research as an active spec.
 
 ## Assumptions
 

@@ -1,7 +1,7 @@
 # Plan: Ward Vault In Research
 
 - **Spec:** [`spec.md`](spec.md)
-- **Status:** Executing
+- **Status:** Done
 
 > **Plan contract:** this is the implementation strategy. Unlike the spec, this
 > document is allowed to change as you learn. When it changes substantially
@@ -184,3 +184,5 @@ read-only Vault APIs.
 ## Changelog
 
 - 2026-06-14: initial plan.
+- 2026-06-14: implemented via reusable Vault explorer/preview extraction and
+  Research page integration.
