@@ -93,8 +93,8 @@ function ResearchHeader({ state, onOpenDrawer, onNew, onStop, onOpenWard, showNe
             type="button"
             className="research-page__ward-chip research-page__ward-chip--clickable"
             onClick={() => onOpenWard(state.wardId as string)}
-            title={`Open ward folder: ${state.wardName}`}
-            aria-label={`Open ward folder: ${state.wardName}`}
+            title={`Open ward in Vault: ${state.wardName}`}
+            aria-label={`Open ward in Vault: ${state.wardName}`}
           >
             <FolderOpen size={12} />
             <span>{state.wardName}</span>
@@ -248,13 +248,9 @@ export function ResearchPage() {
   };
 
   // Memoised so the ResearchHeader sub-component doesn't re-render each tick.
-  const handleOpenWard = useCallback(async (wardId: string) => {
-    const transport = await getTransport();
-    const r = await transport.openWard(wardId);
-    if (!r.success) {
-      toast.error(`Failed to open ward folder: ${r.error ?? "unknown"}`);
-    }
-  }, []);
+  const handleOpenWard = useCallback((wardId: string) => {
+    navigate(`/vault?ward=${encodeURIComponent(wardId)}`);
+  }, [navigate]);
 
   const composerDisabled = state.status === "running";
   // Landing state: no user message, no agent turns, no bound session. Hero

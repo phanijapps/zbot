@@ -186,7 +186,11 @@ impl GatewayServer {
                 }
             };
 
-            let server = axum::serve(listener, http_router).with_graceful_shutdown(async move {
+            let server = axum::serve(
+                listener,
+                http_router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move {
                 let mut rx = http_shutdown_rx;
                 let _ = rx.recv().await;
                 info!("HTTP server shutting down");

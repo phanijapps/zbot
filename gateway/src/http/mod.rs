@@ -35,6 +35,7 @@ mod setup;
 mod skills;
 mod tools;
 mod upload;
+mod vault;
 mod ward_actions;
 mod ward_content;
 mod ward_curator;
@@ -43,11 +44,11 @@ mod webhooks;
 
 use crate::config::GatewayConfig;
 use crate::state::AppState;
-use crate::websocket::{axum_ws_upgrade_handler, WebSocketHandler};
+use crate::websocket::{WebSocketHandler, axum_ws_upgrade_handler};
 use axum::{
+    Extension, Router,
     extract::DefaultBodyLimit,
     routing::{delete, get, post, put},
-    Extension, Router,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -281,6 +282,14 @@ pub fn create_http_router(
         .route("/api/curator/consolidate", post(ward_curator::consolidate))
         // Ward listing (Memory Tab Command Deck — Task 9)
         .route("/api/wards", get(ward_content::list_wards))
+        // Vault filesystem browser — local-only, read-only ward tree + preview.
+        .route("/api/vault/wards", get(vault::list_vault_wards))
+        .route("/api/vault/wards/:ward_id/tree", get(vault::get_vault_tree))
+        .route(
+            "/api/vault/wards/:ward_id/search",
+            get(vault::search_vault_files),
+        )
+        .route("/api/vault/wards/:ward_id/file", get(vault::get_vault_file))
         // Ward content aggregator (Memory Tab Command Deck — Task 5)
         .route(
             "/api/wards/:ward_id/content",
@@ -426,6 +435,7 @@ pub fn create_http_router(
     router = router.route("/ws", get(axum_ws_upgrade_handler));
 
     router
+        .layer(Extension(config.clone()))
         .layer(Extension(ws_handler))
         .layer(cors)
         .layer(TraceLayer::new_for_http())

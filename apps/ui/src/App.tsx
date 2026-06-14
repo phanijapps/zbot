@@ -20,6 +20,7 @@ import {
   MessageSquare,
   Menu,
   Search,
+  Archive,
 } from "lucide-react";
 import { initializeTransport, getTransport } from "@/services/transport";
 import { SetupWizard, SetupGuard } from "./features/setup";
@@ -32,6 +33,7 @@ import { ObservatoryV2Page } from "./features/observatory-v2";
 import { QuickChat } from "./features/chat-v2";
 import { ResearchPage } from "./features/research-v2";
 import { MissionControlPage } from "./features/mission-control";
+import { VaultPage } from "./features/vault";
 import { AccentPicker } from "./components/AccentPicker";
 
 // ============================================================================
@@ -213,6 +215,7 @@ function App() {
                   <Route path="/observatory" element={<ObservatoryPage />} />
                   <Route path="/observatory-v2" element={<ObservatoryV2Page />} />
                   <Route path="/agents" element={<WebAgentsPanel />} />
+                  <Route path="/vault" element={<VaultPage />} />
                   <Route path="/integrations" element={<WebIntegrationsPanel />} />
                   <Route path="/settings" element={<WebSettingsPanel />} />
                   <Route path="/chat" element={<QuickChat />} />
@@ -263,6 +266,7 @@ export const navItems: NavItem[] = [
   { to: "/mission-control", label: "Mission Control", icon: LayoutDashboard },
   { to: "/agents", label: "Agents", icon: Bot },
   { to: "/memory", label: "Memory", icon: Brain },
+  { to: "/vault", label: "Vault", icon: Archive },
   { to: "/observatory", label: "Observatory", icon: Network },
   { to: "/observatory-v2", label: "Graph", icon: Layers },
   { to: "/integrations", label: "Integrations", icon: Plug },

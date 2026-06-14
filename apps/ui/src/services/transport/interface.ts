@@ -66,6 +66,10 @@ import type {
   MemoryFilter,
   MemoryListResponse,
   WardContent,
+  VaultFileResponse,
+  VaultSearchResponse,
+  VaultTreeResponse,
+  VaultWardsResponse,
   HybridSearchRequest,
   HybridSearchResponse,
   // Graph types
@@ -466,6 +470,18 @@ export interface Transport {
 
   /** Get full content (facts, wiki, procedures, episodes) for a single ward */
   getWardContent(wardId: string): Promise<TransportResult<WardContent>>;
+
+  /** List filesystem-backed wards for the Vault tab. */
+  listVaultWards(): Promise<TransportResult<VaultWardsResponse>>;
+
+  /** Get one lazy-loaded Vault tree directory. */
+  getVaultTree(wardId: string, path?: string): Promise<TransportResult<VaultTreeResponse>>;
+
+  /** Fuzzy-search visible files inside one filesystem-backed ward. */
+  searchVaultFiles(wardId: string, query: string, limit?: number): Promise<TransportResult<VaultSearchResponse>>;
+
+  /** Get read-only file preview content for an accepted Vault file. */
+  getVaultFile(wardId: string, path: string): Promise<TransportResult<VaultFileResponse>>;
 
   /**
    * Open the ward's vault folder in the OS native file browser
