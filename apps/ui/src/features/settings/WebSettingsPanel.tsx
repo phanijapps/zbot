@@ -51,6 +51,19 @@ const DEFAULT_MULTIMODAL_CONFIG = {
   maxTokens: DEFAULT_MAX_OUTPUT_TOKENS,
 };
 
+function stripLegacyMaxTokens<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripLegacyMaxTokens(item)) as T;
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value).filter(([key]) => key !== "maxTokens");
+    return Object.fromEntries(
+      entries.map(([key, entryValue]) => [key, stripLegacyMaxTokens(entryValue)]),
+    ) as T;
+  }
+  return value;
+}
+
 export function WebSettingsPanel() {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get("tab") || "providers";
@@ -263,11 +276,12 @@ export function WebSettingsPanel() {
     // Strip restartRequired before sending
     const { restartRequired: _, ...clean } = newSettings as ExecutionSettings & { restartRequired?: boolean };
     setExecSettings(clean);
+    const payload = stripLegacyMaxTokens(clean);
     setIsSavingExec(true);
     setExecSaveMessage(null);
     try {
       const transport = await getTransport();
-      const result = await transport.updateExecutionSettings(clean);
+      const result = await transport.updateExecutionSettings(payload);
       if (result.success) {
         setExecSaveMessage("Saved");
         setExecRestartRequired(result.data?.restartRequired ?? false);

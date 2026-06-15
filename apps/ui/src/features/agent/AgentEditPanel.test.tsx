@@ -182,6 +182,8 @@ describe("AgentEditPanel — Advanced section", () => {
     const [, payload] = mockUpdateAgent.mock.calls[0];
     expect(payload).not.toHaveProperty("voiceRecordingEnabled");
     expect(payload).toHaveProperty("thinkingEnabled");
+    expect(payload).toHaveProperty("maxOutputTokens", 32000);
+    expect(payload).not.toHaveProperty("maxTokens");
     await waitFor(() => expect(onSave).toHaveBeenCalled());
   });
 

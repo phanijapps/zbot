@@ -101,7 +101,8 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
     setError(null);
     try {
       const transport = await getTransport();
-      const result = await transport.updateAgent(agent.id, formData);
+      const { maxTokens: _legacyMaxTokens, ...payload } = formData;
+      const result = await transport.updateAgent(agent.id, payload);
       if (result.success) {
         onSave();
         onClose();

@@ -130,7 +130,6 @@ export function ReviewStep({
             temperature: desired.temperature,
             maxInputTokens: desired.maxInputTokens,
             maxOutputTokens: desired.maxOutputTokens,
-            maxTokens: desired.maxOutputTokens,
           });
         }
       }

@@ -221,7 +221,6 @@ export function WebAgentsPanel() {
         temperature: newAgent.temperature,
         maxInputTokens: newAgent.maxInputTokens ?? DEFAULT_MAX_INPUT_TOKENS,
         maxOutputTokens: newAgent.maxOutputTokens ?? newAgent.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-        maxTokens: newAgent.maxOutputTokens ?? newAgent.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
       });
       if (result.success) {
         setIsCreatingAgent(false);

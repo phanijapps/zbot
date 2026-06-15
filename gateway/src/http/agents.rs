@@ -80,11 +80,19 @@ pub struct CreateAgentRequest {
     pub temperature: Option<f64>,
     #[serde(rename = "maxInputTokens")]
     pub max_input_tokens: Option<u64>,
-    #[serde(rename = "maxOutputTokens", alias = "maxTokens")]
+    #[serde(rename = "maxOutputTokens")]
     pub max_output_tokens: Option<u32>,
+    #[serde(rename = "maxTokens")]
+    pub legacy_max_tokens: Option<u32>,
     pub instructions: Option<String>,
     pub mcps: Option<Vec<String>>,
     pub skills: Option<Vec<String>>,
+}
+
+impl CreateAgentRequest {
+    fn effective_max_output_tokens(&self) -> Option<u32> {
+        self.max_output_tokens.or(self.legacy_max_tokens)
+    }
 }
 
 /// Update agent request.
@@ -100,8 +108,10 @@ pub struct UpdateAgentRequest {
     pub temperature: Option<f64>,
     #[serde(rename = "maxInputTokens")]
     pub max_input_tokens: Option<u64>,
-    #[serde(rename = "maxOutputTokens", alias = "maxTokens")]
+    #[serde(rename = "maxOutputTokens")]
     pub max_output_tokens: Option<u32>,
+    #[serde(rename = "maxTokens")]
+    pub legacy_max_tokens: Option<u32>,
     #[serde(rename = "thinkingEnabled")]
     pub thinking_enabled: Option<bool>,
     #[serde(rename = "voiceRecordingEnabled")]
@@ -110,6 +120,12 @@ pub struct UpdateAgentRequest {
     pub mcps: Option<Vec<String>>,
     pub skills: Option<Vec<String>>,
     pub middleware: Option<String>,
+}
+
+impl UpdateAgentRequest {
+    fn effective_max_output_tokens(&self) -> Option<u32> {
+        self.max_output_tokens.or(self.legacy_max_tokens)
+    }
 }
 
 /// GET /api/agents - List all agents.
@@ -128,6 +144,7 @@ pub async fn create_agent(
     State(state): State<AppState>,
     Json(request): Json<CreateAgentRequest>,
 ) -> Result<Json<AgentResponse>, StatusCode> {
+    let max_output_tokens = request.effective_max_output_tokens();
     let agent = Agent {
         id: String::new(),
         name: request.name.clone(),
@@ -138,9 +155,7 @@ pub async fn create_agent(
         model: request.model,
         temperature: request.temperature.unwrap_or(0.7),
         max_input_tokens: request.max_input_tokens.unwrap_or(DEFAULT_MAX_INPUT_TOKENS),
-        max_tokens: request
-            .max_output_tokens
-            .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
+        max_tokens: max_output_tokens.unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
         thinking_enabled: false,
         voice_recording_enabled: true,
         system_instruction: None,
@@ -187,6 +202,7 @@ pub async fn update_agent(
         Ok(a) => a,
         Err(_) => return Err(StatusCode::NOT_FOUND),
     };
+    let max_output_tokens = request.effective_max_output_tokens();
 
     // Merge updates
     let updated = Agent {
@@ -201,7 +217,7 @@ pub async fn update_agent(
         max_input_tokens: request
             .max_input_tokens
             .unwrap_or(existing.max_input_tokens),
-        max_tokens: request.max_output_tokens.unwrap_or(existing.max_tokens),
+        max_tokens: max_output_tokens.unwrap_or(existing.max_tokens),
         thinking_enabled: request
             .thinking_enabled
             .unwrap_or(existing.thinking_enabled),
@@ -233,5 +249,43 @@ pub async fn delete_agent(State(state): State<AppState>, Path(id): Path<String>)
             tracing::warn!("Failed to delete agent: {} - {}", id, e);
             StatusCode::NOT_FOUND
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_agent_request_accepts_canonical_and_legacy_output_tokens() {
+        let request: UpdateAgentRequest = serde_json::from_value(serde_json::json!({
+            "displayName": "Reviewer",
+            "providerId": "provider-ollama",
+            "model": "kimi-k2.6:cloud",
+            "maxInputTokens": 200000,
+            "maxOutputTokens": 16384,
+            "maxTokens": 16384
+        }))
+        .expect("agent update payload with legacy maxTokens should parse");
+
+        assert_eq!(request.max_input_tokens, Some(200000));
+        assert_eq!(request.max_output_tokens, Some(16384));
+        assert_eq!(request.legacy_max_tokens, Some(16384));
+        assert_eq!(request.effective_max_output_tokens(), Some(16384));
+    }
+
+    #[test]
+    fn create_agent_request_accepts_legacy_output_tokens() {
+        let request: CreateAgentRequest = serde_json::from_value(serde_json::json!({
+            "name": "reviewer-agent",
+            "providerId": "provider-ollama",
+            "model": "kimi-k2.6:cloud",
+            "maxTokens": 12000
+        }))
+        .expect("legacy agent create payload should parse");
+
+        assert_eq!(request.max_output_tokens, None);
+        assert_eq!(request.legacy_max_tokens, Some(12000));
+        assert_eq!(request.effective_max_output_tokens(), Some(12000));
     }
 }
