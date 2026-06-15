@@ -190,6 +190,16 @@ warn_python_venv() {
     fi
 }
 
+warn_uv() {
+    if command -v uvx >/dev/null 2>&1; then
+        return
+    fi
+
+    echo "warning: uvx was not found; MCP servers that use uvx, such as the bundled Time MCP, will not run until uv is installed"
+    echo "         Install uv with: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    echo "         Then restart zbot so the service sees ~/.local/bin/uvx."
+}
+
 enable_linger() {
     if [[ "$(uname -s)" != "Linux" || "$SERVICE" != "true" ]]; then
         return
@@ -232,6 +242,7 @@ StartLimitBurst=3
 
 [Service]
 Type=simple
+Environment=PATH=${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=${INSTALL_DIR}/zbotd --log-dir ${VAULT_DIR}/logs --log-no-stdout --log-rotation daily --log-max-files 4 --static-dir ${dist_dir}
 StandardOutput=journal
 StandardError=journal
@@ -272,6 +283,7 @@ main() {
     verify_checksum "${tmp}/${archive}" "${tmp}/checksums.sha256"
     install_binaries "$tmp" "$archive"
     warn_python_venv
+    warn_uv
     enable_linger
     install_linux_service
 

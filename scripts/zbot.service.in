@@ -11,6 +11,7 @@ StartLimitBurst=3
 
 [Service]
 Type=simple
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=@@BIN@@ \
     --log-dir @@LOG_DIR@@ \
     --log-no-stdout \
