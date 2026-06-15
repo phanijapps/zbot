@@ -6,3 +6,4 @@
 | [RFC-0005: Builder Delegation and Ward Context Hygiene](0005-builder-delegation-and-ward-context-hygiene.md) | Accepted | Adds delegation modes so builder can distinguish direct artifacts, ward hygiene, ward-backed builds, and step execution. |
 | [RFC-0006: Vault Obsidian-Style Ward Browser](0006-vault-obsidian-style-ward-browser.md) | Draft | Proposes a top-level Vault tab for browsing ward filesystem trees and previewing common files in-app. |
 | [RFC-0007: Ward-Specific Vault Explorer in Research](0007-ward-specific-vault-in-research.md) | Open | Proposes embedding a ward-scoped Vault explorer/search pane inside Research once a session has an active ward. |
+| [RFC-0008: Simplified Provider Model Configuration](0008-simplified-provider-model-configuration.md) | Accepted | Replaces broad maintained model metadata with simple 200k input / 32k output defaults plus agent and Advanced overrides. |

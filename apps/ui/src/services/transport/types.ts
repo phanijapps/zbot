@@ -36,6 +36,9 @@ export interface AgentResponse {
   providerId: string;
   model: string;
   temperature: number;
+  maxInputTokens?: number;
+  maxOutputTokens?: number;
+  /** Legacy alias for maxOutputTokens. */
   maxTokens: number;
   thinkingEnabled: boolean;
   voiceRecordingEnabled: boolean;
@@ -53,6 +56,9 @@ export interface CreateAgentRequest {
   providerId: string;
   model: string;
   temperature?: number;
+  maxInputTokens?: number;
+  maxOutputTokens?: number;
+  /** Legacy alias for maxOutputTokens. */
   maxTokens?: number;
   instructions?: string;
   mcps?: string[];
@@ -66,6 +72,9 @@ export interface UpdateAgentRequest {
   providerId?: string;
   model?: string;
   temperature?: number;
+  maxInputTokens?: number;
+  maxOutputTokens?: number;
+  /** Legacy alias for maxOutputTokens. */
   maxTokens?: number;
   thinkingEnabled?: boolean;
   voiceRecordingEnabled?: boolean;
@@ -420,7 +429,11 @@ export interface OrchestratorConfig {
   model?: string | null;
   /** Temperature (0-2). Default: 0.7 */
   temperature: number;
-  /** Max output tokens. Default: 16384 */
+  /** Max input tokens. Default: 200000 */
+  maxInputTokens?: number;
+  /** Max output tokens. Default: 32000 */
+  maxOutputTokens?: number;
+  /** Legacy alias for maxOutputTokens. */
   maxTokens: number;
   /** Enable extended thinking/reasoning. Default: true */
   thinkingEnabled: boolean;
@@ -432,6 +445,12 @@ export interface DistillationConfig {
   providerId?: string | null;
   /** Model override. null = inherit from orchestrator */
   model?: string | null;
+  /** Max input tokens override. null/undefined = inherit from orchestrator */
+  maxInputTokens?: number | null;
+  /** Max output tokens override. null/undefined = inherit from orchestrator */
+  maxOutputTokens?: number | null;
+  /** Legacy alias for maxOutputTokens. */
+  maxTokens?: number | null;
 }
 
 /** Ward-curator model configuration (Phase C consolidation LLM call) */
@@ -440,6 +459,12 @@ export interface CuratorConfig {
   providerId?: string | null;
   /** Model override. null = inherit from orchestrator */
   model?: string | null;
+  /** Max input tokens override. null/undefined = inherit from orchestrator */
+  maxInputTokens?: number | null;
+  /** Max output tokens override. null/undefined = inherit from orchestrator */
+  maxOutputTokens?: number | null;
+  /** Legacy alias for maxOutputTokens. */
+  maxTokens?: number | null;
 }
 
 /** Intent-analysis model configuration (every root prompt) */
@@ -448,6 +473,12 @@ export interface IntentAnalysisConfig {
   providerId?: string | null;
   /** Model override. null = inherit from orchestrator */
   model?: string | null;
+  /** Max input tokens override. null/undefined = inherit from orchestrator */
+  maxInputTokens?: number | null;
+  /** Max output tokens override. null/undefined = inherit from orchestrator */
+  maxOutputTokens?: number | null;
+  /** Legacy alias for maxOutputTokens. */
+  maxTokens?: number | null;
 }
 
 // ============================================================================
@@ -502,7 +533,11 @@ export interface MultimodalConfig {
   model?: string | null;
   /** Temperature for analysis calls (default: 0.3) */
   temperature: number;
-  /** Max output tokens (default: 4096) */
+  /** Max input tokens (default: 200000) */
+  maxInputTokens?: number;
+  /** Max output tokens (default: 32000) */
+  maxOutputTokens?: number;
+  /** Legacy alias for maxOutputTokens. */
   maxTokens: number;
 }
 

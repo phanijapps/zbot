@@ -102,9 +102,10 @@ impl Tool for MultimodalAnalyzeTool {
             .and_then(|v| v.as_f64())
             .unwrap_or(0.3);
         let max_tokens = config
-            .get("maxTokens")
+            .get("maxOutputTokens")
+            .or_else(|| config.get("maxTokens"))
             .and_then(|v| v.as_u64())
-            .unwrap_or(4096);
+            .unwrap_or(32_000);
 
         // Build OpenAI content array from inputs
         let mut content_blocks: Vec<Value> = Vec::new();

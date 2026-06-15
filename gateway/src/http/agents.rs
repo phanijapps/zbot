@@ -5,10 +5,11 @@
 use crate::services::agents::Agent;
 use crate::state::AppState;
 use axum::{
-    Json,
     extract::{Path, State},
     http::StatusCode,
+    Json,
 };
+use gateway_services::models::{DEFAULT_MAX_INPUT_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS};
 use serde::{Deserialize, Serialize};
 
 /// Agent response (full view for API).
@@ -23,6 +24,10 @@ pub struct AgentResponse {
     pub provider_id: String,
     pub model: String,
     pub temperature: f64,
+    #[serde(rename = "maxInputTokens")]
+    pub max_input_tokens: u64,
+    #[serde(rename = "maxOutputTokens")]
+    pub max_output_tokens: u32,
     #[serde(rename = "maxTokens")]
     pub max_tokens: u32,
     #[serde(rename = "thinkingEnabled")]
@@ -48,6 +53,8 @@ impl From<Agent> for AgentResponse {
             provider_id: agent.provider_id,
             model: agent.model,
             temperature: agent.temperature,
+            max_input_tokens: agent.max_input_tokens,
+            max_output_tokens: agent.max_tokens,
             max_tokens: agent.max_tokens,
             thinking_enabled: agent.thinking_enabled,
             voice_recording_enabled: agent.voice_recording_enabled,
@@ -71,8 +78,10 @@ pub struct CreateAgentRequest {
     pub provider_id: String,
     pub model: String,
     pub temperature: Option<f64>,
-    #[serde(rename = "maxTokens")]
-    pub max_tokens: Option<u32>,
+    #[serde(rename = "maxInputTokens")]
+    pub max_input_tokens: Option<u64>,
+    #[serde(rename = "maxOutputTokens", alias = "maxTokens")]
+    pub max_output_tokens: Option<u32>,
     pub instructions: Option<String>,
     pub mcps: Option<Vec<String>>,
     pub skills: Option<Vec<String>>,
@@ -89,8 +98,10 @@ pub struct UpdateAgentRequest {
     pub provider_id: Option<String>,
     pub model: Option<String>,
     pub temperature: Option<f64>,
-    #[serde(rename = "maxTokens")]
-    pub max_tokens: Option<u32>,
+    #[serde(rename = "maxInputTokens")]
+    pub max_input_tokens: Option<u64>,
+    #[serde(rename = "maxOutputTokens", alias = "maxTokens")]
+    pub max_output_tokens: Option<u32>,
     #[serde(rename = "thinkingEnabled")]
     pub thinking_enabled: Option<bool>,
     #[serde(rename = "voiceRecordingEnabled")]
@@ -126,7 +137,10 @@ pub async fn create_agent(
         provider_id: request.provider_id,
         model: request.model,
         temperature: request.temperature.unwrap_or(0.7),
-        max_tokens: request.max_tokens.unwrap_or(2000),
+        max_input_tokens: request.max_input_tokens.unwrap_or(DEFAULT_MAX_INPUT_TOKENS),
+        max_tokens: request
+            .max_output_tokens
+            .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
         thinking_enabled: false,
         voice_recording_enabled: true,
         system_instruction: None,
@@ -184,7 +198,10 @@ pub async fn update_agent(
         provider_id: request.provider_id.unwrap_or(existing.provider_id),
         model: request.model.unwrap_or(existing.model),
         temperature: request.temperature.unwrap_or(existing.temperature),
-        max_tokens: request.max_tokens.unwrap_or(existing.max_tokens),
+        max_input_tokens: request
+            .max_input_tokens
+            .unwrap_or(existing.max_input_tokens),
+        max_tokens: request.max_output_tokens.unwrap_or(existing.max_tokens),
         thinking_enabled: request
             .thinking_enabled
             .unwrap_or(existing.thinking_enabled),

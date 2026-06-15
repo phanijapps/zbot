@@ -34,7 +34,7 @@ use agent_tools::{
 };
 use execution_state::StateService;
 use gateway_services::agents::Agent;
-use gateway_services::models::ModelRegistry;
+use gateway_services::models::{ModelRegistry, DEFAULT_MAX_INPUT_TOKENS};
 use gateway_services::providers::Provider;
 use gateway_services::{McpService, SettingsService, SkillService};
 use std::path::PathBuf;
@@ -652,6 +652,29 @@ impl ExecutorBuilder {
         // through the normal tool_error path.
         let thinking_enabled = resolve_thinking_flag(agent.thinking_enabled, &agent.model);
 
+        let mut effective_max_output = agent.max_tokens;
+        if let Some(provider_max) = provider.effective_max_output(&agent.model) {
+            if provider_max > 0 && (effective_max_output as u64) > provider_max {
+                tracing::warn!(
+                    agent = %agent.id,
+                    model = %agent.model,
+                    requested = effective_max_output,
+                    clamped_to = provider_max,
+                    "Clamped max_tokens to provider model config limit"
+                );
+                effective_max_output = provider_max as u32;
+            }
+        }
+
+        let effective_max_input = if agent.max_input_tokens > 0 {
+            agent.max_input_tokens
+        } else {
+            provider
+                .effective_max_input(&agent.model)
+                .or(provider.context_window)
+                .unwrap_or(DEFAULT_MAX_INPUT_TOKENS)
+        };
+
         // Create LLM client using provider config
         let llm_config = LlmConfig::new(
             provider.base_url.clone(),
@@ -660,7 +683,7 @@ impl ExecutorBuilder {
             provider.id.clone().unwrap_or_else(|| provider.name.clone()),
         )
         .with_temperature(agent.temperature)
-        .with_max_tokens(agent.max_tokens)
+        .with_max_tokens(effective_max_output)
         .with_thinking(thinking_enabled);
 
         let raw_client: Arc<dyn agent_runtime::LlmClient> = Arc::new(
@@ -699,51 +722,8 @@ impl ExecutorBuilder {
         executor_config.system_instruction = Some(agent.instructions.clone());
         executor_config.conversation_id = Some(conversation_id.to_string());
         executor_config.temperature = agent.temperature;
-        executor_config.max_tokens = agent.max_tokens;
-
-        // Clamp max_tokens to model's actual output limit (prevents API errors)
-        // Priority: provider model config → model registry → no clamping
-        let mut clamped = false;
-
-        // Check provider-level model config (user overrides)
-        if let Some(provider_max) = provider.effective_max_output(&agent.model) {
-            if provider_max > 0 && (executor_config.max_tokens as u64) > provider_max {
-                tracing::warn!(
-                    agent = %agent.id,
-                    model = %agent.model,
-                    requested = executor_config.max_tokens,
-                    clamped_to = provider_max,
-                    "Clamped max_tokens to provider model config limit"
-                );
-                executor_config.max_tokens = provider_max as u32;
-                clamped = true;
-            }
-        }
-
-        // Check model registry (bundled + local overrides)
-        if !clamped {
-            if let Some(ref registry) = self.model_registry {
-                let model_output = registry.context_window(&agent.model).resolved_output();
-                if model_output > 0 && (executor_config.max_tokens as u64) > model_output {
-                    tracing::warn!(
-                        agent = %agent.id,
-                        model = %agent.model,
-                        requested = executor_config.max_tokens,
-                        clamped_to = model_output,
-                        "Clamped max_tokens to model registry output limit"
-                    );
-                    executor_config.max_tokens = model_output as u32;
-                }
-            }
-        }
-
-        // Resolve context window: provider override > model registry > default 8192
-        executor_config.context_window_tokens = provider.context_window.unwrap_or_else(|| {
-            self.model_registry
-                .as_ref()
-                .map(|r| r.context_window(&agent.model).input)
-                .unwrap_or(8192)
-        });
+        executor_config.max_tokens = effective_max_output;
+        executor_config.context_window_tokens = effective_max_input;
         executor_config.mcps = agent.mcps.clone();
 
         // Create middleware pipeline after context_window_tokens is resolved.

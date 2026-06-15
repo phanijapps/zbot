@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+pub const DEFAULT_MAX_INPUT_TOKENS: u64 = 200_000;
+pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 32_000;
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -132,8 +135,8 @@ impl ModelRegistry {
                 video_generation: false,
             },
             context: ContextWindow {
-                input: 200_000,
-                output: Some(64_000),
+                input: DEFAULT_MAX_INPUT_TOKENS,
+                output: Some(DEFAULT_MAX_OUTPUT_TOKENS as u64),
             },
             embedding: None,
         };
@@ -297,11 +300,14 @@ mod tests {
     }
 
     #[test]
-    fn fallback_profile_uses_200k_in_64k_out_with_tools() {
+    fn fallback_profile_uses_200k_in_32k_out_with_tools() {
         let registry = ModelRegistry::load(&[], &PathBuf::from("/nonexistent"));
         let profile = registry.get("some-unknown-model-id");
-        assert_eq!(profile.context.input, 200_000);
-        assert_eq!(profile.context.output, Some(64_000));
+        assert_eq!(profile.context.input, DEFAULT_MAX_INPUT_TOKENS);
+        assert_eq!(
+            profile.context.output,
+            Some(DEFAULT_MAX_OUTPUT_TOKENS as u64)
+        );
         assert!(profile.capabilities.tools);
         assert!(!profile.capabilities.vision);
         assert!(!profile.capabilities.thinking);

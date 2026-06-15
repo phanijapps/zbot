@@ -1547,8 +1547,15 @@ components:
         temperature:
           type: number
           format: float
+        maxInputTokens:
+          type: integer
+          default: 200000
+        maxOutputTokens:
+          type: integer
+          default: 32000
         maxTokens:
           type: integer
+          description: Legacy alias for maxOutputTokens.
         thinkingEnabled:
           type: boolean
         voiceRecordingEnabled:
@@ -1590,9 +1597,16 @@ components:
         temperature:
           type: number
           default: 0.7
+        maxInputTokens:
+          type: integer
+          default: 200000
+        maxOutputTokens:
+          type: integer
+          default: 32000
         maxTokens:
           type: integer
-          default: 2000
+          default: 32000
+          description: Legacy alias for maxOutputTokens.
         instructions:
           type: string
         mcps:
@@ -1619,8 +1633,13 @@ components:
           type: string
         temperature:
           type: number
+        maxInputTokens:
+          type: integer
+        maxOutputTokens:
+          type: integer
         maxTokens:
           type: integer
+          description: Legacy alias for maxOutputTokens.
         thinkingEnabled:
           type: boolean
         voiceRecordingEnabled:

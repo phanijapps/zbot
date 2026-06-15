@@ -24,7 +24,9 @@ use agent_runtime::llm::config::LlmConfig;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::openai::OpenAiClient;
 use agent_runtime::types::ChatMessage;
-use gateway_services::{ProviderService, SettingsService, VaultPaths};
+use gateway_services::{
+    models::DEFAULT_MAX_OUTPUT_TOKENS, ProviderService, SettingsService, VaultPaths,
+};
 use knowledge_graph::{Entity, EntityType, Relationship, RelationshipType};
 use serde::{Deserialize, Serialize};
 use zero_stores_domain::{MemoryFact, SessionEpisode};
@@ -273,7 +275,7 @@ impl SessionDistiller {
     /// 1. distillation.provider_id / distillation.model (if set)
     /// 2. orchestrator.provider_id / orchestrator.model (if set)
     /// 3. None (falls through to default provider in extract_all)
-    fn resolve_distillation_target(&self) -> (Option<String>, Option<String>) {
+    fn resolve_distillation_target(&self) -> (Option<String>, Option<String>, u32) {
         let settings = self
             .settings_service
             .as_ref()
@@ -281,7 +283,7 @@ impl SessionDistiller {
 
         let settings = match settings {
             Some(s) => s,
-            None => return (None, None),
+            None => return (None, None, DEFAULT_MAX_OUTPUT_TOKENS),
         };
 
         let provider_id = settings
@@ -296,15 +298,21 @@ impl SessionDistiller {
             .clone()
             .or_else(|| settings.orchestrator.model.clone());
 
+        let max_tokens = settings
+            .distillation
+            .max_tokens
+            .unwrap_or(settings.orchestrator.max_tokens);
+
         if provider_id.is_some() || model.is_some() {
             tracing::debug!(
                 provider = ?provider_id,
                 model = ?model,
+                max_tokens,
                 "Distillation using configured target"
             );
         }
 
-        (provider_id, model)
+        (provider_id, model, max_tokens)
     }
 
     /// Load the distillation prompt from filesystem or use embedded default.
@@ -887,7 +895,7 @@ impl SessionDistiller {
             return Err("No providers configured".to_string());
         }
 
-        let (target_provider_id, target_model) = self.resolve_distillation_target();
+        let (target_provider_id, target_model, max_tokens) = self.resolve_distillation_target();
 
         // Pick target provider, or default, or first
         let provider = target_provider_id
@@ -911,7 +919,7 @@ impl SessionDistiller {
             provider_id,
         )
         .with_temperature(0.3)
-        .with_max_tokens(4096);
+        .with_max_tokens(max_tokens);
 
         let client =
             OpenAiClient::new(config).map_err(|e| format!("Failed to create LLM client: {e}"))?;
@@ -945,7 +953,7 @@ impl SessionDistiller {
 
         // Resolve distillation provider/model from settings chain:
         // distillation config → orchestrator config → default provider
-        let (target_provider_id, target_model) = self.resolve_distillation_target();
+        let (target_provider_id, target_model, max_tokens) = self.resolve_distillation_target();
 
         // Order providers: target first (if specified), then default, then rest
         let default_idx = providers.iter().position(|p| p.is_default);
@@ -994,7 +1002,7 @@ impl SessionDistiller {
                 provider_id.clone(),
             )
             .with_temperature(0.3)
-            .with_max_tokens(4096);
+            .with_max_tokens(max_tokens);
 
             let client = match OpenAiClient::new(config) {
                 Ok(c) => Arc::new(c) as Arc<dyn LlmClient>,

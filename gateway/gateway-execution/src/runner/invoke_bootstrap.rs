@@ -915,6 +915,7 @@ impl InvokeBootstrap {
             .model
             .filter(|m| !m.is_empty())
             .unwrap_or_else(|| agent.model.clone());
+        let max_tokens = intent_cfg.max_tokens.unwrap_or(agent.max_tokens);
 
         let llm_config = agent_runtime::LlmConfig::new(
             target_provider.base_url.clone(),
@@ -925,7 +926,7 @@ impl InvokeBootstrap {
                 .clone()
                 .unwrap_or_else(|| target_provider.name.clone()),
         )
-        .with_max_tokens(2048); // Intent analysis JSON is 1-2KB — keep max_tokens low for speed
+        .with_max_tokens(max_tokens);
 
         let raw_client = match agent_runtime::OpenAiClient::new(llm_config) {
             Ok(c) => c,

@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::models::{DEFAULT_MAX_INPUT_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS};
+
 /// Agent configuration stored in config.yaml
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
@@ -21,7 +23,13 @@ pub struct AgentConfig {
     pub provider_id: String,
     pub model: String,
     pub temperature: f64,
-    #[serde(rename = "maxTokens", default = "default_max_tokens")]
+    #[serde(rename = "maxInputTokens", default = "default_max_input_tokens")]
+    pub max_input_tokens: u64,
+    #[serde(
+        rename = "maxOutputTokens",
+        alias = "maxTokens",
+        default = "default_max_output_tokens"
+    )]
     pub max_tokens: u32,
     #[serde(rename = "thinkingEnabled", default)]
     pub thinking_enabled: bool,
@@ -40,8 +48,12 @@ pub struct AgentConfig {
     pub system_instruction: Option<String>,
 }
 
-fn default_max_tokens() -> u32 {
-    8192
+fn default_max_input_tokens() -> u64 {
+    DEFAULT_MAX_INPUT_TOKENS
+}
+
+fn default_max_output_tokens() -> u32 {
+    DEFAULT_MAX_OUTPUT_TOKENS
 }
 
 fn default_voice_recording_enabled() -> bool {
@@ -62,7 +74,9 @@ pub struct Agent {
     pub provider_id: String,
     pub model: String,
     pub temperature: f64,
-    #[serde(rename = "maxTokens")]
+    #[serde(rename = "maxInputTokens")]
+    pub max_input_tokens: u64,
+    #[serde(rename = "maxOutputTokens", alias = "maxTokens")]
     pub max_tokens: u32,
     #[serde(rename = "thinkingEnabled")]
     pub thinking_enabled: bool,
@@ -182,6 +196,7 @@ impl AgentService {
             provider_id: agent.provider_id.clone(),
             model: agent.model.clone(),
             temperature: agent.temperature,
+            max_input_tokens: agent.max_input_tokens,
             max_tokens: agent.max_tokens,
             thinking_enabled: agent.thinking_enabled,
             voice_recording_enabled: agent.voice_recording_enabled,
@@ -247,6 +262,7 @@ impl AgentService {
             provider_id: agent.provider_id.clone(),
             model: agent.model.clone(),
             temperature: agent.temperature,
+            max_input_tokens: agent.max_input_tokens,
             max_tokens: agent.max_tokens,
             thinking_enabled: agent.thinking_enabled,
             voice_recording_enabled: agent.voice_recording_enabled,
@@ -343,6 +359,7 @@ impl AgentService {
             provider_id: config.provider_id,
             model: config.model,
             temperature: config.temperature,
+            max_input_tokens: config.max_input_tokens,
             max_tokens: config.max_tokens,
             thinking_enabled: config.thinking_enabled,
             voice_recording_enabled: config.voice_recording_enabled,
@@ -421,7 +438,13 @@ impl AgentService {
             let description = entry["description"].as_str().unwrap_or("");
             let agent_type = entry["agentType"].as_str().unwrap_or("specialist");
             let temperature = entry["temperature"].as_f64().unwrap_or(0.7);
-            let max_tokens = entry["maxTokens"].as_u64().unwrap_or(8192) as u32;
+            let max_input_tokens = entry["maxInputTokens"]
+                .as_u64()
+                .unwrap_or(DEFAULT_MAX_INPUT_TOKENS);
+            let max_tokens = entry["maxOutputTokens"]
+                .as_u64()
+                .or_else(|| entry["maxTokens"].as_u64())
+                .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS as u64) as u32;
             let skills: Vec<String> = entry["skills"]
                 .as_array()
                 .map(|a| {
@@ -458,6 +481,7 @@ impl AgentService {
                 provider_id: default_provider_id.to_string(),
                 model: default_model.to_string(),
                 temperature,
+                max_input_tokens,
                 max_tokens,
                 thinking_enabled: false,
                 voice_recording_enabled: false,
@@ -691,6 +715,48 @@ mod tests {
         assert_eq!(reviewer.name, "reviewer-agent");
         assert_eq!(reviewer.display_name, "Reviewer");
         assert!(reviewer.instructions.contains("read-only reviewer"));
+    }
+
+    #[test]
+    fn agent_config_reads_legacy_max_tokens_as_output_tokens() {
+        let yaml = r#"
+name: test-agent
+displayName: Test
+description: Test agent
+providerId: provider
+model: model
+temperature: 0.7
+maxInputTokens: 123456
+maxTokens: 7777
+thinkingEnabled: false
+voiceRecordingEnabled: false
+skills: []
+mcps: []
+"#;
+
+        let config: AgentConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.max_input_tokens, 123456);
+        assert_eq!(config.max_tokens, 7777);
+    }
+
+    #[test]
+    fn agent_config_defaults_to_simplified_token_limits() {
+        let yaml = r#"
+name: test-agent
+displayName: Test
+description: Test agent
+providerId: provider
+model: model
+temperature: 0.7
+thinkingEnabled: false
+voiceRecordingEnabled: false
+skills: []
+mcps: []
+"#;
+
+        let config: AgentConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.max_input_tokens, DEFAULT_MAX_INPUT_TOKENS);
+        assert_eq!(config.max_tokens, DEFAULT_MAX_OUTPUT_TOKENS);
     }
 
     #[tokio::test]

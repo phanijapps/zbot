@@ -155,8 +155,18 @@ impl Tool for CreateAgentTool {
                 },
                 "maxTokens": {
                     "type": "integer",
-                    "description": "Maximum tokens for response (default 2000)",
-                    "default": 2000
+                    "description": "Legacy maximum output tokens for response (default 32000)",
+                    "default": 32000
+                },
+                "maxInputTokens": {
+                    "type": "integer",
+                    "description": "Maximum input/context tokens (default 200000)",
+                    "default": 200000
+                },
+                "maxOutputTokens": {
+                    "type": "integer",
+                    "description": "Maximum output tokens for response (default 32000)",
+                    "default": 32000
                 },
                 "thinkingEnabled": {
                     "type": "boolean",
@@ -228,10 +238,16 @@ impl Tool for CreateAgentTool {
             .and_then(|v| v.as_f64())
             .unwrap_or(0.7);
 
-        let max_tokens = args
-            .get("maxTokens")
+        let max_input_tokens = args
+            .get("maxInputTokens")
             .and_then(|v| v.as_u64())
-            .unwrap_or(2000) as u32;
+            .unwrap_or(200_000);
+
+        let max_tokens = args
+            .get("maxOutputTokens")
+            .or_else(|| args.get("maxTokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(32_000) as u32;
 
         let thinking_enabled = args
             .get("thinkingEnabled")
@@ -277,7 +293,8 @@ impl Tool for CreateAgentTool {
             "providerId": provider_id,
             "model": model,
             "temperature": temperature,
-            "maxTokens": max_tokens,
+            "maxInputTokens": max_input_tokens,
+            "maxOutputTokens": max_tokens,
             "thinkingEnabled": thinking_enabled,
             "skills": skills,
             "mcps": mcps,
@@ -306,6 +323,8 @@ impl Tool for CreateAgentTool {
             "providerId": provider_id,
             "model": model,
             "temperature": temperature,
+            "maxInputTokens": max_input_tokens,
+            "maxOutputTokens": max_tokens,
             "maxTokens": max_tokens,
             "thinkingEnabled": thinking_enabled,
             "skills": skills,
