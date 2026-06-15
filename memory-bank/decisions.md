@@ -190,10 +190,10 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 **Decision**: Wrap LLM clients with `ThrottledLlmClient` that uses a shared `tokio::sync::Semaphore` per provider. All executors sharing the same provider share the semaphore.
 **Rationale**: Simple, composable. Configured via `maxConcurrentRequests` in `providers.json` (default: 3). Wrapping chain: `OpenAiClient -> RetryingLlmClient -> ThrottledLlmClient`. Implementation: `runtime/agent-runtime/src/llm/throttle.rs`.
 
-### Model Capabilities Registry: Data-Driven Over Hardcoded
-**Problem**: Model context windows were hardcoded in a match statement (`get_model_context_window`). No capability metadata — agents could enable thinking on models that don't support it. Adding new models required code changes.
-**Decision**: Three-layer model registry: bundled JSON (embedded in binary) > local overrides (`config/models.json`) > unknown-model fallback. Each model has capabilities (tools, vision, thinking, embeddings, voice, imageGeneration, videoGeneration) and context window (input/output tokens).
-**Rationale**: Data-driven — new models added without code changes. Local overrides for custom/private models. Bundled registry updated with releases. Executor validates `thinking_enabled` against model capabilities (warn + disable). Context window resolution replaces hardcoded lookup. Implementation: `gateway/gateway-services/src/models.rs`, `gateway/templates/models_registry.json`.
+### Model Configuration: Defaults and Overrides Over Catalogs
+**Problem**: Maintaining model context windows and capability metadata in a bundled/local catalog created stale configuration pressure and blocked simple custom-model usage.
+**Decision**: Remove the bundled/local `models.json` catalog. Unknown/custom models use 200k input and 32k output defaults. Provider `modelConfigs`, agent settings, and Advanced settings own explicit overrides.
+**Rationale**: Simple, user-editable, and compatible with OpenAI-style providers where model IDs change faster than bundled releases. Implementation: `gateway/gateway-services/src/models.rs`, `gateway/gateway-services/src/providers.rs`, `gateway/gateway-execution/src/invoke/executor.rs`.
 
 ### Provider Default Model: Explicit Over Positional
 **Problem**: Default model was `provider.models[0]` — an implicit positional convention. Reordering the models array silently changed which model every agent used.

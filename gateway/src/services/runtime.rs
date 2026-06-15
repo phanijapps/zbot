@@ -159,14 +159,8 @@ impl RuntimeService {
             ward_usage: Arc::new(gateway_services::WardUsage::new(paths.wards_dir())),
         });
 
-        // Initialize model registry from bundled + local overrides
-        let bundled_models = gateway_templates::Templates::get("models_registry.json")
-            .map(|f| f.data.to_vec())
-            .unwrap_or_default();
-        runner.set_model_registry(Arc::new(gateway_services::models::ModelRegistry::load(
-            &bundled_models,
-            paths.vault_dir(),
-        )));
+        // Initialize fallback-only model metadata registry.
+        runner.set_model_registry(Arc::new(gateway_services::models::ModelRegistry::load()));
 
         if let Some(ks) = kg_store {
             runner.set_kg_store(ks);

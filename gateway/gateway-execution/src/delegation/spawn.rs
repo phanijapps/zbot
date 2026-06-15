@@ -279,14 +279,8 @@ pub async fn spawn_delegated_agent(
         );
     }
 
-    // Build model registry for capability lookups
-    let bundled_models = gateway_templates::Templates::get("models_registry.json")
-        .map(|f| f.data.to_vec())
-        .unwrap_or_default();
-    let model_registry = Arc::new(gateway_services::models::ModelRegistry::load(
-        &bundled_models,
-        paths.vault_dir(),
-    ));
+    // Build fallback-only model metadata registry.
+    let model_registry = Arc::new(gateway_services::models::ModelRegistry::load());
 
     // Get shared rate limiter for the child's provider
     let provider_id = provider.id.clone().unwrap_or_else(|| provider.name.clone());

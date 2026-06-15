@@ -68,7 +68,6 @@
 │  ├── config/                          # App config, prompts, registries  │
 │  │   ├── settings.json                #   App settings (network, logs)   │
 │  │   ├── providers.json               #   LLM provider credentials       │
-│  │   ├── models.json                  #   Model capability overrides     │
 │  │   ├── recall_config.json           #   Recall tuning: weights, graph  │
 │  │   ├── mcps.json                    #   MCP server configurations      │
 │  │   ├── connectors.json              #   Connector configurations       │
@@ -147,13 +146,12 @@
 | Serialization | serde + serde_json | JSON handling |
 | Logging | tracing + tracing-subscriber + tracing-appender | Structured logging with file rotation |
 
-## Model Capabilities Registry
+## Model Configuration
 
-Models are tracked in a registry with capability metadata and context window sizes. Three-layer resolution:
-
-1. **Local overrides** (`config/models.json`) — user-editable, highest priority
-2. **Bundled registry** (`gateway/templates/models_registry.json`) — embedded in binary, 50+ models
-3. **Unknown model fallback** — conservative defaults (tools: true, 8K context)
+Models are configured directly on providers, agents, and Advanced settings.
+There is no bundled or local `models.json` catalog. Unknown/custom model names
+use the fallback token limits of 200k input and 32k output unless provider,
+agent, or Advanced settings override them.
 
 ### ModelProfile Structure
 
@@ -195,10 +193,9 @@ Models are tracked in a registry with capability metadata and context window siz
 
 | File | Purpose |
 |------|---------|
-| `gateway/gateway-services/src/models.rs` | ModelProfile, ModelCapabilities, ModelRegistry service |
-| `gateway/templates/models_registry.json` | Bundled catalog (50+ models across 9 providers) |
+| `gateway/gateway-services/src/models.rs` | Fallback model profile and default token constants |
 | `gateway/src/http/models.rs` | REST API endpoints |
-| `gateway/gateway-execution/src/invoke/executor.rs` | Context window resolution + thinking validation |
+| `gateway/gateway-execution/src/invoke/executor.rs` | Effective token limit resolution |
 
 ## Logging Configuration
 
@@ -400,7 +397,7 @@ Per-ward LLM config (`wards/{name}/config.yaml`) is a separate override that app
 
 ## Provider Management
 
-Providers are LLM API connections stored in `providers.json`. Each provider has rate limits, model configs enriched from the bundled registry, and a verified status.
+Providers are LLM API connections stored in `providers.json`. Each provider has rate limits, optional per-model configs, and a verified status.
 
 ### Rate Limiting
 
@@ -418,7 +415,7 @@ OpenAiClient → RetryingLlmClient → RateLimitedLlmClient
 
 ### Model Enrichment
 
-API responses (`GET /api/providers`) enrich each provider's model list with capabilities and token limits from the bundled model registry. `enrich_provider()` also injects default rate limits if none are explicitly set.
+API responses (`GET /api/providers`) inject default rate limits and may expose fallback model metadata for listed models. Provider `modelConfigs`, agent settings, and Advanced settings are the supported places for token overrides.
 
 ## LLM Client — Text and Multimodal Content
 
@@ -2175,4 +2172,3 @@ Typical daemon (`zbotd`) memory usage: **~150 MB** at idle after first request.
 - **Reduce pool size**: Lower `max_size` to 4 — saves ~32 MB (trades throughput under load)
 - **Reduce cache_size**: Set `PRAGMA cache_size = -4000` — saves ~4 MB per connection
 - **Lazy model loading**: Defer fastembed init until first `recall`/`save_fact` — saves startup RAM if memory features unused
-

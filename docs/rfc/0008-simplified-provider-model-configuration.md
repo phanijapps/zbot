@@ -53,7 +53,7 @@ several layers:
 
 - Provider records support `models`, `defaultModel`, `contextWindow`, and
   per-model `modelConfigs` with `maxInput` and `maxOutput`.
-- The bundled model registry maintains capability flags and context limits for
+- The old catalog approach maintained capability flags and context limits for
   many model IDs.
 - Runtime execution clamps output tokens and chooses context-window budgets from
   provider overrides, the model registry, or fallback values.
@@ -168,11 +168,8 @@ Compatibility rules:
 - Serializers may continue writing `maxTokens` during a transition if needed,
   but new UI labels and docs should call the value "Max Output Tokens".
 
-The bundled model registry can be reduced to one of these forms:
-
-- a minimal fallback registry with unknown-model defaults, or
-- a legacy compatibility layer used only when local/provider overrides do not
-  exist.
+The old catalog can be reduced to a fallback-only compatibility layer with
+unknown-model defaults.
 
 It should not be treated as a product promise that z-Bot knows every current
 model and capability.
@@ -258,7 +255,7 @@ The option space is MECE along the axis of who owns model metadata.
 | Option | Description | Trade-off |
 | --- | --- | --- |
 | Do nothing | Keep presets, bundled model registry, current UI fields, and current defaults. | Lowest implementation cost, but preserves stale catalog pressure and hides max input configuration from users. |
-| Full bundled registry | Invest in a larger authoritative `models_registry.json` with capabilities and limits for every known model. | Better display metadata when current, but ongoing maintenance cost is high and the list will lag providers. |
+| Full bundled registry | Invest in a larger authoritative model catalog with capabilities and limits for every known model. | Better display metadata when current, but ongoing maintenance cost is high and the list will lag providers. |
 | Provider-discovered metadata only | Depend on provider `/models` or provider-specific metadata endpoints. | Good when metadata exists, but OpenAI-compatible providers vary widely and some only expose model IDs. |
 | Defaults plus user/provider overrides | Use broad defaults, preserve optional overrides, and put controls where users choose models. | Recommended. Simple, works for custom providers, and keeps safety where users need it. |
 
@@ -332,8 +329,9 @@ Repo precedent:
   `apps/ui/src/features/settings/providerPresets.ts`.
 - Provider model overrides are defined in
   `gateway/gateway-services/src/providers.rs`.
-- The current model registry is defined in
-  `gateway/gateway-services/src/models.rs`.
+- Fallback token defaults are defined in
+  `gateway/gateway-services/src/models.rs`; there is no maintained
+  `models.json` catalog.
 - Runtime clamping and context-window resolution live in
   `gateway/gateway-execution/src/invoke/executor.rs`.
 - Agent model editing lives in

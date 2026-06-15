@@ -181,7 +181,7 @@ pub struct AppState {
     /// network itself is disabled (empty history + `enabled: false`).
     pub belief_network_activity: Option<Arc<gateway_memory::RecentBeliefNetworkActivity>>,
 
-    /// Model capabilities registry (bundled + local overrides).
+    /// Fallback-only model metadata registry.
     pub model_registry: Arc<ModelRegistry>,
 
     /// Embedding service — owns live EmbeddingClient, supports backend swap.
@@ -267,11 +267,8 @@ impl AppState {
             crate::memory_llm_factory::ProviderServiceLlmFactory::new(provider_service.clone()),
         );
 
-        // Initialize model capabilities registry (bundled + local overrides)
-        let bundled_models = gateway_templates::Templates::get("models_registry.json")
-            .map(|f| f.data.to_vec())
-            .unwrap_or_default();
-        let model_registry = Arc::new(ModelRegistry::load(&bundled_models, paths.vault_dir()));
+        // Initialize fallback-only model metadata registry.
+        let model_registry = Arc::new(ModelRegistry::load());
 
         // Initialize SQLite database for conversation persistence
         let db_manager = Arc::new(
@@ -1194,7 +1191,7 @@ impl AppState {
             sleep_time_worker: None,
             compaction_repo: None,
             compaction_store: None,
-            model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
+            model_registry: Arc::new(ModelRegistry::load()),
             embedding_service: Arc::new(
                 EmbeddingService::with_config(paths.clone(), Default::default())
                     .expect("default EmbeddingService must build"),
@@ -1334,7 +1331,7 @@ impl AppState {
             sleep_time_worker: None,
             compaction_repo: None,
             compaction_store: None,
-            model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
+            model_registry: Arc::new(ModelRegistry::load()),
             embedding_service: Arc::new(
                 EmbeddingService::with_config(paths.clone(), Default::default())
                     .expect("default EmbeddingService must build"),

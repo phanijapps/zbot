@@ -1688,15 +1688,10 @@ mod model_registry_late_binding_tests {
     //! without needing the full `ExecutionRunner` construction graph.
     use arc_swap::ArcSwapOption;
     use gateway_services::models::ModelRegistry;
-    use std::path::PathBuf;
     use std::sync::Arc;
 
     fn load_user_registry() -> Arc<ModelRegistry> {
-        let bundled = gateway_templates::Templates::get("models_registry.json")
-            .map(|f| f.data.to_vec())
-            .unwrap_or_default();
-        let vault = PathBuf::from("/tmp/agentzero-test-vault");
-        Arc::new(ModelRegistry::load(&bundled, &vault))
+        Arc::new(ModelRegistry::load())
     }
 
     /// The core contract: a clone of the `Arc<ArcSwapOption<T>>` captured

@@ -437,7 +437,7 @@ impl ExecutorBuilder {
         self
     }
 
-    /// Set the model registry for capability lookups and context window resolution.
+    /// Set the fallback-only model metadata registry.
     pub fn with_model_registry(mut self, registry: Arc<ModelRegistry>) -> Self {
         self.model_registry = Some(registry);
         self
