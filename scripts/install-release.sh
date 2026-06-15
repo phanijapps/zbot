@@ -14,6 +14,12 @@ SHARE_DIR="${HOME}/.local/share/zbot"
 SERVICE=true
 DRY_RUN=false
 
+if [[ -d "${HOME}/Documents" ]]; then
+    VAULT_DIR="${HOME}/Documents/zbot"
+else
+    VAULT_DIR="${HOME}/zbot"
+fi
+
 usage() {
     cat <<'USAGE'
 Usage: install-release.sh [options]
@@ -152,18 +158,25 @@ download_release_assets() {
 
 install_binaries() {
     local tmp="$1" archive="$2" root="zbot-${VERSION}"
-    mkdir -p "${tmp}/extract" "$INSTALL_DIR" "${SHARE_DIR}/dist"
+    mkdir -p "${tmp}/extract" "$INSTALL_DIR" "${SHARE_DIR}/dist" "${VAULT_DIR}/logs"
     tar -xzf "${tmp}/${archive}" -C "${tmp}/extract"
     install -m 755 "${tmp}/extract/${root}/zbotd" "${INSTALL_DIR}/zbotd"
     install -m 755 "${tmp}/extract/${root}/zbot" "${INSTALL_DIR}/zbot"
     rm -rf "${SHARE_DIR}/dist/"*
     cp -R "${tmp}/extract/${root}/dist/." "${SHARE_DIR}/dist/"
+}
 
-    if [[ -d "${HOME}/Documents" ]]; then
-        mkdir -p "${HOME}/Documents/zbot"
-    else
-        mkdir -p "${HOME}/zbot"
+enable_linger() {
+    if [[ "$(uname -s)" != "Linux" || "$SERVICE" != "true" ]]; then
+        return
     fi
+    if ! command -v loginctl >/dev/null 2>&1; then
+        echo "loginctl not found; user service may stop after logout"
+        return
+    fi
+
+    loginctl enable-linger "${USER}" || \
+        echo "warning: failed to enable linger; user service may stop after logout"
 }
 
 install_linux_service() {
@@ -195,9 +208,9 @@ StartLimitBurst=3
 
 [Service]
 Type=simple
-ExecStart=${INSTALL_DIR}/zbotd --log-no-stdout --log-rotation daily --log-max-files 4 --static-dir ${dist_dir}
-StandardOutput=null
-StandardError=null
+ExecStart=${INSTALL_DIR}/zbotd --log-dir ${VAULT_DIR}/logs --log-no-stdout --log-rotation daily --log-max-files 4 --static-dir ${dist_dir}
+StandardOutput=journal
+StandardError=journal
 Restart=on-failure
 RestartSec=5
 
@@ -234,6 +247,7 @@ main() {
     download_release_assets "$archive" "$tmp"
     verify_checksum "${tmp}/${archive}" "${tmp}/checksums.sha256"
     install_binaries "$tmp" "$archive"
+    enable_linger
     install_linux_service
 
     echo ""
