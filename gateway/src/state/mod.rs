@@ -1948,30 +1948,39 @@ impl AppState {
         }
 
         tracing::info!("Creating Python venv at {}", venv_path.display());
-        let result = tokio::process::Command::new("python")
-            .args(["-m", "venv"])
-            .arg(&venv_path)
-            .output()
-            .await;
+        let mut failures = Vec::new();
 
-        match result {
-            Ok(output) if output.status.success() => {
-                tracing::info!("Python venv created successfully");
-                true
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("Failed to create Python venv: {}", stderr.trim());
-                false
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to run python -m venv: {} (python may not be installed)",
-                    e
-                );
-                false
+        for candidate in python_venv_commands() {
+            let result = tokio::process::Command::new(candidate.program)
+                .args(candidate.prefix_args)
+                .args(["-m", "venv"])
+                .arg(&venv_path)
+                .output()
+                .await;
+
+            match result {
+                Ok(output) if output.status.success() => {
+                    tracing::info!(
+                        python = candidate.display(),
+                        "Python venv created successfully"
+                    );
+                    return true;
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    failures.push(format!("{}: {}", candidate.display(), stderr.trim()));
+                }
+                Err(e) => {
+                    failures.push(format!("{}: {}", candidate.display(), e));
+                }
             }
         }
+
+        tracing::warn!(
+            attempts = %failures.join(" | "),
+            "Failed to create Python venv. Install Python with venv support, for example `sudo apt install python3 python3-venv` on Debian/Ubuntu/Pop!_OS."
+        );
+        false
     }
 
     /// Ensure Node.js working directory exists at `{config_dir}/wards/.node_env`.
@@ -2003,6 +2012,50 @@ impl AppState {
 
         true
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PythonVenvCommand {
+    program: &'static str,
+    prefix_args: &'static [&'static str],
+}
+
+impl PythonVenvCommand {
+    fn display(self) -> String {
+        if self.prefix_args.is_empty() {
+            self.program.to_string()
+        } else {
+            format!("{} {}", self.program, self.prefix_args.join(" "))
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn python_venv_commands() -> Vec<PythonVenvCommand> {
+    vec![
+        PythonVenvCommand {
+            program: "python3",
+            prefix_args: &[],
+        },
+        PythonVenvCommand {
+            program: "python",
+            prefix_args: &[],
+        },
+    ]
+}
+
+#[cfg(windows)]
+fn python_venv_commands() -> Vec<PythonVenvCommand> {
+    vec![
+        PythonVenvCommand {
+            program: "python",
+            prefix_args: &[],
+        },
+        PythonVenvCommand {
+            program: "py",
+            prefix_args: &["-3"],
+        },
+    ]
 }
 
 #[cfg(test)]
@@ -2148,6 +2201,26 @@ mod tests {
         let legacy = state.config_dir.join("node_env");
         std::fs::create_dir_all(&legacy).unwrap();
         assert!(state.ensure_node_env());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn python_venv_commands_prefer_python3_on_unix() {
+        let commands = python_venv_commands();
+
+        assert_eq!(
+            commands,
+            vec![
+                PythonVenvCommand {
+                    program: "python3",
+                    prefix_args: &[],
+                },
+                PythonVenvCommand {
+                    program: "python",
+                    prefix_args: &[],
+                },
+            ]
+        );
     }
 
     #[test]

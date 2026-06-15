@@ -166,6 +166,30 @@ install_binaries() {
     cp -R "${tmp}/extract/${root}/dist/." "${SHARE_DIR}/dist/"
 }
 
+warn_python_venv() {
+    local py tmp output last_error=""
+
+    for py in python3 python; do
+        if ! command -v "$py" >/dev/null 2>&1; then
+            continue
+        fi
+
+        tmp="$(mktemp -d)"
+        if output="$("$py" -m venv "${tmp}/venv" 2>&1)"; then
+            rm -rf "$tmp"
+            return
+        fi
+        rm -rf "$tmp"
+        last_error="${py} -m venv failed: ${output}"
+    done
+
+    echo "warning: Python venv support was not found; zbot shell tools may not get ~/Documents/zbot/wards/.venv"
+    echo "         On Debian/Ubuntu/Pop!_OS install it with: sudo apt install -y python3 python3-venv"
+    if [[ -n "$last_error" ]]; then
+        echo "         ${last_error}"
+    fi
+}
+
 enable_linger() {
     if [[ "$(uname -s)" != "Linux" || "$SERVICE" != "true" ]]; then
         return
@@ -247,6 +271,7 @@ main() {
     download_release_assets "$archive" "$tmp"
     verify_checksum "${tmp}/${archive}" "${tmp}/checksums.sha256"
     install_binaries "$tmp" "$archive"
+    warn_python_venv
     enable_linger
     install_linux_service
 
