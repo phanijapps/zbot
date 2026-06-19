@@ -26,7 +26,7 @@ impl Tool for GrepTool {
     }
 
     fn description(&self) -> &str {
-        "Search files for a pattern using regex."
+        "Search files for a regex pattern, or set literal=true for plain text."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -44,6 +44,11 @@ impl Tool for GrepTool {
                 "case_insensitive": {
                     "type": "boolean",
                     "default": false
+                },
+                "literal": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Treat pattern as plain text instead of regex"
                 },
                 "max_results": {
                     "type": "integer",
@@ -67,31 +72,32 @@ impl Tool for GrepTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        let literal = args
+            .get("literal")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let max_results = args
             .get("max_results")
             .and_then(|v| v.as_u64())
             .unwrap_or(100) as usize;
 
         tracing::debug!(
-            "Grep: pattern={}, path={}, case_insensitive={}",
+            "Grep: pattern={}, path={}, case_insensitive={}, literal={}",
             pattern,
             path,
-            case_insensitive
+            case_insensitive,
+            literal
         );
 
-        let regex = Regex::new(&format!(
-            "(?{}){}",
-            if case_insensitive { "i" } else { "" },
-            pattern
-        ))
-        .map_err(|e| zero_core::ZeroError::Tool(format!("Invalid regex: {}", e)))?;
+        let regex = Self::compile_pattern(pattern, case_insensitive, literal)?;
 
         let mut results = Vec::new();
 
         // Simple recursive search
         let search_path = PathBuf::from(path);
         if search_path.is_file() {
-            self.search_file(&search_path, &regex, &mut results)?;
+            self.search_file(&search_path, &regex, &mut results, max_results)?;
         } else {
             self.search_directory(&search_path, &regex, &mut results, max_results)?;
         }
@@ -107,6 +113,25 @@ impl GrepTool {
     const TEXT_EXTENSIONS: [&'static str; 12] = [
         "txt", "md", "rs", "js", "ts", "jsx", "tsx", "py", "json", "yaml", "yml", "toml",
     ];
+
+    fn compile_pattern(pattern: &str, case_insensitive: bool, literal: bool) -> Result<Regex> {
+        let source_pattern = if literal {
+            regex::escape(pattern)
+        } else {
+            pattern.to_string()
+        };
+        let compiled = if case_insensitive {
+            format!("(?i){source_pattern}")
+        } else {
+            source_pattern.clone()
+        };
+
+        Regex::new(&compiled).map_err(|e| {
+            zero_core::ZeroError::Tool(format!(
+                "Invalid regex pattern {source_pattern:?}: {e}. Set literal=true for plain-text search or use Rust regex syntax."
+            ))
+        })
+    }
 
     fn search_directory(
         &self,
@@ -140,7 +165,7 @@ impl GrepTool {
             } else if let Some(ext) = path.extension() {
                 let ext_str = ext.to_string_lossy();
                 if Self::TEXT_EXTENSIONS.contains(&ext_str.as_ref()) {
-                    self.search_file(&path, regex, results)?;
+                    self.search_file(&path, regex, results, max_results)?;
                     if results.len() >= max_results {
                         break;
                     }
@@ -151,11 +176,20 @@ impl GrepTool {
         Ok(())
     }
 
-    fn search_file(&self, path: &PathBuf, regex: &Regex, results: &mut Vec<Value>) -> Result<()> {
+    fn search_file(
+        &self,
+        path: &PathBuf,
+        regex: &Regex,
+        results: &mut Vec<Value>,
+        max_results: usize,
+    ) -> Result<()> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to read file: {}", e)))?;
 
         for (line_num, line) in content.lines().enumerate() {
+            if results.len() >= max_results {
+                break;
+            }
             if regex.is_match(line) {
                 results.push(json!({
                     "file": path.to_string_lossy(),
@@ -227,5 +261,52 @@ impl Tool for GlobTool {
             "matches": matches,
             "count": matches.len(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grep_default_regex_does_not_inject_empty_inline_flag() {
+        let regex = GrepTool::compile_pattern(r"^##|^###|^\\|", false, false)
+            .expect("case-sensitive regex should compile directly");
+
+        assert!(regex.is_match("## Heading"));
+    }
+
+    #[test]
+    fn grep_invalid_regex_error_suggests_literal_mode() {
+        let err = GrepTool::compile_pattern("(?", false, false)
+            .expect_err("invalid regex should return a tool error");
+        let message = err.to_string();
+
+        assert!(message.contains("Invalid regex pattern"));
+        assert!(message.contains("literal=true"));
+    }
+
+    #[test]
+    fn grep_literal_mode_escapes_regex_metacharacters() {
+        let regex = GrepTool::compile_pattern("a+b", false, true)
+            .expect("literal search should compile escaped pattern");
+
+        assert!(regex.is_match("a+b"));
+        assert!(!regex.is_match("aaab"));
+    }
+
+    #[test]
+    fn grep_single_file_respects_max_results() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("matches.txt");
+        std::fs::write(&file, "hit one\nhit two\nhit three\n").expect("write fixture");
+        let regex = GrepTool::compile_pattern("hit", false, false).expect("regex");
+        let tool = GrepTool;
+        let mut results = Vec::new();
+
+        tool.search_file(&file, &regex, &mut results, 2)
+            .expect("search file");
+
+        assert_eq!(results.len(), 2);
     }
 }

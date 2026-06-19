@@ -67,6 +67,16 @@ fn log_cache_hit(tag: &str, usage: &TokenUsage) {
     );
 }
 
+fn stream_transport_error(
+    emitted_chars: usize,
+    tool_call_count: usize,
+    error: impl std::fmt::Display,
+) -> LlmError {
+    LlmError::ApiError(format!(
+        "Streaming response terminated after {emitted_chars} chars and {tool_call_count} tool call(s); refusing to treat partial content as complete: {error}"
+    ))
+}
+
 /// Attempt to recover the first JSON object from a concatenated string like `{"a":"b"}{"c":"d"}`.
 /// Returns Some(Value) if recovery succeeds, None otherwise.
 fn recover_first_json(raw: &str) -> Option<serde_json::Value> {
@@ -508,13 +518,18 @@ impl LlmClient for OpenAiClient {
                         return Ok(parsed);
                     }
 
-                    // If we already emitted content, return what we have as partial
-                    // (better than crashing — executor can continue)
+                    // Do not commit partial assistant text as a successful turn.
+                    // A continuation can otherwise treat a truncated preamble as
+                    // the delegate's final answer and make the wrong next move.
                     tracing::warn!(
-                        "Stream broke after {} chars emitted — returning partial response",
+                        "Stream broke after {} chars emitted — failing partial response",
                         full_content.len()
                     );
-                    break;
+                    return Err(stream_transport_error(
+                        full_content.len(),
+                        tool_accumulators.len(),
+                        e,
+                    ));
                 }
             };
             sse_buffer.push_str(&String::from_utf8_lossy(&chunk));
@@ -914,6 +929,19 @@ mod tests {
             "prompt_cache_hit_tokens": 300
         });
         assert_eq!(extract_cached_prompt_tokens(&usage), Some(400));
+    }
+
+    #[test]
+    fn stream_transport_error_rejects_partial_success() {
+        let err = stream_transport_error(86, 0, "connection closed");
+
+        match err {
+            LlmError::ApiError(message) => {
+                assert!(message.contains("terminated after 86 chars"));
+                assert!(message.contains("refusing to treat partial content as complete"));
+            }
+            other => panic!("expected ApiError, got {other:?}"),
+        }
     }
 }
 

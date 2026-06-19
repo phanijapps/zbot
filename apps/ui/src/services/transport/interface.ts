@@ -24,6 +24,9 @@ import type {
   McpServerConfig,
   CreateMcpRequest,
   McpTestResult,
+  McpOAuthStatusResponse,
+  McpOAuthStartRequest,
+  McpOAuthStartResponse,
   ModelRegistryResponse,
   MessageResponse,
   ChatSessionInit,
@@ -201,6 +204,15 @@ export interface Transport {
 
   /** Test an MCP server connection */
   testMcp(id: string): Promise<TransportResult<McpTestResult>>;
+
+  /** Get OAuth status for an MCP server */
+  getMcpOAuthStatus(id: string): Promise<TransportResult<McpOAuthStatusResponse>>;
+
+  /** Start OAuth authorization for an MCP server */
+  startMcpOAuth(id: string, request?: McpOAuthStartRequest): Promise<TransportResult<McpOAuthStartResponse>>;
+
+  /** Disconnect OAuth authorization for an MCP server */
+  disconnectMcpOAuth(id: string): Promise<TransportResult<McpOAuthStatusResponse>>;
 
   // =========================================================================
   // Conversation Operations

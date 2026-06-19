@@ -316,6 +316,7 @@ export interface McpServerSummary {
   description: string;
   type: string;
   enabled: boolean;
+  authStatus?: "not_configured" | "not_connected" | "connected" | "reauth_required";
 }
 
 export interface McpListResponse {
@@ -334,6 +335,7 @@ export interface CreateMcpRequest {
   // http/sse/streamable-http fields
   url?: string;
   headers?: Record<string, string>;
+  auth?: McpAuthConfig;
   enabled?: boolean;
 }
 
@@ -347,14 +349,34 @@ export interface McpServerConfig {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  auth?: McpAuthConfig;
   enabled: boolean;
   validated?: boolean;
+}
+
+export interface McpAuthConfig {
+  type: "oauth2";
+  clientId?: string;
+  scopes?: string[];
 }
 
 export interface McpTestResult {
   success: boolean;
   message: string;
   tools?: string[];
+}
+
+export interface McpOAuthStatusResponse {
+  status: "not_configured" | "not_connected" | "connected" | "reauth_required";
+}
+
+export interface McpOAuthStartRequest {
+  redirectUri?: string;
+}
+
+export interface McpOAuthStartResponse {
+  authUrl: string;
+  state: string;
 }
 
 // ============================================================================

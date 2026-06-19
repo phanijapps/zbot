@@ -7,3 +7,4 @@
 | [RFC-0006: Vault Obsidian-Style Ward Browser](0006-vault-obsidian-style-ward-browser.md) | Draft | Proposes a top-level Vault tab for browsing ward filesystem trees and previewing common files in-app. |
 | [RFC-0007: Ward-Specific Vault Explorer in Research](0007-ward-specific-vault-in-research.md) | Open | Proposes embedding a ward-scoped Vault explorer/search pane inside Research once a session has an active ward. |
 | [RFC-0008: Simplified Provider Model Configuration](0008-simplified-provider-model-configuration.md) | Accepted | Replaces broad maintained model metadata with simple 200k input / 32k output defaults plus agent and Advanced overrides. |
+| [RFC-0009: Agent Runtime Budget and Retry Governance](0009-agent-runtime-budget-and-retry-governance.md) | Draft | Proposes prompt-safe tool-result persistence, token-budgeted continuation history, and bounded delegation retries for long sessions. |

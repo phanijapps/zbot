@@ -5,7 +5,7 @@
 use super::callback::{handle_delegation_failure, handle_delegation_success};
 use super::context::{infer_delegation_mode, DelegationContext, DelegationRequest};
 use super::registry::DelegationRegistry;
-use agent_runtime::AgentExecutor;
+use agent_runtime::{AgentExecutor, ToolResultContextConfig};
 use api_logs::LogService;
 use execution_state::StateService;
 use gateway_events::{EventBus, GatewayEvent};
@@ -221,6 +221,8 @@ pub async fn spawn_delegated_agent(
     // Get tool settings
     let settings_service = gateway_services::SettingsService::new(paths.clone());
     let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
+    let tool_result_context =
+        crate::runner::prompt_safe_tool_result_config(&tool_settings, paths.vault_dir());
 
     // Look up the parent session's ward, then resolve the ward this
     // delegation actually runs in: a `ward:<name>` target runs in its
@@ -429,6 +431,7 @@ pub async fn spawn_delegated_agent(
         paths,
         delegation_permit,
         initial_history,
+        tool_result_context,
         fact_store_for_ctx,
         memory_store_for_snapshot,
         distiller,
@@ -504,6 +507,7 @@ struct SpawnContext {
     /// Child conversation id (what the downstream stream/log services key on).
     conv_id: String,
     initial_history: Vec<ChatMessage>,
+    tool_result_context: ToolResultContextConfig,
 
     // --- Resource control ---
     delegation_permit: Option<OwnedSemaphorePermit>,
@@ -540,6 +544,7 @@ fn spawn_execution_task(ctx: SpawnContext) {
         child_session_id,
         conv_id,
         initial_history,
+        tool_result_context,
         delegation_permit,
         event_bus,
         conversation_repo,
@@ -661,6 +666,7 @@ fn spawn_execution_task(ctx: SpawnContext) {
         let batch_writer_inner = batch_writer.clone();
         let mut turn_tool_calls: Vec<serde_json::Value> = Vec::new();
         let mut turn_text = String::new();
+        let mut current_tool_name = String::new();
 
         let stop_sig = Some(handle.stop_signal());
         let result = executor
@@ -679,6 +685,7 @@ fn spawn_execution_task(ctx: SpawnContext) {
                         args,
                         ..
                     } => {
+                        current_tool_name = tool_name.clone();
                         turn_tool_calls.push(serde_json::json!({
                             "tool_id": tool_id,
                             "tool_name": tool_name,
@@ -688,6 +695,7 @@ fn spawn_execution_task(ctx: SpawnContext) {
                     agent_runtime::StreamEvent::ToolResult {
                         tool_id,
                         result,
+                        context_result,
                         error,
                         ..
                     } => {
@@ -710,11 +718,13 @@ fn spawn_execution_task(ctx: SpawnContext) {
                             turn_tool_calls.clear();
                         }
 
-                        let tool_content = if let Some(err) = error {
-                            format!("Error: {}", err)
-                        } else {
-                            result.clone()
-                        };
+                        let tool_content = crate::runner::prompt_safe_tool_content(
+                            &current_tool_name,
+                            result,
+                            context_result.as_deref(),
+                            error.as_deref(),
+                            &tool_result_context,
+                        );
                         batch_writer_inner.session_message(
                             &child_session_id_inner,
                             &execution_id_inner,
@@ -937,6 +947,21 @@ async fn handle_execution_success(ctx: HandleExecutionSuccess<'_>) {
     })
     .await;
 
+    // Persist the parent callback before marking delegation completion. The
+    // completion event wakes the continuation watcher; waking it first creates
+    // a race where the root can resume without the child result in context.
+    handle_delegation_success(
+        delegation_ctx.as_ref(),
+        conversation_repo,
+        event_bus,
+        session_id,
+        parent_execution_id,
+        agent_id,
+        conv_id,
+        response,
+    )
+    .await;
+
     // Check if this was the last delegation and continuation is needed
     match state_service.complete_delegation(session_id) {
         Ok(true) => {
@@ -959,19 +984,6 @@ async fn handle_execution_success(ctx: HandleExecutionSuccess<'_>) {
         Ok(false) => {} // More delegations pending
         Err(e) => tracing::warn!("Failed to complete delegation tracking: {}", e),
     }
-
-    // Send callback message to parent if enabled
-    handle_delegation_success(
-        delegation_ctx.as_ref(),
-        conversation_repo,
-        event_bus,
-        session_id,
-        parent_execution_id,
-        agent_id,
-        conv_id,
-        response,
-    )
-    .await;
 
     // Phase 2b: write a state_handoff fact so the next subagent in this
     // session can fetch this one's summary by exact key. We look up the

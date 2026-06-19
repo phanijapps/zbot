@@ -54,6 +54,8 @@ pub enum StreamEvent {
         timestamp: u64,
         tool_id: String,
         result: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_result: Option<String>,
         error: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duration_ms: Option<i64>,
@@ -332,6 +334,7 @@ mod tests {
                 timestamp: 6,
                 tool_id: "id".into(),
                 result: "r".into(),
+                context_result: Some("context r".into()),
                 error: None,
                 duration_ms: Some(10),
             },

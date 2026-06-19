@@ -24,7 +24,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::context_management::{sanitize_messages, truncate_tool_result};
+use crate::context_management::{
+    prepare_tool_result_for_context, sanitize_messages, ToolResultContextConfig,
+};
 use crate::llm::client::StreamChunk;
 use crate::llm::LlmClient;
 use crate::mcp::McpManager;
@@ -1064,12 +1066,13 @@ impl AgentExecutor {
                     // Blocked by beforeToolCall hook
                     current_messages.push(ChatMessage::tool_result(
                         tool_call.id.clone(),
-                        blocked_result,
+                        blocked_result.clone(),
                     ));
                     on_event(StreamEvent::ToolResult {
                         timestamp: chrono::Utc::now().timestamp_millis() as u64,
                         tool_id: tool_call.id.clone(),
                         result: "[blocked by hook]".to_string(),
+                        context_result: Some(blocked_result.clone()),
                         error: Some("blocked_by_hook".to_string()),
                         duration_ms: Some(0),
                     });
@@ -1285,22 +1288,10 @@ impl AgentExecutor {
                                 }
                             }
 
-                            on_event(StreamEvent::ToolResult {
-                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                tool_id: tool_call.id.clone(),
-                                result: output.clone(),
-                                error: None,
-                                duration_ms: Some(duration_ms),
-                            });
-
-                            // Process tool result (potentially offload large results to filesystem)
-                            let processed_output = self.process_tool_result(tool_name, output);
-
-                            // Truncate if still over budget (safety net when offload is disabled)
-                            let processed_output = truncate_tool_result(
-                                processed_output,
-                                self.config.max_tool_result_chars,
-                            );
+                            // Process tool result for model context. Large raw outputs are
+                            // offloaded when configured, then truncated as a safety net.
+                            let processed_output =
+                                self.prepare_tool_result_for_context(tool_name, output.clone());
 
                             // afterToolCall hook — can transform the result
                             let final_output = if let Some(ref hook) = self.config.after_tool_call {
@@ -1312,6 +1303,15 @@ impl AgentExecutor {
                             } else {
                                 processed_output
                             };
+
+                            on_event(StreamEvent::ToolResult {
+                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                tool_id: tool_call.id.clone(),
+                                result: output,
+                                context_result: Some(final_output.clone()),
+                                error: None,
+                                duration_ms: Some(duration_ms),
+                            });
 
                             // Add tool result message
                             current_messages
@@ -1328,14 +1328,6 @@ impl AgentExecutor {
                             );
                             progress_tracker.record_error(&e);
 
-                            on_event(StreamEvent::ToolResult {
-                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                tool_id: tool_call.id.clone(),
-                                result: String::new(),
-                                error: Some(e.clone()),
-                                duration_ms: Some(duration_ms),
-                            });
-
                             // afterToolCall hook — can transform error results too
                             let error_message = json!({"error": e}).to_string();
                             let final_error = if let Some(ref hook) = self.config.after_tool_call {
@@ -1346,6 +1338,15 @@ impl AgentExecutor {
                             } else {
                                 error_message
                             };
+
+                            on_event(StreamEvent::ToolResult {
+                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                tool_id: tool_call.id.clone(),
+                                result: String::new(),
+                                context_result: Some(final_error.clone()),
+                                error: Some(e.clone()),
+                                duration_ms: Some(duration_ms),
+                            });
 
                             // Add error result message
                             current_messages
@@ -1644,74 +1645,26 @@ impl AgentExecutor {
     ///
     /// If offload is enabled and the result exceeds the threshold, saves to a temp file
     /// and returns instructions for the agent to read it with a CLI tool.
+    #[cfg(test)]
     fn process_tool_result(&self, tool_name: &str, result: String) -> String {
-        // Check if offload is enabled and result exceeds threshold
-        if !self.config.offload_large_results {
-            return result;
-        }
-
-        if result.len() <= self.config.offload_threshold_chars {
-            return result;
-        }
-
-        // Get offload directory
-        let offload_dir = match &self.config.offload_dir {
-            Some(dir) => dir.clone(),
-            None => {
-                // Default to ~/Documents/zbot/temp
-                if let Some(home) = dirs::home_dir() {
-                    home.join("Documents").join("zbot").join("temp")
-                } else {
-                    tracing::warn!("Could not determine home directory for offload");
-                    return result;
-                }
-            }
-        };
-
-        // Create directory if it doesn't exist
-        if let Err(e) = std::fs::create_dir_all(&offload_dir) {
-            tracing::warn!("Failed to create offload directory: {}", e);
-            return result;
-        }
-
-        // Generate unique filename
-        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-        let sanitized_tool = tool_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
-        let filename = format!("{sanitized_tool}_{timestamp}.txt");
-        let file_path = offload_dir.join(&filename);
-
-        // Write result to file
-        if let Err(e) = std::fs::write(&file_path, &result) {
-            tracing::warn!("Failed to write offloaded result: {}", e);
-            return result;
-        }
-
-        let result_size = result.len();
-        let result_tokens = result_size / 4; // rough estimate
-
-        tracing::info!(
-            "Offloaded large tool result ({} chars, ~{} tokens) to: {}",
-            result_size,
-            result_tokens,
-            file_path.display()
-        );
-
-        // Return instructions for the agent
-        format!(
-            "Tool result was too large for context ({} chars, ~{} tokens).\n\
-            Result saved to: {}\n\n\
-            To access the full result, use the `read` tool:\n\
-            ```json\n\
-            {{\"path\": \"{}\"}}\n\
-            ```\n\n\
-            Or use shell: `head -100 \"{}\"` to preview, `grep \"pattern\" \"{}\"` to search.",
-            result_size,
-            result_tokens,
-            file_path.display(),
-            file_path.display(),
-            file_path.display(),
-            file_path.display()
+        crate::context_management::offload_tool_result_for_context(
+            tool_name,
+            result,
+            &self.tool_result_context_config(),
         )
+    }
+
+    fn prepare_tool_result_for_context(&self, tool_name: &str, result: String) -> String {
+        prepare_tool_result_for_context(tool_name, result, &self.tool_result_context_config())
+    }
+
+    fn tool_result_context_config(&self) -> ToolResultContextConfig {
+        ToolResultContextConfig {
+            max_tool_result_chars: self.config.max_tool_result_chars,
+            offload_large_results: self.config.offload_large_results,
+            offload_threshold_chars: self.config.offload_threshold_chars,
+            offload_dir: self.config.offload_dir.clone(),
+        }
     }
 }
 

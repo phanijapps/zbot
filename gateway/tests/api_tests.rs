@@ -366,6 +366,170 @@ async fn mcps_list_returns_response() {
     assert!(body.get("servers").is_some());
 }
 
+#[tokio::test]
+async fn mcp_oauth_status_reports_not_connected_without_secrets() {
+    let (server, _dir) = setup_test_server().await;
+
+    let create = server
+        .post("/api/mcps")
+        .json(&json!({
+            "type": "streamable-http",
+            "id": "robinhood-trading",
+            "name": "Robinhood Trading",
+            "description": "Trading MCP",
+            "url": "https://agent.robinhood.com/mcp/trading",
+            "auth": { "type": "oauth2" },
+            "enabled": false
+        }))
+        .await;
+    create.assert_status_ok();
+
+    let response = server.get("/api/mcps/robinhood-trading/oauth/status").await;
+    response.assert_status_ok();
+
+    let body: Value = response.json();
+    assert_eq!(body["status"], "not_connected");
+    assert!(!body.to_string().contains("token"));
+}
+
+#[tokio::test]
+async fn mcp_oauth_create_rejects_persisted_authorization_header() {
+    let (server, _dir) = setup_test_server().await;
+
+    let response = server
+        .post("/api/mcps")
+        .json(&json!({
+            "type": "streamable-http",
+            "id": "oauth-with-header",
+            "name": "OAuth With Header",
+            "description": "bad",
+            "url": "https://example.com/mcp",
+            "headers": { "Authorization": "Bearer secret" },
+            "auth": { "type": "oauth2" },
+            "enabled": false
+        }))
+        .await;
+
+    response.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = response.json();
+    assert!(body["error"]
+        .as_str()
+        .unwrap_or("")
+        .contains("Authorization"));
+}
+
+#[tokio::test]
+async fn mcp_oauth_create_rejects_nonlocal_browser_origin() {
+    let (server, _dir) = setup_test_server().await;
+
+    let response = server
+        .post("/api/mcps")
+        .add_header("origin", "https://evil.example")
+        .json(&json!({
+            "type": "streamable-http",
+            "id": "oauth-origin",
+            "name": "OAuth Origin",
+            "description": "oauth",
+            "url": "https://example.com/mcp",
+            "auth": { "type": "oauth2" },
+            "enabled": false
+        }))
+        .await;
+
+    response.assert_status(StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn mcp_oauth_disconnect_is_idempotent_and_returns_status() {
+    let (server, _dir) = setup_test_server().await;
+
+    server
+        .post("/api/mcps")
+        .json(&json!({
+            "type": "streamable-http",
+            "id": "oauth-server",
+            "name": "OAuth Server",
+            "description": "oauth",
+            "url": "https://example.com/mcp",
+            "auth": { "type": "oauth2" },
+            "enabled": false
+        }))
+        .await
+        .assert_status_ok();
+
+    let response = server.post("/api/mcps/oauth-server/oauth/disconnect").await;
+    response.assert_status_ok();
+
+    let body: Value = response.json();
+    assert_eq!(body["status"], "not_connected");
+}
+
+#[tokio::test]
+async fn mcp_oauth_start_rejects_external_redirect_uri() {
+    let (server, _dir) = setup_test_server().await;
+
+    server
+        .post("/api/mcps")
+        .json(&json!({
+            "type": "streamable-http",
+            "id": "oauth-start",
+            "name": "OAuth Start",
+            "description": "oauth",
+            "url": "https://example.com/mcp",
+            "auth": { "type": "oauth2" },
+            "enabled": false
+        }))
+        .await
+        .assert_status_ok();
+
+    let response = server
+        .post("/api/mcps/oauth-start/oauth/start")
+        .json(&json!({ "redirectUri": "https://evil.example/callback" }))
+        .await;
+
+    response.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = response.json();
+    assert!(body["error"].as_str().unwrap_or("").contains("redirectUri"));
+}
+
+#[tokio::test]
+async fn mcp_oauth_callback_rejects_missing_state() {
+    let (server, _dir) = setup_test_server().await;
+
+    let response = server.get("/api/mcps/oauth/callback?code=abc").await;
+
+    response.assert_status(StatusCode::BAD_REQUEST);
+    assert!(response.text().contains("missing state"));
+}
+
+#[tokio::test]
+async fn mcp_oauth_test_requires_connection_before_runtime_start() {
+    let (server, _dir) = setup_test_server().await;
+
+    server
+        .post("/api/mcps")
+        .json(&json!({
+            "type": "streamable-http",
+            "id": "oauth-test",
+            "name": "OAuth Test",
+            "description": "oauth",
+            "url": "https://example.com/mcp",
+            "auth": { "type": "oauth2" },
+            "enabled": true
+        }))
+        .await
+        .assert_status_ok();
+
+    let response = server.post("/api/mcps/oauth-test/test").await;
+
+    response.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = response.json();
+    assert!(body["error"]
+        .as_str()
+        .unwrap_or("")
+        .contains("requires OAuth authentication"));
+}
+
 // ============================================================================
 // Settings Endpoint Tests
 // ============================================================================

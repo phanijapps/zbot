@@ -262,9 +262,9 @@ async fn prepend_continuation_recall(
 /// Build the system-message prompt that seeds a continuation turn.
 ///
 /// If the session has a ward and `specs/{topic}/plan.md` exists, inject the
-/// plan's full text with a "just find-next-step + delegate" directive so the
-/// continuation agent doesn't redo analysis. Otherwise emit the terse "delegate
-/// the next step immediately" nudge.
+/// plan's full text so the continuation agent can compare it with the child
+/// result already in context. Otherwise emit a terse nudge to either finish or
+/// continue based on the delegate callback.
 ///
 /// Side effect: when a plan is found and a fact store is available, the plan
 /// text is written to `ctx.<session_id>.plan` so subagents can fetch it via
@@ -281,8 +281,9 @@ async fn build_continuation_message(
     });
 
     let Some(plan) = plan_hint else {
-        return "[Delegation completed. Delegate the next step in your plan immediately. \
-                 Do NOT read files or analyze — just delegate.]"
+        return "[Delegation completed. Review the delegate result already in context. \
+                 If the user's goal is satisfied, respond with the final answer. \
+                 If work remains, delegate the next concrete step or continue directly.]"
             .to_string();
     };
 
@@ -295,9 +296,10 @@ async fn build_continuation_message(
 
     format!(
         "[DELEGATION COMPLETED. YOUR PLAN IS BELOW.\n\
-         DO NOT read files. DO NOT analyze. DO NOT use shell.\n\
-         Just find the next step that hasn't been done and delegate it NOW.\n\
-         One action only: delegate_to_agent.]\n\n{}",
+         Review the delegate result already in context against this plan.\n\
+         If the user's goal is satisfied, respond with the final answer.\n\
+         If work remains, delegate the next concrete step or continue directly.\n\
+         Avoid re-reading files unless the delegate result is insufficient.]\n\n{}",
         plan
     )
 }
@@ -1189,6 +1191,8 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
     // Get tool settings
     let settings_service = gateway_services::SettingsService::new(paths.clone());
     let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
+    let tool_result_context =
+        super::prompt_safe_tool_result_config(&tool_settings, paths.vault_dir());
 
     // Collect available agents and skills
     let available_agents = collect_agents_summary(&agent_service).await;
@@ -1342,6 +1346,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                     agent_runtime::StreamEvent::ToolResult {
                         tool_id,
                         result,
+                        context_result,
                         error,
                         ..
                     } => {
@@ -1368,11 +1373,13 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                         }
 
                         // Emit tool result message
-                        let tool_content = if let Some(err) = error {
-                            format!("Error: {}", err)
-                        } else {
-                            result.clone()
-                        };
+                        let tool_content = super::prompt_safe_tool_content(
+                            &current_tool_name,
+                            result,
+                            context_result.as_deref(),
+                            error.as_deref(),
+                            &tool_result_context,
+                        );
                         batch_writer_inner.session_message(
                             &session_id_inner,
                             &execution_id_inner,
@@ -1761,6 +1768,47 @@ mod model_registry_late_binding_tests {
             ctx.input, 200_000,
             "registry's internal fallback for unknown models is 200k, \
              not the 8192 emergency default"
+        );
+    }
+}
+
+#[cfg(test)]
+mod continuation_message_tests {
+    use super::*;
+    use gateway_services::VaultPaths;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn continuation_without_plan_allows_final_response() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let paths: SharedVaultPaths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+
+        let message = build_continuation_message(&paths, "session-1", None, None).await;
+
+        assert!(message.contains("If the user's goal is satisfied"));
+        assert!(message.contains("respond with the final answer"));
+        assert!(
+            !message.contains("delegate the next step in your plan immediately"),
+            "continuation must not force another delegation after every child result"
+        );
+    }
+
+    #[tokio::test]
+    async fn continuation_with_plan_allows_final_response() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let paths: SharedVaultPaths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        let plan_dir = tmp.path().join("wards/political-analysis/specs/hormuz");
+        std::fs::create_dir_all(&plan_dir).expect("plan dir");
+        std::fs::write(plan_dir.join("plan.md"), "- Write report\n").expect("plan");
+
+        let message =
+            build_continuation_message(&paths, "session-1", Some("political-analysis"), None).await;
+
+        assert!(message.contains("- Write report"));
+        assert!(message.contains("respond with the final answer"));
+        assert!(
+            !message.contains("One action only: delegate_to_agent"),
+            "plan continuations must be able to finish instead of re-delegating"
         );
     }
 }

@@ -136,6 +136,8 @@ src-tauri/tauri.conf.json.default
 .superpowers/
 docs/*
 !docs/project-graph.html
+!docs/wiki/
+!docs/wiki/**
 !docs/specs/
 !docs/specs/**
 !docs/rfc/

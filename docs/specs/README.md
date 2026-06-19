@@ -15,5 +15,6 @@ Active feature specs for AgentZero.
 | [Vault Ward Browser](vault-ward-browser/spec.md) | Shipped | Adds a read-only Vault tab for browsing ward filesystem trees and previewing common files through bounded local-only APIs. |
 | [Ward Vault In Research](ward-vault-in-research/spec.md) | Implementing | Embeds a read-only ward-scoped Vault explorer/search pane inside Research after a session has an active ward. |
 | [Simplified Provider Model Configuration](simplified-provider-model-configuration/spec.md) | Implemented | Replaces broad model metadata maintenance with 200k input / 32k output defaults plus agent and Advanced overrides. |
+| [MCP OAuth](mcp-oauth/spec.md) | Implementing | Adds OAuth metadata, authorization flow endpoints, token storage, and runtime bearer injection for protected remote MCP servers. |
 | [Subagent Capability Policy](subagent-role-gating/spec.md) | Implementing | Enforces root, executor, reviewer, and ward-agent tool capabilities with an explicit reviewer-agent identity. |
 | [Builder Delegation Hygiene](builder-delegation-hygiene/spec.md) | Implementing | Adds delegation modes so builder-agent can distinguish direct artifacts, ward hygiene, ward-backed builds, and step execution. |

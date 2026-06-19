@@ -89,7 +89,9 @@ pub use tools::{
     ToolRegistry,
 };
 
-pub use mcp::{McpClient, McpError, McpManager, McpServerConfig, McpTool};
+pub use mcp::{
+    McpAuthConfig, McpAuthType, McpClient, McpError, McpManager, McpServerConfig, McpTool,
+};
 
 pub use middleware::{
     ContextEditingConfig, ContextEditingMiddleware, EventMiddleware, KeepPolicy, MiddlewareConfig,
@@ -97,6 +99,7 @@ pub use middleware::{
     PreProcessMiddleware, SummarizationConfig, SummarizationMiddleware, TriggerCondition,
 };
 
+pub use context_management::{prepare_tool_result_for_context, ToolResultContextConfig};
 pub use executor::{
     create_executor, AfterToolCallHook, AgentExecutor, BeforeToolCallHook, ExecutorConfig,
     ExecutorError, RecallHook, RecallHookResult, ToolCallDecision, ToolExecutionMode,

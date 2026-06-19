@@ -45,6 +45,8 @@ thiserror = { workspace = true }
 parking_lot = "0.12"
 arc-swap = "1"
 dirs = "5"
+base64 = { workspace = true }
+sha2 = "0.10"
 
 # File watching for hot-reload
 notify = "7"

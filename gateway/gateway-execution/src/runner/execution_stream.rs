@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use agent_runtime::{AgentExecutor, ChatMessage};
+use agent_runtime::{AgentExecutor, ChatMessage, ToolResultContextConfig};
 use api_logs::LogService;
 use execution_state::StateService;
 use gateway_events::EventBus;
@@ -99,6 +99,7 @@ struct EventHandlerDeps<'a> {
     execution_id: &'a str,
     agent_id: &'a str,
     handle: &'a ExecutionHandle,
+    tool_result_context: &'a ToolResultContextConfig,
     kg_episode_repo: Option<&'a Arc<zero_stores_sqlite::KgEpisodeRepository>>,
     kg_store: Option<&'a Arc<dyn zero_stores::KnowledgeGraphStore>>,
 }
@@ -160,6 +161,7 @@ fn handle_tool_result(
     deps: &EventHandlerDeps<'_>,
     tool_id: &str,
     result: &str,
+    context_result: Option<&str>,
     error: Option<&str>,
 ) {
     acc.tool_acc
@@ -197,10 +199,13 @@ fn handle_tool_result(
     }
 
     // Emit tool result message
-    let tool_content = match error {
-        Some(err) => format!("Error: {}", err),
-        None => result.to_string(),
-    };
+    let tool_content = super::prompt_safe_tool_content(
+        &acc.current_tool_name,
+        result,
+        context_result,
+        error,
+        deps.tool_result_context,
+    );
     deps.batch_writer.session_message(
         deps.session_id,
         deps.execution_id,
@@ -307,6 +312,10 @@ impl ExecutionStream {
         .with_recommended_skills(recommended_skills.clone());
 
         let mut response_acc = ResponseAccumulator::new();
+        let settings_service = gateway_services::SettingsService::new(self.paths.clone());
+        let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
+        let tool_result_context =
+            super::prompt_safe_tool_result_config(&tool_settings, self.paths.vault_dir());
 
         // Append user message to session stream BEFORE execution
         batch_writer.session_message(&session_id, &execution_id, "user", &message, None, None);
@@ -445,6 +454,7 @@ impl ExecutionStream {
                     execution_id: &execution_id_inner,
                     agent_id: &agent_id_inner,
                     handle: &handle,
+                    tool_result_context: &tool_result_context,
                     kg_episode_repo: kg_episode_repo_inner.as_ref(),
                     kg_store: kg_store_inner.as_ref(),
                 };
@@ -460,9 +470,17 @@ impl ExecutionStream {
                     agent_runtime::StreamEvent::ToolResult {
                         tool_id,
                         result,
+                        context_result,
                         error,
                         ..
-                    } => handle_tool_result(&mut acc, &deps, tool_id, result, error.as_deref()),
+                    } => handle_tool_result(
+                        &mut acc,
+                        &deps,
+                        tool_id,
+                        result,
+                        context_result.as_deref(),
+                        error.as_deref(),
+                    ),
                     agent_runtime::StreamEvent::Token { content, .. } => {
                         acc.turn_text.push_str(content);
                     }

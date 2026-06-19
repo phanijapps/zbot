@@ -869,6 +869,12 @@ impl ExecutorBuilder {
             &mut tool_registry,
             actor,
             &[ToolCapability::FileRead],
+            Arc::new(ReadTool),
+        );
+        register_if_allowed(
+            &mut tool_registry,
+            actor,
+            &[ToolCapability::FileRead],
             Arc::new(GrepTool),
         );
         register_if_allowed(
@@ -1022,7 +1028,7 @@ impl ExecutorBuilder {
 
         // Load and start MCP servers configured for this agent
         if !agent.mcps.is_empty() {
-            let mcp_configs = mcp_service.get_multiple(&agent.mcps);
+            let mcp_configs = mcp_service.get_multiple_for_runtime(&agent.mcps);
             for mcp_config in mcp_configs {
                 let server_id = mcp_config.id();
                 tracing::info!("Starting MCP server: {}", server_id);
@@ -1191,6 +1197,7 @@ mod tests {
                 "shell",
                 "write_file",
                 "edit_file",
+                "read",
                 "grep",
                 "ward",
                 "memory",
@@ -1259,6 +1266,7 @@ mod tests {
                 "ward",
                 "update_plan",
                 "set_session_title",
+                "read",
                 "grep",
                 "respond",
                 "delegate_to_agent",

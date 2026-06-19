@@ -66,6 +66,7 @@ pub use web::WebFetchTool;
 ///
 /// Core tools (always enabled):
 /// - shell: Primary execution — commands
+/// - read: Read files by path with optional line limits
 /// - write_file: Create new files
 /// - edit_file: Targeted find-and-replace edits on existing files
 /// - memory: Persist/recall information
@@ -101,10 +102,11 @@ pub struct ToolSettings {
     #[serde(default)]
     pub introspection: bool,
 
-    /// Enable file tools (read, write, edit, glob) as separate tools.
-    /// When false (default), the model uses the core `write_file` / `edit_file`
-    /// tools instead. These optional tools layer on extra capabilities
-    /// (binary read, glob patterns).
+    /// Enable legacy file tools (write, edit, glob) as separate tools.
+    /// `read` is a core safe tool. When false (default), the model uses the
+    /// core `read` / `write_file` / `edit_file` tools instead. These optional
+    /// tools layer on extra capabilities (legacy write/edit names, glob
+    /// patterns).
     #[serde(default)]
     pub file_tools: bool,
 
@@ -139,11 +141,12 @@ fn default_offload_enabled() -> bool {
 
 /// Get core tools — the minimal, high-signal set.
 ///
-/// Shell for commands; write_file / edit_file for file operations.
-/// Separate read/glob tools are optional (moved to optional_tools).
+/// Shell for commands; read / write_file / edit_file for file operations.
+/// Legacy file aliases and glob are optional.
 ///
 /// Core tools:
 /// - shell: Primary execution — commands
+/// - read: Read file contents with optional line limits
 /// - write_file: Create new files
 /// - edit_file: Find-and-replace edits on existing files
 /// - memory: Persistent KV store
@@ -160,6 +163,7 @@ pub fn core_tools(
     vec![
         // Primary execution tool
         Arc::new(ShellTool::new()),
+        Arc::new(ReadTool),
         // File operations
         Arc::new(WriteFileTool::new(fs.clone())),
         Arc::new(EditFileTool::new(fs.clone())),
@@ -183,7 +187,7 @@ pub fn core_tools(
 
 /// Get optional tools based on settings.
 ///
-/// Includes file tools (read/write/edit/glob), todos, python, web_fetch, etc.
+/// Includes legacy file tools (write/edit/glob), todos, python, web_fetch, etc.
 #[must_use]
 pub fn optional_tools(
     fs: Arc<dyn FileSystemContext>,
@@ -191,9 +195,9 @@ pub fn optional_tools(
 ) -> Vec<Arc<dyn Tool>> {
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
 
-    // File tools — separate read/write/edit/glob (opt-in)
+    // File tools — separate legacy write/edit names and glob (opt-in).
+    // `read` is core.
     if settings.file_tools {
-        tools.push(Arc::new(ReadTool));
         tools.push(Arc::new(WriteTool::new(fs.clone())));
         tools.push(Arc::new(EditTool::new(fs.clone())));
         tools.push(Arc::new(GlobTool));
