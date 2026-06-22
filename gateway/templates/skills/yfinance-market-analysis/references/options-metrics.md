@@ -3,6 +3,7 @@
 ## Inputs
 
 For each expiry, pull:
+
 - calls table
 - puts table
 - spot price from `ticker.history(period="5d")`

@@ -163,7 +163,7 @@ pub fn core_tools(
     vec![
         // Primary execution tool
         Arc::new(ShellTool::new()),
-        Arc::new(ReadTool),
+        Arc::new(ReadTool::new(fs.clone())),
         // File operations
         Arc::new(WriteFileTool::new(fs.clone())),
         Arc::new(EditFileTool::new(fs.clone())),

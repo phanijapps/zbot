@@ -1568,7 +1568,7 @@ impl AppState {
                 continue;
             }
 
-            // path_str is like "skills/coding/SKILL.md" or "skills/yf-data/scripts/run.py"
+            // path_str is like "skills/coding/SKILL.md" or "skills/yfinance-market-analysis/scripts/run.py"
             let dest = self.paths.vault_dir().join(path_str);
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent).ok();

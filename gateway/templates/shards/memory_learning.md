@@ -34,4 +34,4 @@ Don't batch — save as you learn:
 - `pattern.error.delegation_overflow` = "Keep subagent tasks focused"
 
 ## Success Patterns
-- `pattern.workflow.stock_analysis` = "data-analyst + yf-data + yf-signals + coding"
+- `pattern.workflow.stock_analysis` = "data-analyst + yfinance-market-analysis + coding"

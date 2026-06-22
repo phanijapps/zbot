@@ -9,7 +9,7 @@ For any question that sounds factual, domain-specific, or references something t
 2. If the user is asking about an entity ("who is X", "what do we know about X", "find all places X appears"):
    - `graph_query(action="search", query="X")` — returns entity records with ids, aliases, properties (first_appearance, mentions_in, chunk_file pointers, roles), and timestamps.
    - For relationships / traversal, use `graph_query(action="neighbors", entity_name="X", depth=1)` — returns neighbors with per-edge evidence (chunk_file + line).
-3. If recall surfaces a skill whose description matches the question's domain (e.g. `yf-fundamentals`, `book-reader`, `pdf`), `load_skill("<skill-id>")` before answering.
+3. If recall surfaces a skill whose description matches the question's domain (e.g. `yfinance-market-analysis`, `book-reader`, `pdf`), `load_skill("<skill-id>")` before answering.
 
 Only fall back to training data if recall and graph_query both come up empty AND no skill is relevant. State that plainly when it happens.
 </before_answering>

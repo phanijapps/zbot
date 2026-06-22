@@ -42,7 +42,7 @@ Search file contents by regex.
 
 ## Skills, Memory, Wards, Delegation
 
-- `load_skill(skill)` — load domain expertise (coding, yf-data, etc.)
+- `load_skill(skill)` — load domain expertise (coding, yfinance-market-analysis, etc.)
 - `memory(action, scope, ...)` — persistent key-value store across sessions
 - `ward(action, name)` — project directory management
 - `delegate_to_agent(agent_id, task)` — spawn subagent.

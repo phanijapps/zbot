@@ -34,7 +34,7 @@ use agent_tools::{
 };
 use execution_state::StateService;
 use gateway_services::agents::Agent;
-use gateway_services::models::{ModelRegistry, DEFAULT_MAX_INPUT_TOKENS};
+use gateway_services::models::{DEFAULT_MAX_INPUT_TOKENS, ModelRegistry};
 use gateway_services::providers::Provider;
 use gateway_services::{McpService, SettingsService, SkillService};
 use std::path::PathBuf;
@@ -279,6 +279,9 @@ fn build_runtime_middleware_pipeline(
                 keep_tool_results: keep_results,
                 min_reclaim: 500,
                 clear_tool_inputs: true,
+                // Loaded skills are behavioral context; keep them resident rather than
+                // replacing them with reload placeholders during context editing.
+                exclude_tools: vec!["load_skill".to_string()],
                 cascade_unload: true,
                 skill_aware_placeholders: true,
                 ..Default::default()
@@ -869,7 +872,7 @@ impl ExecutorBuilder {
             &mut tool_registry,
             actor,
             &[ToolCapability::FileRead],
-            Arc::new(ReadTool),
+            Arc::new(ReadTool::new(fs_context.clone())),
         );
         register_if_allowed(
             &mut tool_registry,
@@ -1000,7 +1003,7 @@ impl ExecutorBuilder {
                 &mut tool_registry,
                 actor,
                 &[ToolCapability::FileRead],
-                Arc::new(ReadTool),
+                Arc::new(ReadTool::new(fs_context.clone())),
             );
             register_if_allowed(
                 &mut tool_registry,

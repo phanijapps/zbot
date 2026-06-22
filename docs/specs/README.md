@@ -4,6 +4,7 @@ Active feature specs for AgentZero.
 
 | Spec | Status | Summary |
 | --- | --- | --- |
+| [YFinance Market Analysis Skill Consolidation](yfinance-market-analysis-skill/spec.md) | Shipped | Consolidates bundled yfinance workflows into one primary skill while keeping old `yf-*` IDs as compatibility wrappers. |
 | [Tool Waste Visibility](tool-waste-visibility/spec.md) | Done | Makes blocked hooks, invalid tool arguments, planner skill drift, and tool durations visible in existing session telemetry. |
 | [Mission Control Performance](mission-control-performance/spec.md) | Draft | Makes Mission Control load bounded summary data first, then lazy-load selected-session detail as the database grows. |
 | [GitHub Release Installer](github-release-installer/spec.md) | Draft | Defines GitHub Release installers and artifact packaging for Linux, macOS, and Windows. |
