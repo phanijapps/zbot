@@ -104,6 +104,8 @@ Thumbs.db
 *.tmp
 *.temp
 temp_*.py
+__pycache__/
+*.pyc
 
 # -----------------------------------------------------------------------------
 # Rust specific
@@ -142,7 +144,10 @@ docs/*
 !docs/specs/**
 !docs/rfc/
 !docs/rfc/**
+!docs/research/
+!docs/research/**
 docs/specs/**/state.json
+.rig-parity/
 .agents
 # mempalace / chromadb artifacts
 chroma.sqlite3

@@ -11,6 +11,7 @@ Active feature specs for AgentZero.
 | [Release On Main](release-on-main/spec.md) | Implementing | Automates the daily CalVer release bump and tag when changes land on `main`, while preserving the manual release script. |
 | [Agent Handoff Notes](agent-handoff-notes/spec.md) | Implementing | Adds current-session agent discovery and one-way handoff notes over existing steering without implementing full Pattern 4 peer messaging. |
 | [Runtime Context Control](runtime-context-control/spec.md) | Draft | Consolidates live conversation compaction into runtime middleware while preserving `knowledge.db` durable memory. |
+| [Rig Engine Migration](rig-engine-migration/spec.md) | Implementing | Replaces the active `zero-*` framework/runtime engine with a Rig-backed execution facade while preserving gateway/UI, config, memory, and parity contracts. |
 | [Memory Hygiene](memory-hygiene/spec.md) | Draft | Adds durable-memory guards for recall embedding input, handoff persistence, KG relationship integrity, and hygiene observability. |
 | [Durable Ward Memory](durable-ward-memory/spec.md) | Draft | Defines Layer 4 as `knowledge.db` first-level indexing over durable executable ward workspaces, with preserved ward/file/artifact route hints. |
 | [Vault Ward Browser](vault-ward-browser/spec.md) | Shipped | Adds a read-only Vault tab for browsing ward filesystem trees and previewing common files through bounded local-only APIs. |

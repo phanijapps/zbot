@@ -802,8 +802,7 @@ async fn handle_client_message(
     Ok(())
 }
 
-/// Convert a GatewayEvent to a ServerMessage.
-fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage> {
+pub(crate) fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage> {
     match event {
         GatewayEvent::AgentStarted {
             agent_id,

@@ -2,6 +2,7 @@
 name = "zero-stores-sqlite"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 # Trait surfaces / domain types this crate implements

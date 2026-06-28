@@ -106,9 +106,9 @@ pub struct OrchestratorConfig {
     /// Temperature (0.0 - 2.0). Default: 0.7.
     #[serde(default = "default_temperature")]
     pub temperature: f64,
-    /// Maximum input tokens. Default: 200000.
-    #[serde(default = "default_max_input_tokens")]
-    pub max_input_tokens: u64,
+    /// Maximum input tokens. None = inherit from provider/model limits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u64>,
     /// Maximum output tokens. Default: 32000.
     #[serde(
         rename = "maxOutputTokens",
@@ -144,10 +144,20 @@ impl Default for OrchestratorConfig {
             provider_id: None,
             model: None,
             temperature: default_temperature(),
-            max_input_tokens: default_max_input_tokens(),
+            max_input_tokens: None,
             max_tokens: default_max_output_tokens(),
             thinking_enabled: true,
         }
+    }
+}
+
+impl OrchestratorConfig {
+    pub fn effective_max_input_tokens(&self) -> u64 {
+        self.max_input_tokens.unwrap_or(DEFAULT_MAX_INPUT_TOKENS)
+    }
+
+    pub fn max_input_tokens_explicit(&self) -> bool {
+        self.max_input_tokens.is_some()
     }
 }
 
@@ -646,14 +656,20 @@ mod tests {
         }"#;
 
         let config: OrchestratorConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.max_input_tokens, 123456);
+        assert_eq!(config.max_input_tokens, Some(123456));
+        assert!(config.max_input_tokens_explicit());
         assert_eq!(config.max_tokens, 7777);
     }
 
     #[test]
     fn orchestrator_defaults_to_simplified_token_limits() {
         let config = OrchestratorConfig::default();
-        assert_eq!(config.max_input_tokens, DEFAULT_MAX_INPUT_TOKENS);
+        assert_eq!(config.max_input_tokens, None);
+        assert_eq!(
+            config.effective_max_input_tokens(),
+            DEFAULT_MAX_INPUT_TOKENS
+        );
+        assert!(!config.max_input_tokens_explicit());
         assert_eq!(config.max_tokens, DEFAULT_MAX_OUTPUT_TOKENS);
     }
 

@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use agent_runtime::{AgentExecutor, ChatMessage};
+use agent_runtime::{AgentExecutor, BoxedAgentEngine, ChatMessage};
 use api_logs::LogService;
 use arc_swap::ArcSwapOption;
 use execution_state::StateService;
@@ -102,7 +102,7 @@ pub(super) struct PartialSetup {
 pub(super) struct SetupResult {
     pub(super) session_id: String,
     pub(super) execution_id: String,
-    pub(super) executor: AgentExecutor,
+    pub(super) executor: BoxedAgentEngine,
     pub(super) handle: ExecutionHandle,
     pub(super) history: Vec<ChatMessage>,
     pub(super) recommended_skills: Vec<String>,
@@ -649,7 +649,7 @@ impl InvokeBootstrap {
         Ok(SetupResult {
             session_id,
             execution_id,
-            executor,
+            executor: Box::new(executor),
             handle,
             history,
             recommended_skills,

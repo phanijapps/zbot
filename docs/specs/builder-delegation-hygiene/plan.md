@@ -25,7 +25,9 @@ ward-agent capability policy.
 - Follows RFC-0005: Builder Delegation and Ward Context Hygiene.
 - Builds on `docs/specs/subagent-role-gating/`: ward agents remain full-tool
   actors and ordinary delegated executors keep implementation tools.
-- Preserves the current `delegate_to_agent` 4000-character task guard.
+- Uses a warning-only `delegate_to_agent` task-length policy: 4000 characters is
+  preferred, 5000 is the recommended upper range, and longer tasks should point
+  at ward/spec files instead of being pasted into the tool call.
 - Does not add a user-facing agent config tool allowlist or denylist.
 - Does not overwrite user-customized agent files.
 - Does not make `DirectArtifact` a general ward-curation path.

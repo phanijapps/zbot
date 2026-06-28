@@ -51,6 +51,12 @@ pub mod middleware;
 /// Executor core
 pub mod executor;
 
+/// Gateway-facing execution facade
+pub mod engine;
+
+/// Rig adapter boundary
+pub mod rig_adapter;
+
 /// Progress tracking for loop detection
 pub(crate) mod progress;
 
@@ -100,11 +106,13 @@ pub use middleware::{
 };
 
 pub use context_management::{prepare_tool_result_for_context, ToolResultContextConfig};
+pub use engine::{AgentEngine, BoxedAgentEngine, StreamEventSink};
 pub use executor::{
     create_executor, AfterToolCallHook, AgentExecutor, BeforeToolCallHook, ExecutorConfig,
     ExecutorError, RecallHook, RecallHookResult, ToolCallDecision, ToolExecutionMode,
     TransformContextHook,
 };
+pub use rig_adapter::{RigAgentConfig, RigConfigError, RigModelConfig};
 
 pub use steering::{
     SteeringHandle, SteeringMessage, SteeringPriority, SteeringQueue, SteeringSource,

@@ -46,6 +46,66 @@ fn make_services(paths: &Arc<VaultPaths>) -> (Arc<AgentService>, Arc<ProviderSer
 // TESTS
 // ============================================================================
 
+#[tokio::test]
+async fn load_or_create_root_ignores_on_disk_root_agent() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+    paths.ensure_dirs_exist().unwrap();
+    seed_default_provider(&paths);
+
+    let root_dir = paths.agents_dir().join("root");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        root_dir.join("config.yaml"),
+        "name: root\n\
+         displayName: Evil Root\n\
+         description: persisted root shadow\n\
+         providerId: test-provider\n\
+         model: test-model\n\
+         temperature: 0.7\n\
+         maxTokens: 8192\n\
+         thinkingEnabled: false\n\
+         voiceRecordingEnabled: false\n\
+         skills: []\n\
+         mcps: []\n",
+    )
+    .unwrap();
+    std::fs::write(root_dir.join("AGENTS.md"), "malicious persisted root\n").unwrap();
+
+    let (agent_service, provider_service) = make_services(&paths);
+    let loader = AgentLoader::new(&agent_service, &provider_service, paths.clone());
+
+    let (agent, provider) = loader
+        .load_or_create_root("root")
+        .await
+        .expect("root should synthesize");
+
+    assert_eq!(agent.id, "root");
+    assert_eq!(agent.display_name, "Root Agent");
+    assert_eq!(agent.agent_type.as_deref(), Some("orchestrator"));
+    assert_eq!(agent.provider_id, "test-provider");
+    assert_eq!(provider.name, "Test Provider");
+    assert!(!agent.instructions.contains("malicious persisted root"));
+}
+
+#[tokio::test]
+async fn load_or_create_specialist_rejects_reserved_root_agent_id() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+    paths.ensure_dirs_exist().unwrap();
+    seed_default_provider(&paths);
+
+    let (agent_service, provider_service) = make_services(&paths);
+    let loader = AgentLoader::new(&agent_service, &provider_service, paths.clone());
+
+    let err = loader
+        .load_or_create_specialist("root")
+        .await
+        .expect_err("delegated root should be rejected");
+
+    assert!(err.contains("Reserved system agent id"));
+}
+
 /// Happy path: a ward directory with an `AGENTS.md` doctrine file produces
 /// a synthesized ward-agent whose `agent_type` is `"ward"`, whose `id` is
 /// `"ward:<name>"`, and whose instructions contain both the ward-agent

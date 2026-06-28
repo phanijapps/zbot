@@ -8,7 +8,7 @@
 //! - Agent delegation handling
 //! - Session and execution lifecycle management
 
-use agent_runtime::{AgentExecutor, ChatMessage};
+use agent_runtime::{AgentExecutor, BoxedAgentEngine, ChatMessage};
 use api_logs::LogService;
 use execution_state::StateService;
 use gateway_events::{EventBus, GatewayEvent};
@@ -1257,6 +1257,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         root_agent_id,
         session_ward_id.as_deref(),
     );
+    let executor: BoxedAgentEngine = Box::new(executor);
 
     // Build a focused continuation message with the plan injected if one exists.
     let continuation_message = build_continuation_message(
@@ -1319,122 +1320,122 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         let mut current_tool_name = String::new();
 
         let stop_sig = Some(handle.stop_signal());
-        let result = executor
-            .execute_stream_with_stop_flag(&continuation_message, &history, stop_sig, |event| {
-                if handle.is_stop_requested() {
-                    return;
+        let mut on_event = |event| {
+            if handle.is_stop_requested() {
+                return;
+            }
+
+            handle.increment();
+
+            // Stream messages to session as they happen
+            match &event {
+                agent_runtime::StreamEvent::ToolCallStart {
+                    tool_id,
+                    tool_name,
+                    args,
+                    ..
+                } => {
+                    tool_acc.start_call(tool_id.clone(), tool_name.clone(), args.clone());
+                    current_tool_name = tool_name.clone();
+                    turn_tool_calls.push(serde_json::json!({
+                        "tool_id": tool_id,
+                        "tool_name": tool_name,
+                        "args": args,
+                    }));
                 }
+                agent_runtime::StreamEvent::ToolResult {
+                    tool_id,
+                    result,
+                    context_result,
+                    error,
+                    ..
+                } => {
+                    tool_acc.complete_call(tool_id, result.clone(), error.clone());
 
-                handle.increment();
-
-                // Stream messages to session as they happen
-                match &event {
-                    agent_runtime::StreamEvent::ToolCallStart {
-                        tool_id,
-                        tool_name,
-                        args,
-                        ..
-                    } => {
-                        tool_acc.start_call(tool_id.clone(), tool_name.clone(), args.clone());
-                        current_tool_name = tool_name.clone();
-                        turn_tool_calls.push(serde_json::json!({
-                            "tool_id": tool_id,
-                            "tool_name": tool_name,
-                            "args": args,
-                        }));
-                    }
-                    agent_runtime::StreamEvent::ToolResult {
-                        tool_id,
-                        result,
-                        context_result,
-                        error,
-                        ..
-                    } => {
-                        tool_acc.complete_call(tool_id, result.clone(), error.clone());
-
-                        // Emit assistant message for this turn
-                        if !turn_tool_calls.is_empty() {
-                            let tc_json =
-                                serde_json::to_string(&turn_tool_calls).unwrap_or_default();
-                            let content = if turn_text.is_empty() {
-                                "[tool calls]".to_string()
-                            } else {
-                                std::mem::take(&mut turn_text)
-                            };
-                            batch_writer_inner.session_message(
-                                &session_id_inner,
-                                &execution_id_inner,
-                                "assistant",
-                                &content,
-                                Some(&tc_json),
-                                None,
-                            );
-                            turn_tool_calls.clear();
-                        }
-
-                        // Emit tool result message
-                        let tool_content = super::prompt_safe_tool_content(
-                            &current_tool_name,
-                            result,
-                            context_result.as_deref(),
-                            error.as_deref(),
-                            &tool_result_context,
-                        );
+                    // Emit assistant message for this turn
+                    if !turn_tool_calls.is_empty() {
+                        let tc_json = serde_json::to_string(&turn_tool_calls).unwrap_or_default();
+                        let content = if turn_text.is_empty() {
+                            "[tool calls]".to_string()
+                        } else {
+                            std::mem::take(&mut turn_text)
+                        };
                         batch_writer_inner.session_message(
                             &session_id_inner,
                             &execution_id_inner,
-                            "tool",
-                            &tool_content,
+                            "assistant",
+                            &content,
+                            Some(&tc_json),
                             None,
-                            Some(tool_id),
                         );
-
-                        // Phase 6d: real-time graph extraction from tool output.
-                        // Non-blocking — fires in a background task so the
-                        // execution loop never waits.
-                        if let (Some(ref ep_repo), Some(ref kg)) =
-                            (&kg_episode_repo_inner, &kg_store_inner)
-                        {
-                            let tool_name_cl = current_tool_name.clone();
-                            let tool_id_cl = tool_id.clone();
-                            let result_cl = result.clone();
-                            let session_id_cl = session_id_inner.clone();
-                            let agent_id_cl = agent_id_inner.clone();
-                            let ep_store: Arc<dyn zero_stores_traits::KgEpisodeStore> = Arc::new(
-                                zero_stores_sqlite::GatewayKgEpisodeStore::new(ep_repo.clone()),
-                            );
-                            let kg_cl = kg.clone();
-                            tokio::spawn(async move {
-                                crate::tool_result_extractor::extract_and_persist(
-                                    &tool_name_cl,
-                                    &tool_id_cl,
-                                    &result_cl,
-                                    &session_id_cl,
-                                    &agent_id_cl,
-                                    ep_store.as_ref(),
-                                    kg_cl.as_ref(),
-                                )
-                                .await;
-                            });
-                        }
+                        turn_tool_calls.clear();
                     }
-                    agent_runtime::StreamEvent::Token { content, .. } => {
-                        turn_text.push_str(content);
+
+                    // Emit tool result message
+                    let tool_content = super::prompt_safe_tool_content(
+                        &current_tool_name,
+                        result,
+                        context_result.as_deref(),
+                        error.as_deref(),
+                        &tool_result_context,
+                    );
+                    batch_writer_inner.session_message(
+                        &session_id_inner,
+                        &execution_id_inner,
+                        "tool",
+                        &tool_content,
+                        None,
+                        Some(tool_id),
+                    );
+
+                    // Phase 6d: real-time graph extraction from tool output.
+                    // Non-blocking — fires in a background task so the
+                    // execution loop never waits.
+                    if let (Some(ref ep_repo), Some(ref kg)) =
+                        (&kg_episode_repo_inner, &kg_store_inner)
+                    {
+                        let tool_name_cl = current_tool_name.clone();
+                        let tool_id_cl = tool_id.clone();
+                        let result_cl = result.clone();
+                        let session_id_cl = session_id_inner.clone();
+                        let agent_id_cl = agent_id_inner.clone();
+                        let ep_store: Arc<dyn zero_stores_traits::KgEpisodeStore> = Arc::new(
+                            zero_stores_sqlite::GatewayKgEpisodeStore::new(ep_repo.clone()),
+                        );
+                        let kg_cl = kg.clone();
+                        tokio::spawn(async move {
+                            crate::tool_result_extractor::extract_and_persist(
+                                &tool_name_cl,
+                                &tool_id_cl,
+                                &result_cl,
+                                &session_id_cl,
+                                &agent_id_cl,
+                                ep_store.as_ref(),
+                                kg_cl.as_ref(),
+                            )
+                            .await;
+                        });
                     }
-                    _ => {}
                 }
-
-                let (gateway_event, response_delta) = process_stream_event(&stream_ctx, &event);
-
-                if let Some(delta) = response_delta {
-                    response_acc.append(&delta);
+                agent_runtime::StreamEvent::Token { content, .. } => {
+                    turn_text.push_str(content);
                 }
+                _ => {}
+            }
 
-                // Broadcast the gateway event (if not an internal-only event)
-                if let Some(event) = gateway_event {
-                    broadcast_event(stream_ctx.event_bus.clone(), event);
-                }
-            })
+            let (gateway_event, response_delta) = process_stream_event(&stream_ctx, &event);
+
+            if let Some(delta) = response_delta {
+                response_acc.append(&delta);
+            }
+
+            // Broadcast the gateway event (if not an internal-only event)
+            if let Some(event) = gateway_event {
+                broadcast_event(stream_ctx.event_bus.clone(), event);
+            }
+        };
+        let result = executor
+            .execute_stream_with_stop_flag(&continuation_message, &history, stop_sig, &mut on_event)
             .await;
 
         let accumulated_response = response_acc.into_response();

@@ -15,6 +15,9 @@ readme = "README.md"
 keywords = ["ai", "agent", "gateway", "websocket", "api"]
 categories = ["web-programming"]
 
+[features]
+rig-parity-capture = []
+
 [dependencies]
 # Internal crates
 api-logs = { path = "../services/api-logs" }
@@ -101,6 +104,11 @@ axum-test = "16"
 [lib]
 name = "gateway"
 path = "src/lib.rs"
+
+[[example]]
+name = "rig_parity_event_capture"
+path = "examples/rig_parity_event_capture.rs"
+required-features = ["rig-parity-capture"]
 
 [lints]
 workspace = true

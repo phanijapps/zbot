@@ -1,6 +1,6 @@
 //! # ExecutionStream
 //!
-//! Per-execution event loop. Consumes an `AgentExecutor` stream,
+//! Per-execution event loop. Consumes an AgentZero engine stream,
 //! accumulates tool calls, drives lifecycle transitions, and fires
 //! post-execution background tasks (distillation, ward indexing).
 //!
@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use agent_runtime::{AgentExecutor, ChatMessage, ToolResultContextConfig};
+use agent_runtime::{BoxedAgentEngine, ChatMessage, ToolResultContextConfig};
 use api_logs::LogService;
 use execution_state::StateService;
 use gateway_events::EventBus;
@@ -275,7 +275,11 @@ impl ExecutionStream {
     /// `tokio::spawn(async move { … })` block), with `self.<field>`
     /// replacing every captured-runner-field access and `ctx.<field>`
     /// replacing every `args.<field>` access.
-    pub async fn run(&self, ctx: ExecutionContext, executor: AgentExecutor) -> Result<(), String> {
+    pub async fn run(
+        &self,
+        ctx: ExecutionContext,
+        executor: BoxedAgentEngine,
+    ) -> Result<(), String> {
         let ExecutionContext {
             execution_id,
             session_id,
@@ -440,66 +444,67 @@ impl ExecutionStream {
         // which we handle as a graceful exit below (stop_execution,
         // not crash_execution).
         let stop_sig = Some(handle.stop_signal());
+        let mut on_event = |event| {
+            if handle.is_stop_requested() {
+                return;
+            }
+
+            handle.increment();
+
+            let deps = EventHandlerDeps {
+                batch_writer: &batch_writer_inner,
+                session_id: &session_id_inner,
+                execution_id: &execution_id_inner,
+                agent_id: &agent_id_inner,
+                handle: &handle,
+                tool_result_context: &tool_result_context,
+                kg_episode_repo: kg_episode_repo_inner.as_ref(),
+                kg_store: kg_store_inner.as_ref(),
+            };
+
+            // Stream messages to session as they happen
+            match &event {
+                agent_runtime::StreamEvent::ToolCallStart {
+                    tool_id,
+                    tool_name,
+                    args,
+                    ..
+                } => handle_tool_call_start(&mut acc, tool_id, tool_name, args),
+                agent_runtime::StreamEvent::ToolResult {
+                    tool_id,
+                    result,
+                    context_result,
+                    error,
+                    ..
+                } => handle_tool_result(
+                    &mut acc,
+                    &deps,
+                    tool_id,
+                    result,
+                    context_result.as_deref(),
+                    error.as_deref(),
+                ),
+                agent_runtime::StreamEvent::Token { content, .. } => {
+                    acc.turn_text.push_str(content);
+                }
+                _ => {}
+            }
+
+            // Process the event (logging, delegation, token tracking)
+            let (gateway_event, response_delta) = process_stream_event(&stream_ctx, &event);
+
+            // Accumulate response content
+            if let Some(delta) = response_delta {
+                response_acc.append(&delta);
+            }
+
+            // Broadcast the gateway event (if not an internal-only event)
+            if let Some(event) = gateway_event {
+                broadcast_event(stream_ctx.event_bus.clone(), event);
+            }
+        };
         let result = executor
-            .execute_stream_with_stop_flag(&message, &history, stop_sig, |event| {
-                if handle.is_stop_requested() {
-                    return;
-                }
-
-                handle.increment();
-
-                let deps = EventHandlerDeps {
-                    batch_writer: &batch_writer_inner,
-                    session_id: &session_id_inner,
-                    execution_id: &execution_id_inner,
-                    agent_id: &agent_id_inner,
-                    handle: &handle,
-                    tool_result_context: &tool_result_context,
-                    kg_episode_repo: kg_episode_repo_inner.as_ref(),
-                    kg_store: kg_store_inner.as_ref(),
-                };
-
-                // Stream messages to session as they happen
-                match &event {
-                    agent_runtime::StreamEvent::ToolCallStart {
-                        tool_id,
-                        tool_name,
-                        args,
-                        ..
-                    } => handle_tool_call_start(&mut acc, tool_id, tool_name, args),
-                    agent_runtime::StreamEvent::ToolResult {
-                        tool_id,
-                        result,
-                        context_result,
-                        error,
-                        ..
-                    } => handle_tool_result(
-                        &mut acc,
-                        &deps,
-                        tool_id,
-                        result,
-                        context_result.as_deref(),
-                        error.as_deref(),
-                    ),
-                    agent_runtime::StreamEvent::Token { content, .. } => {
-                        acc.turn_text.push_str(content);
-                    }
-                    _ => {}
-                }
-
-                // Process the event (logging, delegation, token tracking)
-                let (gateway_event, response_delta) = process_stream_event(&stream_ctx, &event);
-
-                // Accumulate response content
-                if let Some(delta) = response_delta {
-                    response_acc.append(&delta);
-                }
-
-                // Broadcast the gateway event (if not an internal-only event)
-                if let Some(event) = gateway_event {
-                    broadcast_event(stream_ctx.event_bus.clone(), event);
-                }
-            })
+            .execute_stream_with_stop_flag(&message, &history, stop_sig, &mut on_event)
             .await;
 
         // Execute micro-recall triggers collected during the stream

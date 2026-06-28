@@ -2,6 +2,7 @@
 name = "zero-stores-traits"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 # Tiny dependency-light crate that holds the `MemoryFactStore` trait and
 # `SkillIndexRow`. Lives separately from `zero-stores` so consumers like

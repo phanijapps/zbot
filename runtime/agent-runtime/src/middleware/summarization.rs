@@ -70,6 +70,7 @@ impl SummarizationMiddleware {
             temperature: 0.3, // Lower temperature for more consistent summaries
             max_tokens: 1000,
             thinking_enabled: false,
+            provider_params: None,
         };
 
         let summary_client = Arc::new(
@@ -391,6 +392,7 @@ mod tests {
                     temperature: 0.3,
                     max_tokens: 1000,
                     thinking_enabled: false,
+                    provider_params: None,
                 })
                 .unwrap(),
             ),

@@ -5,7 +5,7 @@
 use super::callback::{handle_delegation_failure, handle_delegation_success};
 use super::context::{infer_delegation_mode, DelegationContext, DelegationRequest};
 use super::registry::DelegationRegistry;
-use agent_runtime::{AgentExecutor, ToolResultContextConfig};
+use agent_runtime::{BoxedAgentEngine, ToolResultContextConfig};
 use api_logs::LogService;
 use execution_state::StateService;
 use gateway_events::{EventBus, GatewayEvent};
@@ -415,7 +415,7 @@ pub async fn spawn_delegated_agent(
 
     // Spawn the execution task
     spawn_execution_task(SpawnContext {
-        executor,
+        executor: Box::new(executor),
         handle: handle_clone,
         request: request.clone(),
         execution_id: execution_id.clone(),
@@ -498,7 +498,7 @@ fn reuse_check_block(agent_id: &str) -> Option<&'static str> {
 /// - Fields can be reordered freely without breaking call sites.
 struct SpawnContext {
     // --- Execution identity ---
-    executor: AgentExecutor,
+    executor: BoxedAgentEngine,
     handle: ExecutionHandle,
     request: DelegationRequest,
     execution_id: String,
@@ -669,90 +669,90 @@ fn spawn_execution_task(ctx: SpawnContext) {
         let mut current_tool_name = String::new();
 
         let stop_sig = Some(handle.stop_signal());
-        let result = executor
-            .execute_stream_with_stop_flag(&task_msg, &initial_history, stop_sig, |event| {
-                if handle.is_stop_requested() {
-                    return;
+        let mut on_event = |event| {
+            if handle.is_stop_requested() {
+                return;
+            }
+
+            handle.increment();
+
+            // Stream messages to child session
+            match &event {
+                agent_runtime::StreamEvent::ToolCallStart {
+                    tool_id,
+                    tool_name,
+                    args,
+                    ..
+                } => {
+                    current_tool_name = tool_name.clone();
+                    turn_tool_calls.push(serde_json::json!({
+                        "tool_id": tool_id,
+                        "tool_name": tool_name,
+                        "args": args,
+                    }));
                 }
-
-                handle.increment();
-
-                // Stream messages to child session
-                match &event {
-                    agent_runtime::StreamEvent::ToolCallStart {
-                        tool_id,
-                        tool_name,
-                        args,
-                        ..
-                    } => {
-                        current_tool_name = tool_name.clone();
-                        turn_tool_calls.push(serde_json::json!({
-                            "tool_id": tool_id,
-                            "tool_name": tool_name,
-                            "args": args,
-                        }));
-                    }
-                    agent_runtime::StreamEvent::ToolResult {
-                        tool_id,
-                        result,
-                        context_result,
-                        error,
-                        ..
-                    } => {
-                        if !turn_tool_calls.is_empty() {
-                            let tc_json =
-                                serde_json::to_string(&turn_tool_calls).unwrap_or_default();
-                            let content = if turn_text.is_empty() {
-                                "[tool calls]".to_string()
-                            } else {
-                                std::mem::take(&mut turn_text)
-                            };
-                            batch_writer_inner.session_message(
-                                &child_session_id_inner,
-                                &execution_id_inner,
-                                "assistant",
-                                &content,
-                                Some(&tc_json),
-                                None,
-                            );
-                            turn_tool_calls.clear();
-                        }
-
-                        let tool_content = crate::runner::prompt_safe_tool_content(
-                            &current_tool_name,
-                            result,
-                            context_result.as_deref(),
-                            error.as_deref(),
-                            &tool_result_context,
-                        );
+                agent_runtime::StreamEvent::ToolResult {
+                    tool_id,
+                    result,
+                    context_result,
+                    error,
+                    ..
+                } => {
+                    if !turn_tool_calls.is_empty() {
+                        let tc_json = serde_json::to_string(&turn_tool_calls).unwrap_or_default();
+                        let content = if turn_text.is_empty() {
+                            "[tool calls]".to_string()
+                        } else {
+                            std::mem::take(&mut turn_text)
+                        };
                         batch_writer_inner.session_message(
                             &child_session_id_inner,
                             &execution_id_inner,
-                            "tool",
-                            &tool_content,
+                            "assistant",
+                            &content,
+                            Some(&tc_json),
                             None,
-                            Some(tool_id),
                         );
+                        turn_tool_calls.clear();
                     }
-                    agent_runtime::StreamEvent::Token { content, .. } => {
-                        turn_text.push_str(content);
-                    }
-                    _ => {}
-                }
 
-                // Process the event (logging, delegation, token tracking)
-                let (gateway_event, response_delta) = process_stream_event(&stream_ctx, &event);
-
-                // Accumulate response content
-                if let Some(delta) = response_delta {
-                    response_acc.append(&delta);
+                    let tool_content = crate::runner::prompt_safe_tool_content(
+                        &current_tool_name,
+                        result,
+                        context_result.as_deref(),
+                        error.as_deref(),
+                        &tool_result_context,
+                    );
+                    batch_writer_inner.session_message(
+                        &child_session_id_inner,
+                        &execution_id_inner,
+                        "tool",
+                        &tool_content,
+                        None,
+                        Some(tool_id),
+                    );
                 }
-
-                // Broadcast the gateway event (if not an internal-only event)
-                if let Some(event) = gateway_event {
-                    broadcast_event(stream_ctx.event_bus.clone(), event);
+                agent_runtime::StreamEvent::Token { content, .. } => {
+                    turn_text.push_str(content);
                 }
-            })
+                _ => {}
+            }
+
+            // Process the event (logging, delegation, token tracking)
+            let (gateway_event, response_delta) = process_stream_event(&stream_ctx, &event);
+
+            // Accumulate response content
+            if let Some(delta) = response_delta {
+                response_acc.append(&delta);
+            }
+
+            // Broadcast the gateway event (if not an internal-only event)
+            if let Some(event) = gateway_event {
+                broadcast_event(stream_ctx.event_bus.clone(), event);
+            }
+        };
+        let result = executor
+            .execute_stream_with_stop_flag(&task_msg, &initial_history, stop_sig, &mut on_event)
             .await;
 
         let accumulated_response = response_acc.into_response();

@@ -5,8 +5,9 @@
 use agent_runtime::{
     AgentExecutor, ContextEditingConfig, ContextEditingMiddleware, DelegateTool, ExecutorConfig,
     KeepPolicy, LlmClient, LlmConfig, McpManager, MiddlewarePipeline, OpenAiClient,
-    PlanBlockMiddleware, RespondTool, RetryPolicy, RetryingLlmClient, SummarizationConfig,
-    SummarizationMiddleware, ToolCallDecision, ToolRegistry, TriggerCondition,
+    PlanBlockMiddleware, RespondTool, RetryPolicy, RetryingLlmClient, RigAgentConfig,
+    RigModelConfig, SummarizationConfig, SummarizationMiddleware, ToolCallDecision, ToolRegistry,
+    TriggerCondition,
 };
 use agent_tools::{
     EditFileTool,
@@ -34,7 +35,7 @@ use agent_tools::{
 };
 use execution_state::StateService;
 use gateway_services::agents::Agent;
-use gateway_services::models::{DEFAULT_MAX_INPUT_TOKENS, ModelRegistry};
+use gateway_services::models::{ModelRegistry, DEFAULT_MAX_INPUT_TOKENS};
 use gateway_services::providers::Provider;
 use gateway_services::{McpService, SettingsService, SkillService};
 use std::path::PathBuf;
@@ -62,6 +63,32 @@ use crate::config::GatewayFileSystem;
 /// changing the public signature.
 pub fn resolve_thinking_flag(user_flag: bool, _model: &str) -> bool {
     user_flag
+}
+
+/// Build the Rig-facing agent config from already-resolved gateway settings.
+pub fn build_rig_agent_config(
+    agent: &Agent,
+    llm_config: &LlmConfig,
+    context_window_tokens: u64,
+) -> RigAgentConfig {
+    RigAgentConfig::new(
+        agent.id.clone(),
+        agent.display_name.clone(),
+        agent.description.clone(),
+        agent.instructions.clone(),
+        RigModelConfig::from_llm_config(llm_config, context_window_tokens),
+    )
+}
+
+fn resolve_effective_max_input(agent: &Agent, provider: &Provider) -> u64 {
+    let provider_max_input = provider
+        .effective_max_input(&agent.model)
+        .or(provider.context_window);
+    if agent.max_input_tokens_explicit && agent.max_input_tokens > 0 {
+        agent.max_input_tokens
+    } else {
+        provider_max_input.unwrap_or(DEFAULT_MAX_INPUT_TOKENS)
+    }
 }
 
 /// Runtime actor profile used to derive first-party tool capabilities.
@@ -669,14 +696,7 @@ impl ExecutorBuilder {
             }
         }
 
-        let effective_max_input = if agent.max_input_tokens > 0 {
-            agent.max_input_tokens
-        } else {
-            provider
-                .effective_max_input(&agent.model)
-                .or(provider.context_window)
-                .unwrap_or(DEFAULT_MAX_INPUT_TOKENS)
-        };
+        let effective_max_input = resolve_effective_max_input(agent, provider);
 
         // Create LLM client using provider config
         let llm_config = LlmConfig::new(
@@ -688,6 +708,8 @@ impl ExecutorBuilder {
         .with_temperature(agent.temperature)
         .with_max_tokens(effective_max_output)
         .with_thinking(thinking_enabled);
+
+        let rig_agent_config = build_rig_agent_config(agent, &llm_config, effective_max_input);
 
         let raw_client: Arc<dyn agent_runtime::LlmClient> = Arc::new(
             OpenAiClient::new(llm_config)
@@ -728,6 +750,7 @@ impl ExecutorBuilder {
         executor_config.max_tokens = effective_max_output;
         executor_config.context_window_tokens = effective_max_input;
         executor_config.mcps = agent.mcps.clone();
+        executor_config.rig_agent_config = Some(rig_agent_config);
 
         // Create middleware pipeline after context_window_tokens is resolved.
         let middleware_pipeline = build_runtime_middleware_pipeline(
@@ -1086,7 +1109,7 @@ mod tests {
     use agent_runtime::llm::{ChatResponse, LlmError, StreamCallback};
     use async_trait::async_trait;
     use serde_json::Value;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeSet, HashMap};
 
     struct StubSummaryClient;
 
@@ -1146,6 +1169,175 @@ mod tests {
     fn runtime_middleware_order_keeps_plan_block_when_context_window_unknown() {
         let pipeline = build_runtime_middleware_pipeline(0, false, None);
         assert_eq!(pipeline.pre_processor_names(), vec!["plan_block"]);
+    }
+
+    fn sample_agent() -> Agent {
+        Agent {
+            id: "agent-1".to_string(),
+            name: "code-agent".to_string(),
+            display_name: "Code Agent".to_string(),
+            description: "Writes code".to_string(),
+            agent_type: Some("specialist".to_string()),
+            provider_id: "provider-1".to_string(),
+            model: "gpt-test".to_string(),
+            temperature: 0.25,
+            max_input_tokens: 64_000,
+            max_input_tokens_explicit: true,
+            max_tokens: 4_096,
+            thinking_enabled: true,
+            voice_recording_enabled: false,
+            system_instruction: None,
+            instructions: "Follow the project rules.".to_string(),
+            mcps: vec!["filesystem".to_string()],
+            skills: vec!["rust".to_string()],
+            middleware: None,
+            created_at: None,
+        }
+    }
+
+    fn sample_provider() -> Provider {
+        Provider {
+            id: Some("provider-1".to_string()),
+            name: "Provider One".to_string(),
+            description: "OpenAI-compatible test provider".to_string(),
+            api_key: "sk-test".to_string(),
+            base_url: "http://localhost:9999/v1".to_string(),
+            models: vec!["gpt-test".to_string()],
+            embedding_models: None,
+            embedding_dimensions: None,
+            verified: None,
+            is_default: true,
+            created_at: None,
+            max_concurrent_requests: None,
+            context_window: Some(32_000),
+            default_model: Some("gpt-test".to_string()),
+            rate_limits: None,
+            model_configs: Some(HashMap::from([(
+                "gpt-test".to_string(),
+                gateway_services::providers::ModelConfig {
+                    capabilities: gateway_services::models::ModelCapabilities::default(),
+                    max_input: Some(24_576),
+                    max_output: Some(2_048),
+                    source: "user".to_string(),
+                },
+            )])),
+        }
+    }
+
+    #[test]
+    fn effective_max_input_uses_provider_limit_for_legacy_default() {
+        let mut agent = sample_agent();
+        agent.max_input_tokens = DEFAULT_MAX_INPUT_TOKENS;
+        agent.max_input_tokens_explicit = false;
+        let provider = sample_provider();
+
+        assert_eq!(resolve_effective_max_input(&agent, &provider), 24_576);
+    }
+
+    #[test]
+    fn effective_max_input_keeps_explicit_agent_limit() {
+        let mut agent = sample_agent();
+        agent.max_input_tokens = 64_000;
+        agent.max_input_tokens_explicit = true;
+        let provider = sample_provider();
+
+        assert_eq!(resolve_effective_max_input(&agent, &provider), 64_000);
+    }
+
+    #[test]
+    fn effective_max_input_keeps_explicit_default_value() {
+        let mut agent = sample_agent();
+        agent.max_input_tokens = DEFAULT_MAX_INPUT_TOKENS;
+        agent.max_input_tokens_explicit = true;
+        let provider = sample_provider();
+
+        assert_eq!(
+            resolve_effective_max_input(&agent, &provider),
+            DEFAULT_MAX_INPUT_TOKENS
+        );
+    }
+
+    #[test]
+    fn rig_agent_config_preserves_gateway_agent_and_model_settings() {
+        let agent = sample_agent();
+        let llm = LlmConfig::new(
+            "https://llm.local/v1".to_string(),
+            "sk-test".to_string(),
+            agent.model.clone(),
+            agent.provider_id.clone(),
+        )
+        .with_temperature(agent.temperature)
+        .with_max_tokens(agent.max_tokens)
+        .with_thinking(agent.thinking_enabled)
+        .with_provider_params(serde_json::json!({"parallel_tool_calls": false}));
+
+        let mapped = build_rig_agent_config(&agent, &llm, agent.max_input_tokens);
+
+        assert_eq!(mapped.agent_id, "agent-1");
+        assert_eq!(mapped.name, "Code Agent");
+        assert_eq!(mapped.description, "Writes code");
+        assert_eq!(mapped.instructions, "Follow the project rules.");
+        assert_eq!(mapped.model.provider_id, "provider-1");
+        assert_eq!(mapped.model.base_url, "https://llm.local/v1");
+        assert_eq!(mapped.model.api_key, "sk-test");
+        assert_eq!(mapped.model.model, "gpt-test");
+        assert_eq!(mapped.model.temperature, 0.25);
+        assert_eq!(mapped.model.max_tokens, 4_096);
+        assert_eq!(mapped.model.context_window_tokens, 64_000);
+        assert_eq!(
+            mapped.model.completion_additional_params(),
+            Ok(Some(serde_json::json!({
+                "parallel_tool_calls": false,
+                "thinking": {"type": "enabled"}
+            })))
+        );
+    }
+
+    #[tokio::test]
+    async fn builder_attaches_rig_agent_config_from_production_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = Arc::new(gateway_services::VaultPaths::new(dir.path().to_path_buf()));
+        paths.ensure_dirs_exist().expect("vault dirs");
+        let mcp_service = McpService::new(paths);
+        let mut agent = sample_agent();
+        agent.max_input_tokens = DEFAULT_MAX_INPUT_TOKENS;
+        agent.max_input_tokens_explicit = false;
+        agent.max_tokens = 4_096;
+        agent.mcps.clear();
+        agent.skills.clear();
+        let provider = sample_provider();
+
+        let executor = ExecutorBuilder::new(dir.path().to_path_buf(), ToolSettings::default())
+            .build(
+                &agent,
+                &provider,
+                "conversation-1",
+                "session-1",
+                &[],
+                &[],
+                None,
+                &mcp_service,
+                None,
+            )
+            .await
+            .expect("executor build");
+
+        let rig = executor
+            .config()
+            .rig_agent_config
+            .as_ref()
+            .expect("rig config should be attached");
+        assert_eq!(rig.agent_id, "agent-1");
+        assert_eq!(rig.name, "Code Agent");
+        assert_eq!(rig.instructions, "Follow the project rules.");
+        assert_eq!(rig.model.provider_id, "provider-1");
+        assert_eq!(rig.model.base_url, "http://localhost:9999/v1");
+        assert_eq!(rig.model.api_key, "sk-test");
+        assert_eq!(rig.model.model, "gpt-test");
+        assert_eq!(rig.model.temperature, 0.25);
+        assert_eq!(rig.model.max_tokens, 2_048);
+        assert_eq!(rig.model.context_window_tokens, 24_576);
+        assert!(rig.model.thinking_enabled);
     }
 
     fn registry_names(actor_kind: RuntimeActorKind) -> BTreeSet<String> {

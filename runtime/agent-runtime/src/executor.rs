@@ -33,6 +33,7 @@ use crate::mcp::McpManager;
 use crate::middleware::token_counter::estimate_total_tokens;
 use crate::middleware::traits::MiddlewareContext;
 use crate::middleware::MiddlewarePipeline;
+use crate::rig_adapter::RigAgentConfig;
 use crate::tools::context::ToolContext;
 use crate::tools::ToolRegistry;
 use crate::types::{ChatMessage, StreamEvent, ToolCall};
@@ -189,6 +190,9 @@ pub struct ExecutorConfig {
     /// Extra tool calls are dropped with a log message.
     /// Default: false. Set true for orchestrator agents (root).
     pub single_action_mode: bool,
+
+    /// Rig-facing config resolved from current AgentZero settings.
+    pub rig_agent_config: Option<RigAgentConfig>,
 }
 
 impl ExecutorConfig {
@@ -225,6 +229,7 @@ impl ExecutorConfig {
             transform_context: None,
             complexity: None,
             single_action_mode: false,
+            rig_agent_config: None,
         }
     }
 
@@ -277,6 +282,7 @@ impl fmt::Debug for ExecutorConfig {
             )
             .field("complexity", &self.complexity)
             .field("single_action_mode", &self.single_action_mode)
+            .field("rig_agent_config", &self.rig_agent_config)
             .finish()
     }
 }
@@ -2260,6 +2266,31 @@ mod executor_helper_coverage_tests {
         exec.execute_stream("hi", &[], |e| events.push(e))
             .await
             .unwrap();
+        assert!(matches!(events[0], StreamEvent::Metadata { .. }));
+        assert!(events.iter().any(|e| matches!(e, StreamEvent::Done { .. })));
+    }
+
+    #[tokio::test]
+    async fn agent_engine_facade_streams_agentzero_events() {
+        let llm = Arc::new(OneShotLlm {
+            called: Arc::new(AtomicBool::new(false)),
+        });
+        let mut cfg = ExecutorConfig::new("agent".into(), "p".into(), "m".into());
+        cfg.tools_enabled = false;
+        let exec = AgentExecutor::new(
+            cfg,
+            llm,
+            Arc::new(ToolRegistry::new()),
+            Arc::new(McpManager::new()),
+            Arc::new(MiddlewarePipeline::new()),
+        )
+        .unwrap();
+
+        let engine: &dyn crate::engine::AgentEngine = &exec;
+        let mut events = Vec::new();
+        let mut sink = |event| events.push(event);
+        engine.execute_stream("hi", &[], &mut sink).await.unwrap();
+
         assert!(matches!(events[0], StreamEvent::Metadata { .. }));
         assert!(events.iter().any(|e| matches!(e, StreamEvent::Done { .. })));
     }
