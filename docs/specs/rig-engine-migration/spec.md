@@ -1,8 +1,9 @@
 # Spec: Rig Engine Migration
 
-- **Status:** Implementing
+- **Status:** Implementing (T1–T11 complete; T12–T15 cleanup pending)
 - **Owner:** phanijapps
 - **Plan:** [`plan.md`](plan.md)
+- **E2E Test Cases:** [`e2e_test_cases.md`](e2e_test_cases.md)
 - **Constrained by:** [`runtime-context-control`](../runtime-context-control/spec.md);
   [`mcp-oauth`](../mcp-oauth/spec.md);
   [`subagent-role-gating`](../subagent-role-gating/spec.md);
