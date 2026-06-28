@@ -770,46 +770,25 @@ pub async fn analyze_intent(
         "LLM call — sending relevant resources"
     );
 
-    // Step 4 + 5: Structured extraction with a `submit` tool (Rig's
-    // structured-output primitive, schema derived from IntentAnalysis) — but
-    // tolerant of models that return JSON content instead of calling the tool.
-    // This matters because the (user-customizable) intent-analysis prompt says
-    // "respond with ONLY a JSON object", and some providers don't reliably
-    // honor tool_choice. Prefer a `submit` call; fall back to parsing content.
+    // Step 4: Call LLM (plain chat — the `submit`-tool/extractor approach was
+    // tried but the tool's presence made the model return short non-JSON
+    // responses on Z.AI, failing extraction ~40% of the time. Plain chat with
+    // the existing "respond with JSON" prompt is reliable.)
     let messages = vec![
         ChatMessage::system(system_prompt.to_string()),
         ChatMessage::user(user_content.clone()),
     ];
-    let submit_tool = serde_json::json!([{
-        "type": "function",
-        "function": {
-            "name": "submit",
-            "description": "Submit the intent analysis structured data.",
-            "parameters": schemars::schema_for!(IntentAnalysis),
-        }
-    }]);
     let response = llm_client
-        .chat(messages, Some(submit_tool))
+        .chat(messages, None)
         .await
         .map_err(|e| format!("Intent analysis LLM call failed: {}", e))?;
 
-    // Prefer a `submit` tool call; fall back to parsing the message content.
-    let from_submit = response
-        .tool_calls
-        .as_ref()
-        .and_then(|calls| calls.iter().find(|c| c.name == "submit"))
-        .and_then(|c| serde_json::from_value::<IntentAnalysis>(c.arguments.clone()).ok());
-    let mut analysis: IntentAnalysis = from_submit
-        .or_else(|| {
-            let content = strip_markdown_fences(&response.content);
-            serde_json::from_str::<IntentAnalysis>(content).ok()
-        })
-        .ok_or_else(|| {
-            format!(
-                "Intent analysis extraction failed: model returned neither a submit call nor parseable JSON (content len: {})",
-                response.content.len()
-            )
-        })?;
+    tracing::debug!(raw_response = %response.content, "LLM raw response");
+
+    // Step 5: Parse response
+    let content = strip_markdown_fences(&response.content);
+    let mut analysis: IntentAnalysis = serde_json::from_str(content)
+        .map_err(|e| format!("Failed to parse intent analysis JSON: {}", e))?;
 
     // Step 6: Compute procedure recommendation and attach to the analysis.
     // This block is what `format_intent_injection` will render into the root
@@ -1344,7 +1323,7 @@ mod tests {
     // MockLlmClient, MockFactStore & async tests for analyze_intent
     // -----------------------------------------------------------------------
 
-    use agent_runtime::{ChatMessage, ChatResponse, LlmError, StreamCallback, ToolCall};
+    use agent_runtime::{ChatMessage, ChatResponse, LlmError, StreamCallback};
     use async_trait::async_trait;
 
     struct MockLlmClient {
@@ -1364,16 +1343,9 @@ mod tests {
             _messages: Vec<ChatMessage>,
             _tools: Option<Value>,
         ) -> Result<ChatResponse, LlmError> {
-            // The extractor works via a `submit` tool call; wrap the canned
-            // IntentAnalysis JSON (held in `response`) as the submit args.
-            let args: Value = serde_json::from_str(&self.response).unwrap_or(Value::Null);
             Ok(ChatResponse {
-                content: String::new(),
-                tool_calls: Some(vec![ToolCall {
-                    id: "c1".to_string(),
-                    name: "submit".to_string(),
-                    arguments: args,
-                }]),
+                content: self.response.clone(),
+                tool_calls: None,
                 reasoning: None,
                 usage: None,
             })
@@ -2018,7 +1990,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            err.contains("Intent analysis extraction failed"),
+            err.contains("Failed to parse intent analysis JSON"),
             "unexpected error: {}",
             err
         );

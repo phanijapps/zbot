@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use zero_stores::{KnowledgeGraphStore, StrategyCandidate};
 use zero_stores_traits::{CompactionStore, EpisodeStore, MemoryFactStore, StrategyFactInsert};
 
+use crate::util::parse_llm_json;
 use crate::{CachedLlmClient, LlmClientConfig, MemoryLlmFactory};
 
 /// Maximum candidates fetched from the DB per cycle.
@@ -395,36 +396,19 @@ impl SynthesisLlm for LlmSynthesizer {
                 .collect::<Vec<_>>()
                 .join("\n"),
         );
-        // Tolerant extraction: send a `submit` tool (schema from SynthesisResponse)
-        // but also accept JSON content, since the prompt says "Return ONLY JSON"
-        // and the model may not call the tool. Prefer submit; fall back to content.
+        // Plain chat + parse — the `submit`-tool/extractor approach was tried
+        // but the tool's presence made the model return short non-JSON on Z.AI
+        // (same failure mode as intent analysis). The existing "Return ONLY
+        // JSON" prompt + plain chat is reliable.
         let messages = vec![
             ChatMessage::system("You return only valid JSON.".to_string()),
             ChatMessage::user(prompt),
         ];
-        let submit_tool = serde_json::json!([{
-            "type": "function",
-            "function": {
-                "name": "submit",
-                "description": "Submit the synthesis result.",
-                "parameters": schemars::schema_for!(SynthesisResponse),
-            }
-        }]);
         let response = client
-            .chat(messages, Some(submit_tool))
+            .chat(messages, None)
             .await
             .map_err(|e| format!("LLM call: {e}"))?;
-        let from_submit = response
-            .tool_calls
-            .as_ref()
-            .and_then(|calls| calls.iter().find(|c| c.name == "submit"))
-            .and_then(|c| serde_json::from_value::<SynthesisResponse>(c.arguments.clone()).ok());
-        from_submit
-            .or_else(|| {
-                let content = response.content.trim();
-                serde_json::from_str::<SynthesisResponse>(content).ok()
-            })
-            .ok_or_else(|| "Synthesis extraction failed: no submit call nor parseable JSON".to_string())
+        parse_llm_json::<SynthesisResponse>(&response.content)
     }
 }
 
