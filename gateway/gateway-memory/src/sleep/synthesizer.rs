@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use agent_runtime::llm::embedding::EmbeddingClient;
-use agent_runtime::CompletionClient;
+use agent_runtime::llm::ChatMessage;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -395,14 +395,36 @@ impl SynthesisLlm for LlmSynthesizer {
                 .collect::<Vec<_>>()
                 .join("\n"),
         );
-        let model_name = client.model().to_string();
-        let llm = agent_runtime::rig_adapter::LlmCompletionClient::new(client);
-        llm.extractor::<SynthesisResponse>(&model_name)
-            .preamble("You return only valid JSON.")
-            .build()
-            .extract(&prompt)
+        // Tolerant extraction: send a `submit` tool (schema from SynthesisResponse)
+        // but also accept JSON content, since the prompt says "Return ONLY JSON"
+        // and the model may not call the tool. Prefer submit; fall back to content.
+        let messages = vec![
+            ChatMessage::system("You return only valid JSON.".to_string()),
+            ChatMessage::user(prompt),
+        ];
+        let submit_tool = serde_json::json!([{
+            "type": "function",
+            "function": {
+                "name": "submit",
+                "description": "Submit the synthesis result.",
+                "parameters": schemars::schema_for!(SynthesisResponse),
+            }
+        }]);
+        let response = client
+            .chat(messages, Some(submit_tool))
             .await
-            .map_err(|e| format!("Synthesis extraction failed: {e}"))
+            .map_err(|e| format!("LLM call: {e}"))?;
+        let from_submit = response
+            .tool_calls
+            .as_ref()
+            .and_then(|calls| calls.iter().find(|c| c.name == "submit"))
+            .and_then(|c| serde_json::from_value::<SynthesisResponse>(c.arguments.clone()).ok());
+        from_submit
+            .or_else(|| {
+                let content = response.content.trim();
+                serde_json::from_str::<SynthesisResponse>(content).ok()
+            })
+            .ok_or_else(|| "Synthesis extraction failed: no submit call nor parseable JSON".to_string())
     }
 }
 
