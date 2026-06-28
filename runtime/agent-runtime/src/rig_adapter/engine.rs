@@ -840,6 +840,84 @@ mod tests {
         }
     }
 
+    // T9 / AC13: the Rig path is a faithful conduit for the gateway-owned
+    // conversation tape — it forwards history to the LlmClient without silent
+    // compaction or loss (live context control stays in AgentZero runtime).
+    #[tokio::test]
+    async fn rig_engine_forwards_history_to_llm_unchanged() {
+        use crate::llm::{ChatResponse, LlmClient, LlmError, StreamCallback, StreamChunk};
+        use crate::rig_adapter::model::LlmCompletionModel;
+        use serde_json::Value;
+
+        let sent: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
+        struct RecordingLlm {
+            sent: Arc<Mutex<Vec<Vec<ChatMessage>>>>,
+        }
+        #[async_trait::async_trait]
+        impl LlmClient for RecordingLlm {
+            fn model(&self) -> &str {
+                "stub"
+            }
+            fn provider(&self) -> &str {
+                "stub"
+            }
+            async fn chat(
+                &self,
+                messages: Vec<ChatMessage>,
+                _tools: Option<Value>,
+            ) -> Result<ChatResponse, LlmError> {
+                self.sent.lock().unwrap().push(messages);
+                Ok(ChatResponse {
+                    content: "ok".to_string(),
+                    tool_calls: None,
+                    reasoning: None,
+                    usage: None,
+                })
+            }
+            async fn chat_stream(
+                &self,
+                messages: Vec<ChatMessage>,
+                _tools: Option<Value>,
+                callback: StreamCallback,
+            ) -> Result<ChatResponse, LlmError> {
+                self.sent.lock().unwrap().push(messages);
+                callback(StreamChunk::Token("ok".to_string()));
+                Ok(ChatResponse {
+                    content: "ok".to_string(),
+                    tool_calls: None,
+                    reasoning: None,
+                    usage: None,
+                })
+            }
+        }
+
+        let client: Arc<dyn LlmClient> = Arc::new(RecordingLlm { sent: sent.clone() });
+        let engine = RigAgentEngine::new(
+            sample_config(),
+            LlmCompletionModel::new(client, "stub"),
+            Vec::new(),
+            Arc::new(crate::tools::context::ToolContext::default()),
+        );
+
+        let history = vec![
+            ChatMessage::user("hello".to_string()),
+            ChatMessage::assistant("hi there".to_string()),
+        ];
+        let mut events = Vec::new();
+        engine
+            .execute_stream("next", &history, &mut |event| events.push(event))
+            .await
+            .expect("run");
+
+        let received = sent.lock().unwrap().clone();
+        assert_eq!(received.len(), 1, "LlmClient should be called once");
+        let texts: Vec<String> = received[0].iter().map(|m| m.text_content()).collect();
+        let joined = texts.join(" | ");
+        assert!(joined.contains("hello"), "history user msg forwarded; got {joined}");
+        assert!(joined.contains("hi there"), "history assistant msg forwarded; got {joined}");
+        assert!(joined.contains("next"), "current prompt forwarded; got {joined}");
+    }
+
     // T8 / AC21: a child executor's delegation mode (initial state seeded by the
     // gateway) reaches a bridged tool through the Rig path's SharedToolContext.
     #[tokio::test]
