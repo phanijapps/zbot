@@ -26,6 +26,7 @@
 use std::sync::Arc;
 
 use futures::channel::mpsc;
+use rig::completion::message::ToolResultContent;
 use rig::completion::{
     AssistantContent, CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
     Message, ToolDefinition,
@@ -144,38 +145,89 @@ impl CompletionModel for LlmCompletionModel {
 /// Convert a Rig [`CompletionRequest`] into AgentZero chat messages.
 ///
 /// Preamble is already folded into a leading system message by Rig's request
-/// builder, so it needs no separate handling here. Tool calls and tool results
-/// in history are converted best-effort (text-first); full multimodal and
-/// tool-result fidelity is a follow-up.
+/// builder, so it needs no separate handling here. Assistant tool calls and
+/// tool results are bridged faithfully: a rig assistant `ToolCall` becomes an
+/// AgentZero assistant message with `tool_calls`, and a rig user `ToolResult`
+/// becomes an AgentZero `role:"tool"` message whose `tool_call_id` matches the
+/// originating call. Without this, OpenAI-compatible providers (DeepSeek, GLM,
+/// OpenAI) reject the orphaned tool call as a malformed prompt.
 pub(crate) fn convert_messages(
     request: &CompletionRequest,
 ) -> Result<Vec<ChatMessage>, CompletionError> {
+    use rig::completion::message::{AssistantContent, UserContent};
+    use zero_core::types::Part;
+
     let mut out = Vec::new();
     for message in request.chat_history.iter() {
         match message {
             Message::System { content } => out.push(ChatMessage::system(content.clone())),
+
             Message::User { content } => {
-                let text: String = content
-                    .iter()
-                    .filter_map(|part| match part {
-                        rig::completion::message::UserContent::Text(t) => Some(t.text.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                out.push(ChatMessage::user(text));
+                // A rig user message may carry text and/or tool results. Each
+                // tool result becomes its own `role:"tool"` message (OpenAI shape),
+                // paired by id with the assistant tool call that requested it.
+                for part in content.iter() {
+                    match part {
+                        UserContent::Text(t) => out.push(ChatMessage::user(t.text.clone())),
+                        UserContent::ToolResult(tool_result) => {
+                            let text = tool_result
+                                .content
+                                .iter()
+                                .filter_map(|c| match c {
+                                    ToolResultContent::Text(t) => Some(t.text.clone()),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            let id = tool_result
+                                .call_id
+                                .clone()
+                                .unwrap_or_else(|| tool_result.id.clone());
+                            out.push(ChatMessage::tool_result(id, text));
+                        }
+                        // Images / audio / documents are not yet bridged onto the wire.
+                        _ => {}
+                    }
+                }
             }
+
             Message::Assistant { content, .. } => {
-                let text: String = content
-                    .iter()
-                    .filter_map(|part| match part {
-                        AssistantContent::Text(t) => Some(t.text.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                // TODO(T7): carry assistant tool calls into ChatMessage.tool_calls.
-                out.push(ChatMessage::assistant(text));
+                let mut text_parts: Vec<String> = Vec::new();
+                let mut tool_calls: Vec<AgentToolCall> = Vec::new();
+                for part in content.iter() {
+                    match part {
+                        AssistantContent::Text(t) => text_parts.push(t.text.clone()),
+                        AssistantContent::ToolCall(tc) => {
+                            tool_calls.push(AgentToolCall {
+                                id: tc.call_id.clone().unwrap_or_else(|| tc.id.clone()),
+                                name: tc.function.name.clone(),
+                                arguments: tc.function.arguments.clone(),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                // Providers reject empty assistant content; only emit a content
+                // part when there is text. A tool-call-only turn yields an
+                // assistant message with empty content + tool_calls.
+                let content_parts: Vec<Part> = text_parts
+                    .into_iter()
+                    .map(|t| Part::Text { text: t })
+                    .collect();
+                if content_parts.is_empty() && tool_calls.is_empty() {
+                    continue;
+                }
+                out.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: content_parts,
+                    tool_calls: if tool_calls.is_empty() {
+                        None
+                    } else {
+                        Some(tool_calls)
+                    },
+                    tool_call_id: None,
+                    is_summary: false,
+                });
             }
         }
     }
@@ -429,5 +481,70 @@ mod tests {
             additional_params: None,
             output_schema: None,
         }
+    }
+
+    #[test]
+    fn convert_messages_bridges_tool_calls_and_results() {
+        // Regression: a history with an assistant tool call + its tool result
+        // must produce a valid OpenAI message chain (assistant.tool_calls paired
+        // with a role:"tool" message whose tool_call_id matches). Dropping the
+        // tool result made strict providers (DeepSeek/GLM) reject the request.
+        use rig::completion::message::{
+            AssistantContent, ToolCall as RigToolCall, ToolFunction, ToolResult as RigToolResult,
+            UserContent,
+        };
+        use rig::completion::message::Text as RigText;
+
+        let assistant_call = Message::Assistant {
+            id: None,
+            content: OneOrMany::one(AssistantContent::ToolCall(RigToolCall::new(
+                "call_1".to_string(),
+                ToolFunction::new("echo".to_string(), json!({"x": 1})),
+            ))),
+        };
+        let tool_result = Message::User {
+            content: OneOrMany::one(UserContent::ToolResult(RigToolResult {
+                id: "call_1".to_string(),
+                call_id: Some("call_1".to_string()),
+                content: OneOrMany::one(ToolResultContent::Text(RigText::new("echo-result"))),
+            })),
+        };
+        let request = CompletionRequest {
+            model: None,
+            preamble: None,
+            chat_history: OneOrMany::many(vec![
+                Message::user("please echo".to_string()),
+                assistant_call,
+                tool_result,
+            ])
+            .expect("non-empty history"),
+            documents: Vec::new(),
+            tools: Vec::new(),
+            temperature: None,
+            max_tokens: None,
+            tool_choice: None,
+            additional_params: None,
+            output_schema: None,
+        };
+
+        let msgs = convert_messages(&request).expect("convert");
+
+        let assistant = msgs
+            .iter()
+            .find(|m| m.role == "assistant")
+            .expect("assistant message present");
+        let tool_calls = assistant.tool_calls.as_ref().expect("assistant tool_calls");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].id, "call_1");
+        assert_eq!(tool_calls[0].name, "echo");
+        assert_eq!(tool_calls[0].arguments, json!({"x": 1}));
+
+        let tool = msgs
+            .iter()
+            .find(|m| m.role == "tool")
+            .expect("tool result message present");
+        // The tool result's tool_call_id must match the assistant's tool call id.
+        assert_eq!(tool.tool_call_id.as_deref(), Some("call_1"));
+        assert!(tool.text_content().contains("echo-result"));
     }
 }
