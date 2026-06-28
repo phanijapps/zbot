@@ -301,7 +301,23 @@ impl Tool for DelegateTool {
             "agent_id": target_agent_id,
             "task": task,
             "parallel": parallel,
-            "message": format!("Task delegated to {}. Use execution_id with wait_agent to block until it completes and get its result, steer_agent to send mid-run instructions, or kill_agent to stop it.", target_agent_id)
+            "message": if wait_for_result {
+                // Sequential: the system pauses the caller and resumes it with
+                // the result when the child completes (continuation). Instructing
+                // wait_agent here is redundant and led the model to call it
+                // needlessly after every wait_for_result=true delegation.
+                format!(
+                    "Task delegated to {}. You will be paused and automatically resumed with the result when it completes — do NOT call wait_agent, just wait for the result.",
+                    target_agent_id
+                )
+            } else {
+                // Fire-and-forget (incl. parallel): wait_agent is the intended
+                // way to block for the result later — its actual purpose.
+                format!(
+                    "Task delegated to {} (fire-and-forget). Use execution_id with wait_agent to block until it completes and get its result, steer_agent to send mid-run instructions, or kill_agent to stop it.",
+                    target_agent_id
+                )
+            },
         });
         if let Some(warning) = task_warning {
             if let Some(obj) = result.as_object_mut() {
