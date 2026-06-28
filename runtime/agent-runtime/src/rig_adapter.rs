@@ -4,10 +4,11 @@
 //! the dependency pin so Rig stays confined to `agent-runtime`.
 
 pub mod config;
+pub mod engine;
 pub mod tool;
 
 pub use config::{RigAgentConfig, RigConfigError, RigModelConfig};
-pub use tool::{SharedToolContext, RigToolAdapter};
+pub use tool::{RigToolAdapter, SharedToolContext};
 
 /// Rig package source selected for the migration.
 pub const RIG_REPOSITORY: &str = "https://github.com/0xplaygrounds/rig";
