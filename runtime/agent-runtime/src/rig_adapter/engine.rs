@@ -219,6 +219,37 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
                             error: None,
                             duration_ms: None,
                         });
+                        // Surface tool side-effects set on the shared context
+                        // (delegate/respond), mirroring the legacy executor. Without
+                        // ActionDelegate, delegate_to_agent would not spawn a child
+                        // and wait_agent would hang forever on the Rig path.
+                        let actions = self.shared_context.take_actions();
+                        if let Some(delegate) = actions.delegate {
+                            on_event(StreamEvent::ActionDelegate {
+                                timestamp: current_timestamp(),
+                                agent_id: delegate.agent_id,
+                                task: delegate.task,
+                                context: delegate.context,
+                                wait_for_result: delegate.wait_for_result,
+                                max_iterations: delegate.max_iterations,
+                                output_schema: delegate.output_schema,
+                                skills: delegate.skills,
+                                complexity: delegate.complexity,
+                                mode: delegate.mode,
+                                parallel: delegate.parallel,
+                                child_execution_id: delegate.child_execution_id,
+                            });
+                        }
+                        if let Some(respond) = actions.respond {
+                            on_event(StreamEvent::ActionRespond {
+                                timestamp: current_timestamp(),
+                                message: respond.message,
+                                format: respond.format,
+                                conversation_id: respond.conversation_id,
+                                session_id: respond.session_id,
+                                artifacts: respond.artifacts,
+                            });
+                        }
                     }
                 },
                 MultiTurnStreamItem::CompletionCall(_) => {
@@ -986,5 +1017,66 @@ mod tests {
             *self.seen_mode.lock().unwrap() = mode.and_then(|v| v.as_str().map(str::to_string));
             Ok(serde_json::json!({"ok": true}))
         }
+    }
+
+    // T7/Rig-cutover: a tool that sets a delegate action (like delegate_to_agent)
+    // must surface ActionDelegate, or the gateway never spawns the child and a
+    // later wait_agent hangs forever.
+    #[tokio::test]
+    async fn action_events_surface_after_tool_runs() {
+        struct DelegatingTool;
+        #[async_trait::async_trait]
+        impl zero_core::Tool for DelegatingTool {
+            fn name(&self) -> &str {
+                "delegate_to_agent"
+            }
+            fn description(&self) -> &str {
+                "delegate"
+            }
+            async fn execute(
+                &self,
+                ctx: Arc<dyn zero_core::ToolContext>,
+                _args: Value,
+            ) -> Result<Value, zero_core::error::ZeroError> {
+                let mut actions = ctx.actions();
+                actions.delegate = Some(zero_core::event::DelegateAction {
+                    agent_id: "ward:x".to_string(),
+                    task: "do thing".to_string(),
+                    context: None,
+                    wait_for_result: false,
+                    max_iterations: None,
+                    output_schema: None,
+                    skills: vec![],
+                    complexity: None,
+                    mode: None,
+                    parallel: false,
+                    child_execution_id: None,
+                });
+                ctx.set_actions(actions);
+                Ok(serde_json::json!({"delegated": true}))
+            }
+        }
+
+        let engine = RigAgentEngine::new(
+            sample_config(),
+            ToolCallModel::new("delegate_to_agent"),
+            vec![RigToolAdapter::boxed(Arc::new(DelegatingTool))],
+            Arc::new(crate::tools::context::ToolContext::default()),
+        );
+
+        let mut events = Vec::new();
+        engine
+            .execute_stream("hi", &[], &mut |event| events.push(event))
+            .await
+            .expect("run");
+
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                StreamEvent::ActionDelegate { agent_id, task, .. }
+                    if agent_id == "ward:x" && task == "do thing"
+            )),
+            "ActionDelegate must surface after the tool runs; got {events:?}"
+        );
     }
 }
