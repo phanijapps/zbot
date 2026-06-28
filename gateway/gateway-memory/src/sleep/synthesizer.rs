@@ -14,13 +14,13 @@
 use std::sync::Arc;
 
 use agent_runtime::llm::embedding::EmbeddingClient;
-use agent_runtime::llm::ChatMessage;
+use agent_runtime::CompletionClient;
 use async_trait::async_trait;
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use zero_stores::{KnowledgeGraphStore, StrategyCandidate};
 use zero_stores_traits::{CompactionStore, EpisodeStore, MemoryFactStore, StrategyFactInsert};
 
-use crate::util::parse_llm_json;
 use crate::{CachedLlmClient, LlmClientConfig, MemoryLlmFactory};
 
 /// Maximum candidates fetched from the DB per cycle.
@@ -46,7 +46,7 @@ pub struct SynthesisStats {
 }
 
 /// Parsed LLM response shape.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct SynthesisResponse {
     pub strategy: String,
     pub confidence: f64,
@@ -395,15 +395,14 @@ impl SynthesisLlm for LlmSynthesizer {
                 .collect::<Vec<_>>()
                 .join("\n"),
         );
-        let messages = vec![
-            ChatMessage::system("You return only valid JSON.".to_string()),
-            ChatMessage::user(prompt),
-        ];
-        let response = client
-            .chat(messages, None)
+        let model_name = client.model().to_string();
+        let llm = agent_runtime::rig_adapter::LlmCompletionClient::new(client);
+        llm.extractor::<SynthesisResponse>(&model_name)
+            .preamble("You return only valid JSON.")
+            .build()
+            .extract(&prompt)
             .await
-            .map_err(|e| format!("LLM call: {e}"))?;
-        parse_llm_json::<SynthesisResponse>(&response.content)
+            .map_err(|e| format!("Synthesis extraction failed: {e}"))
     }
 }
 

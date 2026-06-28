@@ -36,6 +36,8 @@ knowledge-graph = { path = "../../services/knowledge-graph" }
 # LLM client trait (EmbeddingClient) used by Synthesizer + sleep components
 # + MemoryRecall (query embedding).
 agent-runtime = { path = "../../runtime/agent-runtime" }
+# JSON Schema derivation for the Rig extractor (synthesizer typed output).
+schemars = { workspace = true }
 
 # EventBus + GatewayEvent for emitting RecallTrace telemetry. Optional in
 # the recall pipeline — when the EventBus isn't wired (tests), recall
