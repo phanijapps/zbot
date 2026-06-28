@@ -17,12 +17,12 @@ use std::sync::Arc;
 
 use axum_test::TestServer;
 use execution_state::StateService;
-use gateway::{AppState, GatewayConfig, http::create_http_router, websocket::WebSocketHandler};
+use gateway::{http::create_http_router, websocket::WebSocketHandler, AppState, GatewayConfig};
 use tempfile::TempDir;
 use zbot_stores_sqlite::DatabaseManager;
 use zbot_stores_sqlite::{
-    EpisodeRepository, ProcedureRepository, SqliteVecIndex, WardWikiRepository,
-    vector_index::VectorIndex,
+    vector_index::VectorIndex, EpisodeRepository, ProcedureRepository, SqliteVecIndex,
+    WardWikiRepository,
 };
 
 /// Current time as RFC3339 string — the form persisted alongside seeded rows.

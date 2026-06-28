@@ -45,7 +45,9 @@ impl LlmClient for MockLlmClient {
         _tools: Option<Value>,
         _callback: StreamCallback,
     ) -> Result<ChatResponse, LlmError> {
-        Err(LlmError::ApiError("chat_stream not used by extractor".into()))
+        Err(LlmError::ApiError(
+            "chat_stream not used by extractor".into(),
+        ))
     }
 }
 

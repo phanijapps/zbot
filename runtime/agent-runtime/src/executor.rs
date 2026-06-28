@@ -37,9 +37,9 @@ use crate::rig_adapter::RigAgentConfig;
 use crate::tools::context::ToolContext;
 use crate::tools::ToolRegistry;
 use crate::types::{ChatMessage, StreamEvent, ToolCall};
-use zero_core::event::EventActions;
-use zero_core::types::Part;
-use zero_core::ToolContext as ZeroToolContext;
+use agent_primitives::event::EventActions;
+use agent_primitives::types::Part;
+use agent_primitives::ToolContext as ZeroToolContext;
 
 // ============================================================================
 // MID-SESSION RECALL HOOK
@@ -602,7 +602,7 @@ impl AgentExecutor {
             // This allows root to delegate again after a previous delegation completes.
             // try_claim checks for Bool(true); setting to Bool(false) releases the claim.
             {
-                use zero_core::CallbackContext;
+                use agent_primitives::CallbackContext;
                 shared_tool_context
                     .set_state("app:delegation_active".to_string(), Value::Bool(false));
             }
@@ -1440,7 +1440,7 @@ impl AgentExecutor {
         // lenient mode falls through to real execution.
         if let Some(store) = agent_tools::replay::global_store() {
             let exec_id =
-                zero_core::ReadonlyContext::invocation_id(shared_ctx.as_ref()).to_string();
+                agent_primitives::ReadonlyContext::invocation_id(shared_ctx.as_ref()).to_string();
             if let Ok(mut guard) = store.lock() {
                 match guard.lookup(&exec_id, tool_name) {
                     agent_tools::replay::LookupOutcome::Hit(result) => {

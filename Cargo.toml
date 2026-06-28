@@ -5,17 +5,6 @@
 [workspace]
 resolver = "2"
 members = [
-    # Framework - Core abstractions (publishable as zero-agent-framework)
-    "framework/zero-core",
-    "framework/zero-llm",
-    "framework/zero-tool",
-    "framework/zero-session",
-    "framework/zero-agent",
-    "framework/zero-mcp",
-    "framework/zero-prompt",
-    "framework/zero-middleware",
-    "framework/zero-app",
-
     # Stores - Backend-agnostic persistence interfaces
     "stores/zbot-stores",
     "stores/zbot-stores-conformance",
@@ -27,6 +16,7 @@ members = [
     "discovery",
 
     # Runtime - Execution engine
+    "runtime/agent-primitives",
     "runtime/agent-runtime",
     "runtime/agent-tools",
 

@@ -17,13 +17,13 @@ use std::convert::Infallible;
 
 use crate::state::AppState;
 use axum::{
-    Json,
     extract::{Query, State},
     http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
+    Json,
 };
 use futures::stream::Stream;
-use gateway_services::{CURATED_MODELS, CuratedModel, EmbeddingConfig, Health, OllamaClient};
+use gateway_services::{CuratedModel, EmbeddingConfig, Health, OllamaClient, CURATED_MODELS};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================

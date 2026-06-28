@@ -9,8 +9,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use zero_core::connectors::ConnectorResourceProvider;
-use zero_core::{Result, Tool, ToolContext, ToolPermissions, ZeroError};
+use agent_primitives::connectors::ConnectorResourceProvider;
+use agent_primitives::{AgentError, Result, Tool, ToolContext, ToolPermissions};
 
 /// Tool for querying resources and invoking capabilities on external connectors.
 ///
@@ -86,7 +86,7 @@ impl Tool for QueryResourceTool {
         let action = args
             .get("action")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'action' parameter".to_string()))?;
+            .ok_or_else(|| AgentError::Tool("Missing 'action' parameter".to_string()))?;
 
         match action {
             "list_resources" => {
@@ -94,7 +94,7 @@ impl Tool for QueryResourceTool {
                     .provider
                     .list_connectors()
                     .await
-                    .map_err(ZeroError::Tool)?;
+                    .map_err(AgentError::Tool)?;
 
                 if connectors.is_empty() {
                     return Ok(json!({
@@ -154,7 +154,7 @@ impl Tool for QueryResourceTool {
                     .get("connector_id")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
-                        ZeroError::Tool(
+                        AgentError::Tool(
                             "Missing 'connector_id' parameter for query action".to_string(),
                         )
                     })?;
@@ -163,7 +163,9 @@ impl Tool for QueryResourceTool {
                     .get("resource")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
-                        ZeroError::Tool("Missing 'resource' parameter for query action".to_string())
+                        AgentError::Tool(
+                            "Missing 'resource' parameter for query action".to_string(),
+                        )
                     })?;
 
                 // Parse params from JSON object to HashMap<String, String>
@@ -179,7 +181,7 @@ impl Tool for QueryResourceTool {
                     .provider
                     .query_resource(connector_id, resource, params)
                     .await
-                    .map_err(ZeroError::Tool)?;
+                    .map_err(AgentError::Tool)?;
 
                 Ok(result)
             }
@@ -189,7 +191,7 @@ impl Tool for QueryResourceTool {
                     .get("connector_id")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
-                        ZeroError::Tool(
+                        AgentError::Tool(
                             "Missing 'connector_id' parameter for invoke action".to_string(),
                         )
                     })?;
@@ -198,7 +200,7 @@ impl Tool for QueryResourceTool {
                     args.get("capability")
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| {
-                            ZeroError::Tool(
+                            AgentError::Tool(
                                 "Missing 'capability' parameter for invoke action".to_string(),
                             )
                         })?;
@@ -212,12 +214,12 @@ impl Tool for QueryResourceTool {
                     .provider
                     .invoke_capability(connector_id, capability, payload, &session_id, &agent_id)
                     .await
-                    .map_err(ZeroError::Tool)?;
+                    .map_err(AgentError::Tool)?;
 
                 Ok(result)
             }
 
-            _ => Err(ZeroError::Tool(format!(
+            _ => Err(AgentError::Tool(format!(
                 "Unknown action '{}'. Valid: list_resources, query, invoke",
                 action
             ))),
@@ -228,10 +230,10 @@ impl Tool for QueryResourceTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zero_core::connectors::{CapabilityInfo, ConnectorInfo, ResourceInfo};
-    use zero_core::context::{CallbackContext, ReadonlyContext};
-    use zero_core::event::EventActions;
-    use zero_core::types::Content;
+    use agent_primitives::connectors::{CapabilityInfo, ConnectorInfo, ResourceInfo};
+    use agent_primitives::context::{CallbackContext, ReadonlyContext};
+    use agent_primitives::event::EventActions;
+    use agent_primitives::types::Content;
 
     /// Mock provider for testing.
     struct MockProvider {

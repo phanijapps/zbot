@@ -142,7 +142,7 @@ export interface AgentChannel {
 // DOMAIN: Agents
 // ============================================================================
 
-/** Agent type from zero-app framework */
+/** Agent type from the gateway API */
 export type AgentType =
   | "llm"
   | "sequential"

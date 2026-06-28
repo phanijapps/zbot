@@ -4,9 +4,9 @@
 
 use crate::state::AppState;
 use axum::{
-    Json,
     extract::{Path, Query, State},
     http::StatusCode,
+    Json,
 };
 use knowledge_graph::{Direction, Entity, GraphStats, Relationship, Subgraph};
 use serde::{Deserialize, Serialize};
@@ -698,7 +698,7 @@ pub struct ReindexResponse {
 pub async fn reindex_all_wards(
     State(state): State<AppState>,
 ) -> Result<Json<ReindexResponse>, StatusCode> {
-    use gateway_execution::ward_artifact_indexer::{IndexOptions, index_ward_with_options};
+    use gateway_execution::ward_artifact_indexer::{index_ward_with_options, IndexOptions};
 
     let episode_store = state
         .kg_episode_store

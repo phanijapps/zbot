@@ -299,7 +299,7 @@ Distilled patterns from building z-Bot:
 
 1. **Plans with concrete data models** — Show actual schemas/types, not prose. File-level specificity. Phase grouping by architectural layer.
 2. **Right level of detail** — Specify what to create, not how. File paths guide but don't micromanage. Assumes competence on implementation details.
-3. **Layer-by-layer implementation** — Follow the dependency graph: `framework/ → runtime/ → services/ → gateway/ → apps/`. Backend before frontend.
+3. **Layer-by-layer implementation** — Follow the dependency graph: `runtime/ → stores/ → services/ → gateway/ → apps/`. Backend before frontend.
 4. **Test each phase** — `cargo check --workspace` after Rust changes, `npm run build` after TypeScript. Don't batch all testing at the end.
 5. **Read before write** — Check existing patterns, understand current state, avoid duplicating functionality.
 6. **Anti-patterns**: Starting without reading context. Solving problems not asked. Ignoring existing patterns. Plans without data models. Skipping root cause analysis.

@@ -700,13 +700,13 @@ impl InvokeBootstrap {
         let fact_store_for_indexing = fact_store.clone();
 
         // Build connector resource provider (HTTP + bridge composite)
-        let http_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
+        let http_provider: Option<Arc<dyn agent_primitives::ConnectorResourceProvider>> =
             self.connector_registry.as_ref().map(|registry| {
                 Arc::new(crate::resource_provider::GatewayResourceProvider::new(
                     registry.clone(),
-                )) as Arc<dyn zero_core::ConnectorResourceProvider>
+                )) as Arc<dyn agent_primitives::ConnectorResourceProvider>
             });
-        let bridge_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> = self
+        let bridge_provider: Option<Arc<dyn agent_primitives::ConnectorResourceProvider>> = self
             .bridge_registry
             .as_ref()
             .zip(self.bridge_outbox.as_ref())
@@ -714,15 +714,15 @@ impl InvokeBootstrap {
                 Arc::new(gateway_bridge::BridgeResourceProvider::new(
                     reg.clone(),
                     outbox.clone(),
-                )) as Arc<dyn zero_core::ConnectorResourceProvider>
+                )) as Arc<dyn agent_primitives::ConnectorResourceProvider>
             });
-        let connector_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
+        let connector_provider: Option<Arc<dyn agent_primitives::ConnectorResourceProvider>> =
             if http_provider.is_some() || bridge_provider.is_some() {
                 Some(
                     Arc::new(crate::composite_provider::CompositeResourceProvider::new(
                         http_provider,
                         bridge_provider,
-                    )) as Arc<dyn zero_core::ConnectorResourceProvider>,
+                    )) as Arc<dyn agent_primitives::ConnectorResourceProvider>,
                 )
             } else {
                 None
@@ -945,12 +945,11 @@ impl InvokeBootstrap {
             }
         };
 
-        let retrying: std::sync::Arc<dyn agent_runtime::LlmClient> = std::sync::Arc::new(
-            agent_runtime::RetryingLlmClient::new(
+        let retrying: std::sync::Arc<dyn agent_runtime::LlmClient> =
+            std::sync::Arc::new(agent_runtime::RetryingLlmClient::new(
                 std::sync::Arc::new(raw_client),
                 agent_runtime::RetryPolicy::default(),
-            ),
-        );
+            ));
         let system_prompt =
             crate::middleware::intent_analysis::load_intent_analysis_prompt(&self.paths);
 

@@ -9,9 +9,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agent-primitives"
+version = "2026.5.3"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "futures",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "agent-runtime"
 version = "2026.5.3"
 dependencies = [
+ "agent-primitives",
  "agent-tools",
  "anyhow",
  "async-trait",
@@ -40,13 +59,13 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "zbot-stores-traits",
- "zero-core",
 ]
 
 [[package]]
 name = "agent-tools"
 version = "0.1.0"
 dependencies = [
+ "agent-primitives",
  "async-trait",
  "base64 0.22.1",
  "chrono",
@@ -67,7 +86,6 @@ dependencies = [
  "uuid",
  "windows-sys 0.59.0",
  "zbot-stores-traits",
- "zero-core",
 ]
 
 [[package]]
@@ -497,7 +515,7 @@ dependencies = [
  "log",
  "num-rational",
  "num-traits",
- "pastey 0.1.1",
+ "pastey",
  "rayon",
  "thiserror 2.0.18",
  "v_frame",
@@ -1091,7 +1109,6 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
- "zero-app",
 ]
 
 [[package]]
@@ -1117,18 +1134,8 @@ version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc7f46116c46ff9ab3eb1597a45688b6715c6e628b5c133e288e709a29bcb4ee"
 dependencies = [
- "darling_core 0.20.11",
- "darling_macro 0.20.11",
-]
-
-[[package]]
-name = "darling"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25ae13da2f202d56bd7f91c25fba009e7717a1e4a1cc98a76d844b65ae912e9d"
-dependencies = [
- "darling_core 0.23.0",
- "darling_macro 0.23.0",
+ "darling_core",
+ "darling_macro",
 ]
 
 [[package]]
@@ -1146,36 +1153,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "darling_core"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9865a50f7c335f53564bb694ef660825eb8610e0a53d3e11bf1b0d3df31e03b0"
-dependencies = [
- "ident_case",
- "proc-macro2",
- "quote",
- "strsim",
- "syn 2.0.114",
-]
-
-[[package]]
 name = "darling_macro"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc34b93ccb385b40dc71c6fceac4b2ad23662c7eeb248cf10d529b7e055b6ead"
 dependencies = [
- "darling_core 0.20.11",
- "quote",
- "syn 2.0.114",
-]
-
-[[package]]
-name = "darling_macro"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac3984ec7bd6cfa798e62b4a642426a5be0e68f9401cfc2a01e3fa9ea2fcdb8d"
-dependencies = [
- "darling_core 0.23.0",
+ "darling_core",
  "quote",
  "syn 2.0.114",
 ]
@@ -1219,7 +1202,7 @@ version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d5bcf7b024d6835cfb3d473887cd966994907effbe9227e8c8219824d06c4e8"
 dependencies = [
- "darling 0.20.11",
+ "darling",
  "proc-macro2",
  "quote",
  "syn 2.0.114",
@@ -1783,6 +1766,7 @@ dependencies = [
 name = "gateway"
 version = "2026.5.3"
 dependencies = [
+ "agent-primitives",
  "agent-runtime",
  "agent-tools",
  "anyhow",
@@ -1835,14 +1819,13 @@ dependencies = [
  "zbot-stores-domain",
  "zbot-stores-sqlite",
  "zbot-stores-traits",
- "zero-app",
- "zero-core",
 ]
 
 [[package]]
 name = "gateway-bridge"
 version = "2026.5.3"
 dependencies = [
+ "agent-primitives",
  "async-trait",
  "axum",
  "chrono",
@@ -1860,7 +1843,6 @@ dependencies = [
  "uuid",
  "zbot-stores-sqlite",
  "zbot-stores-traits",
- "zero-core",
 ]
 
 [[package]]
@@ -1878,6 +1860,7 @@ dependencies = [
 name = "gateway-connectors"
 version = "2026.5.3"
 dependencies = [
+ "agent-primitives",
  "chrono",
  "gateway-services",
  "reqwest 0.12.28",
@@ -1888,7 +1871,6 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
- "zero-core",
 ]
 
 [[package]]
@@ -1923,6 +1905,7 @@ dependencies = [
 name = "gateway-execution"
 version = "2026.5.3"
 dependencies = [
+ "agent-primitives",
  "agent-runtime",
  "agent-tools",
  "anyhow",
@@ -1961,7 +1944,6 @@ dependencies = [
  "zbot-stores-domain",
  "zbot-stores-sqlite",
  "zbot-stores-traits",
- "zero-core",
 ]
 
 [[package]]
@@ -2003,6 +1985,7 @@ dependencies = [
 name = "gateway-services"
 version = "2026.5.3"
 dependencies = [
+ "agent-primitives",
  "agent-runtime",
  "agent-tools",
  "arc-swap",
@@ -2029,7 +2012,6 @@ dependencies = [
  "tokio-test",
  "tracing",
  "uuid",
- "zero-core",
 ]
 
 [[package]]
@@ -2724,7 +2706,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "zero-app",
 ]
 
 [[package]]
@@ -3370,12 +3351,6 @@ name = "pastey"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
-
-[[package]]
-name = "pastey"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b867cad97c0791bbd3aaa6472142568c6c9e8f71937e98379f584cfb0cf35bec"
 
 [[package]]
 name = "percent-encoding"
@@ -4081,42 +4056,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rmcp"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a621b37a548ff6ab6292d57841eb25785a7f146d89391a19c9f199414bd13da"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "futures",
- "pastey 0.2.1",
- "pin-project-lite",
- "rmcp-macros",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "rmcp-macros"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b79ed92303f9262db79575aa8c3652581668e9d136be6fd0b9ededa78954c95"
-dependencies = [
- "darling 0.23.0",
- "proc-macro2",
- "quote",
- "serde_json",
- "syn 2.0.114",
-]
-
-[[package]]
 name = "rusqlite"
 version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4322,7 +4261,6 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
 dependencies = [
- "chrono",
  "dyn-clone",
  "ref-cast",
  "schemars_derive",
@@ -6007,6 +5945,7 @@ dependencies = [
 name = "zbot-stores-sqlite"
 version = "0.1.0"
 dependencies = [
+ "agent-primitives",
  "agent-runtime",
  "api-logs",
  "async-trait",
@@ -6028,7 +5967,6 @@ dependencies = [
  "zbot-stores-conformance",
  "zbot-stores-domain",
  "zbot-stores-traits",
- "zero-core",
 ]
 
 [[package]]
@@ -6039,153 +5977,6 @@ dependencies = [
  "chrono",
  "serde_json",
  "zbot-stores-domain",
-]
-
-[[package]]
-name = "zero-agent"
-version = "2026.5.3"
-dependencies = [
- "anyhow",
- "async-stream",
- "async-trait",
- "chrono",
- "futures",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
- "zero-core",
- "zero-llm",
- "zero-tool",
-]
-
-[[package]]
-name = "zero-app"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "futures",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "zero-agent",
- "zero-core",
- "zero-llm",
- "zero-mcp",
- "zero-middleware",
- "zero-prompt",
- "zero-session",
- "zero-tool",
-]
-
-[[package]]
-name = "zero-core"
-version = "2026.5.3"
-dependencies = [
- "async-stream",
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "futures",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "zero-llm"
-version = "2026.5.3"
-dependencies = [
- "anyhow",
- "async-stream",
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "futures",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
- "zero-core",
-]
-
-[[package]]
-name = "zero-mcp"
-version = "2026.5.3"
-dependencies = [
- "async-trait",
- "chrono",
- "futures",
- "reqwest 0.12.28",
- "rmcp",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
- "zero-core",
-]
-
-[[package]]
-name = "zero-middleware"
-version = "2026.5.3"
-dependencies = [
- "agent-runtime",
-]
-
-[[package]]
-name = "zero-prompt"
-version = "2026.5.3"
-dependencies = [
- "async-trait",
- "regex",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "zero-core",
-]
-
-[[package]]
-name = "zero-session"
-version = "2026.5.3"
-dependencies = [
- "async-trait",
- "chrono",
- "futures",
- "once_cell",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "uuid",
- "zero-core",
-]
-
-[[package]]
-name = "zero-tool"
-version = "2026.5.3"
-dependencies = [
- "async-trait",
- "futures",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "uuid",
- "zero-core",
 ]
 
 [[package]]

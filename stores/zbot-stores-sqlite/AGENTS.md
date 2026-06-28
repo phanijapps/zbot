@@ -44,7 +44,7 @@ pub use wiki_repository::{WardWikiRepository, WikiArticle, WikiHit};
 - `zbot-stores`, `zbot-stores-traits`, `zbot-stores-domain` — traits and types being implemented
 - `knowledge-graph` — `Entity`, `Relationship`, etc. for KG storage
 - `api-logs`, `execution-state` — implement `DbProvider` traits for those services
-- `agent-runtime`, `gateway-services`, `zero-core` — auxiliary dependencies for bootstrapping
+- `agent-runtime`, `gateway-services`, `agent-primitives` — auxiliary dependencies for bootstrapping
 
 ## Database
 

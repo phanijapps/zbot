@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use zero_core::FileSystemContext;
-use zero_core::{Result, Tool, ToolContext};
+use agent_primitives::FileSystemContext;
+use agent_primitives::{Result, Tool, ToolContext};
 
 use crate::tools::guards::has_placeholder_specs;
 
@@ -222,7 +222,7 @@ impl Tool for LoadSkillTool {
             // Load specific file from skill directory
             self.load_skill_file(ctx, args).await
         } else {
-            Err(zero_core::ZeroError::Tool(
+            Err(agent_primitives::AgentError::Tool(
                 "Either 'skill' or 'file' parameter must be provided".to_string(),
             ))
         }
@@ -260,7 +260,7 @@ impl LoadSkillTool {
         let roots = self.fs.skills_dirs();
         let canonical_skill_name = Self::canonical_skill_name(skill_name);
         if roots.is_empty() {
-            return Err(zero_core::ZeroError::Tool(
+            return Err(agent_primitives::AgentError::Tool(
                 "Skills directory not configured".to_string(),
             ));
         }
@@ -274,7 +274,7 @@ impl LoadSkillTool {
             .iter()
             .map(|p| p.to_string_lossy().to_string())
             .collect();
-        Err(zero_core::ZeroError::Tool(format!(
+        Err(agent_primitives::AgentError::Tool(format!(
             "Skill '{}' not found in any configured skills root (searched: {}).{}",
             skill_name,
             searched.join(", "),
@@ -284,24 +284,24 @@ impl LoadSkillTool {
 
     /// Load the main SKILL.md file for a skill
     async fn load_main_skill(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let skill_name = args
-            .get("skill")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'skill' parameter".to_string()))?;
+        let skill_name = args.get("skill").and_then(|v| v.as_str()).ok_or_else(|| {
+            agent_primitives::AgentError::Tool("Missing 'skill' parameter".to_string())
+        })?;
         let canonical_skill_name = Self::canonical_skill_name(skill_name);
 
         let skill_dir = self.resolve_skill_dir(skill_name)?;
         let skill_file = skill_dir.join("SKILL.md");
 
         if !skill_file.exists() {
-            return Err(zero_core::ZeroError::Tool(format!(
+            return Err(agent_primitives::AgentError::Tool(format!(
                 "Skill file not found: {}",
                 skill_file.to_string_lossy()
             )));
         }
 
-        let content = std::fs::read_to_string(&skill_file)
-            .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to read skill file: {}", e)))?;
+        let content = std::fs::read_to_string(&skill_file).map_err(|e| {
+            agent_primitives::AgentError::Tool(format!("Failed to read skill file: {}", e))
+        })?;
 
         // Parse YAML frontmatter
         let (metadata, instructions) = self.parse_skill_frontmatter(&content)?;
@@ -329,10 +329,9 @@ impl LoadSkillTool {
 
     /// Load a specific file from a skill's directory
     async fn load_skill_file(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let file_path = args
-            .get("file")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'file' parameter".to_string()))?;
+        let file_path = args.get("file").and_then(|v| v.as_str()).ok_or_else(|| {
+            agent_primitives::AgentError::Tool("Missing 'file' parameter".to_string())
+        })?;
 
         // Parse path and get skill name
         let (skill_name_from_path, relative_path, is_explicit) = self.parse_skill_path(file_path);
@@ -342,11 +341,11 @@ impl LoadSkillTool {
             skill_name_from_path
         } else {
             ctx.get_state("skill:current_skill")
-                .ok_or_else(|| zero_core::ZeroError::Tool(
+                .ok_or_else(|| agent_primitives::AgentError::Tool(
                     "No skill context. Either use @skill:skill-name/path format or load a skill first using the 'skill' parameter.".to_string()
                 ))?
                 .as_str()
-                .ok_or_else(|| zero_core::ZeroError::Tool("Invalid skill state".to_string()))?
+                .ok_or_else(|| agent_primitives::AgentError::Tool("Invalid skill state".to_string()))?
                 .to_string()
         };
 
@@ -357,13 +356,13 @@ impl LoadSkillTool {
 
         // Security: Ensure path doesn't escape skill directory
         if !full_path.starts_with(&skill_dir) {
-            return Err(zero_core::ZeroError::Tool(
+            return Err(agent_primitives::AgentError::Tool(
                 "Invalid path: cannot access files outside skill directory".to_string(),
             ));
         }
 
         if !full_path.exists() {
-            return Err(zero_core::ZeroError::Tool(format!(
+            return Err(agent_primitives::AgentError::Tool(format!(
                 "Skill file not found: {} (searched in skill: {})",
                 relative_path, skill_name
             )));
@@ -381,8 +380,9 @@ impl LoadSkillTool {
         }
 
         // Read file content
-        let content = std::fs::read_to_string(&full_path)
-            .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to read skill file: {}", e)))?;
+        let content = std::fs::read_to_string(&full_path).map_err(|e| {
+            agent_primitives::AgentError::Tool(format!("Failed to read skill file: {}", e))
+        })?;
 
         // Get the tool call ID for tracking
         let tool_call_id = ctx.function_call_id();
@@ -414,7 +414,7 @@ impl LoadSkillTool {
             let instructions = parts[2].trim().to_string();
 
             let metadata: Value = serde_yaml::from_str(yaml_content).map_err(|e| {
-                zero_core::ZeroError::Tool(format!("Failed to parse skill YAML: {}", e))
+                agent_primitives::AgentError::Tool(format!("Failed to parse skill YAML: {}", e))
             })?;
 
             Ok((metadata, instructions))
@@ -491,9 +491,9 @@ fn is_binary_file(filename: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_primitives::FileSystemContext;
     use std::path::PathBuf;
     use tempfile::TempDir;
-    use zero_core::FileSystemContext;
 
     /// Test FileSystemContext that returns a configurable list of skills
     /// roots. Mirrors what `GatewayFileSystem` does in production but

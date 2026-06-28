@@ -56,5 +56,5 @@ Core tools are always enabled. Optional tools depend on `ToolSettings` boolean f
 
 ## Key Intra-Repo Dependencies
 
-- `zero-core` — `Tool`, `ToolContext`, `FileSystemContext`
+- `agent-primitives` — `Tool`, `ToolContext`, `FileSystemContext`
 - `zbot-stores-traits` — `MemoryFactStore` (for `MemoryTool`, `WardTool`)

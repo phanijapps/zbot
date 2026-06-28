@@ -3,7 +3,7 @@
 // Shared guard functions that redirect tools when preconditions aren't met.
 // ============================================================================
 
-use zero_core::ToolContext;
+use agent_primitives::ToolContext;
 
 /// Check if the given `specs/` directory holds any unfilled placeholder
 /// spec — a file containing the literal text `"Status: placeholder"`.

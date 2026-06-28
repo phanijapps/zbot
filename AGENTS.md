@@ -5,8 +5,7 @@ z-Bot is a multipurpose AI agent that lives on the desktop and connects to any O
 ## Workspace Layout
 
 ```
-framework/   — zero-* Rust library crates (publishable as zero-agent-framework)
-runtime/     — agent-runtime, agent-tools (execution engine + built-in tools)
+runtime/     — agent-primitives, agent-runtime, agent-tools (shared primitives + execution engine + built-in tools)
 services/    — api-logs, daily-sessions, execution-state, knowledge-graph
 stores/      — zbot-stores* persistence layer (traits, domain types, SQLite impl)
 gateway/     — gateway-* sub-crates + gateway shell (HTTP/WS network layer)
@@ -17,11 +16,10 @@ apps/        — daemon (zbotd), cli (zbot), ui (React dashboard)
 ## Dependency Order (bottom → top)
 
 ```
-zero-core
-  ├── zero-llm, zero-tool, zero-mcp, zero-session, zero-prompt
-  └── zero-middleware (re-exports agent-runtime::middleware)
-        └── zero-agent
-              └── zero-app (aggregator prelude)
+agent-primitives
+  ├── agent-tools
+  └── agent-runtime
+        └── gateway-execution
 
 zbot-stores-domain (serde only)
   └── zbot-stores-traits

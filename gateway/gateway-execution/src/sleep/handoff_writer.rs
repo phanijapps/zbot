@@ -590,7 +590,7 @@ pub fn messages_to_chat_format(messages: &[Message]) -> Vec<ChatMessage> {
             };
             ChatMessage {
                 role: m.role.clone(),
-                content: vec![zero_core::types::Part::Text {
+                content: vec![agent_primitives::types::Part::Text {
                     text: m.content.clone(),
                 }],
                 tool_calls,

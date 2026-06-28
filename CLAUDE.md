@@ -26,7 +26,7 @@ Read `memory-bank/decisions.md` for technology choices and architecture decision
 
 ## Development Patterns
 - Plans with concrete data models and file paths, not prose
-- Layer-by-layer implementation: `framework/ → runtime/ → services/ → gateway/ → apps/`
+- Layer-by-layer implementation: `runtime/ → stores/ → services/ → gateway/ → apps/`
 - Test each phase: `cargo check --workspace` after Rust, `npm run build` after TypeScript
 - Read before write: check existing patterns, avoid duplicating functionality
 - Follow adjacent code patterns for error handling, naming, async

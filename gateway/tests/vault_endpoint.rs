@@ -2,7 +2,7 @@ mod common;
 
 use axum_test::TestServer;
 use common::{make_state, setup};
-use gateway::{GatewayConfig, http::create_http_router, websocket::WebSocketHandler};
+use gateway::{http::create_http_router, websocket::WebSocketHandler, GatewayConfig};
 use serde_json::Value;
 use std::{net::Ipv4Addr, sync::Arc};
 use tempfile::TempDir;

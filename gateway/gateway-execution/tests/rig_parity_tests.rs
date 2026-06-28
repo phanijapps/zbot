@@ -21,12 +21,12 @@ use std::sync::Arc;
 
 use agent_runtime::executor::ExecutorError;
 use agent_runtime::llm::{ChatResponse, LlmClient, LlmError, StreamCallback, StreamChunk};
-use agent_runtime::AgentEngine;
 use agent_runtime::rig_adapter::engine::RigAgentEngine;
 use agent_runtime::rig_adapter::model::LlmCompletionModel;
 use agent_runtime::rig_adapter::RigToolAdapter;
 use agent_runtime::tools::ToolContext;
 use agent_runtime::types::{ChatMessage, StreamEvent};
+use agent_runtime::AgentEngine;
 use agent_runtime::{RigAgentConfig, RigModelConfig, ToolCall as AgentToolCall};
 use async_trait::async_trait;
 use gateway_events::GatewayEvent;
@@ -121,7 +121,15 @@ impl LlmClient for ScriptedLlm {
 fn convert_all(events: &[StreamEvent]) -> Vec<GatewayEvent> {
     events
         .iter()
-        .filter_map(|event| convert_stream_event(event.clone(), AGENT_ID, CONVERSATION_ID, SESSION_ID, EXECUTION_ID))
+        .filter_map(|event| {
+            convert_stream_event(
+                event.clone(),
+                AGENT_ID,
+                CONVERSATION_ID,
+                SESSION_ID,
+                EXECUTION_ID,
+            )
+        })
         .collect()
 }
 
@@ -166,7 +174,10 @@ async fn parity_simple_chat() {
         .expect("run");
 
     let names = variant_names(&convert_all(&events));
-    assert!(names.contains(&"Token"), "simple chat must yield Token events: {names:?}");
+    assert!(
+        names.contains(&"Token"),
+        "simple chat must yield Token events: {names:?}"
+    );
     assert!(
         names.contains(&"TurnComplete"),
         "Done must convert to TurnComplete: {names:?}"
@@ -246,7 +257,10 @@ async fn parity_error() {
         matches!(err, ExecutorError::LlmError(_)),
         "expected LlmError for parity with the legacy executor, got {err:?}"
     );
-    assert!(events.is_empty(), "no StreamEvents should be emitted before the error");
+    assert!(
+        events.is_empty(),
+        "no StreamEvents should be emitted before the error"
+    );
 }
 
 #[tokio::test]
@@ -271,18 +285,13 @@ async fn parity_stop_cancel() {
     let stop_for_callback = stop.clone();
     let mut events = Vec::new();
     engine
-        .execute_stream_with_stop_flag(
-            "hi",
-            &[],
-            Some(stop),
-            &mut |event| {
-                let is_token = matches!(event, StreamEvent::Token { .. });
-                events.push(event);
-                if is_token {
-                    stop_for_callback.store(true, Ordering::Release);
-                }
-            },
-        )
+        .execute_stream_with_stop_flag("hi", &[], Some(stop), &mut |event| {
+            let is_token = matches!(event, StreamEvent::Token { .. });
+            events.push(event);
+            if is_token {
+                stop_for_callback.store(true, Ordering::Release);
+            }
+        })
         .await
         .expect("stopped run should finalize");
 
@@ -291,7 +300,10 @@ async fn parity_stop_cancel() {
         .iter()
         .filter(|event| matches!(event, GatewayEvent::Token { .. }))
         .count();
-    assert_eq!(token_count, 1, "stop must halt after the first token: {gateway_events:?}");
+    assert_eq!(
+        token_count, 1,
+        "stop must halt after the first token: {gateway_events:?}"
+    );
     assert!(
         gateway_events
             .iter()
@@ -304,7 +316,7 @@ async fn parity_stop_cancel() {
 struct EchoTool;
 
 #[async_trait]
-impl zero_core::Tool for EchoTool {
+impl agent_primitives::Tool for EchoTool {
     fn name(&self) -> &str {
         "echo"
     }
@@ -313,9 +325,9 @@ impl zero_core::Tool for EchoTool {
     }
     async fn execute(
         &self,
-        _ctx: Arc<dyn zero_core::ToolContext>,
+        _ctx: Arc<dyn agent_primitives::ToolContext>,
         args: Value,
-    ) -> Result<Value, zero_core::error::ZeroError> {
+    ) -> Result<Value, agent_primitives::error::AgentError> {
         Ok(args)
     }
 }

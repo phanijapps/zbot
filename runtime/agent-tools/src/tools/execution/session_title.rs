@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use zero_core::{Result, Tool, ToolContext, ZeroError};
+use agent_primitives::{AgentError, Result, Tool, ToolContext};
 
 // ============================================================================
 // SET SESSION TITLE TOOL
@@ -59,10 +59,10 @@ impl Tool for SetSessionTitleTool {
         let title = args
             .get("title")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'title' string parameter".to_string()))?;
+            .ok_or_else(|| AgentError::Tool("Missing 'title' string parameter".to_string()))?;
 
         if title.trim().is_empty() {
-            return Err(ZeroError::Tool("Title cannot be empty".to_string()));
+            return Err(AgentError::Tool("Title cannot be empty".to_string()));
         }
 
         // Truncate overly long titles

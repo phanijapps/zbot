@@ -6,7 +6,7 @@ description = "Built-in tools for the agentzero application"
 license = "MIT"
 
 [dependencies]
-zero-core = { path = "../../framework/zero-core" }
+agent-primitives = { path = "../agent-primitives" }
 zbot-stores-traits = { path = "../../stores/zbot-stores-traits" }
 
 async-trait = "0.1"

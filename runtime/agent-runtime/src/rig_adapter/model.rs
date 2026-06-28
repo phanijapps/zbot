@@ -35,7 +35,9 @@ use rig::one_or_many::OneOrMany;
 use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
 use serde_json::{json, Value};
 
-use crate::llm::{ChatMessage, ChatResponse, LlmClient, LlmError, StreamChunk, StreamCallback, TokenUsage};
+use crate::llm::{
+    ChatMessage, ChatResponse, LlmClient, LlmError, StreamCallback, StreamChunk, TokenUsage,
+};
 use crate::types::ToolCall as AgentToolCall;
 
 /// Bridge response type carrying token usage from the AgentZero LlmClient.
@@ -143,7 +145,8 @@ impl CompletionModel for LlmCompletionModel {
         let tools = convert_tools(&request.tools);
         let client = self.client.clone();
 
-        let (tx, rx) = mpsc::unbounded::<Result<RawStreamingChoice<LlmCompletionResponse>, CompletionError>>();
+        let (tx, rx) =
+            mpsc::unbounded::<Result<RawStreamingChoice<LlmCompletionResponse>, CompletionError>>();
         let sender = tx.clone();
 
         // The callback is a synchronous Fn invoked from inside the async
@@ -197,8 +200,8 @@ impl CompletionModel for LlmCompletionModel {
 pub(crate) fn convert_messages(
     request: &CompletionRequest,
 ) -> Result<Vec<ChatMessage>, CompletionError> {
+    use agent_primitives::types::Part;
     use rig::completion::message::{AssistantContent, UserContent};
-    use zero_core::types::Part;
 
     let mut out = Vec::new();
     for message in request.chat_history.iter() {
@@ -412,7 +415,7 @@ mod tests {
         }
     }
 
-    fn agentzero_tool_call(id: &str, name: &str, args: Value) -> AgentToolCall {
+    fn agent_tool_call(id: &str, name: &str, args: Value) -> AgentToolCall {
         AgentToolCall {
             id: id.to_string(),
             name: name.to_string(),
@@ -449,11 +452,7 @@ mod tests {
         let stub = Arc::new(StubLlm {
             chunks: vec!["think".to_string()],
             final_text: "think".to_string(),
-            tool_calls: vec![agentzero_tool_call(
-                "call_1",
-                "calculator",
-                json!({"x": 1}),
-            )],
+            tool_calls: vec![agent_tool_call("call_1", "calculator", json!({"x": 1}))],
             seen: Arc::new(Mutex::new(Vec::new())),
         });
         let model = LlmCompletionModel::new(stub as Arc<dyn LlmClient>, "stub");
@@ -532,11 +531,11 @@ mod tests {
         // must produce a valid OpenAI message chain (assistant.tool_calls paired
         // with a role:"tool" message whose tool_call_id matches). Dropping the
         // tool result made strict providers (DeepSeek/GLM) reject the request.
+        use rig::completion::message::Text as RigText;
         use rig::completion::message::{
             AssistantContent, ToolCall as RigToolCall, ToolFunction, ToolResult as RigToolResult,
             UserContent,
         };
-        use rig::completion::message::Text as RigText;
 
         let assistant_call = Message::Assistant {
             id: None,

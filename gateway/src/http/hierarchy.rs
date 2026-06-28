@@ -17,8 +17,8 @@
 
 use crate::state::AppState;
 use axum::{
-    Json,
     extract::{Query, State},
+    Json,
 };
 use serde::{Deserialize, Serialize};
 use zbot_stores::HierarchySummary;

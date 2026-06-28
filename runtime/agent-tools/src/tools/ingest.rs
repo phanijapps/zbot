@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use zero_core::{Result, Tool, ToolContext, ZeroError};
+use agent_primitives::{AgentError, Result, Tool, ToolContext};
 
 // ---------------------------------------------------------------------------
 // Public shapes
@@ -225,7 +225,7 @@ impl Tool for IngestTool {
         let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
 
         if entities.is_empty() && relationships.is_empty() && text.is_empty() {
-            return Err(ZeroError::Tool(
+            return Err(AgentError::Tool(
                 "ingest requires at least one of: entities, relationships, or text".into(),
             ));
         }
@@ -236,7 +236,7 @@ impl Tool for IngestTool {
             self.access
                 .ingest_structured(&agent_id, entities, relationships)
                 .await
-                .map_err(ZeroError::Tool)?
+                .map_err(AgentError::Tool)?
         } else {
             StructuredCounts {
                 entities_upserted: 0,
@@ -263,7 +263,7 @@ impl Tool for IngestTool {
             self.access
                 .enqueue(source_id, source_type, text, session_id_opt, &agent_id)
                 .await
-                .map_err(ZeroError::Tool)?
+                .map_err(AgentError::Tool)?
         } else {
             (String::new(), 0)
         };

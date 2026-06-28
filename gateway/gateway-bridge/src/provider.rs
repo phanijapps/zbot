@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::outbox::OutboxRepository;
 use crate::protocol::BridgeServerMessage;
 use crate::registry::BridgeRegistry;
-use zero_core::connectors::{
+use agent_primitives::connectors::{
     CapabilityInfo, ConnectorInfo, ConnectorResourceProvider, ResourceInfo,
 };
 

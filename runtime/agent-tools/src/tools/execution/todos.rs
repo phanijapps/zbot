@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use zero_core::{Result, Tool, ToolContext, ZeroError};
+use agent_primitives::{AgentError, Result, Tool, ToolContext};
 
 /// State key for TODO list
 const TODO_LIST_KEY: &str = "app:todo_list";
@@ -266,7 +266,7 @@ impl Tool for TodoTool {
         let action = args
             .get("action")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'action' parameter".to_string()))?;
+            .ok_or_else(|| AgentError::Tool("Missing 'action' parameter".to_string()))?;
 
         match action {
             "add" => {
@@ -278,7 +278,9 @@ impl Tool for TodoTool {
                 if let Some(items) = args.get("items").and_then(|v| v.as_array()) {
                     // Batch creation
                     if items.is_empty() {
-                        return Err(ZeroError::Tool("'items' array cannot be empty".to_string()));
+                        return Err(AgentError::Tool(
+                            "'items' array cannot be empty".to_string(),
+                        ));
                     }
 
                     let mut created_ids: Vec<String> = Vec::new();
@@ -287,7 +289,7 @@ impl Tool for TodoTool {
                     for item in items {
                         let title =
                             item.get("title").and_then(|v| v.as_str()).ok_or_else(|| {
-                                ZeroError::Tool("Each item must have a 'title'".to_string())
+                                AgentError::Tool("Each item must have a 'title'".to_string())
                             })?;
 
                         let description = item
@@ -329,7 +331,7 @@ impl Tool for TodoTool {
                 } else {
                     // Single creation (backwards compatible)
                     let title = args.get("title").and_then(|v| v.as_str()).ok_or_else(|| {
-                        ZeroError::Tool(
+                        AgentError::Tool(
                             "Missing 'title' or 'items' parameter for add action".to_string(),
                         )
                     })?;
@@ -372,14 +374,14 @@ impl Tool for TodoTool {
 
             "update" => {
                 let id = args.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
-                    ZeroError::Tool("Missing 'id' parameter for update action".to_string())
+                    AgentError::Tool("Missing 'id' parameter for update action".to_string())
                 })?;
 
                 let completed =
                     args.get("completed")
                         .and_then(|v| v.as_bool())
                         .ok_or_else(|| {
-                            ZeroError::Tool(
+                            AgentError::Tool(
                                 "Missing 'completed' parameter for update action".to_string(),
                             )
                         })?;
@@ -400,13 +402,13 @@ impl Tool for TodoTool {
                         "pending_count": todos.pending().len()
                     }))
                 } else {
-                    Err(ZeroError::Tool(format!("TODO item not found: {}", id)))
+                    Err(AgentError::Tool(format!("TODO item not found: {}", id)))
                 }
             }
 
             "delete" => {
                 let id = args.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
-                    ZeroError::Tool("Missing 'id' parameter for delete action".to_string())
+                    AgentError::Tool("Missing 'id' parameter for delete action".to_string())
                 })?;
 
                 let mut todos = Self::load_todos(&ctx);
@@ -424,7 +426,7 @@ impl Tool for TodoTool {
                         "total_items": todos.items.len()
                     }))
                 } else {
-                    Err(ZeroError::Tool(format!("TODO item not found: {}", id)))
+                    Err(AgentError::Tool(format!("TODO item not found: {}", id)))
                 }
             }
 
@@ -453,7 +455,7 @@ impl Tool for TodoTool {
                 }))
             }
 
-            _ => Err(ZeroError::Tool(format!("Unknown action: {}", action))),
+            _ => Err(AgentError::Tool(format!("Unknown action: {}", action))),
         }
     }
 }

@@ -266,7 +266,7 @@ impl ConversationRepository {
 
                 agent_runtime::ChatMessage {
                     role: m.role.clone(),
-                    content: vec![zero_core::types::Part::Text {
+                    content: vec![agent_primitives::types::Part::Text {
                         text: m.content.clone(),
                     }],
                     tool_calls,

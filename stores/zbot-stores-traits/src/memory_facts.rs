@@ -43,7 +43,7 @@ pub struct MemoryHealthMetrics {
     pub failed_recent: u64,
 }
 
-/// One row in the per-skill staleness tracker. Lives in `zero-core`
+/// One row in the per-skill staleness tracker. Lives in `agent-primitives`
 /// (rather than `gateway-database`) so this trait can use it without
 /// dragging the SQLite stack into agent-tools.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,8 +73,8 @@ pub struct SkillIndexRow {
 /// Implementations can wrap a database (SQLite via `MemoryRepository`),
 /// a remote API, or an in-memory store for testing.
 ///
-/// This trait lives in `zero-core` so that `agent-tools` (which depends on
-/// `zero-core` but not `gateway-database`) can call DB operations via the trait.
+/// This trait lives in `agent-primitives` so that `agent-tools` (which depends on
+/// `agent-primitives` but not `gateway-database`) can call DB operations via the trait.
 #[async_trait]
 pub trait MemoryFactStore: Send + Sync {
     /// Save a structured fact to durable memory.

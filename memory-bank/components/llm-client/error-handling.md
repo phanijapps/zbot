@@ -4,13 +4,13 @@
 
 ### 1. Unsupported Content Type (Capability Check)
 
-**Trigger**: `OpenAiEncoder.encode_content()` receives Image/File parts but model lacks `vision` capability.
+**Trigger**: OpenAI-compatible request encoding receives Image/File parts but the selected model lacks vision capability.
 
-**Behavior**: Returns `EncodingError::UnsupportedContentType { part_type: "image", model: "gpt-3.5-turbo" }`. Error propagates to the agent as an execution error. Planning agent sees it and delegates to a vision-capable model.
+**Behavior**: The runtime surfaces an execution error. Planning logic can then delegate to a vision-capable model or use `multimodal_analyze`.
 
-**No silent dropping.** The framework never strips content quietly.
+**No silent dropping.** The runtime never strips content quietly.
 
-**Location**: `framework/zero-llm/src/openai_encoder.rs`, `encode_content()` validation loop.
+**Location**: `runtime/agent-runtime/src/llm/openai.rs`, request-body construction.
 
 ---
 
@@ -45,7 +45,7 @@
 
 **Trigger**: `resolve_source("/path/to/image.png")` in the multimodal tool, file doesn't exist.
 
-**Behavior**: Returns `ZeroError::Tool("File not found: /path/to/image.png")`. Agent sees the error and can adjust.
+**Behavior**: Returns `AgentError::Tool("File not found: /path/to/image.png")`. Agent sees the error and can adjust.
 
 **Location**: `runtime/agent-tools/src/tools/multimodal.rs`, `resolve_source()`.
 
@@ -57,7 +57,7 @@
 
 **Behavior**: Returns `std::io::Error(InvalidData)`. Caller decides — typically the message is rejected before DB persistence.
 
-**Location**: `framework/zero-core/src/multimodal.rs`, `write_content_addressed()`.
+**Location**: `runtime/agent-primitives/src/multimodal.rs`, `write_content_addressed()`.
 
 ---
 
@@ -67,11 +67,9 @@
 
 **Behavior in OpenAiClient**: Warning logged, original part kept as-is. The API call may fail with the provider if the content is garbled.
 
-**Behavior in OpenAiEncoder**: Returns `EncodingError::Io(...)`.
+**Behavior in multimodal tool**: Returns `AgentError::Tool("Failed to resolve image: ...")`.
 
-**Behavior in multimodal tool**: Returns `ZeroError::Tool("Failed to resolve image: ...")`.
-
-**Location**: `framework/zero-core/src/multimodal.rs` and `runtime/agent-runtime/src/llm/openai.rs`.
+**Location**: `runtime/agent-primitives/src/multimodal.rs` and `runtime/agent-runtime/src/llm/openai.rs`.
 
 ---
 
@@ -79,7 +77,7 @@
 
 **Trigger**: The vision model API returns non-2xx status.
 
-**Behavior**: Returns `ZeroError::Tool("Multimodal API error (status): error_body")`. Agent sees the full error including status code and response body.
+**Behavior**: Returns `AgentError::Tool("Multimodal API error (status): error_body")`. Agent sees the full error including status code and response body.
 
 **Common causes**:
 - Model doesn't support the content format (older models)

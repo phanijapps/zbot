@@ -16,8 +16,8 @@ use crate::middleware::traits::{
     ExecutionState, MiddlewareContext, MiddlewareEffect, PreProcessMiddleware,
 };
 use crate::types::{ChatMessage, StreamEvent, ToolCall};
+use agent_primitives::types::Part;
 use serde_json::json;
-use zero_core::types::Part;
 
 /// Compress an assistant message into a one-line summary.
 ///

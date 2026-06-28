@@ -169,7 +169,7 @@ fn extract_key_info(content: &str) -> String {
 /// 3. Only drop messages if still over budget after compression
 #[cfg(test)]
 pub(crate) fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
-    use zero_core::types::Part;
+    use agent_primitives::types::Part;
 
     const KEEP_RECENT: usize = 20;
 
@@ -314,7 +314,7 @@ fn truncate_tool_args(args: &Value, max_chars: usize) -> Value {
                         key.clone(),
                         Value::String(format!(
                             "{}... [truncated, {} chars]",
-                            zero_core::truncate_str(s, 200),
+                            agent_primitives::truncate_str(s, 200),
                             s.len()
                         )),
                     );
@@ -599,8 +599,8 @@ mod truncation_tests {
 mod compaction_tests {
     use super::*;
     use crate::types::ToolCall;
+    use agent_primitives::types::Part;
     use serde_json::json;
-    use zero_core::types::Part;
 
     #[test]
     fn test_compact_compresses_before_dropping() {
@@ -837,8 +837,8 @@ mod compaction_tests {
 mod helper_coverage_tests {
     use super::*;
     use crate::types::ToolCall;
+    use agent_primitives::types::Part;
     use serde_json::Value;
-    use zero_core::types::Part;
 
     // ------------- sanitize_messages -------------
     #[test]

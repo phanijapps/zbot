@@ -16,7 +16,7 @@ api-logs = { path = "../../services/api-logs" }
 execution-state = { path = "../../services/execution-state" }
 agent-runtime = { path = "../../runtime/agent-runtime" }
 gateway-services = { path = "../../gateway/gateway-services" }
-zero-core = { path = "../../framework/zero-core" }
+agent-primitives = { path = "../../runtime/agent-primitives" }
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled", "functions", "load_extension"] }

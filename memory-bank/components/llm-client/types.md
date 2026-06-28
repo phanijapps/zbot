@@ -2,7 +2,7 @@
 
 ## Backend Types (Rust)
 
-### Part — `framework/zero-core/src/types.rs`
+### Part — `runtime/agent-primitives/src/types.rs`
 
 Content element. Tagged enum with `#[serde(tag = "type")]`.
 
@@ -46,7 +46,7 @@ Helper methods:
 - `Part::type_name() -> &'static str` — "text", "image", "file", etc.
 - `Part::is_multimodal() -> bool` — true for Image/File
 
-### ContentSource — `framework/zero-core/src/types.rs`
+### ContentSource — `runtime/agent-primitives/src/types.rs`
 
 Where content bytes live. Tagged with `#[serde(tag = "type", content = "value")]`.
 
@@ -63,7 +63,7 @@ pub enum ContentSource {
 }
 ```
 
-### ImageDetail — `framework/zero-core/src/types.rs`
+### ImageDetail — `runtime/agent-primitives/src/types.rs`
 
 ```rust
 #[serde(rename_all = "lowercase")]
@@ -97,43 +97,12 @@ Accessors:
 - `text_content() -> String` — joins all Text parts with `\n`
 - `has_multimodal_content() -> bool` — any Image/File parts?
 
-### ProviderEncoder — `framework/zero-llm/src/encoding.rs`
+### OpenAI-Compatible Encoding — `runtime/agent-runtime/src/llm/openai.rs`
 
-```rust
-pub trait ProviderEncoder {
-    fn encode_content(&self, parts: &[Part]) -> Result<Value, EncodingError>;
-    fn supports_part(&self, part: &Part) -> bool;
-    fn filter_unsupported<'a>(&self, parts: &'a [Part]) -> (Vec<&'a Part>, Vec<&'a Part>);
-}
-```
-
-### EncodingError — `framework/zero-llm/src/encoding.rs`
-
-```rust
-pub enum EncodingError {
-    UnsupportedContentType { part_type: String, model: String },
-    EncodingFailed { reason: String },
-    Io(std::io::Error),
-}
-```
-
-### EncoderCapabilities — `framework/zero-llm/src/openai_encoder.rs`
-
-```rust
-pub struct EncoderCapabilities {
-    pub vision: bool,
-    pub tools: bool,
-}
-```
-
-### OpenAiEncoder — `framework/zero-llm/src/openai_encoder.rs`
-
-```rust
-pub struct OpenAiEncoder {
-    capabilities: EncoderCapabilities,
-    model_id: String,
-}
-```
+`OpenAiClient` encodes `ChatMessage.content: Vec<Part>` directly while building
+the request body. Text-only content remains a plain string for compatibility;
+multimodal content becomes OpenAI-compatible content blocks after `FileRef`
+sources are rehydrated through `agent_primitives::multimodal::rehydrate_source`.
 
 ### MultimodalConfig — `gateway/gateway-services/src/settings.rs`
 

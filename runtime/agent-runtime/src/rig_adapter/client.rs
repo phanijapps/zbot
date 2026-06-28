@@ -36,7 +36,7 @@ impl CompletionClient for LlmCompletionClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::{ChatResponse, LlmClient, LlmError, StreamCallback, StreamChunk};
+    use crate::llm::{ChatResponse, LlmClient, LlmError, StreamCallback};
     use crate::types::{ChatMessage, ToolCall};
     use async_trait::async_trait;
     use rig::client::CompletionClient;
@@ -88,7 +88,9 @@ mod tests {
             _tools: Option<Value>,
             _callback: StreamCallback,
         ) -> Result<ChatResponse, LlmError> {
-            Err(LlmError::ApiError("chat_stream not used by extractor".to_string()))
+            Err(LlmError::ApiError(
+                "chat_stream not used by extractor".to_string(),
+            ))
         }
     }
 

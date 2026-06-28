@@ -12,7 +12,7 @@ The LLM client layer carries content between agents and LLM providers. It suppor
 
 ## Design Principles
 
-1. **Framework as backbone** — carries content, enforces capability checks, no processing logic
+1. **Primitive types as backbone** — carry content without owning provider transport
 2. **Intelligence in agents** — planning agent decides routing, sharding, delegation
 3. **No silent degradation** — unsupported content returns clear errors; agent adapts
 4. **No DB bloat** — base64 blobs flushed to content-addressed files on disk
@@ -51,16 +51,9 @@ Messages carry `Vec<Part>` where Part is:
 
 ## Provider Encoding
 
-`ProviderEncoder` trait isolates wire format per provider:
-
-```
-trait ProviderEncoder {
-    fn encode_content(&self, parts: &[Part]) -> Result<Value, EncodingError>;
-    fn supports_part(&self, part: &Part) -> bool;
-}
-```
-
-`OpenAiEncoder` implementation checks `ModelCapabilities.vision` — rejects Image/File parts for non-vision models with `EncodingError::UnsupportedContentType`.
+`OpenAiClient` owns the OpenAI-compatible wire encoding. It converts text-only
+messages to the legacy plain-string content shape and multimodal messages to
+provider content blocks after rehydrating any `FileRef` sources from disk.
 
 ## Content Persistence
 
@@ -115,12 +108,10 @@ Provider credentials (baseUrl, apiKey) resolved from `config/providers.json` at 
 
 | File | Purpose |
 |------|---------|
-| `framework/zero-core/src/types.rs` | Part enum, ContentSource, ImageDetail |
-| `framework/zero-core/src/multimodal.rs` | flush_part_to_disk, rehydrate_source, MIME utils |
-| `framework/zero-llm/src/encoding.rs` | ProviderEncoder trait, EncodingError |
-| `framework/zero-llm/src/openai_encoder.rs` | OpenAiEncoder — Parts → OpenAI content blocks |
+| `runtime/agent-primitives/src/types.rs` | Part enum, ContentSource, ImageDetail |
+| `runtime/agent-primitives/src/multimodal.rs` | flush_part_to_disk, rehydrate_source, MIME utils |
 | `runtime/agent-runtime/src/types/messages.rs` | ChatMessage with Vec<Part>, custom serde |
-| `runtime/agent-runtime/src/llm/openai.rs` | OpenAiClient with FileRef rehydration |
+| `runtime/agent-runtime/src/llm/openai.rs` | OpenAiClient with FileRef rehydration and OpenAI-compatible content encoding |
 | `runtime/agent-tools/src/tools/multimodal.rs` | multimodal_analyze tool |
 | `gateway/gateway-services/src/settings.rs` | MultimodalConfig in ExecutionSettings |
 | `gateway/gateway-execution/src/invoke/executor.rs` | Injects multimodal_config into executor state |

@@ -7,10 +7,10 @@
 //! 2. The task is passed with optional context
 //! 3. Parent receives a callback when subagent completes
 
+use agent_primitives::{Tool, ToolContext};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
-use zero_core::{Tool, ToolContext};
 
 /// Tool for delegating tasks to subagents.
 ///
@@ -106,16 +106,22 @@ impl Tool for DelegateTool {
         }))
     }
 
-    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> zero_core::Result<Value> {
+    async fn execute(
+        &self,
+        ctx: Arc<dyn ToolContext>,
+        args: Value,
+    ) -> agent_primitives::Result<Value> {
         let target_agent_id = args
             .get("agent_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| zero_core::ZeroError::Tool("agent_id is required".to_string()))?;
+            .ok_or_else(|| {
+                agent_primitives::AgentError::Tool("agent_id is required".to_string())
+            })?;
 
         let task = args
             .get("task")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| zero_core::ZeroError::Tool("task is required".to_string()))?;
+            .ok_or_else(|| agent_primitives::AgentError::Tool("task is required".to_string()))?;
 
         // Guidance only: long delegation tasks are allowed, but the tool result
         // nudges agents toward file references before pasted specs get unwieldy.
@@ -144,7 +150,7 @@ impl Tool for DelegateTool {
         if let Some(ctx_val) = &context {
             let ctx_str = serde_json::to_string(ctx_val).unwrap_or_default();
             if ctx_str.len() > RECOMMENDED_TASK_CHARS {
-                return Err(zero_core::ZeroError::Tool(format!(
+                return Err(agent_primitives::AgentError::Tool(format!(
                     "Context too large ({} chars). Maximum is {} chars. Only pass essential context.",
                     ctx_str.len(),
                     RECOMMENDED_TASK_CHARS
@@ -192,7 +198,7 @@ impl Tool for DelegateTool {
                 "step_executor",
             ];
             if !ALLOWED_MODES.contains(&mode) {
-                return Err(zero_core::ZeroError::Tool(format!(
+                return Err(agent_primitives::AgentError::Tool(format!(
                     "Invalid delegation mode '{mode}'. Expected one of: {}",
                     ALLOWED_MODES.join(", ")
                 )));
@@ -207,7 +213,7 @@ impl Tool for DelegateTool {
 
         // Guard: Prevent self-delegation
         if target_agent_id == parent_agent_id {
-            return Err(zero_core::ZeroError::Tool(
+            return Err(agent_primitives::AgentError::Tool(
                 "Cannot delegate to yourself. Use a different agent or handle the task directly."
                     .to_string(),
             ));
@@ -279,7 +285,7 @@ impl Tool for DelegateTool {
 
         // Set delegation action for the executor to pick up
         let mut actions = ctx.actions();
-        actions.delegate = Some(zero_core::event::DelegateAction {
+        actions.delegate = Some(agent_primitives::event::DelegateAction {
             agent_id: target_agent_id.to_string(),
             task: enriched_task,
             context,
@@ -379,7 +385,7 @@ mod tests {
         let ctx = ctx_for("root");
         let res = tool.execute(ctx, json!({ "task": "do thing" })).await;
         let err = res.expect_err("must error");
-        assert!(matches!(err, zero_core::ZeroError::Tool(_)));
+        assert!(matches!(err, agent_primitives::AgentError::Tool(_)));
         assert!(format!("{err}").contains("agent_id"));
     }
 

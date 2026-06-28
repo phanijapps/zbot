@@ -2,6 +2,7 @@
 //!
 //! Builds agent executors with all required components.
 
+use agent_primitives::{ConnectorResourceProvider, FileSystemContext};
 use agent_runtime::{
     AgentExecutor, BoxedAgentEngine, ContextEditingConfig, ContextEditingMiddleware, DelegateTool,
     ExecutorConfig, KeepPolicy, LlmClient, LlmConfig, McpManager, MiddlewarePipeline, OpenAiClient,
@@ -40,7 +41,6 @@ use gateway_services::providers::Provider;
 use gateway_services::{McpService, SettingsService, SkillService};
 use std::path::PathBuf;
 use std::sync::Arc;
-use zero_core::{ConnectorResourceProvider, FileSystemContext};
 use zbot_stores::MemoryFactStore;
 use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
 
@@ -169,12 +169,7 @@ fn select_engine_with(executor: AgentExecutor, use_rig: bool) -> BoxedAgentEngin
         "ZBOT_ENGINE=rig: driving RigAgentEngine"
     );
     Box::new(RigAgentEngine::with_tool_hooks(
-        rig_config,
-        model,
-        tools,
-        shared,
-        before,
-        after,
+        rig_config, model, tools, shared, before, after,
     ))
 }
 
@@ -934,7 +929,7 @@ impl ExecutorBuilder {
             registry: &mut ToolRegistry,
             actor: RuntimeActorKind,
             capabilities: &[ToolCapability],
-            tool: Arc<dyn zero_core::Tool>,
+            tool: Arc<dyn agent_primitives::Tool>,
         ) {
             if actor_allows_all(actor, capabilities) {
                 registry.register(tool);
@@ -1419,7 +1414,10 @@ mod tests {
 
         // Default: legacy executor.
         let legacy = build(&dir, &agent, &provider, &mcp_service).await;
-        assert_eq!(select_engine_with(legacy, false).engine_name(), "agent-executor");
+        assert_eq!(
+            select_engine_with(legacy, false).engine_name(),
+            "agent-executor"
+        );
 
         // ZBOT_ENGINE=rig + no MCP + rig_agent_config present → RigAgentEngine.
         let rig = build(&dir, &agent, &provider, &mcp_service).await;
@@ -1438,12 +1436,25 @@ mod tests {
         let provider = sample_provider();
 
         let executor = ExecutorBuilder::new(dir.path().to_path_buf(), ToolSettings::default())
-            .build(&agent, &provider, "c", "s", &[], &[], None, &mcp_service, None)
+            .build(
+                &agent,
+                &provider,
+                "c",
+                "s",
+                &[],
+                &[],
+                None,
+                &mcp_service,
+                None,
+            )
             .await
             .expect("executor build");
 
         // Rig requested but MCP present → must fall back to legacy (no orphan).
-        assert_eq!(select_engine_with(executor, true).engine_name(), "agent-executor");
+        assert_eq!(
+            select_engine_with(executor, true).engine_name(),
+            "agent-executor"
+        );
     }
 
     #[tokio::test]

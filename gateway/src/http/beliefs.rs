@@ -16,9 +16,9 @@
 
 use crate::state::AppState;
 use axum::{
-    Json,
     extract::{Path, Query, State},
     http::StatusCode,
+    Json,
 };
 use serde::{Deserialize, Serialize};
 use zbot_stores_traits::{Belief, BeliefContradiction, ContradictionType, Resolution};

@@ -79,7 +79,7 @@ pub fn log_tool_result(
 
     // Truncate result for logging
     let truncated = if result.len() > 500 {
-        format!("{}...", zero_core::truncate_str(result, 500))
+        format!("{}...", agent_primitives::truncate_str(result, 500))
     } else {
         result.to_string()
     };

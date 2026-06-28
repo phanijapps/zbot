@@ -1,6 +1,6 @@
 use agent_runtime::{ChatMessage, LlmClient};
-use schemars::JsonSchema;
 use gateway_services::{AgentService, SharedVaultPaths, SkillService, SkillSource};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -1152,7 +1152,6 @@ async fn search_resources(fact_store: &dyn MemoryFactStore, user_message: &str) 
         wards,
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Tests

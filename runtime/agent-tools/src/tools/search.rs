@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde_json::{Value, json};
 
-use zero_core::{Result, Tool, ToolContext};
+use agent_primitives::{Result, Tool, ToolContext};
 
 // ============================================================================
 // GREP TOOL
@@ -63,7 +63,9 @@ impl Tool for GrepTool {
         let pattern = args
             .get("pattern")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'pattern' parameter".to_string()))?;
+            .ok_or_else(|| {
+                agent_primitives::AgentError::Tool("Missing 'pattern' parameter".to_string())
+            })?;
 
         let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
@@ -127,7 +129,7 @@ impl GrepTool {
         };
 
         Regex::new(&compiled).map_err(|e| {
-            zero_core::ZeroError::Tool(format!(
+            agent_primitives::AgentError::Tool(format!(
                 "Invalid regex pattern {source_pattern:?}: {e}. Set literal=true for plain-text search or use Rust regex syntax."
             ))
         })
@@ -144,8 +146,9 @@ impl GrepTool {
             return Ok(());
         }
 
-        let entries = std::fs::read_dir(dir)
-            .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to read directory: {}", e)))?;
+        let entries = std::fs::read_dir(dir).map_err(|e| {
+            agent_primitives::AgentError::Tool(format!("Failed to read directory: {}", e))
+        })?;
 
         for entry in entries.flatten() {
             let path = entry.path();
@@ -183,8 +186,9 @@ impl GrepTool {
         results: &mut Vec<Value>,
         max_results: usize,
     ) -> Result<()> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to read file: {}", e)))?;
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            agent_primitives::AgentError::Tool(format!("Failed to read file: {}", e))
+        })?;
 
         for (line_num, line) in content.lines().enumerate() {
             if results.len() >= max_results {
@@ -241,7 +245,9 @@ impl Tool for GlobTool {
         let pattern = args
             .get("pattern")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'pattern' parameter".to_string()))?;
+            .ok_or_else(|| {
+                agent_primitives::AgentError::Tool("Missing 'pattern' parameter".to_string())
+            })?;
 
         let _include_hidden = args
             .get("include_hidden")
@@ -251,7 +257,9 @@ impl Tool for GlobTool {
         tracing::debug!("Glob: pattern={}", pattern);
 
         let matches = glob::glob(pattern)
-            .map_err(|e| zero_core::ZeroError::Tool(format!("Invalid glob pattern: {}", e)))?
+            .map_err(|e| {
+                agent_primitives::AgentError::Tool(format!("Invalid glob pattern: {}", e))
+            })?
             .filter_map(|entry| entry.ok())
             .filter(|path| path.is_file())
             .map(|path| path.display().to_string())

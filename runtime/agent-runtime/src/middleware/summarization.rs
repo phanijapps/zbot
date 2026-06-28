@@ -580,7 +580,7 @@ mod tests {
     async fn pipeline_does_not_summarize_when_context_editing_drops_below_threshold() {
         use crate::middleware::config::ContextEditingConfig;
         use crate::middleware::{ContextEditingMiddleware, MiddlewarePipeline};
-        use zero_core::types::Part;
+        use agent_primitives::types::Part;
 
         let (stub, calls) = StubSummaryClient::new("should not be called");
         let raw_messages = vec![
@@ -781,7 +781,7 @@ mod tests {
 
     #[test]
     fn split_messages_excludes_system_plan_tool_and_prior_summary_messages() {
-        use zero_core::types::Part;
+        use agent_primitives::types::Part;
 
         let (stub, _) = StubSummaryClient::new("");
         let mw = SummarizationMiddleware::new(

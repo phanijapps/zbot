@@ -14,8 +14,8 @@ use crate::llm::client::{
 };
 use crate::llm::config::LlmConfig;
 use crate::types::{ChatMessage, ToolCall};
-use zero_core::multimodal::rehydrate_source;
-use zero_core::types::{ContentSource, Part};
+use agent_primitives::multimodal::rehydrate_source;
+use agent_primitives::types::{ContentSource, Part};
 
 /// OpenAI-compatible LLM client
 ///

@@ -17,7 +17,7 @@ categories = ["development-tools"]
 
 [dependencies]
 # Internal crates
-zero-core = { path = "../../framework/zero-core" }
+agent-primitives = { path = "../agent-primitives" }
 agent-tools = { path = "../agent-tools" }
 zbot-stores-traits = { path = "../../stores/zbot-stores-traits" }
 

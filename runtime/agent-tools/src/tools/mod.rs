@@ -20,9 +20,9 @@ mod web;
 
 use std::sync::Arc;
 
+use agent_primitives::FileSystemContext;
+use agent_primitives::Tool;
 use serde::{Deserialize, Serialize};
-use zero_core::FileSystemContext;
-use zero_core::Tool;
 use zbot_stores_traits::MemoryFactStore;
 
 pub use agent::{CreateAgentTool, ListAgentsTool};

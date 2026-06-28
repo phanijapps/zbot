@@ -31,9 +31,9 @@
 
 use super::traits::{MiddlewareContext, MiddlewareEffect, PreProcessMiddleware};
 use crate::types::ChatMessage;
+use agent_primitives::types::Part;
 use async_trait::async_trait;
 use serde_json::Value;
-use zero_core::types::Part;
 
 /// Scan a conversation tape backwards for the most recent `update_plan`
 /// tool call and return its arguments as the plan state. This mirrors

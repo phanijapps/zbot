@@ -8,11 +8,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use tokio::io::AsyncWriteExt;
 
-use zero_core::FileSystemContext;
-use zero_core::{Result, Tool, ToolContext};
+use agent_primitives::FileSystemContext;
+use agent_primitives::{Result, Tool, ToolContext};
 
 fn validate_agent_id(name: &str) -> Result<()> {
     const RESERVED_AGENT_IDS: &[&str] = &["root", "orchestrator"];
@@ -28,7 +28,7 @@ fn validate_agent_id(name: &str) -> Result<()> {
     if valid {
         Ok(())
     } else {
-        Err(zero_core::ZeroError::Tool(
+        Err(agent_primitives::AgentError::Tool(
             "Invalid agent name. Use a non-reserved lowercase kebab-case agent ID like 'research-agent'."
                 .to_string(),
         ))
@@ -41,7 +41,7 @@ fn resolve_agent_dir(agents_dir: &Path, name: &str) -> Result<PathBuf> {
     if agent_dir.starts_with(agents_dir) {
         Ok(agent_dir)
     } else {
-        Err(zero_core::ZeroError::Tool(
+        Err(agent_primitives::AgentError::Tool(
             "Resolved agent directory escaped the agents directory".to_string(),
         ))
     }
@@ -230,42 +230,40 @@ impl Tool for CreateAgentTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let name = args
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'name' parameter".to_string()))?;
+        let name = args.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+            agent_primitives::AgentError::Tool("Missing 'name' parameter".to_string())
+        })?;
 
         let display_name = args
             .get("displayName")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                zero_core::ZeroError::Tool("Missing 'displayName' parameter".to_string())
+                agent_primitives::AgentError::Tool("Missing 'displayName' parameter".to_string())
             })?;
 
         let description = args
             .get("description")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                zero_core::ZeroError::Tool("Missing 'description' parameter".to_string())
+                agent_primitives::AgentError::Tool("Missing 'description' parameter".to_string())
             })?;
 
         let provider_id = args
             .get("providerId")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                zero_core::ZeroError::Tool("Missing 'providerId' parameter".to_string())
+                agent_primitives::AgentError::Tool("Missing 'providerId' parameter".to_string())
             })?;
 
-        let model = args
-            .get("model")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'model' parameter".to_string()))?;
+        let model = args.get("model").and_then(|v| v.as_str()).ok_or_else(|| {
+            agent_primitives::AgentError::Tool("Missing 'model' parameter".to_string())
+        })?;
 
         let instructions = args
             .get("instructions")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                zero_core::ZeroError::Tool("Missing 'instructions' parameter".to_string())
+                agent_primitives::AgentError::Tool("Missing 'instructions' parameter".to_string())
             })?;
 
         let temperature = args
@@ -308,31 +306,31 @@ impl Tool for CreateAgentTool {
 
         // Get agents directory from file system context
         let agents_dir = self.fs.agents_dir().ok_or_else(|| {
-            zero_core::ZeroError::Tool("Agents directory not configured".to_string())
+            agent_primitives::AgentError::Tool("Agents directory not configured".to_string())
         })?;
 
         // Create agent directory without overwriting existing agents or symlinks.
         let agent_dir = resolve_agent_dir(&agents_dir, name)?;
         match tokio::fs::symlink_metadata(&agent_dir).await {
             Ok(_) => {
-                return Err(zero_core::ZeroError::Tool(format!(
+                return Err(agent_primitives::AgentError::Tool(format!(
                     "Agent '{}' already exists",
                     name
                 )));
             }
             Err(e) if e.kind() == ErrorKind::NotFound => {}
             Err(e) => {
-                return Err(zero_core::ZeroError::Tool(format!(
+                return Err(agent_primitives::AgentError::Tool(format!(
                     "Failed to inspect agent directory: {}",
                     e
                 )));
             }
         }
         tokio::fs::create_dir_all(&agents_dir).await.map_err(|e| {
-            zero_core::ZeroError::Tool(format!("Failed to create agents directory: {}", e))
+            agent_primitives::AgentError::Tool(format!("Failed to create agents directory: {}", e))
         })?;
         tokio::fs::create_dir(&agent_dir).await.map_err(|e| {
-            zero_core::ZeroError::Tool(format!("Failed to create agent directory: {}", e))
+            agent_primitives::AgentError::Tool(format!("Failed to create agent directory: {}", e))
         })?;
 
         // Create config.yaml. Omit maxInputTokens when absent so provider/model
@@ -353,7 +351,7 @@ impl Tool for CreateAgentTool {
         config.insert("mcps".to_string(), json!(mcps));
 
         let config_yaml = serde_yaml::to_string(&Value::Object(config)).map_err(|e| {
-            zero_core::ZeroError::Tool(format!("Failed to serialize config: {}", e))
+            agent_primitives::AgentError::Tool(format!("Failed to serialize config: {}", e))
         })?;
 
         write_new_file(&agent_dir.join("config.yaml"), config_yaml.as_bytes()).await?;
@@ -402,10 +400,10 @@ async fn write_new_file(path: &Path, bytes: &[u8]) -> Result<()> {
         .create_new(true)
         .open(path)
         .await
-        .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to create file: {}", e)))?;
+        .map_err(|e| agent_primitives::AgentError::Tool(format!("Failed to create file: {}", e)))?;
     file.write_all(bytes)
         .await
-        .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to write file: {}", e)))?;
+        .map_err(|e| agent_primitives::AgentError::Tool(format!("Failed to write file: {}", e)))?;
     Ok(())
 }
 
@@ -414,8 +412,8 @@ mod tests {
     use super::*;
     use std::sync::LazyLock;
 
-    use zero_core::types::Content;
-    use zero_core::{CallbackContext, EventActions, ReadonlyContext};
+    use agent_primitives::types::Content;
+    use agent_primitives::{CallbackContext, EventActions, ReadonlyContext};
 
     struct TestFs {
         agents_dir: PathBuf,
@@ -630,9 +628,11 @@ mod tests {
         let max_input = &schema["properties"]["maxInputTokens"];
 
         assert!(max_input.get("default").is_none());
-        assert!(max_input["description"]
-            .as_str()
-            .expect("description")
-            .contains("Omit to inherit provider/model limits"));
+        assert!(
+            max_input["description"]
+                .as_str()
+                .expect("description")
+                .contains("Omit to inherit provider/model limits")
+        );
     }
 }

@@ -1965,7 +1965,7 @@ fn build_transcript(messages: &[zbot_stores_sqlite::Message]) -> String {
         } else if msg.content.len() > 1000 {
             format!(
                 "{}... [truncated, {} chars total]",
-                zero_core::truncate_str(&msg.content, 1000),
+                agent_primitives::truncate_str(&msg.content, 1000),
                 msg.content.len()
             )
         } else {
@@ -2063,7 +2063,10 @@ fn summarize_tool_result(content: &str) -> String {
     }
     // Fallback: truncate raw content
     if content.len() > 500 {
-        format!("{}... [truncated]", zero_core::truncate_str(content, 500))
+        format!(
+            "{}... [truncated]",
+            agent_primitives::truncate_str(content, 500)
+        )
     } else {
         content.to_string()
     }

@@ -33,14 +33,16 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use agent_primitives::CallbackContext;
 use futures::StreamExt;
-use rig::agent::{Agent, AgentBuilder, AgentHook, Flow, MultiTurnStreamItem, StepEvent, StreamingError};
+use rig::agent::{
+    Agent, AgentBuilder, AgentHook, Flow, MultiTurnStreamItem, StepEvent, StreamingError,
+};
 use rig::completion::message::{ToolResult as RigToolResult, ToolResultContent};
 use rig::completion::{CompletionModel, Message};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat};
 use rig::tool::{ToolCallExtensions, ToolDyn};
 use serde_json::Value;
-use zero_core::CallbackContext;
 
 use crate::engine::{AgentEngine, StreamEventSink};
 use crate::executor::{AfterToolCallHook, BeforeToolCallHook, ExecutorError, ToolCallDecision};
@@ -107,7 +109,15 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
         before: Option<BeforeToolCallHook>,
         after: Option<AfterToolCallHook>,
     ) -> Self {
-        Self::build(config, model, tools, shared_context, DEFAULT_MAX_TURNS, before, after)
+        Self::build(
+            config,
+            model,
+            tools,
+            shared_context,
+            DEFAULT_MAX_TURNS,
+            before,
+            after,
+        )
     }
 
     fn build(
@@ -278,7 +288,8 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
                                 .and_then(Value::as_bool)
                                 .unwrap_or(false)
                             {
-                                if let Some(ward_id) = parsed.get("ward_id").and_then(Value::as_str) {
+                                if let Some(ward_id) = parsed.get("ward_id").and_then(Value::as_str)
+                                {
                                     on_event(StreamEvent::WardChanged {
                                         timestamp: current_timestamp(),
                                         ward_id: ward_id.to_string(),
@@ -618,7 +629,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(tokens, vec!["hel".to_string(), "lo".to_string(), " world".to_string()]);
+        assert_eq!(
+            tokens,
+            vec!["hel".to_string(), "lo".to_string(), " world".to_string()]
+        );
 
         // Terminal Done carries the concatenated text.
         let done = events.iter().rev().find(|e| e.is_terminal());
@@ -638,9 +652,9 @@ mod tests {
         );
 
         let events = collect_events(&engine, "hi").await;
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, StreamEvent::Done { final_message, .. } if final_message.is_empty())));
+        assert!(events.iter().any(
+            |e| matches!(e, StreamEvent::Done { final_message, .. } if final_message.is_empty())
+        ));
     }
 
     #[tokio::test]
@@ -656,19 +670,14 @@ mod tests {
         let stop_for_closure = stop.clone();
         let mut events = Vec::new();
         engine
-            .execute_stream_with_stop_flag(
-                "hi",
-                &[],
-                Some(stop.clone()),
-                &mut |event| {
-                    let is_token = matches!(event, StreamEvent::Token { .. });
-                    events.push(event);
-                    // Stop after the first token lands.
-                    if is_token {
-                        stop_for_closure.store(true, Ordering::Release);
-                    }
-                },
-            )
+            .execute_stream_with_stop_flag("hi", &[], Some(stop.clone()), &mut |event| {
+                let is_token = matches!(event, StreamEvent::Token { .. });
+                events.push(event);
+                // Stop after the first token lands.
+                if is_token {
+                    stop_for_closure.store(true, Ordering::Release);
+                }
+            })
             .await
             .expect("stopped run should still finalize");
 
@@ -682,9 +691,7 @@ mod tests {
         // The stop flag is checked before polling the next item, so exactly one
         // token is emitted before the loop breaks and finalizes.
         assert_eq!(tokens, vec!["a".to_string()]);
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, StreamEvent::Done { .. })));
+        assert!(events.iter().any(|e| matches!(e, StreamEvent::Done { .. })));
     }
 
     // End-to-end: the real LlmCompletionModel bridge over a stub AgentZero
@@ -776,8 +783,9 @@ mod tests {
 
         let calls = Arc::new(AtomicU32::new(0));
         let tool = RigToolAdapter::boxed(Arc::new(RecordingTool::new("recorder", &calls)));
-        let before: BeforeToolCallHook =
-            Arc::new(|_name, _args| ToolCallDecision::Block { reason: "blocked".to_string() });
+        let before: BeforeToolCallHook = Arc::new(|_name, _args| ToolCallDecision::Block {
+            reason: "blocked".to_string(),
+        });
 
         let engine = RigAgentEngine::with_tool_hooks(
             sample_config(),
@@ -808,8 +816,9 @@ mod tests {
 
         let calls = Arc::new(AtomicU32::new(0));
         let fcid = Arc::new(Mutex::new(None));
-        let tool =
-            RigToolAdapter::boxed(Arc::new(RecordingTool::with_fcid("recorder", &calls, &fcid)));
+        let tool = RigToolAdapter::boxed(Arc::new(RecordingTool::with_fcid(
+            "recorder", &calls, &fcid,
+        )));
 
         let engine = RigAgentEngine::new(
             sample_config(),
@@ -824,7 +833,11 @@ mod tests {
             .await
             .expect("run");
 
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "allowed tool should execute once");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "allowed tool should execute once"
+        );
         assert_eq!(
             *fcid.lock().unwrap(),
             Some("call_7".to_string()),
@@ -920,7 +933,11 @@ mod tests {
                 fcid: Arc::new(Mutex::new(None)),
             }
         }
-        fn with_fcid(name: &str, calls: &Arc<AtomicU32>, fcid: &Arc<Mutex<Option<String>>>) -> Self {
+        fn with_fcid(
+            name: &str,
+            calls: &Arc<AtomicU32>,
+            fcid: &Arc<Mutex<Option<String>>>,
+        ) -> Self {
             Self {
                 name: name.to_string(),
                 calls: calls.clone(),
@@ -930,7 +947,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl zero_core::Tool for RecordingTool {
+    impl agent_primitives::Tool for RecordingTool {
         fn name(&self) -> &str {
             &self.name
         }
@@ -939,9 +956,9 @@ mod tests {
         }
         async fn execute(
             &self,
-            ctx: Arc<dyn zero_core::ToolContext>,
+            ctx: Arc<dyn agent_primitives::ToolContext>,
             _args: Value,
-        ) -> Result<Value, zero_core::error::ZeroError> {
+        ) -> Result<Value, agent_primitives::error::AgentError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             *self.fcid.lock().unwrap() = Some(ctx.function_call_id());
             Ok(serde_json::json!({"ok": true}))
@@ -1021,9 +1038,18 @@ mod tests {
         assert_eq!(received.len(), 1, "LlmClient should be called once");
         let texts: Vec<String> = received[0].iter().map(|m| m.text_content()).collect();
         let joined = texts.join(" | ");
-        assert!(joined.contains("hello"), "history user msg forwarded; got {joined}");
-        assert!(joined.contains("hi there"), "history assistant msg forwarded; got {joined}");
-        assert!(joined.contains("next"), "current prompt forwarded; got {joined}");
+        assert!(
+            joined.contains("hello"),
+            "history user msg forwarded; got {joined}"
+        );
+        assert!(
+            joined.contains("hi there"),
+            "history assistant msg forwarded; got {joined}"
+        );
+        assert!(
+            joined.contains("next"),
+            "current prompt forwarded; got {joined}"
+        );
     }
 
     // T8 / AC21: a child executor's delegation mode (initial state seeded by the
@@ -1033,7 +1059,9 @@ mod tests {
         use std::collections::HashMap;
 
         let seen = Arc::new(Mutex::new(None));
-        let tool = RigToolAdapter::boxed(Arc::new(ModeProbeTool { seen_mode: seen.clone() }));
+        let tool = RigToolAdapter::boxed(Arc::new(ModeProbeTool {
+            seen_mode: seen.clone(),
+        }));
 
         // Gateway seeds the child's context with a delegation mode.
         let mut state = HashMap::new();
@@ -1065,7 +1093,9 @@ mod tests {
             Some("ward_backed_build".to_string()),
             "delegation mode must reach the tool through the Rig path"
         );
-        assert!(events.iter().any(|e| matches!(e, StreamEvent::ToolResult { .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::ToolResult { .. })));
     }
 
     /// Tool that records the `app:delegation_mode` it sees in its context.
@@ -1074,7 +1104,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl zero_core::Tool for ModeProbeTool {
+    impl agent_primitives::Tool for ModeProbeTool {
         fn name(&self) -> &str {
             "mode_probe"
         }
@@ -1083,10 +1113,10 @@ mod tests {
         }
         async fn execute(
             &self,
-            ctx: Arc<dyn zero_core::ToolContext>,
+            ctx: Arc<dyn agent_primitives::ToolContext>,
             _args: Value,
-        ) -> Result<Value, zero_core::error::ZeroError> {
-            let mode = zero_core::CallbackContext::get_state(&*ctx, "app:delegation_mode");
+        ) -> Result<Value, agent_primitives::error::AgentError> {
+            let mode = agent_primitives::CallbackContext::get_state(&*ctx, "app:delegation_mode");
             *self.seen_mode.lock().unwrap() = mode.and_then(|v| v.as_str().map(str::to_string));
             Ok(serde_json::json!({"ok": true}))
         }
@@ -1099,7 +1129,7 @@ mod tests {
     async fn action_events_surface_after_tool_runs() {
         struct DelegatingTool;
         #[async_trait::async_trait]
-        impl zero_core::Tool for DelegatingTool {
+        impl agent_primitives::Tool for DelegatingTool {
             fn name(&self) -> &str {
                 "delegate_to_agent"
             }
@@ -1108,11 +1138,11 @@ mod tests {
             }
             async fn execute(
                 &self,
-                ctx: Arc<dyn zero_core::ToolContext>,
+                ctx: Arc<dyn agent_primitives::ToolContext>,
                 _args: Value,
-            ) -> Result<Value, zero_core::error::ZeroError> {
+            ) -> Result<Value, agent_primitives::error::AgentError> {
                 let mut actions = ctx.actions();
-                actions.delegate = Some(zero_core::event::DelegateAction {
+                actions.delegate = Some(agent_primitives::event::DelegateAction {
                     agent_id: "ward:x".to_string(),
                     task: "do thing".to_string(),
                     context: None,
@@ -1159,7 +1189,7 @@ mod tests {
     async fn session_title_marker_surfaces() {
         struct TitleTool;
         #[async_trait::async_trait]
-        impl zero_core::Tool for TitleTool {
+        impl agent_primitives::Tool for TitleTool {
             fn name(&self) -> &str {
                 "set_session_title"
             }
@@ -1168,9 +1198,9 @@ mod tests {
             }
             async fn execute(
                 &self,
-                _ctx: Arc<dyn zero_core::ToolContext>,
+                _ctx: Arc<dyn agent_primitives::ToolContext>,
                 _args: Value,
-            ) -> Result<Value, zero_core::error::ZeroError> {
+            ) -> Result<Value, agent_primitives::error::AgentError> {
                 Ok(serde_json::json!({"__session_title_changed__": true, "title": "My Session"}))
             }
         }

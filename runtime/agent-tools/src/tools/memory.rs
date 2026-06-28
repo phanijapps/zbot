@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use zero_core::{FileSystemContext, Result, Tool, ToolContext, ToolPermissions, ZeroError};
+use agent_primitives::{AgentError, FileSystemContext, Result, Tool, ToolContext, ToolPermissions};
 use zbot_stores_traits::{BeliefContradictionStore, BeliefStore, MemoryFactStore};
 
 // ============================================================================
@@ -140,12 +140,12 @@ impl MemoryTool {
         match scope {
             "shared" => {
                 let file = file.ok_or_else(|| {
-                    ZeroError::Tool("'file' parameter required for shared scope".to_string())
+                    AgentError::Tool("'file' parameter required for shared scope".to_string())
                 })?;
 
                 // Validate file name
                 if !SHARED_FILES.contains(&file) {
-                    return Err(ZeroError::Tool(format!(
+                    return Err(AgentError::Tool(format!(
                         "Invalid shared file '{}'. Valid options: {}",
                         file,
                         SHARED_FILES.join(", ")
@@ -159,13 +159,13 @@ impl MemoryTool {
                             .join("shared")
                             .join(format!("{}.json", file))
                     })
-                    .ok_or_else(|| ZeroError::Tool("No vault path configured".to_string()))
+                    .ok_or_else(|| AgentError::Tool("No vault path configured".to_string()))
             }
             _ => self
                 .fs
                 .agent_data_dir(agent_id)
                 .map(|dir| dir.join(MEMORY_FILE))
-                .ok_or_else(|| ZeroError::Tool("No agent data directory configured".to_string())),
+                .ok_or_else(|| AgentError::Tool("No agent data directory configured".to_string())),
         }
     }
 
@@ -177,20 +177,20 @@ impl MemoryTool {
         }
 
         let file = File::open(path)
-            .map_err(|e| ZeroError::Tool(format!("Failed to open memory file: {}", e)))?;
+            .map_err(|e| AgentError::Tool(format!("Failed to open memory file: {}", e)))?;
 
         // Acquire shared lock (allows other readers)
         file.lock_shared()
-            .map_err(|e| ZeroError::Tool(format!("Failed to lock memory file: {}", e)))?;
+            .map_err(|e| AgentError::Tool(format!("Failed to lock memory file: {}", e)))?;
 
         let mut content = String::new();
         (&file)
             .read_to_string(&mut content)
-            .map_err(|e| ZeroError::Tool(format!("Failed to read memory file: {}", e)))?;
+            .map_err(|e| AgentError::Tool(format!("Failed to read memory file: {}", e)))?;
 
         // Lock released when file is dropped
         serde_json::from_str(&content)
-            .map_err(|e| ZeroError::Tool(format!("Failed to parse memory file: {}", e)))
+            .map_err(|e| AgentError::Tool(format!("Failed to parse memory file: {}", e)))
     }
 
     /// Save memory store with exclusive lock (blocks other readers/writers).
@@ -198,11 +198,11 @@ impl MemoryTool {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
-                .map_err(|e| ZeroError::Tool(format!("Failed to create directory: {}", e)))?;
+                .map_err(|e| AgentError::Tool(format!("Failed to create directory: {}", e)))?;
         }
 
         let content = serde_json::to_string_pretty(store)
-            .map_err(|e| ZeroError::Tool(format!("Failed to serialize memory: {}", e)))?;
+            .map_err(|e| AgentError::Tool(format!("Failed to serialize memory: {}", e)))?;
 
         // Open/create file with write access
         let mut file = OpenOptions::new()
@@ -211,15 +211,15 @@ impl MemoryTool {
             .truncate(true)
             .open(path)
             .map_err(|e| {
-                ZeroError::Tool(format!("Failed to open memory file for writing: {}", e))
+                AgentError::Tool(format!("Failed to open memory file for writing: {}", e))
             })?;
 
         // Acquire exclusive lock (blocks all other access)
         file.lock_exclusive()
-            .map_err(|e| ZeroError::Tool(format!("Failed to lock memory file: {}", e)))?;
+            .map_err(|e| AgentError::Tool(format!("Failed to lock memory file: {}", e)))?;
 
         file.write_all(content.as_bytes())
-            .map_err(|e| ZeroError::Tool(format!("Failed to write memory file: {}", e)))?;
+            .map_err(|e| AgentError::Tool(format!("Failed to write memory file: {}", e)))?;
 
         // Lock released when file is dropped
         Ok(())
@@ -336,7 +336,7 @@ impl Tool for MemoryTool {
                 .get("__message__")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unknown error");
-            return Err(ZeroError::Tool(format!("{}: {}", error_type, message)));
+            return Err(AgentError::Tool(format!("{}: {}", error_type, message)));
         }
 
         // Get agent ID from context
@@ -347,7 +347,7 @@ impl Tool for MemoryTool {
                 ctx.get_state("app:root_agent_id")
                     .and_then(|v| v.as_str().map(String::from))
             })
-            .ok_or_else(|| ZeroError::Tool("No agent ID in context".to_string()))?;
+            .ok_or_else(|| AgentError::Tool("No agent ID in context".to_string()))?;
 
         // Get scope and file parameters
         let scope = args
@@ -361,7 +361,7 @@ impl Tool for MemoryTool {
             .get("action")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                ZeroError::Tool(
+                AgentError::Tool(
                     "Missing 'action' parameter. Expected shape: {\"action\":\"get_fact\", \"key\":\"ctx.session.intent\"} or {\"action\":\"recall\", \"query\":\"...\"}".to_string(),
                 )
             })?;
@@ -386,7 +386,7 @@ impl Tool for MemoryTool {
                 self.action_contradictions(ctx.as_ref(), &agent_id, &args)
                     .await
             }
-            _ => Err(ZeroError::Tool(format!("Unknown action: {}", action))),
+            _ => Err(AgentError::Tool(format!("Unknown action: {}", action))),
         }
     }
 }
@@ -397,7 +397,7 @@ impl MemoryTool {
         let key = args
             .get("key")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'key' parameter for get".to_string()))?;
+            .ok_or_else(|| AgentError::Tool("Missing 'key' parameter for get".to_string()))?;
 
         let store = self.load_store_at_path(path)?;
 
@@ -423,16 +423,16 @@ impl MemoryTool {
         let key = args
             .get("key")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'key' parameter for set".to_string()))?;
+            .ok_or_else(|| AgentError::Tool("Missing 'key' parameter for set".to_string()))?;
 
         let value = args
             .get("value")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'value' parameter for set".to_string()))?;
+            .ok_or_else(|| AgentError::Tool("Missing 'value' parameter for set".to_string()))?;
 
         // Check value size
         if value.len() > MAX_ENTRY_SIZE {
-            return Err(ZeroError::Tool(format!(
+            return Err(AgentError::Tool(format!(
                 "Value too large: {} bytes (max: {} bytes)",
                 value.len(),
                 MAX_ENTRY_SIZE
@@ -453,7 +453,7 @@ impl MemoryTool {
 
         // Check entry limit (only for new entries)
         if !store.entries.contains_key(key) && store.entries.len() >= MAX_ENTRIES {
-            return Err(ZeroError::Tool(format!(
+            return Err(AgentError::Tool(format!(
                 "Memory limit reached: {} entries (max: {})",
                 store.entries.len(),
                 MAX_ENTRIES
@@ -490,7 +490,7 @@ impl MemoryTool {
         let key = args
             .get("key")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'key' parameter for delete".to_string()))?;
+            .ok_or_else(|| AgentError::Tool("Missing 'key' parameter for delete".to_string()))?;
 
         let mut store = self.load_store_at_path(path)?;
 
@@ -532,7 +532,7 @@ impl MemoryTool {
                 json!({
                     "key": key,
                     "value_preview": if entry.value.len() > 100 {
-                        format!("{}...", zero_core::truncate_str(&entry.value, 100))
+                        format!("{}...", agent_primitives::truncate_str(&entry.value, 100))
                     } else {
                         entry.value.clone()
                     },
@@ -561,17 +561,17 @@ impl MemoryTool {
         let category = args
             .get("category")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'category' for save_fact".to_string()))?;
+            .ok_or_else(|| AgentError::Tool("Missing 'category' for save_fact".to_string()))?;
 
         let key = args
             .get("key")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'key' for save_fact".to_string()))?;
+            .ok_or_else(|| AgentError::Tool("Missing 'key' for save_fact".to_string()))?;
 
         let content = args
             .get("content")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'content' for save_fact".to_string()))?;
+            .ok_or_else(|| AgentError::Tool("Missing 'content' for save_fact".to_string()))?;
 
         let confidence = args
             .get("confidence")
@@ -588,7 +588,7 @@ impl MemoryTool {
             "ctx",
         ];
         if !valid_categories.contains(&category) {
-            return Err(ZeroError::Tool(format!(
+            return Err(AgentError::Tool(format!(
                 "Invalid category '{}'. Valid: {}",
                 category,
                 valid_categories.join(", ")
@@ -602,7 +602,7 @@ impl MemoryTool {
         }
 
         if content.len() > 500 {
-            return Err(ZeroError::Tool(
+            return Err(AgentError::Tool(
                 "Fact content too long. Keep to 1-2 sentences (max 500 chars).".to_string(),
             ));
         }
@@ -615,7 +615,7 @@ impl MemoryTool {
                 // to bi-temporal phase 2 (point-in-time recall API).
                 .save_fact(agent_id, category, key, content, confidence, None, None)
                 .await
-                .map_err(ZeroError::Tool),
+                .map_err(AgentError::Tool),
             None => {
                 // Fallback: store in legacy KV file
                 let kv_path = self.resolve_memory_path(agent_id, "agent", None)?;
@@ -671,7 +671,7 @@ impl MemoryTool {
         let query = args
             .get("query")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'query' for recall".to_string()))?;
+            .ok_or_else(|| AgentError::Tool("Missing 'query' for recall".to_string()))?;
 
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
 
@@ -685,7 +685,7 @@ impl MemoryTool {
                 chrono::DateTime::parse_from_rfc3339(s)
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .map_err(|_| {
-                        ZeroError::Tool("invalid as_of timestamp, expected ISO-8601".to_string())
+                        AgentError::Tool("invalid as_of timestamp, expected ISO-8601".to_string())
                     })?,
             ),
             None => None,
@@ -720,7 +720,7 @@ impl MemoryTool {
                                 "source": "memory_db",
                             }))
                         } else {
-                            Err(ZeroError::Tool(e))
+                            Err(AgentError::Tool(e))
                         }
                     }
                 }
@@ -819,7 +819,7 @@ impl MemoryTool {
         // Pure-function permission check. Returns the session id on
         // success so we can pass it to the store; on failure it carries
         // the user-facing error message.
-        let sid = check_ctx_write_permission(is_delegated, key).map_err(ZeroError::Tool)?;
+        let sid = check_ctx_write_permission(is_delegated, key).map_err(AgentError::Tool)?;
 
         // Ward comes from current context; ctx facts are stored per-ward
         // so cleanup on ward deletion is straightforward.
@@ -843,8 +843,8 @@ impl MemoryTool {
             Some(store) => store
                 .save_ctx_fact(&sid, &ward_id, key, content, &owner, pinned)
                 .await
-                .map_err(ZeroError::Tool),
-            None => Err(ZeroError::Tool(
+                .map_err(AgentError::Tool),
+            None => Err(AgentError::Tool(
                 "Ctx facts require a DB-backed fact store (not available in this runtime)"
                     .to_string(),
             )),
@@ -861,10 +861,10 @@ impl MemoryTool {
         let key = args
             .get("key")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'key' for get_fact".to_string()))?;
+            .ok_or_else(|| AgentError::Tool("Missing 'key' for get_fact".to_string()))?;
 
         if !key.starts_with("ctx.") {
-            return Err(ZeroError::Tool(format!(
+            return Err(AgentError::Tool(format!(
                 "get_fact only retrieves ctx-namespaced keys. Got '{}' — use 'recall' for fuzzy search on non-ctx facts.",
                 key
             )));
@@ -880,13 +880,13 @@ impl MemoryTool {
                 let result = store
                     .get_ctx_fact(&ward_id, key)
                     .await
-                    .map_err(ZeroError::Tool)?;
+                    .map_err(AgentError::Tool)?;
                 match result {
                     Some(value) => Ok(value),
                     None => Ok(json!({ "found": false, "key": key })),
                 }
             }
-            None => Err(ZeroError::Tool(
+            None => Err(AgentError::Tool(
                 "Ctx facts require a DB-backed fact store (not available in this runtime)"
                     .to_string(),
             )),
@@ -911,7 +911,7 @@ impl MemoryTool {
         let subject = args
             .get("subject")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'subject' for belief".to_string()))?;
+            .ok_or_else(|| AgentError::Tool("Missing 'subject' for belief".to_string()))?;
 
         let as_of: Option<chrono::DateTime<chrono::Utc>> = match args
             .get("as_of")
@@ -921,7 +921,7 @@ impl MemoryTool {
                 chrono::DateTime::parse_from_rfc3339(s)
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .map_err(|_| {
-                        ZeroError::Tool("invalid as_of timestamp, expected ISO-8601".to_string())
+                        AgentError::Tool("invalid as_of timestamp, expected ISO-8601".to_string())
                     })?,
             ),
             None => None,
@@ -935,7 +935,7 @@ impl MemoryTool {
             .unwrap_or_else(|| agent_id.to_string());
 
         let Some(store) = self.belief_store.as_ref() else {
-            return Err(ZeroError::Tool(
+            return Err(AgentError::Tool(
                 "Belief Network is not configured (enable execution.memory.beliefNetwork in settings)"
                     .to_string(),
             ));
@@ -944,7 +944,7 @@ impl MemoryTool {
         let belief = store
             .get_belief(&partition_id, subject, as_of)
             .await
-            .map_err(ZeroError::Tool)?;
+            .map_err(AgentError::Tool)?;
 
         let payload = match belief {
             Some(b) => json!({
@@ -984,7 +984,7 @@ impl MemoryTool {
         args: &Value,
     ) -> Result<Value> {
         let Some(store) = self.contradiction_store.as_ref() else {
-            return Err(ZeroError::Tool(
+            return Err(AgentError::Tool(
                 "Belief Network is not configured (enable execution.memory.beliefNetwork in settings)"
                     .to_string(),
             ));
@@ -997,7 +997,10 @@ impl MemoryTool {
             .unwrap_or(10);
 
         let rows = if let Some(belief_id) = args.get("belief_id").and_then(|v| v.as_str()) {
-            store.for_belief(belief_id).await.map_err(ZeroError::Tool)?
+            store
+                .for_belief(belief_id)
+                .await
+                .map_err(AgentError::Tool)?
         } else {
             let partition_id = ctx
                 .get_state("ward_id")
@@ -1006,7 +1009,7 @@ impl MemoryTool {
             store
                 .list_recent(&partition_id, limit)
                 .await
-                .map_err(ZeroError::Tool)?
+                .map_err(AgentError::Tool)?
         };
 
         let serialized: Vec<Value> = rows
@@ -1037,7 +1040,7 @@ impl MemoryTool {
         let query = args
             .get("query")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("Missing 'query' parameter for search".to_string()))?;
+            .ok_or_else(|| AgentError::Tool("Missing 'query' parameter for search".to_string()))?;
 
         let query_lower = query.to_lowercase();
         let store = self.load_store_at_path(path)?;
@@ -1503,7 +1506,9 @@ mod tests {
 
         // Minimal ToolContext stub with the session_id() accessor we use
         // for dedup. Everything else returns a reasonable default.
-        use zero_core::{CallbackContext, Content, EventActions, ReadonlyContext, ToolContext};
+        use agent_primitives::{
+            CallbackContext, Content, EventActions, ReadonlyContext, ToolContext,
+        };
 
         struct Ctx;
 
@@ -1628,7 +1633,9 @@ mod tests {
             }
         }
 
-        use zero_core::{CallbackContext, Content, EventActions, ReadonlyContext, ToolContext};
+        use agent_primitives::{
+            CallbackContext, Content, EventActions, ReadonlyContext, ToolContext,
+        };
 
         struct Ctx;
         impl ReadonlyContext for Ctx {
@@ -1810,7 +1817,9 @@ mod tests {
             }
         }
 
-        use zero_core::{CallbackContext, Content, EventActions, ReadonlyContext, ToolContext};
+        use agent_primitives::{
+            CallbackContext, Content, EventActions, ReadonlyContext, ToolContext,
+        };
         struct Ctx;
         impl ReadonlyContext for Ctx {
             fn invocation_id(&self) -> &str {
@@ -1967,7 +1976,9 @@ mod tests {
             }
         }
 
-        use zero_core::{CallbackContext, Content, EventActions, ReadonlyContext, ToolContext};
+        use agent_primitives::{
+            CallbackContext, Content, EventActions, ReadonlyContext, ToolContext,
+        };
         struct Ctx;
         impl ReadonlyContext for Ctx {
             fn invocation_id(&self) -> &str {
@@ -2032,7 +2043,9 @@ mod tests {
     // ========================================================================
 
     fn make_contradiction_ctx() -> impl ToolContext + 'static {
-        use zero_core::{CallbackContext, Content, EventActions, ReadonlyContext, ToolContext};
+        use agent_primitives::{
+            CallbackContext, Content, EventActions, ReadonlyContext, ToolContext,
+        };
         struct Ctx;
         impl ReadonlyContext for Ctx {
             fn invocation_id(&self) -> &str {
@@ -2208,7 +2221,9 @@ mod tests {
 
     #[tokio::test]
     async fn action_belief_errors_when_store_missing() {
-        use zero_core::{CallbackContext, Content, EventActions, ReadonlyContext, ToolContext};
+        use agent_primitives::{
+            CallbackContext, Content, EventActions, ReadonlyContext, ToolContext,
+        };
         struct Ctx;
         impl ReadonlyContext for Ctx {
             fn invocation_id(&self) -> &str {

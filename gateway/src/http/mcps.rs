@@ -2,14 +2,14 @@
 //!
 //! CRUD operations for MCP server configurations.
 
-use crate::services::{McpOAuthService, McpOAuthStartResponse, mcp::McpServerSummary};
+use crate::services::{mcp::McpServerSummary, McpOAuthService, McpOAuthStartResponse};
 use crate::state::AppState;
 use agent_runtime::{McpAuthConfig, McpServerConfig};
 use axum::{
-    Json,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::Html,
+    Json,
 };
 use reqwest::Url;
 use serde::{Deserialize, Serialize};

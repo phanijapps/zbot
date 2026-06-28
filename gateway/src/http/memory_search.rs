@@ -19,9 +19,9 @@
 //! wired (stripped-down test fixtures).
 
 use crate::state::AppState;
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::time::Instant;
 use zbot_stores_domain::{RouteHint, RouteSourceKind, SessionEpisode, WikiHit};
 

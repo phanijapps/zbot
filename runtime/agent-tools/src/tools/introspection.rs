@@ -3,10 +3,10 @@
 // Tools for the agent to query its own capabilities
 // ============================================================================
 
+use agent_primitives::{FileSystemContext, Result, Tool, ToolContext};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use zero_core::{FileSystemContext, Result, Tool, ToolContext};
 
 use super::guards::has_placeholder_specs;
 

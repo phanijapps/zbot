@@ -7,7 +7,7 @@
 //! Built-in tool implementations for the z-Bot application.
 //!
 //! This crate provides concrete tool implementations that use
-//! the abstractions defined in zero-core.
+//! the abstractions defined in agent-primitives.
 
 pub mod replay;
 mod tools;
@@ -62,5 +62,5 @@ pub use tools::{
     optional_tools,
 };
 
-// Re-export from zero-core
-pub use zero_core::{FileSystemContext, Tool};
+// Re-export from agent-primitives
+pub use agent_primitives::{FileSystemContext, Tool};

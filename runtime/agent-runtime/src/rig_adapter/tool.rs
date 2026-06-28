@@ -1,4 +1,4 @@
-//! Bridge from AgentZero (`zero_core::Tool`) tools into Rig's tool dispatch.
+//! Bridge from AgentZero (`agent_primitives::Tool`) tools into Rig's tool dispatch.
 //!
 //! Rig owns the agent loop (multi-turn, tool scheduling, hooks, streaming).
 //! AgentZero keeps owning its tools, their executable filtering, and the
@@ -28,11 +28,11 @@
 
 use std::sync::Arc;
 
+use agent_primitives::Tool as ZeroTool;
 use rig::completion::ToolDefinition;
 use rig::tool::{ToolCallExtensions, ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
 use serde_json::{json, Value};
-use zero_core::Tool as ZeroTool;
 
 use crate::tools::context::ToolContext;
 
@@ -176,12 +176,12 @@ fn empty_object_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_primitives::CallbackContext;
+    use agent_primitives::ToolContext as ZeroToolContext;
     use async_trait::async_trait;
     use serde_json::json;
     use std::collections::HashMap;
     use std::sync::Mutex;
-    use zero_core::CallbackContext;
-    use zero_core::ToolContext as ZeroToolContext;
 
     /// AgentZero tool that records what it was called with.
     struct RecordingTool {
@@ -229,7 +229,7 @@ mod tests {
             &self,
             ctx: Arc<dyn ZeroToolContext>,
             args: Value,
-        ) -> Result<Value, zero_core::error::ZeroError> {
+        ) -> Result<Value, agent_primitives::error::AgentError> {
             let secret_from_state = ctx.get_state("app:hidden_auth_token");
             let record = RecordedCall {
                 args,
@@ -355,7 +355,7 @@ mod tests {
                 &self,
                 _ctx: Arc<dyn ZeroToolContext>,
                 _args: Value,
-            ) -> Result<Value, zero_core::error::ZeroError> {
+            ) -> Result<Value, agent_primitives::error::AgentError> {
                 Ok(Value::String("plain text result".to_string()))
             }
         }
@@ -372,7 +372,7 @@ mod tests {
                 &self,
                 _ctx: Arc<dyn ZeroToolContext>,
                 _args: Value,
-            ) -> Result<Value, zero_core::error::ZeroError> {
+            ) -> Result<Value, agent_primitives::error::AgentError> {
                 Ok(json!({"path": "/a/b", "bytes": 10}))
             }
         }
@@ -409,7 +409,7 @@ mod tests {
                 &self,
                 ctx: Arc<dyn ZeroToolContext>,
                 _args: Value,
-            ) -> Result<Value, zero_core::error::ZeroError> {
+            ) -> Result<Value, agent_primitives::error::AgentError> {
                 ctx.set_state("skill:loaded".to_string(), json!(["alpha"]));
                 Ok(Value::Null)
             }
@@ -478,7 +478,7 @@ mod tests {
                 &self,
                 _ctx: Arc<dyn ZeroToolContext>,
                 _args: Value,
-            ) -> Result<Value, zero_core::error::ZeroError> {
+            ) -> Result<Value, agent_primitives::error::AgentError> {
                 Ok(Value::Null)
             }
         }

@@ -444,7 +444,7 @@ Messages carry content as `Vec<Part>` where each Part is one of:
 
 ### Provider Encoding
 
-`ProviderEncoder` trait with `OpenAiEncoder` implementation. Capability-aware — rejects Image/File parts for non-vision models with `EncodingError::UnsupportedContentType`. The planning agent handles the error and routes to a vision-capable model.
+`OpenAiClient` performs OpenAI-compatible request encoding directly. Capability-aware encoding rejects Image/File parts for non-vision models and surfaces an execution error so the planning agent can route to a vision-capable model.
 
 ### Content Persistence
 
@@ -455,7 +455,7 @@ Inbound: Part::Image { Base64("...") }
   → flush_part_to_disk() → Part::Image { FileRef("/attachments/abc123.png") }
   → DB stores FileRef
   → rehydrate_source() → Part::Image { Base64("...") }
-  → OpenAiEncoder encodes to API format
+  → OpenAiClient encodes to API format
 ```
 
 ### Multimodal Processing Paths
@@ -483,10 +483,8 @@ Configured via Settings > Advanced > Multimodal (provider + model with vision ca
 
 | File | Purpose |
 |------|---------|
-| `framework/zero-core/src/types.rs` | Part enum (Text, Image, File), ContentSource, ImageDetail |
-| `framework/zero-core/src/multimodal.rs` | flush_part_to_disk, rehydrate_source, MIME utils |
-| `framework/zero-llm/src/encoding.rs` | ProviderEncoder trait, EncodingError |
-| `framework/zero-llm/src/openai_encoder.rs` | OpenAiEncoder — encodes Parts to OpenAI content blocks |
+| `runtime/agent-primitives/src/types.rs` | Part enum (Text, Image, File), ContentSource, ImageDetail |
+| `runtime/agent-primitives/src/multimodal.rs` | flush_part_to_disk, rehydrate_source, MIME utils |
 | `runtime/agent-runtime/src/types/messages.rs` | ChatMessage with Vec<Part> content, custom serde |
 | `runtime/agent-runtime/src/llm/openai.rs` | OpenAiClient with FileRef rehydration |
 | `runtime/agent-tools/src/tools/multimodal.rs` | multimodal_analyze tool |
@@ -660,39 +658,36 @@ A `non-null` value overrides the orchestrator for that ward only. This is the pe
 
 ```
 zbot/
-├── framework/      # Core abstractions (publishable)
-├── runtime/        # Execution engine
+├── runtime/        # Shared primitives, Rig-backed execution engine, built-in tools
+├── stores/         # Persistence traits, domain types, SQLite backend, conformance
 ├── services/       # Standalone data services
 ├── gateway/        # HTTP/WebSocket server
 ├── apps/           # Applications (daemon, cli, ui)
 └── dist/           # Frontend build output
 ```
 
-### Framework (`framework/`)
-
-Core abstractions that can be used independently:
-
-```
-framework/
-├── zero-core/           # Core traits: Agent, Tool, Toolset, Event
-├── zero-llm/            # LLM abstractions and OpenAI client
-├── zero-tool/           # Tool registry and execution
-├── zero-session/        # Session and state management
-├── zero-agent/          # Agent implementations (LLM, workflow)
-├── zero-mcp/            # Model Context Protocol integration
-├── zero-prompt/         # Template rendering
-├── zero-middleware/     # Message preprocessing pipelines
-└── zero-app/            # Convenience prelude
-```
-
 ### Runtime (`runtime/`)
 
-Execution engine:
+Shared primitives, Rig adapter, execution engine, and built-in tools:
 
 ```
 runtime/
-├── agent-runtime/       # Executor, LLM loop, middleware
+├── agent-primitives/    # Tool/context/event/content/filesystem primitives
+├── agent-runtime/       # Rig adapter, executor facade, LLM client, middleware
 └── agent-tools/         # Built-in tool implementations
+```
+
+### Stores (`stores/`)
+
+Persistence traits, domain types, SQLite implementation, and conformance:
+
+```
+stores/
+├── zbot-stores-domain/       # Serde-only domain/request types
+├── zbot-stores-traits/       # Dependency-light store traits
+├── zbot-stores/              # Persistence facade and trait re-exports
+├── zbot-stores-sqlite/       # SQLite backend, schema, repositories
+└── zbot-stores-conformance/  # Backend conformance harness
 ```
 
 ### Services (`services/`)

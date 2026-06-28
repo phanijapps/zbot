@@ -354,8 +354,8 @@ mod progress_tracker_tests {
     use crate::context_management::compact_messages;
     use crate::executor::ExecutorConfig;
     use crate::types::ChatMessage;
+    use agent_primitives::types::Part;
     use serde_json::json;
-    use zero_core::types::Part;
 
     #[test]
     fn test_new_tracker_no_extension() {
