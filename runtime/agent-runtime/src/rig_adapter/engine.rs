@@ -211,10 +211,11 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
                 },
                 MultiTurnStreamItem::StreamUserItem(user_content) => match user_content {
                     StreamedUserContent::ToolResult { tool_result, .. } => {
+                        let result_text = tool_result_text(&tool_result);
                         on_event(StreamEvent::ToolResult {
                             timestamp: current_timestamp(),
                             tool_id: tool_result.id.clone(),
-                            result: tool_result_text(&tool_result),
+                            result: result_text.clone(),
                             context_result: None,
                             error: None,
                             duration_ms: None,
@@ -249,6 +250,57 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
                                 session_id: respond.session_id,
                                 artifacts: respond.artifacts,
                             });
+                        }
+                        // Surface result-value markers. The ward/update_plan/
+                        // set_session_title tools signal via their return JSON
+                        // (`__ward_changed__`/`__plan_update`/`__session_title_changed__`
+                        // + payload fields); the legacy executor parses the tool
+                        // output. Without this, set_session_title never persists
+                        // and the session shows as "root" in mission-control.
+                        if let Ok(parsed) = serde_json::from_str::<Value>(&result_text) {
+                            if parsed
+                                .get("__session_title_changed__")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false)
+                            {
+                                if let Some(title) = parsed.get("title").and_then(Value::as_str) {
+                                    on_event(StreamEvent::SessionTitleChanged {
+                                        timestamp: current_timestamp(),
+                                        title: title.to_string(),
+                                    });
+                                }
+                            }
+                            if parsed
+                                .get("__ward_changed__")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false)
+                            {
+                                if let Some(ward_id) = parsed.get("ward_id").and_then(Value::as_str) {
+                                    on_event(StreamEvent::WardChanged {
+                                        timestamp: current_timestamp(),
+                                        ward_id: ward_id.to_string(),
+                                    });
+                                }
+                            }
+                            if parsed
+                                .get("__plan_update")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false)
+                            {
+                                let plan = parsed
+                                    .get("plan")
+                                    .cloned()
+                                    .unwrap_or_else(|| Value::Array(Vec::new()));
+                                let explanation = parsed
+                                    .get("explanation")
+                                    .and_then(Value::as_str)
+                                    .map(std::string::ToString::to_string);
+                                on_event(StreamEvent::ActionPlanUpdate {
+                                    timestamp: current_timestamp(),
+                                    plan,
+                                    explanation,
+                                });
+                            }
                         }
                     }
                 },
@@ -1077,6 +1129,50 @@ mod tests {
                     if agent_id == "ward:x" && task == "do thing"
             )),
             "ActionDelegate must surface after the tool runs; got {events:?}"
+        );
+    }
+
+    // set_session_title returns `{"__session_title_changed__": true, "title": ...}`;
+    // the engine must surface SessionTitleChanged so the gateway persists the title.
+    #[tokio::test]
+    async fn session_title_marker_surfaces() {
+        struct TitleTool;
+        #[async_trait::async_trait]
+        impl zero_core::Tool for TitleTool {
+            fn name(&self) -> &str {
+                "set_session_title"
+            }
+            fn description(&self) -> &str {
+                "set title"
+            }
+            async fn execute(
+                &self,
+                _ctx: Arc<dyn zero_core::ToolContext>,
+                _args: Value,
+            ) -> Result<Value, zero_core::error::ZeroError> {
+                Ok(serde_json::json!({"__session_title_changed__": true, "title": "My Session"}))
+            }
+        }
+
+        let engine = RigAgentEngine::new(
+            sample_config(),
+            ToolCallModel::new("set_session_title"),
+            vec![RigToolAdapter::boxed(Arc::new(TitleTool))],
+            Arc::new(crate::tools::context::ToolContext::default()),
+        );
+
+        let mut events = Vec::new();
+        engine
+            .execute_stream("hi", &[], &mut |event| events.push(event))
+            .await
+            .expect("run");
+
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                StreamEvent::SessionTitleChanged { title, .. } if title == "My Session"
+            )),
+            "SessionTitleChanged must surface; got {events:?}"
         );
     }
 }
