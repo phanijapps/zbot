@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::time::Duration;
 use zero_core::{Result, Tool, ToolContext, ZeroError};
-use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 pub struct WaitAgentTool {
     bus: Arc<AgentResultBus>,
@@ -145,7 +145,7 @@ mod tests {
     use gateway_services::VaultPaths;
     use serde_json::json;
     use tempfile::TempDir;
-    use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+    use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
 
     struct Harness {
         _tmp: TempDir,

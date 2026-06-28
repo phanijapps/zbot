@@ -522,7 +522,7 @@ impl WardCurator {
     ///
     /// Procedure re-keying is **the caller's responsibility** — this method
     /// stays focused on filesystem + sidecar so `gateway-services` doesn't
-    /// pick up a `zero-stores-traits` dep.
+    /// pick up a `zbot-stores-traits` dep.
     pub fn apply_consolidation(
         &self,
         plan: &ConsolidationPlan,

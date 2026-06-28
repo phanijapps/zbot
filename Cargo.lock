@@ -26,6 +26,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rig",
  "rust-embed",
+ "schemars",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -38,8 +39,8 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "zbot-stores-traits",
  "zero-core",
- "zero-stores-traits",
 ]
 
 [[package]]
@@ -65,8 +66,8 @@ dependencies = [
  "url",
  "uuid",
  "windows-sys 0.59.0",
+ "zbot-stores-traits",
  "zero-core",
- "zero-stores-traits",
 ]
 
 [[package]]
@@ -1830,12 +1831,12 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "uuid",
+ "zbot-stores",
+ "zbot-stores-domain",
+ "zbot-stores-sqlite",
+ "zbot-stores-traits",
  "zero-app",
  "zero-core",
- "zero-stores",
- "zero-stores-domain",
- "zero-stores-sqlite",
- "zero-stores-traits",
 ]
 
 [[package]]
@@ -1857,9 +1858,9 @@ dependencies = [
  "tokio-test",
  "tracing",
  "uuid",
+ "zbot-stores-sqlite",
+ "zbot-stores-traits",
  "zero-core",
- "zero-stores-sqlite",
- "zero-stores-traits",
 ]
 
 [[package]]
@@ -1945,6 +1946,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "rusqlite",
+ "schemars",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1955,11 +1957,11 @@ dependencies = [
  "tokio-test",
  "tracing",
  "uuid",
+ "zbot-stores",
+ "zbot-stores-domain",
+ "zbot-stores-sqlite",
+ "zbot-stores-traits",
  "zero-core",
- "zero-stores",
- "zero-stores-domain",
- "zero-stores-sqlite",
- "zero-stores-traits",
 ]
 
 [[package]]
@@ -1984,16 +1986,17 @@ dependencies = [
  "gateway-services",
  "knowledge-graph",
  "rusqlite",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
  "uuid",
- "zero-stores",
- "zero-stores-domain",
- "zero-stores-sqlite",
- "zero-stores-traits",
+ "zbot-stores",
+ "zbot-stores-domain",
+ "zbot-stores-sqlite",
+ "zbot-stores-traits",
 ]
 
 [[package]]
@@ -5968,6 +5971,77 @@ dependencies = [
 ]
 
 [[package]]
+name = "zbot-stores"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "knowledge-graph",
+ "serde",
+ "thiserror 2.0.18",
+ "zbot-stores-domain",
+ "zbot-stores-traits",
+]
+
+[[package]]
+name = "zbot-stores-conformance"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "knowledge-graph",
+ "serde_json",
+ "zbot-stores",
+ "zbot-stores-traits",
+]
+
+[[package]]
+name = "zbot-stores-domain"
+version = "2026.5.3"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "zbot-stores-sqlite"
+version = "0.1.0"
+dependencies = [
+ "agent-runtime",
+ "api-logs",
+ "async-trait",
+ "chrono",
+ "execution-state",
+ "gateway-services",
+ "knowledge-graph",
+ "r2d2",
+ "r2d2_sqlite",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sqlite-vec",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "zbot-stores",
+ "zbot-stores-conformance",
+ "zbot-stores-domain",
+ "zbot-stores-traits",
+ "zero-core",
+]
+
+[[package]]
+name = "zbot-stores-traits"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde_json",
+ "zbot-stores-domain",
+]
+
+[[package]]
 name = "zero-agent"
 version = "2026.5.3"
 dependencies = [
@@ -6098,77 +6172,6 @@ dependencies = [
  "tokio",
  "uuid",
  "zero-core",
-]
-
-[[package]]
-name = "zero-stores"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "knowledge-graph",
- "serde",
- "thiserror 2.0.18",
- "zero-stores-domain",
- "zero-stores-traits",
-]
-
-[[package]]
-name = "zero-stores-conformance"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "knowledge-graph",
- "serde_json",
- "zero-stores",
- "zero-stores-traits",
-]
-
-[[package]]
-name = "zero-stores-domain"
-version = "2026.5.3"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "zero-stores-sqlite"
-version = "0.1.0"
-dependencies = [
- "agent-runtime",
- "api-logs",
- "async-trait",
- "chrono",
- "execution-state",
- "gateway-services",
- "knowledge-graph",
- "r2d2",
- "r2d2_sqlite",
- "rusqlite",
- "serde",
- "serde_json",
- "sqlite-vec",
- "tempfile",
- "tokio",
- "tracing",
- "uuid",
- "zero-core",
- "zero-stores",
- "zero-stores-conformance",
- "zero-stores-domain",
- "zero-stores-traits",
-]
-
-[[package]]
-name = "zero-stores-traits"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "serde_json",
- "zero-stores-domain",
 ]
 
 [[package]]

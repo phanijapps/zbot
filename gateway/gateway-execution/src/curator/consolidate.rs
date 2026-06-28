@@ -17,7 +17,7 @@ use gateway_services::{
     ConsolidateRequest, ConsolidationAction, ConsolidationPlan, ConsolidationReport, WardCandidate,
     WardCurator,
 };
-use zero_stores_traits::ProcedureStore;
+use zbot_stores_traits::ProcedureStore;
 
 /// System prompt — the curator-agent's behavioural contract. Mirrors
 /// Hermes's `CURATOR_REVIEW_PROMPT`, adapted for wards.

@@ -15,7 +15,7 @@ use crate::services::{AgentService, McpService, ProviderService, SharedVaultPath
 use api_logs::LogService;
 use execution_state::StateService;
 use std::sync::Arc;
-use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 /// Execution state for a conversation.
 #[derive(Debug, Clone)]
@@ -107,18 +107,18 @@ impl RuntimeService {
         log_service: Arc<LogService<DatabaseManager>>,
         state_service: Arc<StateService<DatabaseManager>>,
         connector_registry: Option<Arc<ConnectorRegistry>>,
-        memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+        memory_store: Option<Arc<dyn zbot_stores::MemoryFactStore>>,
         distiller: Option<Arc<SessionDistiller>>,
         memory_recall: Option<Arc<MemoryRecall>>,
         bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
         bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
         embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
         max_parallel_agents: u32,
-        kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
-        kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
+        kg_store: Option<Arc<dyn zbot_stores::KnowledgeGraphStore>>,
+        kg_episode_repo: Option<Arc<zbot_stores_sqlite::KgEpisodeRepository>>,
         ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
         goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
-        procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+        procedure_store: Option<Arc<dyn zbot_stores_traits::ProcedureStore>>,
         procedure_recommendation_cfg: gateway_memory::ProcedureRecommendationConfig,
         memory_llm_factory: Arc<dyn gateway_memory::MemoryLlmFactory>,
     ) -> Self {
@@ -126,7 +126,7 @@ impl RuntimeService {
             let llm = Arc::new(gateway_execution::sleep::LlmHandoffWriter::new(
                 memory_llm_factory.clone(),
             ));
-            let conversation_store: Arc<dyn zero_stores_traits::ConversationStore> =
+            let conversation_store: Arc<dyn zbot_stores_traits::ConversationStore> =
                 conversation_repo.clone();
             Arc::new(gateway_execution::sleep::HandoffWriter::new(
                 llm,

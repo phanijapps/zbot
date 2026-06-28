@@ -1337,7 +1337,7 @@ export interface Procedure {
   updated_at: string;
 }
 
-/** Session episode fields from the backend (matches `zero_stores_domain::SessionEpisode`). */
+/** Session episode fields from the backend (matches `zbot_stores_domain::SessionEpisode`). */
 export interface SessionEpisode {
   id: string;
   session_id: string;

@@ -35,7 +35,7 @@ memory failures as counters instead of unrelated warnings.
 - `cargo test -p gateway-memory recall`
 - `cargo test -p gateway-execution handoff`
 - `cargo test -p gateway-execution distillation`
-- `cargo test -p zero-stores-sqlite memory_fact_store knowledge_graph`
+- `cargo test -p zbot-stores-sqlite memory_fact_store knowledge_graph`
 
 **Manual verification:** run or inspect a long-session log after implementation
 and verify no recall `input length exceeds context length`, no
@@ -84,8 +84,8 @@ embedding failure does not suppress lexical recall.
 **Depends on:** none
 
 **Touches:** `gateway/gateway-execution/src/sleep/handoff_writer.rs`,
-`stores/zero-stores-sqlite/src/memory_fact_store.rs`,
-`stores/zero-stores-traits/src/memory_facts.rs`
+`stores/zbot-stores-sqlite/src/memory_fact_store.rs`,
+`stores/zbot-stores-traits/src/memory_facts.rs`
 
 **Mode:** TDD
 
@@ -95,7 +95,7 @@ embedding failure does not suppress lexical recall.
 - Add a handoff-writer test with JSON content over 800 characters; assert
   `handoff.latest` and `handoff.<session_id>` persist through `save_ctx_fact` or
   equivalent exact-key storage.
-- Keep or add a `zero-stores-sqlite` test proving oversized normal semantic
+- Keep or add a `zbot-stores-sqlite` test proving oversized normal semantic
   facts still fail validation.
 - Add a test proving full handoff JSON is not written as a normal fuzzy
   semantic fact.
@@ -119,7 +119,7 @@ weakening normal fact validation.
 **Depends on:** none
 
 **Touches:** `gateway/gateway-execution/src/distillation.rs`,
-`stores/zero-stores-sqlite/src/kg/storage.rs`
+`stores/zbot-stores-sqlite/src/kg/storage.rs`
 
 **Mode:** TDD
 
@@ -152,7 +152,7 @@ for unresolved endpoint cases and still writes valid relationships.
 **Touches:** `gateway/gateway-memory/src/recall/mod.rs`,
 `gateway/gateway-execution/src/sleep/handoff_writer.rs`,
 `gateway/gateway-execution/src/distillation.rs`,
-`stores/zero-stores-sqlite/src/distillation_repository.rs`,
+`stores/zbot-stores-sqlite/src/distillation_repository.rs`,
 `gateway/src/http/graph.rs`
 
 **Mode:** Goal-based check plus focused tests
@@ -189,7 +189,7 @@ structured field.
 - `cargo test -p gateway-memory recall`
 - `cargo test -p gateway-execution handoff`
 - `cargo test -p gateway-execution distillation`
-- `cargo test -p zero-stores-sqlite memory_fact_store knowledge_graph`
+- `cargo test -p zbot-stores-sqlite memory_fact_store knowledge_graph`
 - `cargo check --workspace`
 - `rg -n "input length exceeds the context length|handoff.latest: fact content too long|FOREIGN KEY constraint failed" ~/Documents/zbot/logs/zerod.2026-05-31.log` is used only as a baseline comparison, not a passing gate.
 

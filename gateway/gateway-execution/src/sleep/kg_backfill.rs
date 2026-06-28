@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use rusqlite::params;
 use serde_json::{Map, Value};
-use zero_stores_sqlite::KnowledgeDatabase;
+use zbot_stores_sqlite::KnowledgeDatabase;
 
 /// Marker reason recorded in `kg_compactions.reason` on completion.
 const BACKFILL_REASON: &str = "kg-metadata-backfill-v1";
@@ -354,7 +354,7 @@ mod tests {
     use super::*;
     use gateway_services::VaultPaths;
     use tempfile::TempDir;
-    use zero_stores_sqlite::KnowledgeDatabase;
+    use zbot_stores_sqlite::KnowledgeDatabase;
 
     struct Harness {
         _tmp: TempDir,

@@ -19,8 +19,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use gateway_memory::{LlmClientConfig, MemoryLlmFactory};
 use serde::{Deserialize, Serialize};
-use zero_stores_domain::{Message, RouteHint, RouteSourceKind};
-use zero_stores_traits::ConversationStore;
+use zbot_stores_domain::{Message, RouteHint, RouteSourceKind};
+use zbot_stores_traits::ConversationStore;
 
 pub const HANDOFF_MAX_AGE_DAYS: i64 = 7;
 
@@ -72,7 +72,7 @@ pub fn should_inject(entry: &HandoffEntry) -> bool {
 /// Returns `None` if absent, unparseable, older than `HANDOFF_MAX_AGE_DAYS`,
 /// or if `current_ward` is `Some` and doesn't match the entry's ward.
 pub async fn read_handoff_block(
-    fact_store: &Arc<dyn zero_stores::MemoryFactStore>,
+    fact_store: &Arc<dyn zbot_stores::MemoryFactStore>,
     current_ward: Option<&str>,
 ) -> Option<String> {
     let mut ctx_wards = Vec::new();
@@ -235,18 +235,18 @@ impl HandoffLlm for LlmHandoffWriter {
 /// Writes session handoff to the memory fact store.
 ///
 /// Backend-agnostic: takes `Arc<dyn ConversationStore>` so it does not
-/// pull `zero-stores-sqlite` into this crate (which would form a cycle
+/// pull `zbot-stores-sqlite` into this crate (which would form a cycle
 /// with `gateway-services`).
 pub struct HandoffWriter {
     llm: Arc<dyn HandoffLlm>,
-    fact_store: Arc<dyn zero_stores::MemoryFactStore>,
+    fact_store: Arc<dyn zbot_stores::MemoryFactStore>,
     conversation_store: Arc<dyn ConversationStore>,
 }
 
 impl HandoffWriter {
     pub fn new(
         llm: Arc<dyn HandoffLlm>,
-        fact_store: Arc<dyn zero_stores::MemoryFactStore>,
+        fact_store: Arc<dyn zbot_stores::MemoryFactStore>,
         conversation_store: Arc<dyn ConversationStore>,
     ) -> Self {
         Self {
@@ -574,8 +574,8 @@ fn push_route_hint(
 
 /// Convert POD `Message` rows into `agent_runtime::ChatMessage` for LLM use.
 ///
-/// Mirrors `zero_stores_sqlite::ConversationRepository::session_messages_to_chat_format`,
-/// hoisted here so the trait surface in `zero-stores-traits` stays free of
+/// Mirrors `zbot_stores_sqlite::ConversationRepository::session_messages_to_chat_format`,
+/// hoisted here so the trait surface in `zbot-stores-traits` stays free of
 /// `agent-runtime`. Parses `tool_calls` JSON on assistant messages from the
 /// stored format `[{"tool_id", "tool_name", "args", ...}]` into the LLM's
 /// `ToolCall { id, name, arguments }` shape.
@@ -630,7 +630,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex;
-    use zero_stores_domain::MemoryFact;
+    use zbot_stores_domain::MemoryFact;
 
     // ---- Mock MemoryFactStore ----
 
@@ -664,7 +664,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl zero_stores::MemoryFactStore for MockFactStore {
+    impl zbot_stores::MemoryFactStore for MockFactStore {
         async fn save_fact(
             &self,
             _agent_id: &str,
@@ -854,7 +854,7 @@ mod tests {
 
     fn make_writer(
         llm: Arc<dyn HandoffLlm>,
-        store: Arc<dyn zero_stores::MemoryFactStore>,
+        store: Arc<dyn zbot_stores::MemoryFactStore>,
     ) -> HandoffWriter {
         HandoffWriter::new(llm, store, Arc::new(MockConvStore))
     }
@@ -926,7 +926,7 @@ mod tests {
             serde_json::to_string(&entry).unwrap(),
         );
 
-        let store: Arc<dyn zero_stores::MemoryFactStore> = store;
+        let store: Arc<dyn zbot_stores::MemoryFactStore> = store;
         let block = read_handoff_block(&store, None)
             .await
             .expect("should return a block");
@@ -962,7 +962,7 @@ mod tests {
             serde_json::to_string(&entry).unwrap(),
         );
 
-        let store: Arc<dyn zero_stores::MemoryFactStore> = store;
+        let store: Arc<dyn zbot_stores::MemoryFactStore> = store;
         assert!(read_handoff_block(&store, None).await.is_none());
     }
 
@@ -970,7 +970,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_handoff_block_returns_none_when_absent() {
-        let store: Arc<dyn zero_stores::MemoryFactStore> = MockFactStore::new();
+        let store: Arc<dyn zbot_stores::MemoryFactStore> = MockFactStore::new();
         assert!(read_handoff_block(&store, None).await.is_none());
     }
 
@@ -995,7 +995,7 @@ mod tests {
             "handoff.latest".to_string(),
             serde_json::to_string(&entry).unwrap(),
         );
-        let store: Arc<dyn zero_stores::MemoryFactStore> = store;
+        let store: Arc<dyn zbot_stores::MemoryFactStore> = store;
         assert!(read_handoff_block(&store, Some("research-ward"))
             .await
             .is_none());

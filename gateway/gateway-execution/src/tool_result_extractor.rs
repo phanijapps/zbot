@@ -11,9 +11,9 @@
 use knowledge_graph::{Entity, EntityType};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use zero_stores::{ExtractedKnowledge, KnowledgeGraphStore};
-use zero_stores_domain::EpisodeSource;
-use zero_stores_traits::KgEpisodeStore;
+use zbot_stores::{ExtractedKnowledge, KnowledgeGraphStore};
+use zbot_stores_domain::EpisodeSource;
+use zbot_stores_traits::KgEpisodeStore;
 
 /// Extract entities from a tool result and persist them with episode provenance.
 ///

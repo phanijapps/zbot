@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use api_logs::{ExecutionLog, LogCategory, LogService, SessionStatus};
 use serde::Serialize;
-use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 // ============================================================================
 // TYPES

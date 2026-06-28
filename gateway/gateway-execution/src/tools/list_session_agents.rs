@@ -3,7 +3,7 @@ use execution_state::{DelegationType, ExecutionFilter, StateService};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use zero_core::{Result, Tool, ToolContext, ZeroError};
-use zero_stores_sqlite::DatabaseManager;
+use zbot_stores_sqlite::DatabaseManager;
 
 pub struct ListSessionAgentsTool {
     state_service: Arc<StateService<DatabaseManager>>,

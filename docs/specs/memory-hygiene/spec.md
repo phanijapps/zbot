@@ -76,7 +76,7 @@ before proceeding; *Never do* is a hard rule, even under time pressure.
   log fields should exist for each hygiene outcome, and status plumbing should
   compile without broad UI changes.
 - Regression gates: **goal-based check**. Targeted `cargo test` commands for
-  `gateway-memory`, `gateway-execution`, and `zero-stores-sqlite` must pass.
+  `gateway-memory`, `gateway-execution`, and `zbot-stores-sqlite` must pass.
 
 ## Acceptance Criteria
 
@@ -109,8 +109,8 @@ before proceeding; *Never do* is a hard rule, even under time pressure.
 - Technical: `MemoryFactStore` already exposes `save_ctx_fact`, and the SQLite
   implementation stores `ctx` facts as exact-key machine state without
   embedding generation (source:
-  `stores/zero-stores-traits/src/memory_facts.rs`;
-  `stores/zero-stores-sqlite/src/memory_fact_store.rs`).
+  `stores/zbot-stores-traits/src/memory_facts.rs`;
+  `stores/zbot-stores-sqlite/src/memory_fact_store.rs`).
 - Technical: `MemoryRecall::embed_query` currently sends the provided text
   directly to the embedding client and logs provider failures before returning
   `None` (source: `gateway/gateway-memory/src/recall/mod.rs`).

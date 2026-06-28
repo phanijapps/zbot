@@ -30,8 +30,8 @@ use agent_runtime::llm::ChatMessage;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use zero_stores_domain::{Belief, MemoryFact};
-use zero_stores_traits::{BeliefStore, MemoryFactStore};
+use zbot_stores_domain::{Belief, MemoryFact};
+use zbot_stores_traits::{BeliefStore, MemoryFactStore};
 
 use crate::util::parse_llm_json;
 use crate::{CachedLlmClient, LlmClientConfig, MemoryLlmFactory};
@@ -586,8 +586,8 @@ mod tests {
     use chrono::Duration as ChronoDuration;
     use gateway_services::VaultPaths;
     use std::sync::Mutex as StdMutex;
-    use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
-    use zero_stores_sqlite::{
+    use zbot_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+    use zbot_stores_sqlite::{
         GatewayMemoryFactStore, KnowledgeDatabase, MemoryRepository, SqliteBeliefStore,
     };
 

@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use zero_core::{Result, Tool, ToolContext, ZeroError};
-use zero_stores_traits::{PatternStep, ProcedureStore};
+use zbot_stores_traits::{PatternStep, ProcedureStore};
 
 use crate::tools::registry::ToolRegistry;
 
@@ -283,7 +283,7 @@ mod tests {
     use super::*;
     use crate::tools::context::ToolContext as ConcreteCtx;
     use tokio::sync::Mutex as TokioMutex;
-    use zero_stores_traits::Procedure;
+    use zbot_stores_traits::Procedure;
 
     struct NoOpProcedureStore;
     #[async_trait]

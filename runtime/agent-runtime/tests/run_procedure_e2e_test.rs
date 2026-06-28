@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
 use zero_core::{Result, Tool, ToolContext};
-use zero_stores_traits::{Procedure, ProcedureStore};
+use zbot_stores_traits::{Procedure, ProcedureStore};
 
 use agent_runtime::tools::context::ToolContext as ConcreteCtx;
 use agent_runtime::tools::registry::ToolRegistry;

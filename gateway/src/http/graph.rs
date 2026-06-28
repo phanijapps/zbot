@@ -12,8 +12,8 @@ use knowledge_graph::{Direction, Entity, GraphStats, Relationship, Subgraph};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use zero_stores::{Direction as StoreDirection, KnowledgeGraphStore};
-use zero_stores_domain::{DistillationStats, UndistilledSession};
+use zbot_stores::{Direction as StoreDirection, KnowledgeGraphStore};
+use zbot_stores_domain::{DistillationStats, UndistilledSession};
 
 // ============================================================================
 // REQUEST/RESPONSE TYPES
@@ -392,10 +392,10 @@ fn require_kg_store(
     })
 }
 
-/// Map a [`zero_stores::StoreError`] to the HTTP error pair used by graph
+/// Map a [`zbot_stores::StoreError`] to the HTTP error pair used by graph
 /// handlers: `(StatusCode, Json<ErrorResponse>)`.
-fn store_err_to_http(err: zero_stores::StoreError) -> (StatusCode, Json<ErrorResponse>) {
-    use zero_stores::StoreError;
+fn store_err_to_http(err: zbot_stores::StoreError) -> (StatusCode, Json<ErrorResponse>) {
+    use zbot_stores::StoreError;
     match err {
         StoreError::NotFound => (
             StatusCode::NOT_FOUND,
@@ -591,7 +591,7 @@ pub async fn trigger_distillation(
 /// Counts come from trait-erased stores where possible: `kg_store`
 /// for entity/relationship counts and `memory_store` for fact count.
 /// `episode_repo` and `distillation_repo` remain on their concrete
-/// repos — neither has been migrated to a `zero-stores` trait yet.
+/// repos — neither has been migrated to a `zbot-stores` trait yet.
 pub async fn graph_stats(
     State(state): State<AppState>,
 ) -> Result<Json<AggregateGraphStats>, (StatusCode, Json<ErrorResponse>)> {

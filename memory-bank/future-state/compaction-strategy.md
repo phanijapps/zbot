@@ -170,7 +170,7 @@ Five layers, bottom-up in per-turn order. Each layer names the Anthropic or indu
   - 4-char heuristic goes.
 
 ### Layer 4 — durable memory surface
-- **Existing source of truth**: `knowledge.db` via the zero-stores repositories and traits.
+- **Existing source of truth**: `knowledge.db` via the zbot-stores repositories and traits.
 - **Adapter**: `runtime/agent-tools/src/tools/memory.rs` remains a tool-facing API over the database-backed memory layer.
 - **Session-close distillation**: lives in existing `gateway/gateway-execution/src/distillation.rs` and writes durable facts through `MemoryFactStore`.
 - **Sleep compactor scope**: `gateway/gateway-memory/src/sleep/compactor.rs` is scoped to durable KG hygiene. It no longer represents a parallel forgetting policy against live conversation state.

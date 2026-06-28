@@ -81,7 +81,7 @@ gateway-execution/src/
 
 ## Dependencies
 
-Depends on most other gateway sub-crates: `gateway-events`, `gateway-services`, `gateway-connectors`, `gateway-templates`, `gateway-hooks`, `gateway-bus`. Also depends on `agent-runtime`, `agent-tools`, and `zero-stores-sqlite` (replaces gateway-database).
+Depends on most other gateway sub-crates: `gateway-events`, `gateway-services`, `gateway-connectors`, `gateway-templates`, `gateway-hooks`, `gateway-bus`. Also depends on `agent-runtime`, `agent-tools`, and `zbot-stores-sqlite` (replaces gateway-database).
 
 ## Conventions
 

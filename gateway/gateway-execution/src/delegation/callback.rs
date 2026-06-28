@@ -6,7 +6,7 @@ use super::context::DelegationContext;
 use gateway_events::{EventBus, GatewayEvent};
 use serde_json::Value;
 use std::sync::Arc;
-use zero_stores_sqlite::ConversationRepository;
+use zbot_stores_sqlite::ConversationRepository;
 
 // ============================================================================
 // CALLBACK FORMATTING

@@ -19,8 +19,8 @@ use axum_test::TestServer;
 use execution_state::StateService;
 use gateway::{AppState, GatewayConfig, http::create_http_router, websocket::WebSocketHandler};
 use tempfile::TempDir;
-use zero_stores_sqlite::DatabaseManager;
-use zero_stores_sqlite::{
+use zbot_stores_sqlite::DatabaseManager;
+use zbot_stores_sqlite::{
     EpisodeRepository, ProcedureRepository, SqliteVecIndex, WardWikiRepository,
     vector_index::VectorIndex,
 };

@@ -19,7 +19,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock, Semaphore};
-use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 /// Callback invoked after session creation but before any events are emitted.
 /// Receives the session_id so the caller can set up subscriptions before events fire.
@@ -84,7 +84,7 @@ pub struct ExecutionRunner {
     /// Bridge outbox for reliable message delivery
     bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
     /// Trait-routed memory store.
-    memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+    memory_store: Option<Arc<dyn zbot_stores::MemoryFactStore>>,
     /// Session distiller for automatic fact extraction after sessions
     distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     /// Handoff writer for session completion → KV summary.
@@ -113,9 +113,9 @@ pub struct ExecutionRunner {
         >,
     >,
     /// Trait-routed kg store for the `graph_query` tool — wired by AppState.
-    kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
+    kg_store: Option<Arc<dyn zbot_stores::KnowledgeGraphStore>>,
     /// KG episode repository for ward artifact indexing after distillation.
-    kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
+    kg_episode_repo: Option<Arc<zbot_stores_sqlite::KgEpisodeRepository>>,
     /// Adapter for the `ingest` agent tool. Wired via [`Self::set_ingestion_adapter`].
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     /// Adapter for the `goal` agent tool. Wired via [`Self::set_goal_adapter`].
@@ -123,7 +123,7 @@ pub struct ExecutionRunner {
     steering_registry: Arc<agent_runtime::SteeringRegistry>,
     agent_result_bus: Arc<AgentResultBus>,
     /// Trait-routed procedure store for the `run_procedure` tool — wired by AppState.
-    procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    procedure_store: Option<Arc<dyn zbot_stores_traits::ProcedureStore>>,
     /// Per-ward usage telemetry — every `ward:<name>` delegation bumps it,
     /// the curator reads it. Wired by AppState via [`ExecutionRunnerConfig`].
     ward_usage: Arc<gateway_services::WardUsage>,
@@ -163,7 +163,7 @@ pub struct ExecutionRunnerConfig {
     // --- Optional integrations ---
     pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     /// Trait-routed memory store — wired.
-    pub memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+    pub memory_store: Option<Arc<dyn zbot_stores::MemoryFactStore>>,
     pub distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub handoff_writer: Option<Arc<crate::sleep::HandoffWriter>>,
     pub memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
@@ -171,7 +171,7 @@ pub struct ExecutionRunnerConfig {
     pub bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
     pub embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     /// Trait-routed procedure store for the `run_procedure` tool.
-    pub procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    pub procedure_store: Option<Arc<dyn zbot_stores_traits::ProcedureStore>>,
     /// Procedure recommendation tier thresholds (graduated promoted/advisory/tentative).
     /// Wired from `settings.memory.procedureRecommendation` by AppState.
     pub procedure_recommendation_cfg: gateway_memory::ProcedureRecommendationConfig,
@@ -202,17 +202,17 @@ pub(super) struct ContinuationArgs<'a> {
     pub(super) delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
     pub(super) log_service: Arc<LogService<DatabaseManager>>,
     pub(super) state_service: Arc<StateService<DatabaseManager>>,
-    pub(super) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+    pub(super) memory_store: Option<Arc<dyn zbot_stores::MemoryFactStore>>,
     pub(super) embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     pub(super) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub(super) handoff_writer: Option<Arc<crate::sleep::HandoffWriter>>,
     pub(super) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub(super) model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
-    pub(super) kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
-    pub(super) kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
+    pub(super) kg_store: Option<Arc<dyn zbot_stores::KnowledgeGraphStore>>,
+    pub(super) kg_episode_repo: Option<Arc<zbot_stores_sqlite::KgEpisodeRepository>>,
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
-    pub(super) procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    pub(super) procedure_store: Option<Arc<dyn zbot_stores_traits::ProcedureStore>>,
     pub(super) ward_usage: Arc<gateway_services::WardUsage>,
 }
 
@@ -273,7 +273,7 @@ async fn build_continuation_message(
     paths: &SharedVaultPaths,
     session_id: &str,
     ward_id: Option<&str>,
-    fact_store: Option<&Arc<dyn zero_stores::MemoryFactStore>>,
+    fact_store: Option<&Arc<dyn zbot_stores::MemoryFactStore>>,
 ) -> String {
     let plan_hint = ward_id.and_then(|wid| {
         let specs_dir = paths.vault_dir().join("wards").join(wid).join("specs");
@@ -522,7 +522,7 @@ impl ExecutionRunner {
     }
 
     /// Set the KG episode repository used by post-distillation ward indexing.
-    pub fn set_kg_episode_repo(&mut self, repo: Arc<zero_stores_sqlite::KgEpisodeRepository>) {
+    pub fn set_kg_episode_repo(&mut self, repo: Arc<zbot_stores_sqlite::KgEpisodeRepository>) {
         self.kg_episode_repo = Some(repo);
     }
 
@@ -530,7 +530,7 @@ impl ExecutionRunner {
     /// bootstrap so `InvokeBootstrap::finish_setup` reads its own clone
     /// at session-setup time. Phase E5b — wired by AppState so the
     /// `graph_query` tool registers regardless of backend.
-    pub fn set_kg_store(&mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) {
+    pub fn set_kg_store(&mut self, store: Arc<dyn zbot_stores::KnowledgeGraphStore>) {
         self.bootstrap.kg_store = Some(store.clone());
         self.kg_store = Some(store);
     }
@@ -1209,7 +1209,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
 
     // Trait-routed fact store used for save_fact and ctx writes during
     // continuation. Wired via AppState.
-    let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = memory_store.clone();
+    let fact_store: Option<Arc<dyn zbot_stores::MemoryFactStore>> = memory_store.clone();
     // Clone for session-ctx plan_snapshot below — the builder moves the
     // primary Arc, so we keep a separate handle to write plan text to
     // ctx.<sid>.plan on continuations that load a plan.md.
@@ -1399,8 +1399,8 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                         let result_cl = result.clone();
                         let session_id_cl = session_id_inner.clone();
                         let agent_id_cl = agent_id_inner.clone();
-                        let ep_store: Arc<dyn zero_stores_traits::KgEpisodeStore> = Arc::new(
-                            zero_stores_sqlite::GatewayKgEpisodeStore::new(ep_repo.clone()),
+                        let ep_store: Arc<dyn zbot_stores_traits::KgEpisodeStore> = Arc::new(
+                            zbot_stores_sqlite::GatewayKgEpisodeStore::new(ep_repo.clone()),
                         );
                         let kg_cl = kg.clone();
                         tokio::spawn(async move {
@@ -1509,10 +1509,10 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
                     // -> kg_store is already on the runner via
                     // set_kg_store, so we pass that directly.
                     let kg_episode_store_for_indexer: Option<
-                        Arc<dyn zero_stores_traits::KgEpisodeStore>,
+                        Arc<dyn zbot_stores_traits::KgEpisodeStore>,
                     > = kg_episode_repo.as_ref().map(|r| {
-                        Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
-                            as Arc<dyn zero_stores_traits::KgEpisodeStore>
+                        Arc::new(zbot_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
+                            as Arc<dyn zbot_stores_traits::KgEpisodeStore>
                     });
                     let kg_store_for_indexer = kg_store.clone();
                     let paths_for_indexer = paths.clone();
@@ -1656,8 +1656,8 @@ pub(super) async fn run_ward_artifact_indexer(
     ward_id: &Option<String>,
     session_id: &str,
     agent_id: &str,
-    kg_episode_store: Option<&Arc<dyn zero_stores_traits::KgEpisodeStore>>,
-    kg_store: Option<&Arc<dyn zero_stores::KnowledgeGraphStore>>,
+    kg_episode_store: Option<&Arc<dyn zbot_stores_traits::KgEpisodeStore>>,
+    kg_store: Option<&Arc<dyn zbot_stores::KnowledgeGraphStore>>,
     paths: &SharedVaultPaths,
 ) {
     let (Some(wid), Some(ep_store), Some(kg)) = (ward_id, kg_episode_store, kg_store) else {

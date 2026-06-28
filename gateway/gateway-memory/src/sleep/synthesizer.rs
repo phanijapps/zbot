@@ -18,8 +18,8 @@ use agent_runtime::llm::ChatMessage;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use zero_stores::{KnowledgeGraphStore, StrategyCandidate};
-use zero_stores_traits::{CompactionStore, EpisodeStore, MemoryFactStore, StrategyFactInsert};
+use zbot_stores::{KnowledgeGraphStore, StrategyCandidate};
+use zbot_stores_traits::{CompactionStore, EpisodeStore, MemoryFactStore, StrategyFactInsert};
 
 use crate::util::parse_llm_json;
 use crate::{CachedLlmClient, LlmClientConfig, MemoryLlmFactory};
@@ -422,10 +422,10 @@ mod tests {
     use gateway_services::VaultPaths;
     use rusqlite::params;
     use std::sync::Mutex;
-    use zero_stores_sqlite::kg::storage::GraphStorage;
-    use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
-    use zero_stores_sqlite::EpisodeRepository;
-    use zero_stores_sqlite::{
+    use zbot_stores_sqlite::kg::storage::GraphStorage;
+    use zbot_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+    use zbot_stores_sqlite::EpisodeRepository;
+    use zbot_stores_sqlite::{
         CompactionRepository, GatewayCompactionStore, GatewayEpisodeStore, GatewayMemoryFactStore,
         KnowledgeDatabase, MemoryRepository, SqliteKgStore,
     };

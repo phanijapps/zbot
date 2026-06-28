@@ -22,7 +22,7 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use serde_json::{Value, json};
-use zero_stores_domain::{
+use zbot_stores_domain::{
     MemoryFact, Procedure, RouteHint, RouteSourceKind, SessionEpisode, WikiArticle,
 };
 

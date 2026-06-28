@@ -14,9 +14,9 @@ The memory subsystem currently lives across three crates:
 
 | Crate | Role |
 |-------|------|
-| `stores/zero-stores-traits` | `MemoryFactStore`, `CompactionStore`, `EpisodeStore`, `KnowledgeGraphStore` traits + `MemoryFact` re-exports |
-| `stores/zero-stores-sqlite` | SQLite implementations of all above traits |
-| `stores/zero-stores-domain` | `MemoryFact`, `StrategyFactInsert`, `StrategyFactMatch` types |
+| `stores/zbot-stores-traits` | `MemoryFactStore`, `CompactionStore`, `EpisodeStore`, `KnowledgeGraphStore` traits + `MemoryFact` re-exports |
+| `stores/zbot-stores-sqlite` | SQLite implementations of all above traits |
+| `stores/zbot-stores-domain` | `MemoryFact`, `StrategyFactInsert`, `StrategyFactMatch` types |
 | `gateway/gateway-execution/src/sleep/` | All sleep-time memory components (Compactor, Synthesizer, PatternExtractor, Pruner, OrphanArchiver, **CorrectionsAbstractor**, **ConflictResolver**, **HandoffWriter**) |
 | `gateway/gateway-memory` | **COMPLETE — Phases A through F.** The full memory subsystem: config types, all sleep-component engines + abstraction traits, recall pipeline, `MemoryLlmFactory` + 6 production `Llm*` impls, `HandoffWriter` struct, `SleepOps` + `SleepTimeWorker`, and the `MemoryServices::new(MemoryServicesConfig)` factory. Gateway constructs services in 41 lines (was 104). |
 | `gateway/gateway-execution/src/recall/` | Recall scoring + retrieval pipeline |
@@ -25,7 +25,7 @@ The memory subsystem currently lives across three crates:
 | `gateway/gateway-services/src/settings.rs` | `MemorySettings` (new) inside `ExecutionSettings` |
 | `gateway/src/state/mod.rs` | Construction + wiring of all memory components |
 
-A future `zero-memory` crate would naturally absorb most of `gateway/gateway-execution/src/sleep/` and `recall/`, plus `RecallConfig` and `MemorySettings`. The store traits already live in `zero-stores-*` and don't need to move.
+A future `zero-memory` crate would naturally absorb most of `gateway/gateway-execution/src/sleep/` and `recall/`, plus `RecallConfig` and `MemorySettings`. The store traits already live in `zbot-stores-*` and don't need to move.
 
 ---
 
@@ -66,17 +66,17 @@ These are the *new* memory components built across the three phases. All live in
 
 | Component | File | Responsibility |
 |-----------|------|----------------|
-| `decay_entity_confidence` / `decay_relationship_confidence` | `stores/zero-stores/src/knowledge_graph.rs` (trait), `stores/zero-stores-sqlite/src/knowledge_graph.rs` (impl) | Batch-apply temporal decay to KG `confidence` columns based on `last_seen_at` age, floor at `min_confidence`, transaction-wrapped |
+| `decay_entity_confidence` / `decay_relationship_confidence` | `stores/zbot-stores/src/knowledge_graph.rs` (trait), `stores/zbot-stores-sqlite/src/knowledge_graph.rs` (impl) | Batch-apply temporal decay to KG `confidence` columns based on `last_seen_at` age, floor at `min_confidence`, transaction-wrapped |
 | `DecayEngine::decay_kg_confidence` | `gateway/gateway-execution/src/sleep/decay.rs` | Orchestrates both store calls, enabled-guard, returns `KgDecayStats` |
-| `evidence` TEXT column | `stores/zero-stores-sqlite/src/knowledge_schema.rs` | Schema-only — preparatory for future contradiction-provenance work. No code populates it yet. |
+| `evidence` TEXT column | `stores/zbot-stores-sqlite/src/knowledge_schema.rs` | Schema-only — preparatory for future contradiction-provenance work. No code populates it yet. |
 | `KgDecayConfig` | `gateway/gateway-services/src/recall_config.rs` | Configurable half-lives + floor + skip-recent guard |
 | `KnowledgeGraphStore::find_kg_nodes_by_episode_ids` + `apply_entity_confidence_multiplier` + `apply_relationship_confidence_multiplier` | trait + SQLite impl | MEM-001 Part A — locate kg_entities and kg_relationships whose `source_episode_ids` blob contains any of a given set, then multiplicatively decay their `confidence` floored at `min_floor`. Comma-flanked token match (no substring false positives), agent-scoped, archival excluded. |
 | `MemoryFactStore::list_contradicted_fact_episode_ids` | trait + SQLite impl | Returns distinct `source_episode_id` values from `memory_facts` rows where `contradicted_by IS NOT NULL` and `updated_at > since`. Lookback bounded by the engine's `contradiction_lookback_hours` (default 24h). |
 | `DecayEngine::propagate_fact_contradictions` + `ContradictionPropagationConfig` | `gateway-memory/src/sleep/decay.rs` | MEM-001 Part A orchestrator. Chains the three trait calls above. Builder-style `with_contradiction_propagation(fact_store, config)` so the engine stays a no-op when unwired or disabled. Wired into the sleep cycle in `worker.rs` immediately after `decay_kg_confidence`. Default config: `enabled=true`, `decay_factor=0.9`, `min_floor=0.05`, `lookback_hours=24`. |
-| `EntityNameEmbeddingHit.confidence` + `GraphTraversalConfig.min_kg_confidence` + recall step-4 weighting | `stores/zero-stores-domain/src/kg_ops.rs` + `stores/zero-stores-sqlite/src/kg/storage.rs` + `gateway/gateway-memory/src/lib.rs` + `gateway/gateway-memory/src/recall/mod.rs` | MEM-001 Part B-1 — recall step-4 (graph-ANN over entity name index) now joins `kg_entities.confidence` and (a) filters hits below `min_kg_confidence` (default 0.1) and (b) multiplies the final score by entity confidence. Closes the loop with Part A: when the sleep cycle decays a contradicted entity's confidence, recall actually downweights it. Filter applies to seed_ids too, so the hierarchy LCA surface (step 5c) stays consistent with what recall shows. |
-| `KnowledgeGraphStore::traverse_weighted` + `WeightedTraversalHit` + recall step 4b | `stores/zero-stores/src/knowledge_graph.rs` + `stores/zero-stores-sqlite/src/{kg/storage.rs,knowledge_graph.rs}` + `gateway/gateway-memory/src/recall/mod.rs` | MEM-001 Part B-2 — confidence-aware BFS traversal in recall. Recursive CTE walks `kg_relationships` outward from the top-3 graph-ANN seeds (bounded by `max_hops` + `max_graph_facts`), filters edges below `min_kg_confidence`, and accumulates an `edge_confidence_product` along each path. Recall scores each hit as `hop_decay^hop × edge_confidence_product × entity_confidence` and emits ScoredItems with `provenance.source = "kg_traversal"` (distinct from step-4's `kg_name_index` seeds). Shortest-hop-wins dedup; ties go to higher edge-confidence product. Agent-scoped, archival rows + edges excluded. **MEM-001 fully closed.** |
+| `EntityNameEmbeddingHit.confidence` + `GraphTraversalConfig.min_kg_confidence` + recall step-4 weighting | `stores/zbot-stores-domain/src/kg_ops.rs` + `stores/zbot-stores-sqlite/src/kg/storage.rs` + `gateway/gateway-memory/src/lib.rs` + `gateway/gateway-memory/src/recall/mod.rs` | MEM-001 Part B-1 — recall step-4 (graph-ANN over entity name index) now joins `kg_entities.confidence` and (a) filters hits below `min_kg_confidence` (default 0.1) and (b) multiplies the final score by entity confidence. Closes the loop with Part A: when the sleep cycle decays a contradicted entity's confidence, recall actually downweights it. Filter applies to seed_ids too, so the hierarchy LCA surface (step 5c) stays consistent with what recall shows. |
+| `KnowledgeGraphStore::traverse_weighted` + `WeightedTraversalHit` + recall step 4b | `stores/zbot-stores/src/knowledge_graph.rs` + `stores/zbot-stores-sqlite/src/{kg/storage.rs,knowledge_graph.rs}` + `gateway/gateway-memory/src/recall/mod.rs` | MEM-001 Part B-2 — confidence-aware BFS traversal in recall. Recursive CTE walks `kg_relationships` outward from the top-3 graph-ANN seeds (bounded by `max_hops` + `max_graph_facts`), filters edges below `min_kg_confidence`, and accumulates an `edge_confidence_product` along each path. Recall scores each hit as `hop_decay^hop × edge_confidence_product × entity_confidence` and emits ScoredItems with `provenance.source = "kg_traversal"` (distinct from step-4's `kg_name_index` seeds). Shortest-hop-wins dedup; ties go to higher edge-confidence product. Agent-scoped, archival rows + edges excluded. **MEM-001 fully closed.** |
 | `CachedLlmClient` helper + production Llm* impls converted | `gateway/gateway-memory/src/llm_factory.rs` + 9 sleep/recall LLM impls | MEM-003 — every Llm* impl (`LlmConflictJudge`, `LlmCorrectionsAbstractor`, `LlmSynthesizer`, `LlmBeliefSynthesizer`, `LlmContradictionJudge`, `LlmPatternExtractor`, `LlmPairwiseVerifier`, `LlmAggregateEntity`, `LlmQueryGate`) now embeds a `CachedLlmClient` instead of re-building per call. `tokio::sync::OnceCell` so concurrent first-call paths coalesce to one build. Errors are not memoized — transient factory failures retry on next call. Net effect: one `build_client` per process per (impl, config) tuple. |
-| Bulk decay UPDATE + `exp` SQLite UDF | `stores/zero-stores-sqlite/src/{knowledge_db.rs,knowledge_graph.rs}` | MEM-004 — `decay_kg_table` replaced with a single `UPDATE … SET confidence = MAX(?, confidence * exp(-? * (julianday('now') - julianday(last_seen_at)))) WHERE …`. rusqlite's `bundled` feature doesn't ship `SQLITE_ENABLE_MATH_FUNCTIONS`, so a tiny Rust-side `exp(x)` scalar UDF is registered on every pooled connection via `create_scalar_function` (deterministic, no I/O). One SQL round-trip per decay pass regardless of row count. Tested at 1/90/180 days against the canonical exp formula. Cargo.toml gains the `functions` feature on rusqlite. |
+| Bulk decay UPDATE + `exp` SQLite UDF | `stores/zbot-stores-sqlite/src/{knowledge_db.rs,knowledge_graph.rs}` | MEM-004 — `decay_kg_table` replaced with a single `UPDATE … SET confidence = MAX(?, confidence * exp(-? * (julianday('now') - julianday(last_seen_at)))) WHERE …`. rusqlite's `bundled` feature doesn't ship `SQLITE_ENABLE_MATH_FUNCTIONS`, so a tiny Rust-side `exp(x)` scalar UDF is registered on every pooled connection via `create_scalar_function` (deterministic, no I/O). One SQL round-trip per decay pass regardless of row count. Tested at 1/90/180 days against the canonical exp formula. Cargo.toml gains the `functions` feature on rusqlite. |
 
 ### Phase 6 — Hierarchical Memory (HiRAG + LeanRAG)
 
@@ -84,7 +84,7 @@ Multi-layer aggregation on top of `kg_entities`. Sleep cycle K-means-clusters la
 
 | Component | File | Responsibility |
 |-----------|------|----------------|
-| Schema v31 — `kg_entities.layer` + `parent_cluster_id`; `kg_relationships.layer` + `is_inter_cluster` | `stores/zero-stores-sqlite/src/knowledge_schema.rs` + `migrations/v31_kg_hierarchy_columns.sql` | Columns + 4 supporting indexes. PRAGMA-guarded ALTER mirrors v29/v30. |
+| Schema v31 — `kg_entities.layer` + `parent_cluster_id`; `kg_relationships.layer` + `is_inter_cluster` | `stores/zbot-stores-sqlite/src/knowledge_schema.rs` + `migrations/v31_kg_hierarchy_columns.sql` | Columns + 4 supporting indexes. PRAGMA-guarded ALTER mirrors v29/v30. |
 | `kmeans_cosine` + `cluster_sparsity` + `should_stop_layering` | `gateway/gateway-memory/src/sleep/clustering.rs` | Pure-Rust K-means with K-means++ init, cosine distance, HiRAG cluster-sparsity stop rule. Seeded LCG, no `rand` dep. |
 | `KnowledgeGraphStore::list_entities_with_embeddings_at_layer` | trait + SQLite impl | Builder's candidate-pool fetch. Joins `kg_entities × kg_name_index`, dual-matches agent_id against `__global__`. |
 | `KnowledgeGraphStore::connectivity_strength` | trait + SQLite impl | Counts cross-cluster edges in both directions. Gates inter-cluster relation synthesis at λ > τ. |
@@ -148,10 +148,10 @@ These trait method additions happened during Phase 3 and represent a real archit
 
 | Method | File | Phase | Why |
 |--------|------|-------|-----|
-| `MemoryFactStore::get_fact_embedding(fact_id) -> Result<Option<Vec<f32>>>` | `stores/zero-stores-traits/src/memory_facts.rs` | Phase 3 | Hydrate embeddings on-demand for `ConflictResolver` pair scoring |
-| SQLite impl: one-line delegation to `memory_repo.get_fact_embedding` | `stores/zero-stores-sqlite/src/memory_fact_store.rs` | Phase 3 | (`memory_repository.rs:1121` already had the method) |
+| `MemoryFactStore::get_fact_embedding(fact_id) -> Result<Option<Vec<f32>>>` | `stores/zbot-stores-traits/src/memory_facts.rs` | Phase 3 | Hydrate embeddings on-demand for `ConflictResolver` pair scoring |
+| SQLite impl: one-line delegation to `memory_repo.get_fact_embedding` | `stores/zbot-stores-sqlite/src/memory_fact_store.rs` | Phase 3 | (`memory_repository.rs:1121` already had the method) |
 
-**For extraction:** these trait additions stay in `zero-stores-traits` — they're part of the store contract, not the memory crate proper.
+**For extraction:** these trait additions stay in `zbot-stores-traits` — they're part of the store contract, not the memory crate proper.
 
 ---
 
@@ -186,7 +186,7 @@ Today's memory code reaches into:
 | `gateway_services::ProviderService` | Every `Llm*` production impl (resolves the default provider) | Awkward — `ProviderService` should arguably not be a memory dep. Could be replaced by an `LlmClientFactory` trait passed in |
 | `gateway_services::VaultPaths` | Test harnesses only | Tests-only; not a runtime dep |
 | `agent_tools::GoalSummary` | `format_goals_block` in `invoke_bootstrap.rs` | Yes — goals are conceptually orthogonal to memory but injected alongside |
-| `zero_stores`, `zero_stores_traits`, `zero_stores_domain`, `zero_stores_sqlite` | All store ops | Yes — stays in stores crates |
+| `zbot_stores`, `zbot_stores_traits`, `zbot_stores_domain`, `zbot_stores_sqlite` | All store ops | Yes — stays in stores crates |
 | `chrono`, `serde`, `async_trait`, `tracing`, `uuid` | Pervasive | Standard, no friction |
 
 **Blocker:** the `ProviderService` dependency is the main awkwardness. A clean extraction would introduce a `MemoryLlmFactory` trait in `zero-memory` that the gateway implements by wrapping `ProviderService`. This keeps the memory crate provider-agnostic.
@@ -233,7 +233,7 @@ Listed in reverse-chronological order. All on branch `feat/parallel-delegation-a
 
 **Per-impl LlmClientConfig** preserved exactly: Synthesizer (0.0, 512), PatternExtractor (0.0, 1024), CorrectionsAbstractor (0.0, 512), ConflictJudge (0.0, 256), HandoffWriter (0.2, 256), PairwiseVerifier (0.0, 128).
 
-**MEM-005** bonus: HandoffWriter struct also moved via a one-method extension to `ConversationStore` trait (`get_session_messages`) + hoisting `Message` POD type into `zero-stores-domain`.
+**MEM-005** bonus: HandoffWriter struct also moved via a one-method extension to `ConversationStore` trait (`get_session_messages`) + hoisting `Message` POD type into `zbot-stores-domain`.
 
 ### Phase C — Recall module moved to gateway-memory (2026-05-13)
 - `f1c3be31` refactor(gateway-memory): move recall module from gateway-execution — Phase C
@@ -250,7 +250,7 @@ Listed in reverse-chronological order. All on branch `feat/parallel-delegation-a
 - `59a660a1` refactor(gateway-memory): move DecayEngine from gateway-execution
 - `aa98a131` chore(gateway-memory): scaffold sleep submodule + add deps for Phase B
 
-**Note:** `HandoffWriter` struct itself stayed in gateway-execution (concrete-type dep would cycle through zero-stores-sqlite). Trait + read_handoff_block + supporting types + 5 of 10 tests moved. Full struct move tracked as MEM-005.
+**Note:** `HandoffWriter` struct itself stayed in gateway-execution (concrete-type dep would cycle through zbot-stores-sqlite). Trait + read_handoff_block + supporting types + 5 of 10 tests moved. Full struct move tracked as MEM-005.
 
 ### Phase A — Memory crate extraction begins (2026-05-13)
 - `a1e96a74` feat(gateway-memory): extract config types — Phase A of memory crate extraction

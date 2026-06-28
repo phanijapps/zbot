@@ -1,8 +1,8 @@
 //! # Embedding Reindex (gateway-side wrapper)
 //!
 //! The vec0-rebuild orchestration moved into
-//! [`zero_stores_sqlite::reindex`] in Phase 3d (TD-012). The trait method
-//! [`zero_stores::KnowledgeGraphStore::reindex_embeddings`] is the
+//! [`zbot_stores_sqlite::reindex`] in Phase 3d (TD-012). The trait method
+//! [`zbot_stores::KnowledgeGraphStore::reindex_embeddings`] is the
 //! backend-agnostic surface that future SurrealDB / other impls will
 //! implement.
 //!
@@ -23,6 +23,6 @@
 // (`gateway::state::reconcile_embeddings_at_boot`, the `/api/embeddings`
 // handler) keep their import paths working with no churn beyond a single
 // dep addition.
-pub use zero_stores_sqlite::reindex::{
+pub use zbot_stores_sqlite::reindex::{
     reindex_all, reindex_table, ProgressFn, ReindexSummary, ReindexTarget, REINDEX_TARGETS,
 };

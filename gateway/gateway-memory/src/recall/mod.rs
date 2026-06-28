@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use crate::{MmrConfig, RecallConfig};
 use agent_runtime::llm::embedding::{EmbeddingClient, EmbeddingError};
-use zero_stores_domain::{MemoryFact, Procedure, ScoredFact};
+use zbot_stores_domain::{MemoryFact, Procedure, ScoredFact};
 
 const MAX_RECALL_EMBED_QUERY_CHARS: usize = 500;
 const RETRY_RECALL_EMBED_QUERY_CHARS: usize = 384;
@@ -44,16 +44,16 @@ const RETRY_RECALL_EMBED_QUERY_CHARS: usize = 384;
 /// this struct's signatures.
 pub struct MemoryRecall {
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
-    memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
-    kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
-    episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>>,
-    wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>>,
-    procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    memory_store: Option<Arc<dyn zbot_stores::MemoryFactStore>>,
+    kg_store: Option<Arc<dyn zbot_stores::KnowledgeGraphStore>>,
+    episode_store: Option<Arc<dyn zbot_stores_traits::EpisodeStore>>,
+    wiki_store: Option<Arc<dyn zbot_stores_traits::WikiStore>>,
+    procedure_store: Option<Arc<dyn zbot_stores_traits::ProcedureStore>>,
     /// Belief store for Phase B-4 recall integration. Wired only when
     /// the Belief Network is enabled — when `None`, `recall_unified`
     /// stays byte-for-byte identical to pre-B-4 behavior (no extra
     /// fetch, no extra log).
-    belief_store: Option<Arc<dyn zero_stores_traits::BeliefStore>>,
+    belief_store: Option<Arc<dyn zbot_stores_traits::BeliefStore>>,
     /// Self-RAG retrieval gate. When `None`, recall behaves identically to
     /// pre-gate behavior (raw user message → hybrid search).
     query_gate: Option<Arc<QueryGate>>,
@@ -102,7 +102,7 @@ impl MemoryRecall {
     /// alongside facts (Phase B-4). Caller is expected to attach this
     /// only when `beliefNetwork.enabled = true`; when unset, beliefs
     /// stay out of the recall pool entirely.
-    pub fn set_belief_store(&mut self, store: Arc<dyn zero_stores_traits::BeliefStore>) {
+    pub fn set_belief_store(&mut self, store: Arc<dyn zbot_stores_traits::BeliefStore>) {
         self.belief_store = Some(store);
     }
 
@@ -128,27 +128,27 @@ impl MemoryRecall {
     }
 
     /// Wire the memory-fact store (hybrid FTS + vector recall path).
-    pub fn set_memory_store(&mut self, store: Arc<dyn zero_stores::MemoryFactStore>) {
+    pub fn set_memory_store(&mut self, store: Arc<dyn zbot_stores::MemoryFactStore>) {
         self.memory_store = Some(store);
     }
 
     /// Wire the KG store (graph ANN recall path).
-    pub fn set_kg_store(&mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) {
+    pub fn set_kg_store(&mut self, store: Arc<dyn zbot_stores::KnowledgeGraphStore>) {
         self.kg_store = Some(store);
     }
 
     /// Wire the episode store (previous-episode chain recall path).
-    pub fn set_episode_store(&mut self, store: Arc<dyn zero_stores_traits::EpisodeStore>) {
+    pub fn set_episode_store(&mut self, store: Arc<dyn zbot_stores_traits::EpisodeStore>) {
         self.episode_store = Some(store);
     }
 
     /// Wire the wiki store (ward-scoped wiki recall path).
-    pub fn set_wiki_store(&mut self, store: Arc<dyn zero_stores_traits::WikiStore>) {
+    pub fn set_wiki_store(&mut self, store: Arc<dyn zbot_stores_traits::WikiStore>) {
         self.wiki_store = Some(store);
     }
 
     /// Wire the procedure store (procedure recall path).
-    pub fn set_procedure_store(&mut self, store: Arc<dyn zero_stores_traits::ProcedureStore>) {
+    pub fn set_procedure_store(&mut self, store: Arc<dyn zbot_stores_traits::ProcedureStore>) {
         self.procedure_store = Some(store);
     }
 
@@ -375,7 +375,7 @@ impl MemoryRecall {
                 .into_iter()
                 .filter_map(|v| {
                     let score = v.get("score").and_then(|s| s.as_f64()).unwrap_or(0.5);
-                    // See note on `zero_stores_sqlite::MemoryFact` above — we
+                    // See note on `zbot_stores_sqlite::MemoryFact` above — we
                     // decode into the domain type to avoid a dep cycle.
                     serde_json::from_value::<MemoryFact>(v)
                         .ok()
@@ -427,7 +427,7 @@ impl MemoryRecall {
         // to seed_ids too, so the hierarchy LCA surface (step 5c) is
         // consistent with what recall actually shows.
         let min_kg_conf = self.config.graph_traversal.min_kg_confidence;
-        let (graph_items, graph_seed_ids): (Vec<ScoredItem>, Vec<zero_stores::types::EntityId>) =
+        let (graph_items, graph_seed_ids): (Vec<ScoredItem>, Vec<zbot_stores::types::EntityId>) =
             match (self.kg_store.as_ref(), query_emb.as_ref()) {
                 (Some(store), Some(emb)) => match store
                     .search_entities_by_name_embedding(agent_id, emb, 10)
@@ -438,10 +438,10 @@ impl MemoryRecall {
                             .into_iter()
                             .filter(|h| h.confidence >= min_kg_conf)
                             .collect();
-                        let seed_ids: Vec<zero_stores::types::EntityId> = hits
+                        let seed_ids: Vec<zbot_stores::types::EntityId> = hits
                             .iter()
                             .filter(|h| !h.id.is_empty())
-                            .map(|h| zero_stores::types::EntityId(h.id.clone()))
+                            .map(|h| zbot_stores::types::EntityId(h.id.clone()))
                             .collect();
                         let items: Vec<ScoredItem> = hits
                             .into_iter()
@@ -589,9 +589,9 @@ impl MemoryRecall {
                     ward_id: ward_id.map(String::from),
                 },
                 route_hint: ward_id.map(|ward| {
-                    zero_stores_domain::RouteHint::new(
+                    zbot_stores_domain::RouteHint::new(
                         ward.to_string(),
-                        zero_stores_domain::RouteSourceKind::Goal,
+                        zbot_stores_domain::RouteSourceKind::Goal,
                     )
                     .with_memory_id(g.id.clone())
                 }),
@@ -1223,7 +1223,7 @@ mod tests {
         // Sanity test: retain logic drops items whose underlying fact has
         // superseded_by set. Verifies the filter intent directly without the
         // full recall pipeline.
-        use zero_stores_sqlite::MemoryFact;
+        use zbot_stores_sqlite::MemoryFact;
 
         let mk_fact = |id: &str, superseded: Option<&str>| MemoryFact {
             id: id.to_string(),
@@ -1276,8 +1276,8 @@ mod tests {
     use async_trait::async_trait;
     use gateway_services::VaultPaths;
     use std::sync::Mutex;
-    use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
-    use zero_stores_sqlite::{GatewayMemoryFactStore, KnowledgeDatabase, MemoryRepository};
+    use zbot_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+    use zbot_stores_sqlite::{GatewayMemoryFactStore, KnowledgeDatabase, MemoryRepository};
 
     struct FixedDecisionLlm {
         decision: Mutex<&'static str>,
@@ -1319,7 +1319,7 @@ mod tests {
                 .expect("vec index init"),
         );
         let memory_repo = Arc::new(MemoryRepository::new(db, vec_index));
-        let memory_store: Arc<dyn zero_stores::MemoryFactStore> =
+        let memory_store: Arc<dyn zbot_stores::MemoryFactStore> =
             Arc::new(GatewayMemoryFactStore::new(memory_repo, None));
 
         let agent_id = "agent-test-h";
@@ -1393,8 +1393,8 @@ mod tests {
     // ========================================================================
 
     use agent_runtime::llm::embedding::{EmbeddingClient, EmbeddingError};
-    use zero_stores_domain::{Belief, ScoredBelief};
-    use zero_stores_traits::BeliefStore;
+    use zbot_stores_domain::{Belief, ScoredBelief};
+    use zbot_stores_traits::BeliefStore;
 
     /// Test embedder that returns a fixed vector — only used for B-4
     /// recall tests where the magnitudes don't matter, only presence.
@@ -1771,7 +1771,7 @@ mod tests {
     async fn make_memory_store_with_embedder(
         tmp: &tempfile::TempDir,
         embed: Arc<dyn EmbeddingClient>,
-    ) -> Arc<dyn zero_stores::MemoryFactStore> {
+    ) -> Arc<dyn zbot_stores::MemoryFactStore> {
         let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
         std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
         let db = Arc::new(KnowledgeDatabase::new(paths).expect("db"));
@@ -2133,7 +2133,7 @@ mod tests {
     // The KnowledgeGraphStore trait has 25+ required methods so a
     // crate-local stub becomes 200+ lines of `Ok(Default::default())`.
     // We rely instead on the focused tests below + the unit tests
-    // sitting next to the SQLite impl (zero-stores-sqlite::kg::storage
+    // sitting next to the SQLite impl (zbot-stores-sqlite::kg::storage
     // `lca_*` family) for end-to-end coverage. The recall pipeline's
     // H-4 branch is also exercised indirectly by the existing
     // recall_unified_* tests above (which all pass after H-4 lands).

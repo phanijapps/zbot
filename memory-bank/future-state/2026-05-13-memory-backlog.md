@@ -35,7 +35,7 @@ Extract the memory subsystem from `gateway/gateway-execution/src/sleep/`, `gatew
 ### Phased migration plan
 
 **Phase A — Empty crate + config types** (~1 day, 1 commit)
-- Create `gateway/gateway-memory/` with `Cargo.toml` depending on `zero-stores-traits`, `zero-stores-domain`, `chrono`, `serde`, `tokio`, `async-trait`, `tracing`
+- Create `gateway/gateway-memory/` with `Cargo.toml` depending on `zbot-stores-traits`, `zbot-stores-domain`, `chrono`, `serde`, `tokio`, `async-trait`, `tracing`
 - Move `RecallConfig`, `MemorySettings`, `KgDecayConfig` from `gateway-services` to `gateway-memory`
 - Add `pub use gateway_memory::{...}` re-exports in `gateway-services/src/lib.rs` for backward compat (zero caller changes)
 
@@ -82,7 +82,7 @@ Total: ~16–18 commits across 2–3 days focused work. Each phase is independen
 ### Risks
 
 - **LLM factory abstraction** is the trickiest piece. The 6 production impls all have the same `build_client` shape that resolves the default provider from `ProviderService` and constructs an `OpenAiClient`. Replacing this cleanly requires a small refactor to share the build logic.
-- **Test harness coupling**: existing tests construct stores directly via `KnowledgeDatabase` + `MemoryRepository` etc. The new crate will pull in `zero-stores-sqlite` as a dev-dep for tests, which is fine but adds a transitive dep.
+- **Test harness coupling**: existing tests construct stores directly via `KnowledgeDatabase` + `MemoryRepository` etc. The new crate will pull in `zbot-stores-sqlite` as a dev-dep for tests, which is fine but adds a transitive dep.
 - **Re-export discipline**: backward-compat re-exports from `gateway-services` and `gateway-execution` need to stay until callers migrate. Plan a follow-up commit per phase to remove the re-exports once nothing uses them.
 
 ### Dependencies
@@ -123,7 +123,7 @@ Same pattern for the other LLM impls in `sleep/`.
 
 ### Scope
 
-`decay_kg_table` in `stores/zero-stores-sqlite/src/knowledge_graph.rs` runs an O(N) per-row UPDATE loop because SQLite's `exp()` is in an optional math extension. A single bulk UPDATE would be one SQL round-trip:
+`decay_kg_table` in `stores/zbot-stores-sqlite/src/knowledge_graph.rs` runs an O(N) per-row UPDATE loop because SQLite's `exp()` is in an optional math extension. A single bulk UPDATE would be one SQL round-trip:
 
 ```sql
 UPDATE kg_entities
@@ -151,10 +151,10 @@ WHERE agent_id = ? AND epistemic_class != 'archival' AND last_seen_at < ?
 
 ### Context
 
-During Phase B of the memory crate extraction (commit `bba92b87`), the `HandoffWriter` *engine struct* could not be moved into `gateway-memory` because it takes a concrete `Arc<zero_stores_sqlite::ConversationRepository>` parameter (not a trait). Moving it would create a crate-dependency cycle:
+During Phase B of the memory crate extraction (commit `bba92b87`), the `HandoffWriter` *engine struct* could not be moved into `gateway-memory` because it takes a concrete `Arc<zbot_stores_sqlite::ConversationRepository>` parameter (not a trait). Moving it would create a crate-dependency cycle:
 
 ```
-gateway-memory → zero-stores-sqlite → gateway-services → gateway-memory
+gateway-memory → zbot-stores-sqlite → gateway-services → gateway-memory
 ```
 
 What *did* move into `gateway-memory/src/sleep/handoff_writer.rs`: `HandoffLlm` trait, `HandoffEntry`, `HandoffInput`, `HANDOFF_*` constants, `should_inject`, `read_handoff_block`, and tests 4-8.
@@ -166,8 +166,8 @@ What *stayed* in `gateway-execution/src/sleep/handoff_writer.rs`: the `HandoffWr
 Two options, in increasing order of cleanliness:
 
 **Option A — Extend `ConversationStore` trait (preferred)**
-- Add `get_session_conversation(session_id) -> Result<Conversation>` and `session_messages_to_chat_format(...)` to the `ConversationStore` trait in `stores/zero-stores-traits/src/conversation.rs`
-- Implement on `zero-stores-sqlite::ConversationRepository`
+- Add `get_session_conversation(session_id) -> Result<Conversation>` and `session_messages_to_chat_format(...)` to the `ConversationStore` trait in `stores/zbot-stores-traits/src/conversation.rs`
+- Implement on `zbot-stores-sqlite::ConversationRepository`
 - Change `HandoffWriter::new` to accept `Arc<dyn ConversationStore>` instead of `Arc<ConversationRepository>`
 - Move the struct + impl + remaining tests + helper into `gateway-memory/src/sleep/handoff_writer.rs`
 

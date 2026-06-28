@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock};
-use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use crate::agent_pool::{AgentResultBus, AgentWaitError};
 
@@ -60,7 +60,7 @@ pub async fn spawn_delegated_agent(
     log_service: Arc<LogService<DatabaseManager>>,
     state_service: Arc<StateService<DatabaseManager>>,
     delegation_permit: Option<OwnedSemaphorePermit>,
-    memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+    memory_store: Option<Arc<dyn zbot_stores::MemoryFactStore>>,
     distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     memory_recall: Option<Arc<MemoryRecall>>,
     rate_limiters: Arc<
@@ -68,7 +68,7 @@ pub async fn spawn_delegated_agent(
             std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
         >,
     >,
-    kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
+    kg_store: Option<Arc<dyn zbot_stores::KnowledgeGraphStore>>,
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     steering_registry: Arc<agent_runtime::SteeringRegistry>,
@@ -407,7 +407,7 @@ pub async fn spawn_delegated_agent(
     // The post-execution state_handoff hook reuses the same trait store
     // the executor was wired with. Cloning is cheap (Arc) and lets the
     // handoff fire after the executor has consumed its own copy.
-    let fact_store_for_ctx: Option<Arc<dyn zero_stores::MemoryFactStore>> = memory_store.clone();
+    let fact_store_for_ctx: Option<Arc<dyn zbot_stores::MemoryFactStore>> = memory_store.clone();
 
     // Phase 7: pass the memory_store handle through so spawn_execution_task
     // can query ctx.state.* rows when building the ward_snapshot preamble.
@@ -522,8 +522,8 @@ struct SpawnContext {
     paths: SharedVaultPaths,
 
     // --- Optional memory wiring (Phase 4b + 7 ward_snapshot preamble) ---
-    fact_store_for_ctx: Option<Arc<dyn zero_stores::MemoryFactStore>>,
-    memory_store_for_snapshot: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+    fact_store_for_ctx: Option<Arc<dyn zbot_stores::MemoryFactStore>>,
+    memory_store_for_snapshot: Option<Arc<dyn zbot_stores::MemoryFactStore>>,
     /// Distiller for the subagent's child session — fired after
     /// `complete_session(child_session_id)`.
     distiller: Option<Arc<crate::distillation::SessionDistiller>>,
@@ -887,7 +887,7 @@ struct HandleExecutionSuccess<'a> {
     response: &'a str,
     parent_agent: &'a str,
     parent_execution_id: &'a str,
-    fact_store_for_ctx: Option<&'a Arc<dyn zero_stores::MemoryFactStore>>,
+    fact_store_for_ctx: Option<&'a Arc<dyn zbot_stores::MemoryFactStore>>,
 }
 
 /// Handle successful execution completion.

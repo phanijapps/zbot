@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use zero_core::{FileSystemContext, Result, Tool, ToolContext, ToolPermissions, ZeroError};
-use zero_stores_traits::{BeliefContradictionStore, BeliefStore, MemoryFactStore};
+use zbot_stores_traits::{BeliefContradictionStore, BeliefStore, MemoryFactStore};
 
 // ============================================================================
 // CONFIGURATION
@@ -1462,7 +1462,7 @@ mod tests {
     #[tokio::test]
     async fn action_recall_returns_degraded_result_on_missing_index() {
         use async_trait::async_trait;
-        use zero_stores_traits::MemoryFactStore;
+        use zbot_stores_traits::MemoryFactStore;
 
         struct BrokenStore;
 
@@ -1584,7 +1584,7 @@ mod tests {
     async fn action_recall_threads_as_of_into_store() {
         use async_trait::async_trait;
         use std::sync::Mutex;
-        use zero_stores_traits::MemoryFactStore;
+        use zbot_stores_traits::MemoryFactStore;
 
         /// Captures the `as_of` argument observed on the most recent
         /// `recall_facts_prioritized` call so the test can assert against it.
@@ -1733,7 +1733,7 @@ mod tests {
     async fn action_belief_returns_belief_when_present() {
         use async_trait::async_trait;
         use std::sync::Mutex as StdMutex;
-        use zero_stores_traits::{Belief, BeliefStore};
+        use zbot_stores_traits::{Belief, BeliefStore};
 
         struct StubBeliefStore {
             stored: StdMutex<Option<Belief>>,
@@ -1805,7 +1805,7 @@ mod tests {
                 _partition_id: &str,
                 _query_embedding: &[f32],
                 _limit: usize,
-            ) -> std::result::Result<Vec<zero_stores_traits::ScoredBelief>, String> {
+            ) -> std::result::Result<Vec<zbot_stores_traits::ScoredBelief>, String> {
                 Ok(vec![])
             }
         }
@@ -1894,7 +1894,7 @@ mod tests {
     #[tokio::test]
     async fn action_belief_returns_null_when_absent() {
         use async_trait::async_trait;
-        use zero_stores_traits::{Belief, BeliefStore};
+        use zbot_stores_traits::{Belief, BeliefStore};
 
         struct EmptyStore;
         #[async_trait]
@@ -1962,7 +1962,7 @@ mod tests {
                 _: &str,
                 _: &[f32],
                 _: usize,
-            ) -> std::result::Result<Vec<zero_stores_traits::ScoredBelief>, String> {
+            ) -> std::result::Result<Vec<zbot_stores_traits::ScoredBelief>, String> {
                 Ok(vec![])
             }
         }
@@ -2080,8 +2080,8 @@ mod tests {
         Ctx
     }
 
-    fn sample_contradiction(id: &str, a: &str, b: &str) -> zero_stores_traits::BeliefContradiction {
-        use zero_stores_traits::{BeliefContradiction, ContradictionType};
+    fn sample_contradiction(id: &str, a: &str, b: &str) -> zbot_stores_traits::BeliefContradiction {
+        use zbot_stores_traits::{BeliefContradiction, ContradictionType};
         BeliefContradiction {
             id: id.to_string(),
             belief_a_id: a.to_string(),
@@ -2099,29 +2099,29 @@ mod tests {
     /// `for_belief_rows`; `list_recent` returns `list_recent_rows`. Lets
     /// tests assert routing without an SQLite dependency.
     struct StubContradictionStore {
-        for_belief_rows: std::sync::Mutex<Vec<zero_stores_traits::BeliefContradiction>>,
-        list_recent_rows: std::sync::Mutex<Vec<zero_stores_traits::BeliefContradiction>>,
+        for_belief_rows: std::sync::Mutex<Vec<zbot_stores_traits::BeliefContradiction>>,
+        list_recent_rows: std::sync::Mutex<Vec<zbot_stores_traits::BeliefContradiction>>,
     }
 
     #[async_trait::async_trait]
-    impl zero_stores_traits::BeliefContradictionStore for StubContradictionStore {
+    impl zbot_stores_traits::BeliefContradictionStore for StubContradictionStore {
         async fn insert_contradiction(
             &self,
-            _c: &zero_stores_traits::BeliefContradiction,
+            _c: &zbot_stores_traits::BeliefContradiction,
         ) -> std::result::Result<(), String> {
             Ok(())
         }
         async fn for_belief(
             &self,
             _belief_id: &str,
-        ) -> std::result::Result<Vec<zero_stores_traits::BeliefContradiction>, String> {
+        ) -> std::result::Result<Vec<zbot_stores_traits::BeliefContradiction>, String> {
             Ok(self.for_belief_rows.lock().unwrap().clone())
         }
         async fn list_recent(
             &self,
             _partition_id: &str,
             _limit: usize,
-        ) -> std::result::Result<Vec<zero_stores_traits::BeliefContradiction>, String> {
+        ) -> std::result::Result<Vec<zbot_stores_traits::BeliefContradiction>, String> {
             Ok(self.list_recent_rows.lock().unwrap().clone())
         }
         async fn pair_exists(&self, _a: &str, _b: &str) -> std::result::Result<bool, String> {
@@ -2130,7 +2130,7 @@ mod tests {
         async fn resolve(
             &self,
             _id: &str,
-            _r: zero_stores_traits::Resolution,
+            _r: zbot_stores_traits::Resolution,
         ) -> std::result::Result<(), String> {
             Ok(())
         }
@@ -2151,7 +2151,7 @@ mod tests {
             fs,
             None,
             None,
-            Some(store as Arc<dyn zero_stores_traits::BeliefContradictionStore>),
+            Some(store as Arc<dyn zbot_stores_traits::BeliefContradictionStore>),
         );
         let ctx = make_contradiction_ctx();
 
@@ -2181,7 +2181,7 @@ mod tests {
             fs,
             None,
             None,
-            Some(store as Arc<dyn zero_stores_traits::BeliefContradictionStore>),
+            Some(store as Arc<dyn zbot_stores_traits::BeliefContradictionStore>),
         );
         let ctx = make_contradiction_ctx();
 

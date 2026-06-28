@@ -10,7 +10,7 @@
 
 ## Approach
 
-Migrate by putting Rig behind the existing gateway-facing execution facade first, then progressively moving provider, config, tool, hook, stream, memory, and compaction behavior behind that adapter. The gateway, UI, memory stores, knowledge graph, and config files stay authoritative. The first task captures a parity baseline from the current conversation database as a gitignored exact local DB signature, a committed coarse old-engine signature, an old-engine event-path signature, and synthetic E2E cases, so later tasks can prove compatibility without committing private data. Only after the Rig-backed path is green do we rehome `zero-stores*`, remove active `zero-*` framework crates/imports/dependencies, and update active architecture docs.
+Migrate by putting Rig behind the existing gateway-facing execution facade first, then progressively moving provider, config, tool, hook, stream, memory, and compaction behavior behind that adapter. The gateway, UI, memory stores, knowledge graph, and config files stay authoritative. The first task captures a parity baseline from the current conversation database as a gitignored exact local DB signature, a committed coarse old-engine signature, an old-engine event-path signature, and synthetic E2E cases, so later tasks can prove compatibility without committing private data. Only after the Rig-backed path is green do we rehome `zbot-stores*`, remove active `zero-*` framework crates/imports/dependencies, and update active architecture docs.
 
 ## Constraints
 
@@ -33,7 +33,7 @@ Migrate by putting Rig behind the existing gateway-facing execution facade first
 - Gateway execution tests for delegation, continuation, stop/cancel, actor tool policy, and handoff/steering ownership.
 - Delegation mode tests for `DirectArtifact`, `WardHygiene`, `WardBackedBuild`, and `StepExecutor`.
 - Runtime adapter tests for Rig stream/tool/hook/error mapping into existing `agent_runtime` types.
-- Store conformance and schema compatibility tests after `zero-stores*` rehome/rename.
+- Store conformance and schema compatibility tests after `zbot-stores*` rehome/rename.
 
 **Manual verification:**
 - After implementation, run daemon/UI or CLI against a new database and verify normal chat, streaming, first-party tool use, delegation continuation, and session reload.
@@ -45,7 +45,7 @@ Migrate by putting Rig behind the existing gateway-facing execution facade first
 - Adapter first: `gateway-execution` continues to call an AgentZero execution facade and receive AgentZero `StreamEvent`s. Traces to: AC2, AC5, AC15.
 - Preserve configs: current agent/provider/MCP/OAuth/skill/connector/tool settings are mapped into Rig, not replaced at the user boundary. Traces to: AC4, AC8, AC9.
 - Preserve event contract without a new `contracts/` tree: existing Rust event enums and `memory-bank/websocket-events.md` are the contract surface. Traces to: AC14, AC15.
-- Cleanup is part of done: active `zero-*` and `zero-stores*` crates/imports are removed only after the Rig-backed runtime and store compatibility paths are proven. Traces to: AC16, AC17, AC18.
+- Cleanup is part of done: active `zero-*` and `zbot-stores*` crates/imports are removed only after the Rig-backed runtime and store compatibility paths are proven. Traces to: AC16, AC17, AC18.
 
 ### Data & schema
 
@@ -54,7 +54,7 @@ Migrate by putting Rig behind the existing gateway-facing execution facade first
 - The committed old-engine DB signature artifact records deterministic coarse buckets, category presence, and schema hashes only; the exact DB-derived signature is written only under the gitignored `.rig-parity/` directory.
 - Synthetic E2E fixtures contain sanitized session/message/event patterns needed to prove behavior.
 - Rig `ConversationMemory` adapters may load/append through existing store traits but must not become a separate durable source of truth.
-- `zero-stores*` crate names are transitional; storage behavior and schema compatibility are preserved while crate/package/import names are rehomed.
+- `zbot-stores*` crate names are transitional; storage behavior and schema compatibility are preserved while crate/package/import names are rehomed.
 
 ### Interfaces & contracts
 
@@ -71,7 +71,7 @@ Migrate by putting Rig behind the existing gateway-facing execution facade first
 - `runtime/agent-tools`: moves first-party tools from `zero_core::Tool` implementations to Rig-compatible tools or transitional wrappers.
 - `gateway/gateway-execution`: keeps runner, delegation, continuation, lifecycle, and event conversion responsibilities; changes should be limited to executor construction and compatibility tests.
 - `gateway/gateway-services`: keeps agent/provider/config loading and feeds mapped settings into the runtime adapter.
-- `stores/*`: rehome/rename `zero-stores*` crates while preserving traits, domain types, SQLite implementation, conformance harness, and schema compatibility.
+- `stores/*`: rehome/rename `zbot-stores*` crates while preserving traits, domain types, SQLite implementation, conformance harness, and schema compatibility.
 - `framework/*`: removed, merged, or reduced during cleanup once no active dependency remains.
 - `docs` and `memory-bank`: updated so active architecture describes the Rig-backed engine and no longer presents `zero-*` as current framework or persistence architecture.
 
@@ -120,7 +120,7 @@ Migrate by putting Rig behind the existing gateway-facing execution facade first
 
 - Rig source is available at `rig checkout`, commit `6b1991bf` during analysis; implementation pins the Cargo dependency deliberately before adapter work begins.
 - Existing OpenAI-compatible provider stack should be adapted first; native Rig providers are optional follow-up only after compatibility.
-- Existing store traits and SQLite implementations remain the durable persistence integration while names are rehomed away from `zero-stores*`.
+- Existing store traits and SQLite implementations remain the durable persistence integration while names are rehomed away from `zbot-stores*`.
 
 ## Tasks
 
@@ -334,24 +334,24 @@ Migrate by putting Rig behind the existing gateway-facing execution facade first
 
 **Done when:** parity gates prove the Rig-backed path preserves product-visible behavior.
 
-### T12: Persistence crates are rehomed away from zero-stores
+### T12: Persistence crates are rehomed away from zbot-stores
 
 **Depends on:** T9, T11
 
 **Touches:** `Cargo.toml`, `stores/**/*`, `runtime/**/*`, `gateway/**/*`, `services/**/*`, `apps/**/*`
 
 **Tests:**
-- Goal-based: `cargo metadata` shows no workspace package named `zero-stores*`. Verifies AC16.
-- Goal-based: `rg "zero_stores|zero-stores" Cargo.toml stores runtime gateway services apps` has no active production references except migration history explicitly allowed by the spec. Verifies AC16.
+- Goal-based: `cargo metadata` shows no workspace package named `zbot-stores*`. Verifies AC16.
+- Goal-based: `rg "zbot_stores|zbot-stores" Cargo.toml stores runtime gateway services apps` has no active production references except migration history explicitly allowed by the spec. Verifies AC16.
 - Goal-based: store conformance tests pass against the renamed traits/domain/SQLite crates. Verifies AC16.
 - Goal-based integration: memory, knowledge graph, conversation, episode, procedure, belief, compaction, and vector-index tests pass without schema changes. Verifies AC12, AC16.
 
 **Approach:**
-- Rename/rehome `zero-stores-domain`, `zero-stores-traits`, `zero-stores`, `zero-stores-sqlite`, and conformance crates to non-zero names.
+- Rename/rehome `zbot-stores-domain`, `zbot-stores-traits`, `zbot-stores`, `zbot-stores-sqlite`, and conformance crates to non-zero names.
 - Preserve public trait/domain semantics during the rename.
 - Update dependent imports and manifests mechanically, then run conformance gates.
 
-**Done when:** persistence keeps behavior and schema compatibility without active `zero-stores*` names.
+**Done when:** persistence keeps behavior and schema compatibility without active `zbot-stores*` names.
 
 ### T13: Retire active zero framework crates and imports
 
@@ -379,7 +379,7 @@ Migrate by putting Rig behind the existing gateway-facing execution facade first
 **Touches:** `AGENTS.md`, `CLAUDE.md`, `framework/AGENTS.md`, `runtime/AGENTS.md`, `stores/AGENTS.md`, `memory-bank/**/*.md`, `docs/**/*.md`, `README.md`
 
 **Tests:**
-- Goal-based: active architecture docs no longer present `zero-*` or `zero-stores*` as the live dependency order, framework, or persistence architecture. Verifies AC18.
+- Goal-based: active architecture docs no longer present `zero-*` or `zbot-stores*` as the live dependency order, framework, or persistence architecture. Verifies AC18.
 - Goal-based: docs name the Rig-backed engine, retained gateway/UI contracts, retained memory/knowledge ownership, config mapping, and renamed persistence crates. Verifies AC18.
 
 **Approach:**
@@ -427,7 +427,7 @@ Migrate by putting Rig behind the existing gateway-facing execution facade first
 ## Changelog
 
 - 2026-06-27: initial plan.
-- 2026-06-27: tightened constraints, parity signatures, inbound protocol/event coverage, MCP/skill/connector coverage, `zero-stores*` rehome, compaction invariants, and Rig dependency pinning after spec review.
+- 2026-06-27: tightened constraints, parity signatures, inbound protocol/event coverage, MCP/skill/connector coverage, `zbot-stores*` rehome, compaction invariants, and Rig dependency pinning after spec review.
 - 2026-06-27: implemented the T1 parity baseline harness: coarse committed DB-derived signature artifact, exact gitignored local DB signature, old-engine event-path signature capture, synthetic fixture generator, and gitignored local provenance manifest.
 - 2026-06-27: selected Rig root crate `rig` version `0.39.0` from `https://github.com/0xplaygrounds/rig` pinned to revision `6b1991bfb246411dd75839c8611e801a2309d33c`; added it only to `agent-runtime` with default features disabled, aligned workspace `futures`/`indexmap` minima to Rig's pinned transitive requirements, noted the side-by-side `reqwest 0.13` pulled by `rig-core` with no Rig provider/vector-store features enabled, introduced the `AgentEngine` runtime facade for the current executor, moved gateway root/delegation/continuation execution streams to the boxed facade boundary, and wired `cargo deny check` plus the Rig boundary verifier as supply-chain and isolation gates.
 - 2026-06-27: tightened the Rig isolation gate so source imports are allowed only in `runtime/agent-runtime/src/rig_adapter.rs` or a future `rig_adapter/` module, added grouped/aliased provider import detection, and made the Rig pin test compare the declared adapter pin against the actual `agent-runtime` manifest and workspace lockfile.

@@ -12,7 +12,7 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use zero_stores_domain::MemoryFact;
+use zbot_stores_domain::MemoryFact;
 
 // ============================================================================
 // REQUEST/RESPONSE TYPES
@@ -803,7 +803,7 @@ pub struct MemoryHealth {
 /// (which counts pending / running / failed rows in `kg_episodes`)
 /// instead of reaching into `state.knowledge_db` directly. Compaction
 /// metrics still come from `state.compaction_repo` — that repository
-/// has not been migrated to a `zero-stores` trait yet (tracked under
+/// has not been migrated to a `zbot-stores` trait yet (tracked under
 /// TD-023's HTTP-handler retirement follow-up).
 pub async fn health(State(state): State<AppState>) -> Json<MemoryHealth> {
     let mut health = MemoryHealth::default();

@@ -8,7 +8,7 @@ z-Bot is a multipurpose AI agent that lives on the desktop and connects to any O
 framework/   — zero-* Rust library crates (publishable as zero-agent-framework)
 runtime/     — agent-runtime, agent-tools (execution engine + built-in tools)
 services/    — api-logs, daily-sessions, execution-state, knowledge-graph
-stores/      — zero-stores* persistence layer (traits, domain types, SQLite impl)
+stores/      — zbot-stores* persistence layer (traits, domain types, SQLite impl)
 gateway/     — gateway-* sub-crates + gateway shell (HTTP/WS network layer)
 discovery/   — LAN mDNS advertisement
 apps/        — daemon (zbotd), cli (zbot), ui (React dashboard)
@@ -23,11 +23,11 @@ zero-core
         └── zero-agent
               └── zero-app (aggregator prelude)
 
-zero-stores-domain (serde only)
-  └── zero-stores-traits
-        └── zero-stores
-              └── zero-stores-sqlite (SQLite + rusqlite + sqlite-vec)
-                    └── zero-stores-conformance (test harness)
+zbot-stores-domain (serde only)
+  └── zbot-stores-traits
+        └── zbot-stores
+              └── zbot-stores-sqlite (SQLite + rusqlite + sqlite-vec)
+                    └── zbot-stores-conformance (test harness)
 
 services/* (execution-state, api-logs, knowledge-graph, daily-sessions)
 runtime/* (agent-runtime, agent-tools)
@@ -63,7 +63,7 @@ All apps default to `~/Documents/agentzero/`:
 
 ```
 agentzero/
-├── conversations.db      # SQLite (gateway-database / zero-stores-sqlite)
+├── conversations.db      # SQLite (gateway-database / zbot-stores-sqlite)
 ├── config/               # SOUL.md, INSTRUCTIONS.md, OS.md, shards/
 ├── agents/{name}/        # Agent YAML configs
 ├── wards/                # Code project directories

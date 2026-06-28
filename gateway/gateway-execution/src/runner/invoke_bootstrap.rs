@@ -24,7 +24,7 @@ use gateway_services::{
     AgentService, McpService, ModelRegistry, ProviderService, SharedVaultPaths, SkillService,
 };
 use tokio::sync::RwLock;
-use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use crate::agent_pool::AgentResultBus;
 use crate::config::ExecutionConfig;
@@ -54,7 +54,7 @@ pub(super) struct InvokeBootstrap {
     pub(super) conversation_repo: Arc<ConversationRepository>,
     pub(super) paths: SharedVaultPaths,
     /// Trait-routed memory store used to build the executor's fact_store.
-    pub(super) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+    pub(super) memory_store: Option<Arc<dyn zbot_stores::MemoryFactStore>>,
     pub(super) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub(super) model_registry: Arc<ArcSwapOption<ModelRegistry>>,
     pub(super) rate_limiters: Arc<
@@ -65,13 +65,13 @@ pub(super) struct InvokeBootstrap {
     pub(super) connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     pub(super) bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
     pub(super) bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
-    pub(super) kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
+    pub(super) kg_store: Option<Arc<dyn zbot_stores::KnowledgeGraphStore>>,
     pub(super) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(super) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     pub(super) steering_registry: Option<Arc<agent_runtime::SteeringRegistry>>,
     pub(super) agent_result_bus: Option<Arc<AgentResultBus>>,
     /// Trait-routed procedure store used to build the executor's run_procedure tool.
-    pub(super) procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    pub(super) procedure_store: Option<Arc<dyn zbot_stores_traits::ProcedureStore>>,
     /// Per-ward usage telemetry — feeds the curator and gets a
     /// `created_by = "agent"` mark whenever the `ward` tool creates a new ward.
     pub(super) ward_usage: Arc<gateway_services::WardUsage>,
@@ -135,7 +135,7 @@ struct IntentAnalysisCtx<'a> {
     execution_id: &'a str,
     is_root: bool,
     user_message: Option<&'a str>,
-    fact_store: Option<&'a Arc<dyn zero_stores::MemoryFactStore>>,
+    fact_store: Option<&'a Arc<dyn zbot_stores::MemoryFactStore>>,
 }
 
 /// Return type of [`InvokeBootstrap::run_intent_analysis`].
@@ -195,7 +195,7 @@ fn root_orchestrator_tool_names(bootstrap: &InvokeBootstrap) -> Vec<String> {
     names
 }
 
-fn format_corrections_block(facts: &[zero_stores_traits::MemoryFact]) -> Option<String> {
+fn format_corrections_block(facts: &[zbot_stores_traits::MemoryFact]) -> Option<String> {
     if facts.is_empty() {
         return None;
     }
@@ -233,7 +233,7 @@ fn ward_doctrine_is_graduated(agents_md: &str) -> bool {
 /// store is wired (the requirement cannot be evaluated, so it must not block
 /// graduation) and `false` on a store error.
 async fn ward_has_promoted_procedure(
-    store: Option<&Arc<dyn zero_stores_traits::ProcedureStore>>,
+    store: Option<&Arc<dyn zbot_stores_traits::ProcedureStore>>,
     ward: &str,
 ) -> bool {
     let Some(store) = store else {
@@ -695,7 +695,7 @@ impl InvokeBootstrap {
 
         // Trait-routed fact store wired by AppState. None only in
         // stripped-down test fixtures that don't drive save_fact / recall paths.
-        let fact_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = self.memory_store.clone();
+        let fact_store: Option<Arc<dyn zbot_stores::MemoryFactStore>> = self.memory_store.clone();
         // Clone for resource indexing (before fact_store is moved into builder)
         let fact_store_for_indexing = fact_store.clone();
 
@@ -1180,7 +1180,7 @@ mod tests {
     use gateway_events::EventBus;
     use gateway_services::VaultPaths;
     use tokio::sync::RwLock;
-    use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+    use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
 
     #[test]
     fn ward_doctrine_is_graduated_true_for_canonical_agents_md() {
@@ -1203,7 +1203,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl zero_stores_traits::ProcedureStore for FakeProcStore {
+    impl zbot_stores_traits::ProcedureStore for FakeProcStore {
         async fn list_by_ward(
             &self,
             _ward_id: &str,
@@ -1224,21 +1224,21 @@ mod tests {
         assert!(ward_has_promoted_procedure(None, "w").await);
 
         // Doctrine present but zero procedures — not graduated.
-        let empty: Arc<dyn zero_stores_traits::ProcedureStore> = Arc::new(FakeProcStore {
+        let empty: Arc<dyn zbot_stores_traits::ProcedureStore> = Arc::new(FakeProcStore {
             ward_procs: 0,
             fail: false,
         });
         assert!(!ward_has_promoted_procedure(Some(&empty), "w").await);
 
         // At least one promoted procedure — graduated.
-        let stocked: Arc<dyn zero_stores_traits::ProcedureStore> = Arc::new(FakeProcStore {
+        let stocked: Arc<dyn zbot_stores_traits::ProcedureStore> = Arc::new(FakeProcStore {
             ward_procs: 2,
             fail: false,
         });
         assert!(ward_has_promoted_procedure(Some(&stocked), "w").await);
 
         // Store error — conservatively treated as not graduated.
-        let broken: Arc<dyn zero_stores_traits::ProcedureStore> = Arc::new(FakeProcStore {
+        let broken: Arc<dyn zbot_stores_traits::ProcedureStore> = Arc::new(FakeProcStore {
             ward_procs: 5,
             fail: true,
         });

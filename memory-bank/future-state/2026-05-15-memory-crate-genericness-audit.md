@@ -70,9 +70,9 @@ Concepts that are generic but named with zbot terminology.
 | R3 | `recall/mod.rs:243` | `if sf.fact.key.starts_with(&ward_prefix) \|\| sf.fact.category == "ward" {` | Same as R2 — the special-case treatment of `"ward"` category in the affinity-boost path. Couples scoring to a specific zbot category name. | ~1 hr — fold into configurable category weights so no name is hardcoded in code. |
 | R4 | `recall/mod.rs:240` | `if !current_ward.is_empty() && current_ward != "scratch" {` | The `"scratch"` literal is a zbot UX concept (the "no ward selected" placeholder). Generic name: a `None` or empty-string sentinel handled at the call site. | ~½ hr — drop the `"scratch"` check; callers already control `ward_id: Option<&str>`. |
 | R5 | `recall/adapters.rs:41` | `source: "ward_wiki".to_string(),` | `Provenance.source` is a free-form string but `"ward_wiki"` is zbot vocabulary. `"wiki"` or `"scoped_wiki"` is generic. | ~10 min |
-| R6 | `recall/previous_episodes.rs:32-35` | `pub async fn fetch(&self, ward_id: &str)` calling `fetch_recent_successful_by_ward(ward_id, 3)` | Trait method on `EpisodeStore` carries the `ward` name too. Coupled to `zero-stores-traits`. Rename to `scope_id` / `partition_id` everywhere. | Cross-cut with R1: ~1 day total once all trait surfaces touched. |
+| R6 | `recall/previous_episodes.rs:32-35` | `pub async fn fetch(&self, ward_id: &str)` calling `fetch_recent_successful_by_ward(ward_id, 3)` | Trait method on `EpisodeStore` carries the `ward` name too. Coupled to `zbot-stores-traits`. Rename to `scope_id` / `partition_id` everywhere. | Cross-cut with R1: ~1 day total once all trait surfaces touched. |
 
-The R1/R6 cluster is the largest single coupling — `ward_id` appears in `MemoryFact`, `ScoredItem.Provenance`, `WikiArticle`, `Procedure`, `SessionEpisode`, `HandoffEntry`, plus every trait method and every test. Most of those types live in `zero-stores-domain` / `zero-stores-traits`, so this is a multi-crate rename, not gateway-memory-only.
+The R1/R6 cluster is the largest single coupling — `ward_id` appears in `MemoryFact`, `ScoredItem.Provenance`, `WikiArticle`, `Procedure`, `SessionEpisode`, `HandoffEntry`, plus every trait method and every test. Most of those types live in `zbot-stores-domain` / `zbot-stores-traits`, so this is a multi-crate rename, not gateway-memory-only.
 
 ### Configurable
 
@@ -136,7 +136,7 @@ Ranked by `genericness_impact / effort`:
 
 4. **C8 + C9 (compactor/synthesizer config structs)** — ~2 hours. Mechanical; promotes magic constants to a per-component config. Worth doing the same day as C5 + C7 since the pattern is identical.
 
-5. **R1 + R6 (ward → scope rename across trait surface)** — ~1 day. Biggest single rename but cross-cuts `zero-stores-traits` and `zero-stores-domain` too. Defer until the bi-temporal wiring (PR #142 etc.) settles to avoid merge conflicts.
+5. **R1 + R6 (ward → scope rename across trait surface)** — ~1 day. Biggest single rename but cross-cuts `zbot-stores-traits` and `zbot-stores-domain` too. Defer until the bi-temporal wiring (PR #142 etc.) settles to avoid merge conflicts.
 
 6. **C1 + C2 (recall "always pull corrections" → configurable)** — ~½ day. Removes the most coupled bit of the recall pipeline. Less urgent because it doesn't break anything, just makes the policy explicit.
 
@@ -154,10 +154,10 @@ Total estimated effort if all done: **~4-5 engineer days**, spread across at lea
 
 ## Out of Scope
 
-- **`zero-stores-domain` field renames** (e.g., `MemoryFact.ward_id`). Several leaks (R1, R5, R6) depend on these. Audit flagged but the primary fix belongs in the stores crates, not in `gateway-memory`.
-- **`zero-stores-traits` method signatures** (e.g., `fetch_recent_successful_by_ward`, `get_session_ward_id`). Same — these are trait-level renames that touch every backend.
+- **`zbot-stores-domain` field renames** (e.g., `MemoryFact.ward_id`). Several leaks (R1, R5, R6) depend on these. Audit flagged but the primary fix belongs in the stores crates, not in `gateway-memory`.
+- **`zbot-stores-traits` method signatures** (e.g., `fetch_recent_successful_by_ward`, `get_session_ward_id`). Same — these are trait-level renames that touch every backend.
 - **Schema-level rename** of `kg_entities.ward_id` / `memory_facts.ward_id` columns. Migration work, not crate work.
-- **Tests as a coupling source.** Test fixtures use `gateway_services::VaultPaths` and `zero-stores-sqlite` types. Production code does not. Acceptable for now; will need adapter test harness during extraction.
+- **Tests as a coupling source.** Test fixtures use `gateway_services::VaultPaths` and `zbot-stores-sqlite` types. Production code does not. Acceptable for now; will need adapter test harness during extraction.
 - **`HANDOFF_MAX_AGE_DAYS = 7`** — even though it's a zbot-tuned default, it ships with the (to-be-moved) handoff writer; no separate action.
 - **`tokio` runtime dependency.** The sleep worker uses `tokio::spawn`. Acceptable; a generic crate can require a tokio runtime in the same way Axum / Reqwest do.
 - **`chrono` for timestamps.** Already a workspace standard; not a zbot-specific dependency.

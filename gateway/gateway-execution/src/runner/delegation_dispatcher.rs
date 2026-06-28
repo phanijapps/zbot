@@ -35,7 +35,7 @@ use gateway_events::EventBus;
 use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths};
 use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio::task::JoinHandle;
-use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use crate::agent_pool::AgentResultBus;
 use crate::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
@@ -245,7 +245,7 @@ pub(crate) struct RunnerDelegationInvoker {
     pub(crate) delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
     pub(crate) log_service: Arc<LogService<DatabaseManager>>,
     pub(crate) state_service: Arc<StateService<DatabaseManager>>,
-    pub(crate) memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+    pub(crate) memory_store: Option<Arc<dyn zbot_stores::MemoryFactStore>>,
     pub(crate) distiller: Option<Arc<crate::distillation::SessionDistiller>>,
     pub(crate) memory_recall: Option<Arc<crate::recall::MemoryRecall>>,
     pub(crate) rate_limiters: Arc<
@@ -253,7 +253,7 @@ pub(crate) struct RunnerDelegationInvoker {
             std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
         >,
     >,
-    pub(crate) kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
+    pub(crate) kg_store: Option<Arc<dyn zbot_stores::KnowledgeGraphStore>>,
     pub(crate) ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     pub(crate) goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     pub(crate) steering_registry: Arc<agent_runtime::SteeringRegistry>,

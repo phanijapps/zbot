@@ -16,7 +16,7 @@ use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::ChatMessage;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use zero_stores_traits::{
+use zbot_stores_traits::{
     CompactionStore, ConversationStore, EpisodeStore, PatternProcedureInsert, PatternStep,
     ProcedureStore, SuccessfulEpisode,
 };
@@ -516,8 +516,8 @@ mod tests {
     use gateway_services::VaultPaths;
     use rusqlite::params;
     use std::sync::Mutex;
-    use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
-    use zero_stores_sqlite::{
+    use zbot_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+    use zbot_stores_sqlite::{
         CompactionRepository, ConversationRepository, DatabaseManager, EpisodeRepository,
         GatewayCompactionStore, GatewayEpisodeStore, GatewayProcedureStore, KnowledgeDatabase,
         Procedure, ProcedureRepository,
@@ -842,7 +842,7 @@ mod tests {
 
     // Note: `extend_tool_names_parses_stored_format` previously tested
     // a helper that lived here. The helper moved to
-    // `zero_stores_sqlite::repository::extend_tool_names_from_blob`
+    // `zbot_stores_sqlite::repository::extend_tool_names_from_blob`
     // when the conversation read became trait-routed in Phase D4 —
     // see the SQLite-side `tool_sequence_for_session` impl for the
     // current behaviour test (covered indirectly via this module's
@@ -853,7 +853,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     use agent_runtime::llm::embedding::{EmbeddingClient, EmbeddingError};
-    use zero_stores_traits::ProcedureSummary;
+    use zbot_stores_traits::ProcedureSummary;
 
     /// `ProcedureStore` that captures the last `insert_pattern_procedure`
     /// request so the test can assert on the inserted shape.

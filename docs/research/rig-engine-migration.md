@@ -227,7 +227,7 @@ AgentZero's current compaction is live middleware:
 - summarization optionally calls an LLM and inserts a system summary.
 - gateway orders context editing, plan-block reinsertion, and summarization.
 
-Rig gives cleaner interfaces. AgentZero currently gives more aggressive survival behavior. The best migration is to put a Rig-like compactor interface behind AgentZero's existing live middleware first, then consider a durable `ConversationMemory` adapter over `zero-stores`.
+Rig gives cleaner interfaces. AgentZero currently gives more aggressive survival behavior. The best migration is to put a Rig-like compactor interface behind AgentZero's existing live middleware first, then consider a durable `ConversationMemory` adapter over `zbot-stores`.
 
 ## What You Probably Lose Or Must Rebuild
 
@@ -329,7 +329,7 @@ RigEngineAdapter
   |-- tool adapter: existing zbot tools/MCP -> Rig ToolServerHandle
   |-- hook adapter: zbot policy/context hooks -> Rig AgentHook/Flow
   |-- stream adapter: Rig stream items -> agent_runtime::StreamEvent
-  |-- memory adapter: zero-stores/runtime context -> Rig ConversationMemory/compactor where useful
+  |-- memory adapter: zbot-stores/runtime context -> Rig ConversationMemory/compactor where useful
   |
   v
 Rig AgentRunner / AgentRun

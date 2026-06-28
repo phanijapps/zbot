@@ -23,7 +23,7 @@ use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Instant;
-use zero_stores_domain::{RouteHint, RouteSourceKind, SessionEpisode, WikiHit};
+use zbot_stores_domain::{RouteHint, RouteSourceKind, SessionEpisode, WikiHit};
 
 fn route_hint_value(hint: RouteHint) -> Value {
     serde_json::to_value(hint).unwrap_or_else(|_| Value::Null)
@@ -118,7 +118,7 @@ fn wiki_hit_to_value(hit: WikiHit) -> Value {
     })
 }
 
-fn procedure_to_value(proc: zero_stores_domain::Procedure, score: f64) -> Value {
+fn procedure_to_value(proc: zbot_stores_domain::Procedure, score: f64) -> Value {
     let route_hint = proc
         .ward_id
         .as_ref()
@@ -170,7 +170,7 @@ fn episode_to_value(ep: SessionEpisode, score: Option<f64>, source: &str) -> Val
     v
 }
 
-fn fact_to_value(fact: zero_stores_domain::MemoryFact, source: &str, score: Option<f64>) -> Value {
+fn fact_to_value(fact: zbot_stores_domain::MemoryFact, source: &str, score: Option<f64>) -> Value {
     let route_hint = RouteHint::new(fact.ward_id.clone(), RouteSourceKind::Fact)
         .with_memory_id(fact.id.clone())
         .with_session_id(fact.session_id.clone())
@@ -440,7 +440,7 @@ pub async fn memory_search(
 /// unfiltered pool (admin/debug).
 #[allow(clippy::too_many_arguments)]
 async fn run_facts(
-    memory_store: &dyn zero_stores_traits::MemoryFactStore,
+    memory_store: &dyn zbot_stores_traits::MemoryFactStore,
     query: &str,
     mode: &str,
     embedding: Option<&[f32]>,
@@ -463,7 +463,7 @@ async fn run_facts(
 #[cfg(test)]
 mod helpers_tests {
     use super::*;
-    use zero_stores_domain::{MemoryFact, Procedure, SessionEpisode, WikiArticle, WikiHit};
+    use zbot_stores_domain::{MemoryFact, Procedure, SessionEpisode, WikiArticle, WikiHit};
 
     fn fact() -> MemoryFact {
         MemoryFact {
@@ -644,7 +644,7 @@ mod helpers_tests {
     /// impl; we only need to implement the two non-default methods.
     struct StubStore;
     #[async_trait::async_trait]
-    impl zero_stores_traits::MemoryFactStore for StubStore {
+    impl zbot_stores_traits::MemoryFactStore for StubStore {
         async fn save_fact(
             &self,
             _agent_id: &str,

@@ -29,8 +29,8 @@ use gateway_services::{
 };
 use knowledge_graph::{Entity, EntityType, Relationship, RelationshipType};
 use serde::{Deserialize, Serialize};
-use zero_stores_domain::{MemoryFact, SessionEpisode};
-use zero_stores_sqlite::ConversationRepository;
+use zbot_stores_domain::{MemoryFact, SessionEpisode};
+use zbot_stores_sqlite::ConversationRepository;
 
 /// Distills completed sessions into structured memory facts.
 ///
@@ -41,20 +41,20 @@ pub struct SessionDistiller {
     provider_service: Arc<ProviderService>,
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
     conversation_repo: Arc<ConversationRepository>,
-    memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
-    kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
+    memory_store: Option<Arc<dyn zbot_stores::MemoryFactStore>>,
+    kg_store: Option<Arc<dyn zbot_stores::KnowledgeGraphStore>>,
     /// Trait-routed distillation store. Run-tracking writes flow
     /// through this handle.
-    distillation_store: Option<Arc<dyn zero_stores_traits::DistillationStore>>,
+    distillation_store: Option<Arc<dyn zbot_stores_traits::DistillationStore>>,
     /// Trait-routed episode store for episode storage, strategy
     /// emergence, and failure clustering.
-    episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>>,
+    episode_store: Option<Arc<dyn zbot_stores_traits::EpisodeStore>>,
     paths: Arc<VaultPaths>,
     settings_service: Option<Arc<SettingsService>>,
     /// Trait-routed wiki store for ward-wiki compilation.
-    pub wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>>,
+    pub wiki_store: Option<Arc<dyn zbot_stores_traits::WikiStore>>,
     /// Trait-routed procedure store for procedure upsert.
-    pub procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    pub procedure_store: Option<Arc<dyn zbot_stores_traits::ProcedureStore>>,
 }
 
 /// A single fact extracted by the distillation LLM call.
@@ -230,25 +230,25 @@ impl SessionDistiller {
 
     /// Wire the trait-routed memory store. Upsert + supersede route
     /// through this handle.
-    pub fn set_memory_store(&mut self, store: Arc<dyn zero_stores::MemoryFactStore>) {
+    pub fn set_memory_store(&mut self, store: Arc<dyn zbot_stores::MemoryFactStore>) {
         self.memory_store = Some(store);
     }
 
     /// Wire the trait-routed knowledge-graph store. Entity / relationship
     /// writes route through this handle.
-    pub fn set_kg_store(&mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) {
+    pub fn set_kg_store(&mut self, store: Arc<dyn zbot_stores::KnowledgeGraphStore>) {
         self.kg_store = Some(store);
     }
 
     /// Wire the trait-routed episode store. Episode insert and
     /// similarity-search route through this handle.
-    pub fn set_episode_store(&mut self, store: Arc<dyn zero_stores_traits::EpisodeStore>) {
+    pub fn set_episode_store(&mut self, store: Arc<dyn zbot_stores_traits::EpisodeStore>) {
         self.episode_store = Some(store);
     }
 
     /// Wire the trait-routed wiki store (Phase E6b). When set, ward-wiki
     /// compilation routes through this handle. Falls back to `wiki_repo`.
-    pub fn set_wiki_store(&mut self, store: Arc<dyn zero_stores_traits::WikiStore>) {
+    pub fn set_wiki_store(&mut self, store: Arc<dyn zbot_stores_traits::WikiStore>) {
         self.wiki_store = Some(store);
     }
 
@@ -258,14 +258,14 @@ impl SessionDistiller {
     /// field.
     pub fn set_distillation_store(
         &mut self,
-        store: Arc<dyn zero_stores_traits::DistillationStore>,
+        store: Arc<dyn zbot_stores_traits::DistillationStore>,
     ) {
         self.distillation_store = Some(store);
     }
 
     /// Wire the trait-routed procedure store (Phase E6b). Procedure
     /// upserts during distillation flow through this when set.
-    pub fn set_procedure_store(&mut self, store: Arc<dyn zero_stores_traits::ProcedureStore>) {
+    pub fn set_procedure_store(&mut self, store: Arc<dyn zbot_stores_traits::ProcedureStore>) {
         self.procedure_store = Some(store);
     }
 
@@ -1548,7 +1548,7 @@ impl SessionDistiller {
             .as_ref()
             .ok_or_else(|| "no kg store wired".to_string())?;
         store
-            .bump_entity_mention(&zero_stores::EntityId::from(id.to_string()))
+            .bump_entity_mention(&zbot_stores::EntityId::from(id.to_string()))
             .await
             .map_err(|e| e.to_string())
     }
@@ -1665,7 +1665,7 @@ impl SessionDistiller {
             .as_ref()
             .map(|p| serde_json::to_string(p).unwrap_or_default());
 
-        let proc = zero_stores_sqlite::Procedure {
+        let proc = zbot_stores_sqlite::Procedure {
             id: format!("proc-{}", uuid::Uuid::new_v4()),
             agent_id: agent_id.to_string(),
             ward_id: ward_id.or_else(|| Some("__global__".to_string())),
@@ -1750,7 +1750,7 @@ impl SessionDistiller {
 /// conversation repo + paths + settings + embedding client).
 #[cfg(test)]
 fn resolve_relationship_endpoint(
-    graph: &zero_stores_sqlite::kg::storage::GraphStorage,
+    graph: &zbot_stores_sqlite::kg::storage::GraphStorage,
     agent_id: &str,
     name: &str,
     entity_map: &mut std::collections::HashMap<String, String>,
@@ -1947,7 +1947,7 @@ fn compute_session_metrics(transcript: &str) -> SessionMetrics {
 }
 
 /// Build a compact transcript from session messages.
-fn build_transcript(messages: &[zero_stores_sqlite::Message]) -> String {
+fn build_transcript(messages: &[zbot_stores_sqlite::Message]) -> String {
     let mut parts = Vec::with_capacity(messages.len());
 
     for msg in messages {
@@ -2255,8 +2255,8 @@ mod tests {
         use std::collections::HashMap;
         use std::sync::Arc;
         use tempfile::tempdir;
-        use zero_stores_sqlite::kg::storage::GraphStorage;
-        use zero_stores_sqlite::KnowledgeDatabase;
+        use zbot_stores_sqlite::kg::storage::GraphStorage;
+        use zbot_stores_sqlite::KnowledgeDatabase;
 
         fn fresh_graph() -> GraphStorage {
             let dir = tempdir().unwrap();
@@ -2380,7 +2380,7 @@ mod tests {
     #[test]
     fn test_build_transcript_truncates() {
         let long_content = "x".repeat(2000);
-        let messages = vec![zero_stores_sqlite::Message {
+        let messages = vec![zbot_stores_sqlite::Message {
             id: "msg-1".to_string(),
             execution_id: Some("exec-1".to_string()),
             session_id: Some("sess-1".to_string()),
@@ -2643,8 +2643,8 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Mutex;
         use tempfile::tempdir;
-        use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
-        use zero_stores_traits::ProcedureStore;
+        use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
+        use zbot_stores_traits::ProcedureStore;
 
         /// `ProcedureStore` that captures every `upsert_procedure` call so
         /// the test can assert on the inserted shape + embedding.

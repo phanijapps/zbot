@@ -191,8 +191,8 @@ Minimum useful first phase. Lands the `kg_beliefs` table, the BeliefSynthesizer 
 
 - Migration v27: `CREATE TABLE kg_beliefs`
 - `gateway-memory/src/sleep/belief_synthesizer.rs` — the worker
-- `zero-stores-traits` — `BeliefStore` trait
-- `zero-stores-sqlite` — implementation
+- `zbot-stores-traits` — `BeliefStore` trait
+- `zbot-stores-sqlite` — implementation
 - `MemoryServices` — wire the worker into the sleep cycle
 - `runtime/agent-tools/src/tools/memory.rs` — new `belief` action on the memory tool
 - Tests: synthesis from single fact, synthesis from multiple facts, re-synthesis idempotence, as_of point-in-time

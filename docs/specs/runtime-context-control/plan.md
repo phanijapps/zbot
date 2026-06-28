@@ -209,7 +209,7 @@ without both entity records and an affirmative verifier result.
 
 **Touches:** `runtime/agent-runtime/src/llm/openai.rs`,
 `gateway/src/state/mod.rs`,
-`stores/zero-stores-sqlite/src/*`,
+`stores/zbot-stores-sqlite/src/*`,
 `docs/specs/runtime-context-control/spec.md`
 
 **Tests:**

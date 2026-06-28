@@ -10,7 +10,7 @@ mod common;
 use common::{make_episode_repo, make_procedure_repo, make_wiki_repo, now_iso, setup};
 use gateway::AppState;
 use serde_json::{json, Value};
-use zero_stores_domain::{MemoryFact, Procedure, SessionEpisode, WikiArticle};
+use zbot_stores_domain::{MemoryFact, Procedure, SessionEpisode, WikiArticle};
 
 const TEST_WARD: &str = "maritime-vessel-tracking";
 

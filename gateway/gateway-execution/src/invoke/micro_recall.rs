@@ -9,9 +9,9 @@ use regex::Regex;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use tracing::debug;
-use zero_stores::KnowledgeGraphStore;
-use zero_stores_traits::MemoryFact;
-use zero_stores_traits::MemoryFactStore;
+use zbot_stores::KnowledgeGraphStore;
+use zbot_stores_traits::MemoryFact;
+use zbot_stores_traits::MemoryFactStore;
 
 /// Regex for extracting entity candidates from text (same pattern as working_memory_middleware).
 /// Matches: "quoted strings", PascalCase words, ALLCAPS (3+ chars).

@@ -615,7 +615,7 @@ The reference book gets smaller, sharper, and more consistent with each cycle. R
 - **Tracking doc** — `memory-bank/future-state/2026-05-13-memory-crate-extraction-tracking.md` (running log of memory-subsystem changes; paired with this file)
 - **Slide deck** — `docs/memory-slides.html` (the visual companion to this doc)
 - **Validation corpus** — `docs/memory-validation.md` (recall test scenarios across 4 tiers)
-- **Source** — `gateway/gateway-memory/src/` (memory subsystem), `stores/zero-stores-sqlite/src/knowledge_schema.rs` (schema), `gateway/src/http/beliefs.rs` (HTTP surface), `apps/ui/src/features/memory/` and `apps/ui/src/features/observatory/` (UI)
+- **Source** — `gateway/gateway-memory/src/` (memory subsystem), `stores/zbot-stores-sqlite/src/knowledge_schema.rs` (schema), `gateway/src/http/beliefs.rs` (HTTP surface), `apps/ui/src/features/memory/` and `apps/ui/src/features/observatory/` (UI)
 
 ### Recap
 

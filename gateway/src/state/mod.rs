@@ -20,10 +20,10 @@ use execution_state::StateService;
 use gateway_services::{EmbeddingService, WardProvenance, WardUsage};
 use std::path::PathBuf;
 use std::sync::Arc;
-use zero_stores_sqlite::kg::service::GraphService;
-use zero_stores_sqlite::kg::storage::GraphStorage;
-use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
-use zero_stores_sqlite::{
+use zbot_stores_sqlite::kg::service::GraphService;
+use zbot_stores_sqlite::kg::storage::GraphStorage;
+use zbot_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+use zbot_stores_sqlite::{
     ConversationRepository, DatabaseManager, DistillationRepository, EpisodeRepository,
     KgEpisodeRepository, KnowledgeDatabase, MemoryRepository, ProcedureRepository,
     WardWikiRepository,
@@ -88,10 +88,10 @@ pub struct AppState {
 
     /// Trait-routed memory-fact store. The single read/write surface for
     /// memory facts.
-    pub memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+    pub memory_store: Option<Arc<dyn zbot_stores::MemoryFactStore>>,
 
     /// Goal repository — active goals used for intent boost in unified recall.
-    pub goal_repo: Option<Arc<zero_stores_sqlite::GoalRepository>>,
+    pub goal_repo: Option<Arc<zbot_stores_sqlite::GoalRepository>>,
 
     /// Distillation repository for tracking distillation run outcomes.
     pub distillation_repo: Option<Arc<DistillationRepository>>,
@@ -105,15 +105,15 @@ pub struct AppState {
     /// Trait-routed episode store (Phase D2). Coexists with `episode_repo`
     /// for now; consumers migrate incrementally per the portability doc.
     /// `None` when `episode_repo` itself is `None`.
-    pub episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>>,
+    pub episode_store: Option<Arc<dyn zbot_stores_traits::EpisodeStore>>,
 
     /// Trait-routed wiki store (Phase D3). The handler-side migrations
     /// route through this; legacy callers still build a
     /// `WardWikiRepository` directly. `None` in minimal AppStates.
-    pub wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>>,
+    pub wiki_store: Option<Arc<dyn zbot_stores_traits::WikiStore>>,
 
     /// Trait-routed procedure store (Phase D4).
-    pub procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    pub procedure_store: Option<Arc<dyn zbot_stores_traits::ProcedureStore>>,
 
     /// Knowledge graph episode repository (Phase 6a+).
     pub kg_episode_repo: Option<Arc<KgEpisodeRepository>>,
@@ -121,7 +121,7 @@ pub struct AppState {
     /// Trait-routed kg-ingestion-episode store (Phase B). Wraps the
     /// SQLite kg_episode_repo. Backend-agnostic — a new backend
     /// implements the trait without consumers changing.
-    pub kg_episode_store: Option<Arc<dyn zero_stores_traits::KgEpisodeStore>>,
+    pub kg_episode_store: Option<Arc<dyn zbot_stores_traits::KgEpisodeStore>>,
 
     /// Graph service for knowledge graph operations.
     pub graph_service: Option<Arc<GraphService>>,
@@ -130,7 +130,7 @@ pub struct AppState {
     /// Coexists with `graph_service` — consumers are migrated incrementally.
     /// `None` when `GraphStorage` fails to initialise (same condition as
     /// `graph_service`).
-    pub kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
+    pub kg_store: Option<Arc<dyn zbot_stores::KnowledgeGraphStore>>,
 
     /// Streaming ingestion queue (Phase 2) — None when graph is unavailable.
     pub ingestion_queue: Option<Arc<gateway_execution::ingest::IngestionQueue>>,
@@ -154,14 +154,14 @@ pub struct AppState {
 
     /// Compaction repository — read-model for the last compaction run.
     /// Set by server.start() in Phase 4 Task 10; `None` until then.
-    pub compaction_repo: Option<Arc<zero_stores_sqlite::CompactionRepository>>,
+    pub compaction_repo: Option<Arc<zbot_stores_sqlite::CompactionRepository>>,
 
     /// Trait-routed compaction audit store (Phase D1). Wired in both
     /// SQLite and SurrealDB modes — the maintenance worker writes
     /// merge/prune/synthesis events here for Observatory display.
     /// Backend-agnostic: the trait has default no-op impls so any
     /// backend that doesn't care can inherit them.
-    pub compaction_store: Option<Arc<dyn zero_stores_traits::CompactionStore>>,
+    pub compaction_store: Option<Arc<dyn zbot_stores_traits::CompactionStore>>,
 
     /// Trait-routed belief store (Belief Network Phase B-5 HTTP surface).
     /// `Some(...)` only when `execution.memory.beliefNetwork.enabled = true`
@@ -169,11 +169,11 @@ pub struct AppState {
     /// `http::beliefs` and `http::belief_network` use this for 503-vs-200
     /// disambiguation: a `None` here means the Belief Network is disabled,
     /// not that the data is missing.
-    pub belief_store: Option<Arc<dyn zero_stores_traits::BeliefStore>>,
+    pub belief_store: Option<Arc<dyn zbot_stores_traits::BeliefStore>>,
 
     /// Trait-routed belief-contradiction store (Belief Network Phase B-5
     /// HTTP surface). Same opt-in gating as `belief_store`.
-    pub belief_contradiction_store: Option<Arc<dyn zero_stores_traits::BeliefContradictionStore>>,
+    pub belief_contradiction_store: Option<Arc<dyn zbot_stores_traits::BeliefContradictionStore>>,
 
     /// In-memory recorder of recent Belief Network worker stats (Phase
     /// B-6). Always wired when the sleep-time worker is wired so the
@@ -211,7 +211,7 @@ pub struct AppState {
 /// reconfigures.
 fn sync_reconcile_vec_dim_at_boot(
     embedding_service: &Arc<EmbeddingService>,
-    knowledge_db: &Arc<zero_stores_sqlite::KnowledgeDatabase>,
+    knowledge_db: &Arc<zbot_stores_sqlite::KnowledgeDatabase>,
 ) {
     let current_dim = embedding_service.dimensions();
     if current_dim == 0 {
@@ -307,9 +307,9 @@ impl AppState {
             );
             Arc::new(MemoryRepository::new(kdb.clone(), memory_vec))
         });
-        let goal_repo: Option<Arc<zero_stores_sqlite::GoalRepository>> = knowledge_db
+        let goal_repo: Option<Arc<zbot_stores_sqlite::GoalRepository>> = knowledge_db
             .as_ref()
-            .map(|kdb| Arc::new(zero_stores_sqlite::GoalRepository::new(kdb.clone())));
+            .map(|kdb| Arc::new(zbot_stores_sqlite::GoalRepository::new(kdb.clone())));
         // Phase E6c: distillation_run rows live on the conversation DB
         // (DatabaseManager), not knowledge.db. Wire unconditionally —
         // both backends have the conversation DB. This makes
@@ -418,7 +418,7 @@ impl AppState {
 
         // Build the trait-routed memory_store eagerly (before MemoryRecall +
         // SessionDistiller construction, so they can be wired with it).
-        let early_memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> =
+        let early_memory_store: Option<Arc<dyn zbot_stores::MemoryFactStore>> =
             memory_repo.as_ref().map(|mr| {
                 persistence_factory::build_memory_store(mr.clone(), embedding_client.clone())
             });
@@ -438,10 +438,10 @@ impl AppState {
         };
         // Wire trait-routed episode_store wrapping the SQLite EpisodeRepository.
         if let Some(recall) = memory_recall_inner.as_mut() {
-            let store_opt: Option<Arc<dyn zero_stores_traits::EpisodeStore>> =
+            let store_opt: Option<Arc<dyn zbot_stores_traits::EpisodeStore>> =
                 episode_repo.as_ref().map(|r| {
-                    Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(r.clone()))
-                        as Arc<dyn zero_stores_traits::EpisodeStore>
+                    Arc::new(zbot_stores_sqlite::GatewayEpisodeStore::new(r.clone()))
+                        as Arc<dyn zbot_stores_traits::EpisodeStore>
                 });
             if let Some(store) = store_opt {
                 recall.set_episode_store(store);
@@ -459,10 +459,10 @@ impl AppState {
         });
         // Wire trait-routed wiki_store (Phase E6c).
         if let Some(recall) = memory_recall_inner.as_mut() {
-            let store_opt: Option<Arc<dyn zero_stores_traits::WikiStore>> =
+            let store_opt: Option<Arc<dyn zbot_stores_traits::WikiStore>> =
                 wiki_repo.as_ref().map(|r| {
-                    Arc::new(zero_stores_sqlite::GatewayWikiStore::new(r.clone()))
-                        as Arc<dyn zero_stores_traits::WikiStore>
+                    Arc::new(zbot_stores_sqlite::GatewayWikiStore::new(r.clone()))
+                        as Arc<dyn zbot_stores_traits::WikiStore>
                 });
             if let Some(store) = store_opt {
                 recall.set_wiki_store(store);
@@ -472,18 +472,18 @@ impl AppState {
         // the SQLite kg_episode_repo. Handlers + queue + adapter all
         // consume the trait, so a future backend plugs in by
         // implementing the trait without touching consumers.
-        let kg_episode_store: Option<Arc<dyn zero_stores_traits::KgEpisodeStore>> =
+        let kg_episode_store: Option<Arc<dyn zbot_stores_traits::KgEpisodeStore>> =
             kg_episode_repo.as_ref().map(|r| {
-                Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
-                    as Arc<dyn zero_stores_traits::KgEpisodeStore>
+                Arc::new(zbot_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
+                    as Arc<dyn zbot_stores_traits::KgEpisodeStore>
             });
 
         // Trait-routed wiki store — wraps the SQLite repository
         // (when wiki_repo exists), else None.
-        let wiki_store_for_state: Option<Arc<dyn zero_stores_traits::WikiStore>> =
+        let wiki_store_for_state: Option<Arc<dyn zbot_stores_traits::WikiStore>> =
             wiki_repo.as_ref().map(|wr| {
-                Arc::new(zero_stores_sqlite::GatewayWikiStore::new(wr.clone()))
-                    as Arc<dyn zero_stores_traits::WikiStore>
+                Arc::new(zbot_stores_sqlite::GatewayWikiStore::new(wr.clone()))
+                    as Arc<dyn zbot_stores_traits::WikiStore>
             });
 
         // Wire procedure repository for procedure recall during intent analysis.
@@ -495,10 +495,10 @@ impl AppState {
             );
             Arc::new(ProcedureRepository::new(kdb.clone(), procedure_vec))
         });
-        let procedure_store_for_state: Option<Arc<dyn zero_stores_traits::ProcedureStore>> =
+        let procedure_store_for_state: Option<Arc<dyn zbot_stores_traits::ProcedureStore>> =
             procedure_repo.as_ref().map(|pr| {
-                Arc::new(zero_stores_sqlite::GatewayProcedureStore::new(pr.clone()))
-                    as Arc<dyn zero_stores_traits::ProcedureStore>
+                Arc::new(zbot_stores_sqlite::GatewayProcedureStore::new(pr.clone()))
+                    as Arc<dyn zbot_stores_traits::ProcedureStore>
             });
         // Wire the trait-routed procedure_store on MemoryRecall so
         // procedure recall runs (Phase E6c).
@@ -513,29 +513,29 @@ impl AppState {
         // sleep worker + AppState). Built once here so the sleep worker
         // construction below doesn't have to re-derive from the underlying
         // repo. Wraps `EpisodeRepository` over the same KnowledgeDatabase.
-        let episode_store_for_state: Option<Arc<dyn zero_stores_traits::EpisodeStore>> =
+        let episode_store_for_state: Option<Arc<dyn zbot_stores_traits::EpisodeStore>> =
             knowledge_db.as_ref().and_then(|kdb| {
-                zero_stores_sqlite::vector_index::SqliteVecIndex::new(
+                zbot_stores_sqlite::vector_index::SqliteVecIndex::new(
                     kdb.clone(),
                     "session_episodes_index",
                     "episode_id",
                 )
                 .ok()
                 .map(|vec_index| {
-                    let repo = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
+                    let repo = Arc::new(zbot_stores_sqlite::EpisodeRepository::new(
                         kdb.clone(),
                         Arc::new(vec_index),
                     ));
-                    Arc::new(zero_stores_sqlite::GatewayEpisodeStore::new(repo))
-                        as Arc<dyn zero_stores_traits::EpisodeStore>
+                    Arc::new(zbot_stores_sqlite::GatewayEpisodeStore::new(repo))
+                        as Arc<dyn zbot_stores_traits::EpisodeStore>
                 })
             });
 
         // Conversation store is always SQLite-backed (per the design doc:
         // conversations.db is SQLite-only). The sleep worker's
         // PatternExtractor needs it on both backends.
-        let conversation_store_for_state: Arc<dyn zero_stores_traits::ConversationStore> = Arc::new(
-            zero_stores_sqlite::ConversationRepository::new(db_manager.clone()),
+        let conversation_store_for_state: Arc<dyn zbot_stores_traits::ConversationStore> = Arc::new(
+            zbot_stores_sqlite::ConversationRepository::new(db_manager.clone()),
         );
         if let (Some(recall), Some(mem)) =
             (memory_recall_inner.as_mut(), early_memory_store.as_ref())
@@ -546,7 +546,7 @@ impl AppState {
         // Build the trait-routed kg_store early enough to wire it on
         // MemoryRecall before that struct is moved into Arc::new below.
         // Wraps the SQLite GraphStorage.
-        let kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
+        let kg_store: Option<Arc<dyn zbot_stores::KnowledgeGraphStore>> =
             graph_storage.as_ref().map(|gs| {
                 let embedder = embedding_client
                     .clone()
@@ -570,8 +570,8 @@ impl AppState {
                 .unwrap_or(false);
         if belief_network_enabled_for_recall {
             if let Some(kdb) = knowledge_db.as_ref() {
-                let belief_store_for_recall: Arc<dyn zero_stores_traits::BeliefStore> =
-                    Arc::new(zero_stores_sqlite::SqliteBeliefStore::new(kdb.clone()));
+                let belief_store_for_recall: Arc<dyn zbot_stores_traits::BeliefStore> =
+                    Arc::new(zbot_stores_sqlite::SqliteBeliefStore::new(kdb.clone()));
                 if let Some(recall) = memory_recall_inner.as_mut() {
                     recall.set_belief_store(belief_store_for_recall);
                 }
@@ -711,8 +711,8 @@ impl AppState {
             // Phase E6c: trait-routed distillation store. Wraps the
             // SQLite DistillationRepository for run-tracking writes.
             if let Some(dr) = distillation_repo.as_ref() {
-                let store: Arc<dyn zero_stores_traits::DistillationStore> = Arc::new(
-                    zero_stores_sqlite::GatewayDistillationStore::new(dr.clone()),
+                let store: Arc<dyn zbot_stores_traits::DistillationStore> = Arc::new(
+                    zbot_stores_sqlite::GatewayDistillationStore::new(dr.clone()),
                 );
                 distiller_inner.set_distillation_store(store);
             }
@@ -780,10 +780,10 @@ impl AppState {
             _ => None,
         };
         // Goal adapter wraps the SQLite GoalRepository.
-        let goal_store_for_adapter: Option<Arc<dyn zero_stores_traits::GoalStore>> =
+        let goal_store_for_adapter: Option<Arc<dyn zbot_stores_traits::GoalStore>> =
             goal_repo.as_ref().map(|gr| {
-                Arc::new(zero_stores_sqlite::GatewayGoalStore::new(gr.clone()))
-                    as Arc<dyn zero_stores_traits::GoalStore>
+                Arc::new(zbot_stores_sqlite::GatewayGoalStore::new(gr.clone()))
+                    as Arc<dyn zbot_stores_traits::GoalStore>
             });
         let goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>> =
             goal_store_for_adapter.map(|store| {
@@ -826,19 +826,19 @@ impl AppState {
         // Phase 4: CompactionRepository + SleepTimeWorker (background maintenance).
         // CompactionRepository is SQLite-tied (kg_compactions table on
         // knowledge.db). None when knowledge_db is unwired.
-        let compaction_repo: Option<Arc<zero_stores_sqlite::CompactionRepository>> = knowledge_db
+        let compaction_repo: Option<Arc<zbot_stores_sqlite::CompactionRepository>> = knowledge_db
             .as_ref()
-            .map(|kdb| Arc::new(zero_stores_sqlite::CompactionRepository::new(kdb.clone())));
+            .map(|kdb| Arc::new(zbot_stores_sqlite::CompactionRepository::new(kdb.clone())));
 
         // Phase D1: trait-routed compaction audit store. Wired in BOTH
         // backends so the maintenance worker can record merges/prunes
         // regardless of backend. Surreal uses its own
         // `kg_compaction_run` table; SQLite delegates to the existing
         // `CompactionRepository`. Default no-op impls cover edge cases.
-        let compaction_store: Option<Arc<dyn zero_stores_traits::CompactionStore>> =
+        let compaction_store: Option<Arc<dyn zbot_stores_traits::CompactionStore>> =
             compaction_repo.as_ref().map(|r| {
-                Arc::new(zero_stores_sqlite::GatewayCompactionStore::new(r.clone()))
-                    as Arc<dyn zero_stores_traits::CompactionStore>
+                Arc::new(zbot_stores_sqlite::GatewayCompactionStore::new(r.clone()))
+                    as Arc<dyn zbot_stores_traits::CompactionStore>
             });
 
         // One-shot backfill: populate legacy kg_entities / kg_relationships
@@ -885,26 +885,26 @@ impl AppState {
             .get_execution_settings()
             .map(|s| s.memory.belief_network.clone())
             .unwrap_or_default();
-        let belief_store_raw: Option<Arc<dyn zero_stores::BeliefStore>> =
+        let belief_store_raw: Option<Arc<dyn zbot_stores::BeliefStore>> =
             knowledge_db.as_ref().map(|kdb| {
-                Arc::new(zero_stores_sqlite::SqliteBeliefStore::new(kdb.clone()))
-                    as Arc<dyn zero_stores::BeliefStore>
+                Arc::new(zbot_stores_sqlite::SqliteBeliefStore::new(kdb.clone()))
+                    as Arc<dyn zbot_stores::BeliefStore>
             });
-        let belief_contradiction_store_raw: Option<Arc<dyn zero_stores::BeliefContradictionStore>> =
+        let belief_contradiction_store_raw: Option<Arc<dyn zbot_stores::BeliefContradictionStore>> =
             knowledge_db.as_ref().map(|kdb| {
-                Arc::new(zero_stores_sqlite::SqliteBeliefContradictionStore::new(
+                Arc::new(zbot_stores_sqlite::SqliteBeliefContradictionStore::new(
                     kdb.clone(),
-                )) as Arc<dyn zero_stores::BeliefContradictionStore>
+                )) as Arc<dyn zbot_stores::BeliefContradictionStore>
             });
         // HTTP surface only exposes the stores when the feature is on.
-        let belief_store_for_http: Option<Arc<dyn zero_stores_traits::BeliefStore>> =
+        let belief_store_for_http: Option<Arc<dyn zbot_stores_traits::BeliefStore>> =
             if belief_network_cfg.enabled {
                 belief_store_raw.clone()
             } else {
                 None
             };
         let belief_contradiction_store_for_http: Option<
-            Arc<dyn zero_stores_traits::BeliefContradictionStore>,
+            Arc<dyn zbot_stores_traits::BeliefContradictionStore>,
         > = if belief_network_cfg.enabled {
             belief_contradiction_store_raw.clone()
         } else {
@@ -1125,8 +1125,8 @@ impl AppState {
         // so tests that hit /api/memory/.../search succeed without
         // needing to construct full AppState. Fallback no-op
         // embedding client lets save_fact path complete.
-        let memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = Some(Arc::new(
-            zero_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
+        let memory_store: Option<Arc<dyn zbot_stores::MemoryFactStore>> = Some(Arc::new(
+            zbot_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
         ));
 
         // Episode / wiki / procedure trait stores so HTTP handlers reach
@@ -1136,36 +1136,36 @@ impl AppState {
             SqliteVecIndex::new(knowledge_db.clone(), "session_episodes_index", "episode_id")
                 .expect("episode vec index init"),
         );
-        let episode_repo_handle = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
+        let episode_repo_handle = Arc::new(zbot_stores_sqlite::EpisodeRepository::new(
             knowledge_db.clone(),
             episode_vec,
         ));
-        let episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>> = Some(Arc::new(
-            zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo_handle),
+        let episode_store: Option<Arc<dyn zbot_stores_traits::EpisodeStore>> = Some(Arc::new(
+            zbot_stores_sqlite::GatewayEpisodeStore::new(episode_repo_handle),
         ));
 
         let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
             SqliteVecIndex::new(knowledge_db.clone(), "wiki_articles_index", "article_id")
                 .expect("wiki vec index init"),
         );
-        let wiki_repo_handle = Arc::new(zero_stores_sqlite::WardWikiRepository::new(
+        let wiki_repo_handle = Arc::new(zbot_stores_sqlite::WardWikiRepository::new(
             knowledge_db.clone(),
             wiki_vec,
         ));
-        let wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>> = Some(Arc::new(
-            zero_stores_sqlite::GatewayWikiStore::new(wiki_repo_handle),
+        let wiki_store: Option<Arc<dyn zbot_stores_traits::WikiStore>> = Some(Arc::new(
+            zbot_stores_sqlite::GatewayWikiStore::new(wiki_repo_handle),
         ));
 
         let proc_vec: Arc<dyn VectorIndex> = Arc::new(
             SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
                 .expect("procedure vec index init"),
         );
-        let procedure_repo_handle = Arc::new(zero_stores_sqlite::ProcedureRepository::new(
+        let procedure_repo_handle = Arc::new(zbot_stores_sqlite::ProcedureRepository::new(
             knowledge_db.clone(),
             proc_vec,
         ));
-        let procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>> = Some(Arc::new(
-            zero_stores_sqlite::GatewayProcedureStore::new(procedure_repo_handle),
+        let procedure_store: Option<Arc<dyn zbot_stores_traits::ProcedureStore>> = Some(Arc::new(
+            zbot_stores_sqlite::GatewayProcedureStore::new(procedure_repo_handle),
         ));
 
         Self {
@@ -1248,8 +1248,8 @@ impl AppState {
 
         // Phase B: same trait wrap as `minimal()` so test paths see a
         // wired memory_store and search/recall handlers don't 503.
-        let memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>> = Some(Arc::new(
-            zero_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
+        let memory_store: Option<Arc<dyn zbot_stores::MemoryFactStore>> = Some(Arc::new(
+            zbot_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
         ));
 
         // Episode / wiki / procedure trait stores so HTTP handlers reach
@@ -1258,36 +1258,36 @@ impl AppState {
             SqliteVecIndex::new(knowledge_db.clone(), "session_episodes_index", "episode_id")
                 .expect("episode vec index init"),
         );
-        let episode_repo_handle = Arc::new(zero_stores_sqlite::EpisodeRepository::new(
+        let episode_repo_handle = Arc::new(zbot_stores_sqlite::EpisodeRepository::new(
             knowledge_db.clone(),
             episode_vec,
         ));
-        let episode_store: Option<Arc<dyn zero_stores_traits::EpisodeStore>> = Some(Arc::new(
-            zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo_handle),
+        let episode_store: Option<Arc<dyn zbot_stores_traits::EpisodeStore>> = Some(Arc::new(
+            zbot_stores_sqlite::GatewayEpisodeStore::new(episode_repo_handle),
         ));
 
         let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
             SqliteVecIndex::new(knowledge_db.clone(), "wiki_articles_index", "article_id")
                 .expect("wiki vec index init"),
         );
-        let wiki_repo_handle = Arc::new(zero_stores_sqlite::WardWikiRepository::new(
+        let wiki_repo_handle = Arc::new(zbot_stores_sqlite::WardWikiRepository::new(
             knowledge_db.clone(),
             wiki_vec,
         ));
-        let wiki_store: Option<Arc<dyn zero_stores_traits::WikiStore>> = Some(Arc::new(
-            zero_stores_sqlite::GatewayWikiStore::new(wiki_repo_handle),
+        let wiki_store: Option<Arc<dyn zbot_stores_traits::WikiStore>> = Some(Arc::new(
+            zbot_stores_sqlite::GatewayWikiStore::new(wiki_repo_handle),
         ));
 
         let proc_vec: Arc<dyn VectorIndex> = Arc::new(
             SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
                 .expect("procedure vec index init"),
         );
-        let procedure_repo_handle = Arc::new(zero_stores_sqlite::ProcedureRepository::new(
+        let procedure_repo_handle = Arc::new(zbot_stores_sqlite::ProcedureRepository::new(
             knowledge_db.clone(),
             proc_vec,
         ));
-        let procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>> = Some(Arc::new(
-            zero_stores_sqlite::GatewayProcedureStore::new(procedure_repo_handle),
+        let procedure_store: Option<Arc<dyn zbot_stores_traits::ProcedureStore>> = Some(Arc::new(
+            zbot_stores_sqlite::GatewayProcedureStore::new(procedure_repo_handle),
         ));
 
         // Create bridge registry and outbox

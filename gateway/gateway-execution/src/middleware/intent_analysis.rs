@@ -4,7 +4,7 @@ use gateway_services::{AgentService, SharedVaultPaths, SkillService, SkillSource
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use zero_stores::{MemoryFactStore, SkillIndexRow};
+use zbot_stores::{MemoryFactStore, SkillIndexRow};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -483,7 +483,7 @@ fn simple_analysis(message: &str) -> IntentAnalysis {
 /// Returns `false` for malformed JSON, empty step lists, or any unknown
 /// action name. The check is strict (`all`), not partial.
 fn procedure_is_dispatchable(steps_json: &str, known_tool_names: &[&str]) -> bool {
-    let parsed: Vec<zero_stores_domain::PatternStep> = match serde_json::from_str(steps_json) {
+    let parsed: Vec<zbot_stores_domain::PatternStep> = match serde_json::from_str(steps_json) {
         Ok(v) => v,
         Err(_) => return false,
     };

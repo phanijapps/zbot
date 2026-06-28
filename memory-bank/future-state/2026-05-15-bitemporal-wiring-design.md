@@ -5,7 +5,7 @@
 **Context:** Borrowed from Yang et al. (arxiv 2602.05665) and Du (arxiv 2603.07670) — both surveys flag bi-temporal modeling (Graphiti pattern) as the missing piece in production agent-memory systems. AgentZero already has the columns; this doc wires them up.
 **Related:**
 - `[[project_reflective_memory_roadmap]]` — Phase 4 Belief Network is what this unblocks
-- `[[project_memory_crate_extraction]]` — wiring touches gateway-memory + zero-stores-sqlite
+- `[[project_memory_crate_extraction]]` — wiring touches gateway-memory + zbot-stores-sqlite
 - PR #139 (merged to develop via #141) — recall double-boost fix
 - PR #142 — recall supersession-semantic bug fix (prerequisite for this work)
 
@@ -73,7 +73,7 @@ Four concrete gaps:
 
 Every caller of `save_fact` / the underlying INSERT passes `valid_from: None`. Result: facts created today have no recorded "began being true at" time. Without `valid_from`, point-in-time queries can't tell whether a fact was valid at the query time.
 
-**Fix:** The `save_fact` trait method (`zero-stores-traits/src/memory_facts.rs`) and its impls need a `valid_from: Option<DateTime>` parameter (default `Some(Utc::now())`). Callers explicitly opt out by passing `None` only for facts that have always been true (categories like `procedural`, `convention`). All other categories default to `valid_from = created_at`.
+**Fix:** The `save_fact` trait method (`zbot-stores-traits/src/memory_facts.rs`) and its impls need a `valid_from: Option<DateTime>` parameter (default `Some(Utc::now())`). Callers explicitly opt out by passing `None` only for facts that have always been true (categories like `procedural`, `convention`). All other categories default to `valid_from = created_at`.
 
 Caller sites to update (from grep `save_fact` excluding tests):
 - `runtime/agent-tools/src/tools/memory.rs:541` — `action_save_fact` (the agent-callable tool path)
@@ -82,7 +82,7 @@ Caller sites to update (from grep `save_fact` excluding tests):
 
 ### Gap 2 — No point-in-time recall API
 
-`recall_facts_prioritized` (`stores/zero-stores-traits/src/memory_facts.rs:112`) takes `(agent_id, query, limit)`. There's no way to ask "what was true at time T?" — the SQL filter implicitly assumes "now."
+`recall_facts_prioritized` (`stores/zbot-stores-traits/src/memory_facts.rs:112`) takes `(agent_id, query, limit)`. There's no way to ask "what was true at time T?" — the SQL filter implicitly assumes "now."
 
 **Fix:** Add an optional `as_of: Option<DateTime>` parameter. When `None` (default), behavior unchanged: returns currently-valid facts. When `Some(T)`, filter clause becomes:
 
@@ -132,33 +132,33 @@ Total: **~3-4 days**, less than the original 5-day estimate because the superses
 ### File changes
 
 **Phase 1 (Gap 1) — populate valid_from on creation:**
-- `stores/zero-stores-traits/src/memory_facts.rs` — extend `save_fact` trait signature to take `valid_from: Option<DateTime<Utc>>`
-- `stores/zero-stores-sqlite/src/memory_repository.rs:168` — pass `valid_from` through to INSERT
-- `stores/zero-stores-sqlite/src/memory_fact_store.rs` — adapter passes through
+- `stores/zbot-stores-traits/src/memory_facts.rs` — extend `save_fact` trait signature to take `valid_from: Option<DateTime<Utc>>`
+- `stores/zbot-stores-sqlite/src/memory_repository.rs:168` — pass `valid_from` through to INSERT
+- `stores/zbot-stores-sqlite/src/memory_fact_store.rs` — adapter passes through
 - `runtime/agent-tools/src/tools/memory.rs:541` — `action_save_fact` defaults `Utc::now()`
 - `gateway/gateway-memory/src/sleep/corrections_abstractor.rs:135` — abstractor defaults `Utc::now()`
 - Backfill migration (one-time): `UPDATE memory_facts SET valid_from = created_at WHERE valid_from IS NULL`
 
 **Phase 2 (Gap 2) — point-in-time recall:**
-- `stores/zero-stores-traits/src/memory_facts.rs:112` — add `as_of: Option<DateTime<Utc>>` to `recall_facts_prioritized`
-- `stores/zero-stores-traits/src/memory_facts.rs:351` — same for `search_memory_facts_hybrid`
-- `stores/zero-stores-sqlite/src/memory_repository.rs` — SQL filter clause as documented
+- `stores/zbot-stores-traits/src/memory_facts.rs:112` — add `as_of: Option<DateTime<Utc>>` to `recall_facts_prioritized`
+- `stores/zbot-stores-traits/src/memory_facts.rs:351` — same for `search_memory_facts_hybrid`
+- `stores/zbot-stores-sqlite/src/memory_repository.rs` — SQL filter clause as documented
 - `gateway/gateway-memory/src/recall/mod.rs` — pass `as_of` through from callers; default `None`
 - `runtime/agent-tools/src/tools/memory.rs` — agent-callable tool gains optional `as_of` arg in the JSON schema; default omitted = current
 
 **Phase 3 (Gap 3) — kg_relationships symmetry:**
-- New migration: `stores/zero-stores-sqlite/migrations/v25_kg_relationships_bitemporal.sql`
+- New migration: `stores/zbot-stores-sqlite/migrations/v25_kg_relationships_bitemporal.sql`
   - `ALTER TABLE kg_relationships ADD COLUMN valid_from TEXT`
   - `UPDATE kg_relationships SET valid_from = valid_at WHERE valid_from IS NULL`
   - `ALTER TABLE kg_relationships ADD COLUMN valid_until TEXT`
   - `UPDATE kg_relationships SET valid_until = invalidated_at WHERE valid_until IS NULL`
   - Keep `valid_at` and `invalidated_at` as legacy (don't drop in this migration; deprecate over time)
-- `stores/zero-stores-sqlite/src/knowledge_schema.rs:113-135` — update CREATE TABLE for fresh DBs
+- `stores/zbot-stores-sqlite/src/knowledge_schema.rs:113-135` — update CREATE TABLE for fresh DBs
 - All writers in `synthesizer.rs`, `decay.rs`, `orphan_archiver.rs`, `kg_backfill.rs` — write to new columns
 
 **Phase 4 (Gap 4) — winner `valid_from` on cross-boundary supersession:**
 - `gateway/gateway-memory/src/sleep/conflict_resolver.rs` — in the resolution path, after `supersede_fact(loser, winner)`, conditionally UPDATE the winner's `valid_from`
-- `stores/zero-stores-sqlite/src/memory_repository.rs` — add `promote_winner_valid_from(winner_id, transition_time)` helper
+- `stores/zbot-stores-sqlite/src/memory_repository.rs` — add `promote_winner_valid_from(winner_id, transition_time)` helper
 
 ### Migration shape
 

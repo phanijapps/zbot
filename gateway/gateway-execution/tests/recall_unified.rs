@@ -11,7 +11,7 @@ use tempfile::tempdir;
 
 use gateway_execution::recall::{ItemKind, MemoryRecall};
 use gateway_services::{RecallConfig, VaultPaths};
-use zero_stores_sqlite::{
+use zbot_stores_sqlite::{
     EpisodeRepository, KnowledgeDatabase, MemoryFact, MemoryRepository, SessionEpisode,
     SqliteVecIndex, VectorIndex,
 };
@@ -63,8 +63,8 @@ async fn recall_unified_returns_scored_items_from_facts() {
     };
     memory_repo.upsert_memory_fact(&fact).unwrap();
 
-    let memory_store: Arc<dyn zero_stores::MemoryFactStore> = Arc::new(
-        zero_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
+    let memory_store: Arc<dyn zbot_stores::MemoryFactStore> = Arc::new(
+        zbot_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
     );
     let mut recall = MemoryRecall::new(None, config);
     recall.set_memory_store(memory_store);
@@ -114,11 +114,11 @@ async fn recall_unified_injects_previous_episodes_for_ward() {
     episode_repo.insert(&ep).unwrap();
 
     let config = Arc::new(RecallConfig::default());
-    let memory_store: Arc<dyn zero_stores::MemoryFactStore> = Arc::new(
-        zero_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
+    let memory_store: Arc<dyn zbot_stores::MemoryFactStore> = Arc::new(
+        zbot_stores_sqlite::GatewayMemoryFactStore::new(memory_repo.clone(), None),
     );
-    let episode_store: Arc<dyn zero_stores_traits::EpisodeStore> = Arc::new(
-        zero_stores_sqlite::GatewayEpisodeStore::new(episode_repo.clone()),
+    let episode_store: Arc<dyn zbot_stores_traits::EpisodeStore> = Arc::new(
+        zbot_stores_sqlite::GatewayEpisodeStore::new(episode_repo.clone()),
     );
     let mut recall = MemoryRecall::new(None, config);
     recall.set_memory_store(memory_store);

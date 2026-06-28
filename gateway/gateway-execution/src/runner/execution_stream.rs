@@ -15,7 +15,7 @@ use execution_state::StateService;
 use gateway_events::EventBus;
 use gateway_services::SharedVaultPaths;
 use tokio::sync::{mpsc, RwLock};
-use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use crate::delegation::extract_structured_result;
 use crate::delegation::{DelegationRegistry, DelegationRequest};
@@ -49,10 +49,10 @@ pub struct ExecutionStream {
     pub delegation_registry: Arc<DelegationRegistry>,
     pub handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
     pub distiller: Option<Arc<crate::distillation::SessionDistiller>>,
-    pub kg_episode_repo: Option<Arc<zero_stores_sqlite::KgEpisodeRepository>>,
+    pub kg_episode_repo: Option<Arc<zbot_stores_sqlite::KgEpisodeRepository>>,
     pub paths: SharedVaultPaths,
-    pub kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
-    pub memory_store: Option<Arc<dyn zero_stores::MemoryFactStore>>,
+    pub kg_store: Option<Arc<dyn zbot_stores::KnowledgeGraphStore>>,
+    pub memory_store: Option<Arc<dyn zbot_stores::MemoryFactStore>>,
     pub connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     pub bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
     pub bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
@@ -100,8 +100,8 @@ struct EventHandlerDeps<'a> {
     agent_id: &'a str,
     handle: &'a ExecutionHandle,
     tool_result_context: &'a ToolResultContextConfig,
-    kg_episode_repo: Option<&'a Arc<zero_stores_sqlite::KgEpisodeRepository>>,
-    kg_store: Option<&'a Arc<dyn zero_stores::KnowledgeGraphStore>>,
+    kg_episode_repo: Option<&'a Arc<zbot_stores_sqlite::KgEpisodeRepository>>,
+    kg_store: Option<&'a Arc<dyn zbot_stores::KnowledgeGraphStore>>,
 }
 
 /// Pull the `message` (or `text`) arg from a `respond` tool call in
@@ -233,8 +233,8 @@ fn handle_tool_result(
         let result_cl = result.to_string();
         let session_id_cl = deps.session_id.to_string();
         let agent_id_cl = deps.agent_id.to_string();
-        let ep_store: Arc<dyn zero_stores_traits::KgEpisodeStore> = Arc::new(
-            zero_stores_sqlite::GatewayKgEpisodeStore::new(ep_repo.clone()),
+        let ep_store: Arc<dyn zbot_stores_traits::KgEpisodeStore> = Arc::new(
+            zbot_stores_sqlite::GatewayKgEpisodeStore::new(ep_repo.clone()),
         );
         let kg_cl = kg.clone();
         tokio::spawn(async move {
@@ -632,12 +632,12 @@ impl ExecutionStream {
                     // the concrete repo for backward compat. Same shape
                     // for kg_store: the SqliteKgStore wrap of graph_storage.
                     let kg_episode_store_for_indexer: Option<
-                        Arc<dyn zero_stores_traits::KgEpisodeStore>,
+                        Arc<dyn zbot_stores_traits::KgEpisodeStore>,
                     > = self.kg_episode_repo.as_ref().map(|r| {
-                        Arc::new(zero_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
-                            as Arc<dyn zero_stores_traits::KgEpisodeStore>
+                        Arc::new(zbot_stores_sqlite::GatewayKgEpisodeStore::new(r.clone()))
+                            as Arc<dyn zbot_stores_traits::KgEpisodeStore>
                     });
-                    let kg_store_for_indexer: Option<Arc<dyn zero_stores::KnowledgeGraphStore>> =
+                    let kg_store_for_indexer: Option<Arc<dyn zbot_stores::KnowledgeGraphStore>> =
                         self.kg_store.clone();
                     let paths_for_indexer = self.paths.clone();
                     tokio::spawn(async move {
@@ -793,7 +793,7 @@ mod tests {
     use gateway_events::EventBus;
     use gateway_services::VaultPaths;
     use tokio::sync::{mpsc, RwLock};
-    use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+    use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
 
     #[test]
     fn execution_stream_constructs_with_minimum_required_deps() {

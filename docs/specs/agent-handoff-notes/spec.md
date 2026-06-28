@@ -142,7 +142,7 @@ before proceeding; *Never do* is a hard rule, even under time pressure.
   `child_session_id`. (source:
   `services/execution-state/src/types.rs`;
   `services/execution-state/src/repository.rs`;
-  `stores/zero-stores-sqlite/src/schema.rs`)
+  `stores/zbot-stores-sqlite/src/schema.rs`)
 - Technical: `delegate_to_agent` already returns an `execution_id` that can be
   used by `wait_agent`, `steer_agent`, or `kill_agent`. (source:
   `runtime/agent-runtime/src/tools/delegate.rs`)

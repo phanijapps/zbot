@@ -5,16 +5,16 @@
 //! AppState consumes `Arc<dyn KnowledgeGraphStore>` and `Arc<dyn
 //! MemoryFactStore>` rather than the concrete SQLite repos so HTTP
 //! handlers and sleep jobs don't need to know which backend they got.
-//! The trait surfaces in `zero-stores-traits` keep the door open for
+//! The trait surfaces in `zbot-stores-traits` keep the door open for
 //! future backends; today there is one impl, SQLite.
 
 use std::sync::Arc;
 
 use agent_runtime::llm::EmbeddingClient;
-use zero_stores::{KnowledgeGraphStore, MemoryFactStore};
-use zero_stores_sqlite::kg::storage::GraphStorage;
-use zero_stores_sqlite::{KnowledgeDatabase, MemoryRepository};
-use zero_stores_sqlite::{SqliteKgStore, SqliteMemoryStore};
+use zbot_stores::{KnowledgeGraphStore, MemoryFactStore};
+use zbot_stores_sqlite::kg::storage::GraphStorage;
+use zbot_stores_sqlite::{KnowledgeDatabase, MemoryRepository};
+use zbot_stores_sqlite::{SqliteKgStore, SqliteMemoryStore};
 
 /// Build the `Arc<dyn KnowledgeGraphStore>` used by `AppState`.
 ///
@@ -78,7 +78,7 @@ mod tests {
     use super::*;
     use gateway_services::VaultPaths;
     use tempfile::TempDir;
-    use zero_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
+    use zbot_stores_sqlite::vector_index::{SqliteVecIndex, VectorIndex};
 
     struct NoEmbed;
     #[async_trait::async_trait]

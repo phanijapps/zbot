@@ -77,15 +77,15 @@ pub async fn get_health(State(state): State<AppState>) -> Json<HealthResponse> {
 /// fall back to "all five tables missing, zero indexed" so the
 /// endpoint keeps responding — same degraded-but-honest behavior the
 /// historical handler exhibited on DB errors.
-async fn vec_health_snapshot(state: &AppState) -> zero_stores::VecIndexHealth {
+async fn vec_health_snapshot(state: &AppState) -> zbot_stores::VecIndexHealth {
     if let Some(kg_store) = state.kg_store.as_ref() {
         if let Ok(h) = kg_store.vec_index_health().await {
             return h;
         }
     }
-    zero_stores::VecIndexHealth {
+    zbot_stores::VecIndexHealth {
         tables_present: Vec::new(),
-        tables_missing: zero_stores_sqlite::REQUIRED_VEC_TABLES
+        tables_missing: zbot_stores_sqlite::REQUIRED_VEC_TABLES
             .iter()
             .map(|s| s.to_string())
             .collect(),
@@ -310,7 +310,7 @@ pub async fn configure(
 /// stored before write-time name embedding existed).
 pub async fn reindex(
     State(state): State<AppState>,
-) -> Result<Json<zero_stores::ReindexReport>, (StatusCode, String)> {
+) -> Result<Json<zbot_stores::ReindexReport>, (StatusCode, String)> {
     let kg_store = state.kg_store.clone().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "knowledge graph store not available".to_string(),

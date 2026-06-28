@@ -17,8 +17,8 @@ use std::sync::Arc;
 use agent_tools::{IngestionAccess, StructuredCounts, StructuredEntity, StructuredRelationship};
 use chrono::Utc;
 use knowledge_graph::{Entity, EntityType, Relationship, RelationshipType};
-use zero_stores::KnowledgeGraphStore;
-use zero_stores_traits::KgEpisodeStore;
+use zbot_stores::KnowledgeGraphStore;
+use zbot_stores_traits::KgEpisodeStore;
 
 use crate::ingest::{
     chunker::{chunk_text, ChunkOptions},
@@ -104,14 +104,14 @@ impl IngestionAccess for IngestionAdapter {
     }
 }
 
-/// Map the generic agent-tools shapes onto `zero_stores::ExtractedKnowledge`.
+/// Map the generic agent-tools shapes onto `zbot_stores::ExtractedKnowledge`.
 /// Returns the trait-side type so the result can be passed straight to
 /// `KnowledgeGraphStore::store_knowledge`.
 fn build_knowledge(
     agent_id: &str,
     entities: Vec<StructuredEntity>,
     relationships: Vec<StructuredRelationship>,
-) -> zero_stores::ExtractedKnowledge {
+) -> zbot_stores::ExtractedKnowledge {
     let now = Utc::now();
 
     let kg_entities: Vec<Entity> = entities
@@ -156,7 +156,7 @@ fn build_knowledge(
         })
         .collect();
 
-    zero_stores::ExtractedKnowledge {
+    zbot_stores::ExtractedKnowledge {
         entities: kg_entities,
         relationships: kg_relationships,
     }
@@ -167,8 +167,8 @@ mod tests {
     use super::*;
     use crate::ingest::extractor::Extractor;
     use gateway_services::VaultPaths;
-    use zero_stores_sqlite::kg::storage::GraphStorage;
-    use zero_stores_sqlite::{
+    use zbot_stores_sqlite::kg::storage::GraphStorage;
+    use zbot_stores_sqlite::{
         GatewayKgEpisodeStore, KgEpisodeRepository, KnowledgeDatabase, SqliteKgStore,
     };
 
@@ -182,7 +182,7 @@ mod tests {
             &self,
             _episode_id: &str,
             _chunk_text: &str,
-            _kg_store: &Arc<dyn zero_stores::KnowledgeGraphStore>,
+            _kg_store: &Arc<dyn zbot_stores::KnowledgeGraphStore>,
         ) -> std::result::Result<(), String> {
             Ok(())
         }

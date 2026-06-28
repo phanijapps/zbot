@@ -14,7 +14,7 @@ use gateway::{http::create_http_router, websocket::WebSocketHandler, GatewayConf
 use serde_json::Value;
 use std::sync::Arc;
 use tempfile::TempDir;
-use zero_stores_domain::MemoryFact;
+use zbot_stores_domain::MemoryFact;
 
 /// Build a minimal `TestServer` + seed one memory fact whose content contains
 /// the keyword `tickers`.

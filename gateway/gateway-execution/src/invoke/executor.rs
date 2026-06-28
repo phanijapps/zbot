@@ -41,8 +41,8 @@ use gateway_services::{McpService, SettingsService, SkillService};
 use std::path::PathBuf;
 use std::sync::Arc;
 use zero_core::{ConnectorResourceProvider, FileSystemContext};
-use zero_stores::MemoryFactStore;
-use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+use zbot_stores::MemoryFactStore;
+use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 use super::setup::SubagentRole;
 use crate::agent_pool::AgentResultBus;
@@ -465,7 +465,7 @@ pub struct ExecutorBuilder {
     actor_kind: RuntimeActorKind,
     subagent_non_streaming: bool,
     /// Trait-routed kg store for the `graph_query` tool.
-    kg_store: Option<Arc<dyn zero_stores::KnowledgeGraphStore>>,
+    kg_store: Option<Arc<dyn zbot_stores::KnowledgeGraphStore>>,
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     /// Observer for ward-tool creation events — bumps the curator sidecar's
@@ -476,7 +476,7 @@ pub struct ExecutorBuilder {
     state_service: Option<Arc<StateService<DatabaseManager>>>,
     conversation_repo: Option<Arc<ConversationRepository>>,
     /// Trait-routed procedure store for the `run_procedure` tool.
-    procedure_store: Option<Arc<dyn zero_stores_traits::ProcedureStore>>,
+    procedure_store: Option<Arc<dyn zbot_stores_traits::ProcedureStore>>,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
     chat_mode: bool,
 }
@@ -516,7 +516,7 @@ impl ExecutorBuilder {
     /// Set the trait-routed procedure store for the `run_procedure` tool.
     pub fn with_procedure_store(
         mut self,
-        procedure_store: Arc<dyn zero_stores_traits::ProcedureStore>,
+        procedure_store: Arc<dyn zbot_stores_traits::ProcedureStore>,
     ) -> Self {
         self.procedure_store = Some(procedure_store);
         self
@@ -572,7 +572,7 @@ impl ExecutorBuilder {
     }
 
     /// Set the trait-routed kg store for the `graph_query` tool.
-    pub fn with_kg_store(mut self, store: Arc<dyn zero_stores::KnowledgeGraphStore>) -> Self {
+    pub fn with_kg_store(mut self, store: Arc<dyn zbot_stores::KnowledgeGraphStore>) -> Self {
         self.kg_store = Some(store);
         self
     }

@@ -11,7 +11,7 @@ use gateway_execution::session_state::{SessionPhase, SessionStateBuilder};
 use gateway_services::VaultPaths;
 #[allow(deprecated)]
 use tempfile::tempdir;
-use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
 
 // ============================================================================
 // HELPERS

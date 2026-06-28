@@ -45,7 +45,7 @@ use agent_tools::{MemoryEntry, MemoryStore};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use zero_stores_sqlite::ConversationRepository;
+use zbot_stores_sqlite::ConversationRepository;
 
 pub const HANDOFF_MAX_AGE_DAYS: i64 = 7;
 
@@ -254,7 +254,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use tempfile::TempDir;
-    use zero_stores_sqlite::{ConversationRepository, DatabaseManager};
+    use zbot_stores_sqlite::{ConversationRepository, DatabaseManager};
 
     // ---- Mock LLM ----
 

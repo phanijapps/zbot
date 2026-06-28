@@ -4,7 +4,7 @@ use execution_state::{DelegationType, ExecutionStatus, StateService};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use zero_core::{Result, Tool, ToolContext, ZeroError};
-use zero_stores_sqlite::DatabaseManager;
+use zbot_stores_sqlite::DatabaseManager;
 
 const MAX_HANDOFF_CHARS: usize = 1000;
 
