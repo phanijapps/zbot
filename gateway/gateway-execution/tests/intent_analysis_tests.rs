@@ -232,7 +232,7 @@ async fn test_graceful_degradation_on_llm_failure() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        err.contains("Intent analysis extraction failed"),
+        err.contains("Intent analysis LLM call failed"),
         "unexpected error message: {}",
         err
     );

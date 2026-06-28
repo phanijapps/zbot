@@ -1,4 +1,4 @@
-use agent_runtime::{CompletionClient, LlmClient};
+use agent_runtime::{ChatMessage, LlmClient};
 use schemars::JsonSchema;
 use gateway_services::{AgentService, SharedVaultPaths, SkillService, SkillSource};
 use serde::{Deserialize, Serialize};
@@ -634,6 +634,21 @@ async fn build_procedure_recommendation(
 // config, existing wards). Bundling into a struct would obscure call sites
 // without reducing coupling.
 #[allow(clippy::too_many_arguments)]
+/// Strip ```json ... ``` (or bare ``` ... ```) fences from an LLM response so it
+/// can be parsed as JSON. Tolerant of models that wrap JSON in markdown fences.
+fn strip_markdown_fences(content: &str) -> &str {
+    let trimmed = content.trim();
+    let inner = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .unwrap_or(trimmed);
+    if let Some(stripped) = inner.strip_suffix("```") {
+        stripped.trim()
+    } else {
+        content
+    }
+}
+
 pub async fn analyze_intent(
     llm_client: std::sync::Arc<dyn LlmClient>,
     user_message: &str,
@@ -755,21 +770,46 @@ pub async fn analyze_intent(
         "LLM call — sending relevant resources"
     );
 
-    // Step 4 + 5: Typed extraction via the Rig extractor. The extractor registers
-    // a `submit` tool whose schema is `IntentAnalysis`; the model calls
-    // `submit({...})` and we get a typed struct directly — no raw chat, no
-    // markdown-fence stripping, no manual JSON parse (the path that broke on
-    // empty responses with "EOF while parsing a value at line 1 column 0").
-    // Runs over the same LlmClient (Path A) via LlmCompletionClient.
-    let model_name = llm_client.model().to_string();
-    let client = agent_runtime::rig_adapter::LlmCompletionClient::new(llm_client);
-    let mut analysis: IntentAnalysis = client
-        .extractor::<IntentAnalysis>(&model_name)
-        .preamble(system_prompt)
-        .build()
-        .extract(&user_content)
+    // Step 4 + 5: Structured extraction with a `submit` tool (Rig's
+    // structured-output primitive, schema derived from IntentAnalysis) — but
+    // tolerant of models that return JSON content instead of calling the tool.
+    // This matters because the (user-customizable) intent-analysis prompt says
+    // "respond with ONLY a JSON object", and some providers don't reliably
+    // honor tool_choice. Prefer a `submit` call; fall back to parsing content.
+    let messages = vec![
+        ChatMessage::system(system_prompt.to_string()),
+        ChatMessage::user(user_content.clone()),
+    ];
+    let submit_tool = serde_json::json!([{
+        "type": "function",
+        "function": {
+            "name": "submit",
+            "description": "Submit the intent analysis structured data.",
+            "parameters": schemars::schema_for!(IntentAnalysis),
+        }
+    }]);
+    let response = llm_client
+        .chat(messages, Some(submit_tool))
         .await
-        .map_err(|e| format!("Intent analysis extraction failed: {}", e))?;
+        .map_err(|e| format!("Intent analysis LLM call failed: {}", e))?;
+
+    // Prefer a `submit` tool call; fall back to parsing the message content.
+    let from_submit = response
+        .tool_calls
+        .as_ref()
+        .and_then(|calls| calls.iter().find(|c| c.name == "submit"))
+        .and_then(|c| serde_json::from_value::<IntentAnalysis>(c.arguments.clone()).ok());
+    let mut analysis: IntentAnalysis = from_submit
+        .or_else(|| {
+            let content = strip_markdown_fences(&response.content);
+            serde_json::from_str::<IntentAnalysis>(content).ok()
+        })
+        .ok_or_else(|| {
+            format!(
+                "Intent analysis extraction failed: model returned neither a submit call nor parseable JSON (content len: {})",
+                response.content.len()
+            )
+        })?;
 
     // Step 6: Compute procedure recommendation and attach to the analysis.
     // This block is what `format_intent_injection` will render into the root
