@@ -945,9 +945,11 @@ impl InvokeBootstrap {
             }
         };
 
-        let retrying = agent_runtime::RetryingLlmClient::new(
-            std::sync::Arc::new(raw_client),
-            agent_runtime::RetryPolicy::default(),
+        let retrying: std::sync::Arc<dyn agent_runtime::LlmClient> = std::sync::Arc::new(
+            agent_runtime::RetryingLlmClient::new(
+                std::sync::Arc::new(raw_client),
+                agent_runtime::RetryPolicy::default(),
+            ),
         );
         let system_prompt =
             crate::middleware::intent_analysis::load_intent_analysis_prompt(&self.paths);
@@ -955,7 +957,7 @@ impl InvokeBootstrap {
         let tool_inventory = root_orchestrator_tool_names(self);
         let existing_wards = list_existing_wards(&self.paths);
         let mut analysis = match analyze_intent(
-            &retrying,
+            retrying.clone(),
             msg,
             fs.as_ref(),
             self.memory_recall.as_ref().map(|r| r.as_ref()),

@@ -96,6 +96,9 @@ lazy_static = "1.5"
 base64 = "0.22"
 once_cell = "1.21"
 indexmap = "2.14.0"
+# JSON Schema derivation for Rig extractors (typed structured output). Pinned to
+# the version rig 0.39.0 resolves, so the lockfile stays single-version.
+schemars = "1.2.1"
 gethostname = "0.5"
 
 # Networking

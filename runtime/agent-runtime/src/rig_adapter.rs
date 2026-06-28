@@ -13,6 +13,11 @@ pub use client::LlmCompletionClient;
 pub use config::{RigAgentConfig, RigConfigError, RigModelConfig};
 pub use tool::{RigToolAdapter, SharedToolContext};
 
+// Re-exported through the adapter boundary so gateway crates can use Rig
+// extractors (typed structured output) over LlmCompletionClient without
+// depending on Rig directly. Rig itself stays confined to this crate.
+pub use rig::client::CompletionClient;
+
 /// Rig package source selected for the migration.
 pub const RIG_REPOSITORY: &str = "https://github.com/0xplaygrounds/rig";
 

@@ -1,4 +1,5 @@
-use agent_runtime::{ChatMessage, LlmClient};
+use agent_runtime::{CompletionClient, LlmClient};
+use schemars::JsonSchema;
 use gateway_services::{AgentService, SharedVaultPaths, SkillService, SkillSource};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -9,7 +10,7 @@ use zero_stores::{MemoryFactStore, SkillIndexRow};
 // Types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IntentAnalysis {
     pub primary_intent: String,
     pub hidden_intents: Vec<String>,
@@ -19,6 +20,7 @@ pub struct IntentAnalysis {
     pub execution_strategy: ExecutionStrategy,
     /// Kept for backward compat with existing logs; no longer requested from LLM.
     #[serde(default)]
+    #[schemars(skip)]
     pub rewritten_prompt: String,
     /// Pre-rendered "## Recommended action: run_procedure" or legacy
     /// "## Proven Procedure Available" markdown block, computed in
@@ -28,10 +30,11 @@ pub struct IntentAnalysis {
     /// call `run_procedure`. `#[serde(default, skip_serializing)]` because
     /// it's populated post-deserialization and not requested from the LLM.
     #[serde(default, skip_serializing)]
+    #[schemars(skip)]
     pub procedure_recommendation: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WardRecommendation {
     /// "use_existing" or "create_new"
     pub action: String,
@@ -47,26 +50,27 @@ pub struct WardRecommendation {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ExecutionStrategy {
     pub approach: String,
     pub graph: Option<ExecutionGraph>,
     pub explanation: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ExecutionGraph {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
     /// Kept for backward compat with existing logs; no longer requested from LLM.
     /// Will be derived from nodes/edges in code when UI needs it.
     #[serde(default)]
+    #[schemars(skip)]
     pub mermaid: Option<String>,
     #[serde(default)]
     pub max_cycles: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GraphNode {
     pub id: String,
     pub task: String,
@@ -74,7 +78,7 @@ pub struct GraphNode {
     pub skills: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum GraphEdge {
     Conditional {
@@ -87,7 +91,7 @@ pub enum GraphEdge {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EdgeCondition {
     pub when: String,
     pub to: String,
@@ -631,7 +635,7 @@ async fn build_procedure_recommendation(
 // without reducing coupling.
 #[allow(clippy::too_many_arguments)]
 pub async fn analyze_intent(
-    llm_client: &dyn LlmClient,
+    llm_client: std::sync::Arc<dyn LlmClient>,
     user_message: &str,
     fact_store: &dyn MemoryFactStore,
     memory_recall: Option<&crate::recall::MemoryRecall>,
@@ -744,11 +748,6 @@ pub async fn analyze_intent(
         format!("{}\n\n{}", memory_context, user_template)
     };
 
-    let messages = vec![
-        ChatMessage::system(system_prompt.to_string()),
-        ChatMessage::user(user_content),
-    ];
-
     tracing::info!(
         skills = results.skills.len(),
         agents = results.agents.len(),
@@ -756,19 +755,21 @@ pub async fn analyze_intent(
         "LLM call — sending relevant resources"
     );
 
-    // Step 4: Call LLM
-    let response = llm_client
-        .chat(messages, None)
+    // Step 4 + 5: Typed extraction via the Rig extractor. The extractor registers
+    // a `submit` tool whose schema is `IntentAnalysis`; the model calls
+    // `submit({...})` and we get a typed struct directly — no raw chat, no
+    // markdown-fence stripping, no manual JSON parse (the path that broke on
+    // empty responses with "EOF while parsing a value at line 1 column 0").
+    // Runs over the same LlmClient (Path A) via LlmCompletionClient.
+    let model_name = llm_client.model().to_string();
+    let client = agent_runtime::rig_adapter::LlmCompletionClient::new(llm_client);
+    let mut analysis: IntentAnalysis = client
+        .extractor::<IntentAnalysis>(&model_name)
+        .preamble(system_prompt)
+        .build()
+        .extract(&user_content)
         .await
-        .map_err(|e| format!("Intent analysis LLM call failed: {}", e))?;
-
-    tracing::debug!(raw_response = %response.content, "LLM raw response");
-
-    let content = strip_markdown_fences(&response.content);
-
-    // Step 5: Parse response
-    let mut analysis: IntentAnalysis = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse intent analysis JSON: {}", e))?;
+        .map_err(|e| format!("Intent analysis extraction failed: {}", e))?;
 
     // Step 6: Compute procedure recommendation and attach to the analysis.
     // This block is what `format_intent_injection` will render into the root
@@ -1133,20 +1134,6 @@ async fn search_resources(fact_store: &dyn MemoryFactStore, user_message: &str) 
     }
 }
 
-/// Strip optional markdown code-fences that LLMs sometimes wrap around JSON.
-fn strip_markdown_fences(content: &str) -> String {
-    let trimmed = content.trim();
-    if trimmed.starts_with("```") {
-        let without_start = trimmed
-            .trim_start_matches("```json")
-            .trim_start_matches("```JSON")
-            .trim_start_matches("```");
-        if let Some(end) = without_start.rfind("```") {
-            return without_start[..end].trim().to_string();
-        }
-    }
-    trimmed.to_string()
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -1317,7 +1304,7 @@ mod tests {
     // MockLlmClient, MockFactStore & async tests for analyze_intent
     // -----------------------------------------------------------------------
 
-    use agent_runtime::{ChatResponse, LlmError, StreamCallback};
+    use agent_runtime::{ChatMessage, ChatResponse, LlmError, StreamCallback, ToolCall};
     use async_trait::async_trait;
 
     struct MockLlmClient {
@@ -1337,9 +1324,16 @@ mod tests {
             _messages: Vec<ChatMessage>,
             _tools: Option<Value>,
         ) -> Result<ChatResponse, LlmError> {
+            // The extractor works via a `submit` tool call; wrap the canned
+            // IntentAnalysis JSON (held in `response`) as the submit args.
+            let args: Value = serde_json::from_str(&self.response).unwrap_or(Value::Null);
             Ok(ChatResponse {
-                content: self.response.clone(),
-                tool_calls: None,
+                content: String::new(),
+                tool_calls: Some(vec![ToolCall {
+                    id: "c1".to_string(),
+                    name: "submit".to_string(),
+                    arguments: args,
+                }]),
                 reasoning: None,
                 usage: None,
             })
@@ -1898,7 +1892,7 @@ mod tests {
 
         let fact_store = MockFactStore;
         let result = analyze_intent(
-            &mock,
+            std::sync::Arc::new(mock),
             "Tell me about the weather forecast for tomorrow",
             &fact_store,
             None,
@@ -1941,7 +1935,7 @@ mod tests {
 
         let fact_store = MockFactStore;
         let result = analyze_intent(
-            &mock,
+            std::sync::Arc::new(mock),
             "Write code",
             &fact_store,
             None,
@@ -1971,7 +1965,7 @@ mod tests {
 
         let fact_store = MockFactStore;
         let result = analyze_intent(
-            &mock,
+            std::sync::Arc::new(mock),
             "Build me a web scraper for news articles",
             &fact_store,
             None,
@@ -1984,46 +1978,15 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            err.contains("Failed to parse intent analysis JSON"),
+            err.contains("Intent analysis extraction failed"),
             "unexpected error: {}",
             err
         );
     }
 
-    #[tokio::test]
-    async fn test_analyze_intent_strips_markdown_fences() {
-        let mock = MockLlmClient {
-            response: r#"```json
-{
-    "primary_intent": "greeting",
-    "hidden_intents": [],
-    "recommended_skills": [],
-    "recommended_agents": [],
-    "ward_recommendation": {"action": "create_new", "ward_name": "test-ward", "subdirectory": null, "reason": "test"},
-    "execution_strategy": {
-        "approach": "simple",
-        "explanation": "Simple greeting"
-    }
-}
-```"#
-            .to_string(),
-        };
-
-        let fact_store = MockFactStore;
-        let result = analyze_intent(
-            &mock,
-            "Analyze this dataset and create visualizations",
-            &fact_store,
-            None,
-            DEFAULT_INTENT_ANALYSIS_PROMPT,
-            &[],
-            None,
-            &[],
-        )
-        .await;
-        let analysis = result.expect("should strip fences and parse");
-        assert_eq!(analysis.primary_intent, "greeting");
-    }
+    // NOTE: `test_analyze_intent_strips_markdown_fences` was removed — markdown
+    // fence stripping is gone now that intent analysis uses the Rig extractor
+    // (tool-calling via `submit`), which never deals with fenced JSON.
 
     #[test]
     fn test_format_intent_injection() {

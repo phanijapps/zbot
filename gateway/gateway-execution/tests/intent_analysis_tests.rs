@@ -3,7 +3,7 @@
 //! These tests verify the full flow:
 //!   analyze_intent -> IntentAnalysis -> format_intent_injection
 
-use agent_runtime::{ChatMessage, ChatResponse, LlmClient, LlmError, StreamCallback};
+use agent_runtime::{ChatMessage, ChatResponse, LlmClient, LlmError, StreamCallback, ToolCall};
 use async_trait::async_trait;
 use gateway_execution::middleware::intent_analysis::{
     analyze_intent, format_intent_injection, DEFAULT_INTENT_ANALYSIS_PROMPT,
@@ -32,9 +32,16 @@ impl LlmClient for MockLlmClient {
         _messages: Vec<ChatMessage>,
         _tools: Option<Value>,
     ) -> Result<ChatResponse, LlmError> {
+        // The extractor works via a `submit` tool call; wrap the canned
+        // IntentAnalysis JSON (held in `response`) as the submit args.
+        let args: Value = serde_json::from_str(&self.response).unwrap_or(Value::Null);
         Ok(ChatResponse {
-            content: self.response.clone(),
-            tool_calls: None,
+            content: String::new(),
+            tool_calls: Some(vec![ToolCall {
+                id: "c1".to_string(),
+                name: "submit".to_string(),
+                arguments: args,
+            }]),
             reasoning: None,
             usage: None,
         })
@@ -45,12 +52,7 @@ impl LlmClient for MockLlmClient {
         _tools: Option<Value>,
         _callback: StreamCallback,
     ) -> Result<ChatResponse, LlmError> {
-        Ok(ChatResponse {
-            content: self.response.clone(),
-            tool_calls: None,
-            reasoning: None,
-            usage: None,
-        })
+        Err(LlmError::ApiError("chat_stream not used by extractor".into()))
     }
 }
 
@@ -172,7 +174,7 @@ async fn test_full_enrichment_flow() {
     let fact_store = MockFactStore;
 
     let analysis = analyze_intent(
-        &mock,
+        std::sync::Arc::new(mock),
         "Analyze my investment portfolio",
         &fact_store,
         None,
@@ -216,7 +218,7 @@ async fn test_graceful_degradation_on_llm_failure() {
     let fact_store = MockFactStore;
 
     let result = analyze_intent(
-        &client,
+        std::sync::Arc::new(client),
         "Create a dashboard for monitoring server metrics",
         &fact_store,
         None,
@@ -230,7 +232,7 @@ async fn test_graceful_degradation_on_llm_failure() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        err.contains("Intent analysis LLM call failed"),
+        err.contains("Intent analysis extraction failed"),
         "unexpected error message: {}",
         err
     );
@@ -245,7 +247,7 @@ async fn test_graceful_degradation_on_malformed_json() {
     let fact_store = MockFactStore;
 
     let result = analyze_intent(
-        &mock,
+        std::sync::Arc::new(mock),
         "Do something",
         &fact_store,
         None,
@@ -259,7 +261,7 @@ async fn test_graceful_degradation_on_malformed_json() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        err.contains("Failed to parse intent analysis JSON"),
+        err.contains("Intent analysis extraction failed"),
         "unexpected error message: {}",
         err
     );
@@ -292,7 +294,7 @@ async fn test_simple_request_no_graph() {
     let fact_store = MockFactStore;
 
     let analysis = analyze_intent(
-        &mock,
+        std::sync::Arc::new(mock),
         "What is the weather forecast for this weekend",
         &fact_store,
         None,
@@ -318,7 +320,7 @@ async fn test_skills_recommended() {
     let fact_store = MockFactStore;
 
     let analysis = analyze_intent(
-        &mock,
+        std::sync::Arc::new(mock),
         "Analyze my portfolio",
         &fact_store,
         None,
