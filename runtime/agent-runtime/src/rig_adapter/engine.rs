@@ -839,4 +839,70 @@ mod tests {
             Ok(serde_json::json!({"ok": true}))
         }
     }
+
+    // T8 / AC21: a child executor's delegation mode (initial state seeded by the
+    // gateway) reaches a bridged tool through the Rig path's SharedToolContext.
+    #[tokio::test]
+    async fn delegation_mode_flows_to_tool_through_rig_path() {
+        use std::collections::HashMap;
+
+        let seen = Arc::new(Mutex::new(None));
+        let tool = RigToolAdapter::boxed(Arc::new(ModeProbeTool { seen_mode: seen.clone() }));
+
+        // Gateway seeds the child's context with a delegation mode.
+        let mut state = HashMap::new();
+        state.insert(
+            "app:delegation_mode".to_string(),
+            serde_json::json!("ward_backed_build"),
+        );
+        let shared = Arc::new(crate::tools::context::ToolContext::full_with_state(
+            "child-agent".to_string(),
+            None,
+            Vec::new(),
+            state,
+        ));
+
+        let engine = RigAgentEngine::new(
+            sample_config(),
+            ToolCallModel::new("mode_probe"),
+            vec![tool],
+            shared,
+        );
+        let mut events = Vec::new();
+        engine
+            .execute_stream("hi", &[], &mut |event| events.push(event))
+            .await
+            .expect("run");
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            Some("ward_backed_build".to_string()),
+            "delegation mode must reach the tool through the Rig path"
+        );
+        assert!(events.iter().any(|e| matches!(e, StreamEvent::ToolResult { .. })));
+    }
+
+    /// Tool that records the `app:delegation_mode` it sees in its context.
+    struct ModeProbeTool {
+        seen_mode: Arc<Mutex<Option<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl zero_core::Tool for ModeProbeTool {
+        fn name(&self) -> &str {
+            "mode_probe"
+        }
+        fn description(&self) -> &str {
+            "reads delegation mode"
+        }
+        async fn execute(
+            &self,
+            ctx: Arc<dyn zero_core::ToolContext>,
+            _args: Value,
+        ) -> Result<Value, zero_core::error::ZeroError> {
+            let mode = zero_core::CallbackContext::get_state(&*ctx, "app:delegation_mode");
+            *self.seen_mode.lock().unwrap() = mode.and_then(|v| v.as_str().map(str::to_string));
+            Ok(serde_json::json!({"ok": true}))
+        }
+    }
 }
