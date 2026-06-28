@@ -29,14 +29,55 @@ use futures::channel::mpsc;
 use rig::completion::message::ToolResultContent;
 use rig::completion::{
     AssistantContent, CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
-    Message, ToolDefinition,
+    GetTokenUsage, Message, ToolDefinition, Usage,
 };
 use rig::one_or_many::OneOrMany;
 use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
 use serde_json::{json, Value};
 
-use crate::llm::{ChatMessage, ChatResponse, LlmClient, LlmError, StreamChunk, StreamCallback};
+use crate::llm::{ChatMessage, ChatResponse, LlmClient, LlmError, StreamChunk, StreamCallback, TokenUsage};
 use crate::types::ToolCall as AgentToolCall;
+
+/// Bridge response type carrying token usage from the AgentZero LlmClient.
+/// Implements [`GetTokenUsage`] so Rig's agent loop populates `CompletionCall.usage`.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct LlmCompletionResponse {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub total_tokens: u64,
+    #[serde(default)]
+    pub cached_input_tokens: u64,
+}
+
+impl LlmCompletionResponse {
+    fn from_usage(usage: Option<&TokenUsage>) -> Self {
+        usage
+            .map(|u| Self {
+                input_tokens: u.prompt_tokens as u64,
+                output_tokens: u.completion_tokens as u64,
+                total_tokens: u.total_tokens as u64,
+                cached_input_tokens: u.cached_prompt_tokens.unwrap_or(0) as u64,
+            })
+            .unwrap_or_default()
+    }
+}
+
+impl GetTokenUsage for LlmCompletionResponse {
+    fn token_usage(&self) -> Usage {
+        Usage {
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+            total_tokens: self.total_tokens,
+            cached_input_tokens: self.cached_input_tokens,
+            cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
+        }
+    }
+}
 
 /// Rig completion model backed by an AgentZero [`LlmClient`].
 #[derive(Clone)]
@@ -58,8 +99,8 @@ impl LlmCompletionModel {
 }
 
 impl CompletionModel for LlmCompletionModel {
-    type Response = ();
-    type StreamingResponse = ();
+    type Response = LlmCompletionResponse;
+    type StreamingResponse = LlmCompletionResponse;
     type Client = super::client::LlmCompletionClient;
 
     fn make(client: &Self::Client, model: impl Into<String>) -> Self {
@@ -88,8 +129,8 @@ impl CompletionModel for LlmCompletionModel {
 
         Ok(CompletionResponse {
             choice,
-            usage: rig::completion::Usage::new(),
-            raw_response: (),
+            usage: LlmCompletionResponse::from_usage(response.usage.as_ref()).token_usage(),
+            raw_response: LlmCompletionResponse::from_usage(response.usage.as_ref()),
             message_id: None,
         })
     }
@@ -102,7 +143,7 @@ impl CompletionModel for LlmCompletionModel {
         let tools = convert_tools(&request.tools);
         let client = self.client.clone();
 
-        let (tx, rx) = mpsc::unbounded::<Result<RawStreamingChoice<()>, CompletionError>>();
+        let (tx, rx) = mpsc::unbounded::<Result<RawStreamingChoice<LlmCompletionResponse>, CompletionError>>();
         let sender = tx.clone();
 
         // The callback is a synchronous Fn invoked from inside the async
@@ -129,7 +170,9 @@ impl CompletionModel for LlmCompletionModel {
                     for call in response.tool_calls.unwrap_or_default() {
                         let _ = tx.unbounded_send(Ok(raw_tool_call(call)));
                     }
-                    let _ = tx.unbounded_send(Ok(RawStreamingChoice::FinalResponse(())));
+                    let _ = tx.unbounded_send(Ok(RawStreamingChoice::FinalResponse(
+                        LlmCompletionResponse::from_usage(response.usage.as_ref()),
+                    )));
                 }
                 Err(error) => {
                     let _ = tx.unbounded_send(Err(llm_error_to_completion(error)));
@@ -278,7 +321,7 @@ fn nonempty_tool_calls(response: &ChatResponse) -> Option<Vec<AssistantContent>>
     )
 }
 
-fn raw_tool_call(call: AgentToolCall) -> RawStreamingChoice<()> {
+fn raw_tool_call(call: AgentToolCall) -> RawStreamingChoice<LlmCompletionResponse> {
     RawStreamingChoice::ToolCall(RawStreamingToolCall {
         id: call.id.clone(),
         // Rig correlates tool results by `internal_call_id`; reuse the
@@ -393,7 +436,7 @@ mod tests {
         while let Some(item) = s.next().await {
             match item.expect("chunk") {
                 StreamedAssistantContent::Text(t) => text.push_str(&t.text),
-                StreamedAssistantContent::Final(()) => saw_final = true,
+                StreamedAssistantContent::Final(_) => saw_final = true,
                 _ => {}
             }
         }

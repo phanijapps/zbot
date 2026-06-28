@@ -166,6 +166,8 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
             .await;
 
         let mut final_message = String::new();
+        let mut total_input: u64 = 0;
+        let mut total_output: u64 = 0;
         while let Some(item) = stream.next().await {
             if let Some(flag) = &stop_flag {
                 if flag.load(Ordering::Acquire) {
@@ -305,9 +307,16 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
                         }
                     }
                 },
-                MultiTurnStreamItem::CompletionCall(_) => {
-                    // TODO(T7): emit StreamEvent::TokenUpdate once usage is
-                    // threaded through the LlmCompletionModel bridge.
+                MultiTurnStreamItem::CompletionCall(cc) => {
+                    // Emit token usage (cumulative) so the gateway records
+                    // per-execution token counts via TokenUpdate → batch_writer.
+                    total_input += cc.usage.input_tokens;
+                    total_output += cc.usage.output_tokens;
+                    on_event(StreamEvent::TokenUpdate {
+                        timestamp: current_timestamp(),
+                        tokens_in: total_input,
+                        tokens_out: total_output,
+                    });
                 }
                 MultiTurnStreamItem::FinalResponse(_) => {
                     // Terminal; final_message accumulated from tokens above.
@@ -321,7 +330,7 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
         on_event(StreamEvent::Done {
             timestamp: current_timestamp(),
             final_message,
-            token_count: 0,
+            token_count: (total_input + total_output) as usize,
         });
         Ok(())
     }
