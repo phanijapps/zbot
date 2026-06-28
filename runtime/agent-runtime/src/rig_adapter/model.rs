@@ -1,0 +1,433 @@
+//! Rig `CompletionModel` adapter over AgentZero's existing `LlmClient`.
+//!
+//! This is the T7a provider bridge: Rig owns the agent loop, tool dispatch,
+//! hooks, and stream aggregation; AgentZero keeps owning the OpenAI-compatible
+//! HTTP transport (with its retry and rate-limiter wrappers). The adapter
+//! implements Rig's [`CompletionModel`] by driving
+//! [`LlmClient::chat_stream`](crate::llm::LlmClient::chat_stream) and bridging
+//! its callback-based chunks onto Rig's stream-of-`RawStreamingChoice`.
+//!
+//! ## Design choices
+//!
+//! - **Text streams token-by-token; tool calls arrive complete.** AgentZero's
+//!   `chat_stream` emits partial `ToolCall` argument fragments during streaming,
+//!   but the authoritative complete calls come back in the final
+//!   [`ChatResponse`]. Re-accumulating fragments would duplicate provider
+//!   parsing, so the bridge forwards `Token`/`Reasoning` chunks live and emits
+//!   complete `RawStreamingChoice::ToolCall`s once `chat_stream` resolves.
+//! - **`futures::mpsc::unbounded` carries chunks out of the callback.** The
+//!   callback is a synchronous `Fn` invoked from inside the async `chat_stream`,
+//!   where `tokio::mpsc::blocking_send` would panic; an unbounded channel sends
+//!   synchronously without blocking.
+//! - **Usage is not yet threaded** (response type is `()`). Token-usage
+//!   accounting through the Rig bridge is deferred; the legacy `AgentExecutor`
+//!   path still owns it until the cutover completes.
+
+use std::sync::Arc;
+
+use futures::channel::mpsc;
+use rig::completion::{
+    AssistantContent, CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
+    Message, ToolDefinition,
+};
+use rig::one_or_many::OneOrMany;
+use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
+use serde_json::{json, Value};
+
+use crate::llm::{ChatMessage, ChatResponse, LlmClient, LlmError, StreamChunk, StreamCallback};
+use crate::types::ToolCall as AgentToolCall;
+
+/// Rig completion model backed by an AgentZero [`LlmClient`].
+#[derive(Clone)]
+pub struct LlmCompletionModel {
+    client: Arc<dyn LlmClient>,
+    #[allow(dead_code)]
+    model_id: String,
+}
+
+impl LlmCompletionModel {
+    /// Wrap an AgentZero LLM client for use as a Rig completion model.
+    #[must_use]
+    pub fn new(client: Arc<dyn LlmClient>, model_id: impl Into<String>) -> Self {
+        Self {
+            client,
+            model_id: model_id.into(),
+        }
+    }
+}
+
+impl CompletionModel for LlmCompletionModel {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = Arc<dyn LlmClient>;
+
+    fn make(client: &Self::Client, model: impl Into<String>) -> Self {
+        Self::new(client.clone(), model)
+    }
+
+    async fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        let messages = convert_messages(&request)?;
+        let tools = convert_tools(&request.tools);
+        let response = self
+            .client
+            .chat(messages, tools)
+            .await
+            .map_err(llm_error_to_completion)?;
+
+        let choice = if let Some(calls) = nonempty_tool_calls(&response) {
+            OneOrMany::many(calls).map_err(|_| {
+                CompletionError::ProviderError("tool call list was empty".to_string())
+            })?
+        } else {
+            OneOrMany::one(AssistantContent::text(response.content))
+        };
+
+        Ok(CompletionResponse {
+            choice,
+            usage: rig::completion::Usage::new(),
+            raw_response: (),
+            message_id: None,
+        })
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        let messages = convert_messages(&request)?;
+        let tools = convert_tools(&request.tools);
+        let client = self.client.clone();
+
+        let (tx, rx) = mpsc::unbounded::<Result<RawStreamingChoice<()>, CompletionError>>();
+        let sender = tx.clone();
+
+        // The callback is a synchronous Fn invoked from inside the async
+        // `chat_stream`; it forwards text/reasoning chunks onto the channel.
+        let callback: StreamCallback = Box::new(move |chunk| match chunk {
+            StreamChunk::Token(text) => {
+                let _ = sender.unbounded_send(Ok(RawStreamingChoice::Message(text)));
+            }
+            StreamChunk::Reasoning(text) => {
+                let _ = sender.unbounded_send(Ok(RawStreamingChoice::ReasoningDelta {
+                    id: None,
+                    reasoning: text,
+                }));
+            }
+            // Partial tool-call fragments are ignored; complete calls are
+            // emitted from the resolved ChatResponse below.
+            StreamChunk::ToolCall(_) => {}
+        });
+
+        tokio::spawn(async move {
+            let result = client.chat_stream(messages, tools, callback).await;
+            match result {
+                Ok(response) => {
+                    for call in response.tool_calls.unwrap_or_default() {
+                        let _ = tx.unbounded_send(Ok(raw_tool_call(call)));
+                    }
+                    let _ = tx.unbounded_send(Ok(RawStreamingChoice::FinalResponse(())));
+                }
+                Err(error) => {
+                    let _ = tx.unbounded_send(Err(llm_error_to_completion(error)));
+                }
+            }
+            // Dropping `tx` ends the stream.
+        });
+
+        Ok(StreamingCompletionResponse::stream(Box::pin(rx)))
+    }
+}
+
+/// Convert a Rig [`CompletionRequest`] into AgentZero chat messages.
+///
+/// Preamble is already folded into a leading system message by Rig's request
+/// builder, so it needs no separate handling here. Tool calls and tool results
+/// in history are converted best-effort (text-first); full multimodal and
+/// tool-result fidelity is a follow-up.
+pub(crate) fn convert_messages(
+    request: &CompletionRequest,
+) -> Result<Vec<ChatMessage>, CompletionError> {
+    let mut out = Vec::new();
+    for message in request.chat_history.iter() {
+        match message {
+            Message::System { content } => out.push(ChatMessage::system(content.clone())),
+            Message::User { content } => {
+                let text: String = content
+                    .iter()
+                    .filter_map(|part| match part {
+                        rig::completion::message::UserContent::Text(t) => Some(t.text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                out.push(ChatMessage::user(text));
+            }
+            Message::Assistant { content, .. } => {
+                let text: String = content
+                    .iter()
+                    .filter_map(|part| match part {
+                        AssistantContent::Text(t) => Some(t.text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                // TODO(T7): carry assistant tool calls into ChatMessage.tool_calls.
+                out.push(ChatMessage::assistant(text));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Convert Rig tool definitions into the OpenAI-compatible `tools` payload the
+/// AgentZero client expects.
+pub(crate) fn convert_tools(tools: &[ToolDefinition]) -> Option<Value> {
+    if tools.is_empty() {
+        return None;
+    }
+    Some(Value::Array(
+        tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    }
+                })
+            })
+            .collect(),
+    ))
+}
+
+fn nonempty_tool_calls(response: &ChatResponse) -> Option<Vec<AssistantContent>> {
+    let calls = response.tool_calls.as_ref()?;
+    if calls.is_empty() {
+        return None;
+    }
+    Some(
+        calls
+            .iter()
+            .map(|call| {
+                AssistantContent::ToolCall(rig::completion::message::ToolCall::new(
+                    call.id.clone(),
+                    rig::completion::message::ToolFunction::new(
+                        call.name.clone(),
+                        call.arguments.clone(),
+                    ),
+                ))
+            })
+            .collect(),
+    )
+}
+
+fn raw_tool_call(call: AgentToolCall) -> RawStreamingChoice<()> {
+    RawStreamingChoice::ToolCall(RawStreamingToolCall {
+        id: call.id.clone(),
+        // Rig correlates tool results by `internal_call_id`; reuse the
+        // provider call id so the result round-trips match.
+        internal_call_id: call.id.clone(),
+        call_id: None,
+        name: call.name.clone(),
+        arguments: call.arguments.clone(),
+        signature: None,
+        additional_params: None,
+    })
+}
+
+fn llm_error_to_completion(error: LlmError) -> CompletionError {
+    CompletionError::ProviderError(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use futures::StreamExt;
+    use rig::streaming::StreamedAssistantContent;
+    use std::sync::Mutex;
+
+    /// Stub AgentZero LlmClient that streams canned text then resolves.
+    struct StubLlm {
+        chunks: Vec<String>,
+        final_text: String,
+        tool_calls: Vec<AgentToolCall>,
+        seen: Arc<Mutex<Vec<Vec<ChatMessage>>>>,
+    }
+
+    impl StubLlm {
+        fn text(chunks: &[&str]) -> (Arc<Self>, Arc<Mutex<Vec<Vec<ChatMessage>>>>) {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let stub = Arc::new(Self {
+                chunks: chunks.iter().map(|c| (*c).to_string()).collect(),
+                final_text: chunks.join(""),
+                tool_calls: Vec::new(),
+                seen: seen.clone(),
+            });
+            (stub, seen)
+        }
+    }
+
+    #[async_trait]
+    impl LlmClient for StubLlm {
+        fn model(&self) -> &str {
+            "stub"
+        }
+        fn provider(&self) -> &str {
+            "stub"
+        }
+        async fn chat(
+            &self,
+            messages: Vec<ChatMessage>,
+            _tools: Option<Value>,
+        ) -> Result<ChatResponse, LlmError> {
+            self.seen.lock().unwrap().push(messages);
+            Ok(ChatResponse {
+                content: self.final_text.clone(),
+                tool_calls: None,
+                reasoning: None,
+                usage: None,
+            })
+        }
+        async fn chat_stream(
+            &self,
+            messages: Vec<ChatMessage>,
+            _tools: Option<Value>,
+            callback: StreamCallback,
+        ) -> Result<ChatResponse, LlmError> {
+            self.seen.lock().unwrap().push(messages);
+            for chunk in &self.chunks {
+                callback(StreamChunk::Token(chunk.clone()));
+            }
+            Ok(ChatResponse {
+                content: self.final_text.clone(),
+                tool_calls: if self.tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(self.tool_calls.clone())
+                },
+                reasoning: None,
+                usage: None,
+            })
+        }
+    }
+
+    fn agentzero_tool_call(id: &str, name: &str, args: Value) -> AgentToolCall {
+        AgentToolCall {
+            id: id.to_string(),
+            name: name.to_string(),
+            arguments: args,
+        }
+    }
+
+    #[tokio::test]
+    async fn bridge_streams_text_tokens_then_final() {
+        let (stub, _seen) = StubLlm::text(&["hel", "lo"]);
+        let model = LlmCompletionModel::new(stub as Arc<dyn LlmClient>, "stub");
+
+        let stream = model
+            .stream(rig_request("hi"))
+            .await
+            .expect("stream should build");
+
+        let mut text = String::new();
+        let mut saw_final = false;
+        let mut s = stream;
+        while let Some(item) = s.next().await {
+            match item.expect("chunk") {
+                StreamedAssistantContent::Text(t) => text.push_str(&t.text),
+                StreamedAssistantContent::Final(()) => saw_final = true,
+                _ => {}
+            }
+        }
+        assert_eq!(text, "hello");
+        assert!(saw_final);
+    }
+
+    #[tokio::test]
+    async fn bridge_forwards_complete_tool_calls_after_text() {
+        let stub = Arc::new(StubLlm {
+            chunks: vec!["think".to_string()],
+            final_text: "think".to_string(),
+            tool_calls: vec![agentzero_tool_call(
+                "call_1",
+                "calculator",
+                json!({"x": 1}),
+            )],
+            seen: Arc::new(Mutex::new(Vec::new())),
+        });
+        let model = LlmCompletionModel::new(stub as Arc<dyn LlmClient>, "stub");
+
+        let stream = model.stream(rig_request("use tool")).await.expect("stream");
+        let mut tool_calls = Vec::new();
+        let mut s = stream;
+        while let Some(item) = s.next().await {
+            if let StreamedAssistantContent::ToolCall { tool_call, .. } = item.expect("chunk") {
+                tool_calls.push((
+                    tool_call.function.name,
+                    tool_call.function.arguments,
+                    tool_call.id,
+                ));
+            }
+        }
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].0, "calculator");
+        assert_eq!(tool_calls[0].1, json!({"x": 1}));
+        assert_eq!(tool_calls[0].2, "call_1");
+    }
+
+    #[tokio::test]
+    async fn bridge_surfaces_llm_errors_as_provider_error() {
+        struct ErrorLlm;
+        #[async_trait]
+        impl LlmClient for ErrorLlm {
+            fn model(&self) -> &str {
+                "err"
+            }
+            fn provider(&self) -> &str {
+                "err"
+            }
+            async fn chat(
+                &self,
+                _: Vec<ChatMessage>,
+                _: Option<Value>,
+            ) -> Result<ChatResponse, LlmError> {
+                Err(LlmError::ApiError("boom".to_string()))
+            }
+            async fn chat_stream(
+                &self,
+                _: Vec<ChatMessage>,
+                _: Option<Value>,
+                _: StreamCallback,
+            ) -> Result<ChatResponse, LlmError> {
+                Err(LlmError::ApiError("boom".to_string()))
+            }
+        }
+        let model = LlmCompletionModel::new(Arc::new(ErrorLlm) as Arc<dyn LlmClient>, "err");
+        let mut stream = model.stream(rig_request("hi")).await.expect("stream");
+        match stream.next().await.expect("an item") {
+            Err(CompletionError::ProviderError(msg)) => assert!(msg.contains("boom")),
+            other => panic!("expected provider error, got {other:?}"),
+        }
+    }
+
+    fn rig_request(prompt: &str) -> CompletionRequest {
+        CompletionRequest {
+            model: None,
+            preamble: None,
+            chat_history: OneOrMany::one(Message::user(prompt.to_string())),
+            documents: Vec::new(),
+            tools: Vec::new(),
+            temperature: None,
+            max_tokens: None,
+            tool_choice: None,
+            additional_params: None,
+            output_schema: None,
+        }
+    }
+}

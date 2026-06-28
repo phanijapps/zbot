@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod engine;
+pub mod model;
 pub mod tool;
 
 pub use config::{RigAgentConfig, RigConfigError, RigModelConfig};

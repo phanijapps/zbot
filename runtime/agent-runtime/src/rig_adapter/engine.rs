@@ -8,27 +8,32 @@
 //! (T11). It is generic over the model so a stub model can drive it in tests
 //! without the LLM-client bridge (which lands as a separate T7a step).
 //!
-//! ## Status (T7, in progress)
+//! ## Status (T7)
 //!
-//! Wired and unit-tested with a stub model: agent construction, multi-turn
-//! stream driving, cooperative stop, streaming-error mapping, text→`Token`
-//! streaming, tool-call-start surfacing, and finalization (`Done`).
+//! Wired and tested: agent construction, multi-turn stream driving via
+//! `stream_chat` (with `ChatMessage`→`Message` history), cooperative stop,
+//! streaming-error mapping, and mapping of `MultiTurnStreamItem` onto
+//! `StreamEvent` — text→`Token`, reasoning→`Reasoning`, tool-call→
+//! `ToolCallStart`, tool-result→`ToolResult`, terminal→`Done`. The
+//! `LlmCompletionModel` bridge (`model.rs`) lets Rig drive the real
+//! OpenAI-compatible `LlmClient`.
 //!
-//! Deliberately deferred to the rest of T7 (see TODOs below):
-//! - full history conversion (`ChatMessage` → rig `Message`) and `stream_chat`;
-//! - reasoning-text extraction (`Reasoning` → `StreamEvent::Reasoning`);
-//! - tool-result mapping (`StreamedUserContent::ToolResult` →
-//!   `StreamEvent::ToolResult`, including the raw/context distinction);
+//! Still deferred (see TODOs + T7c):
+//! - token-usage accounting through the bridge (`TokenUpdate`);
+//! - the raw/context/persisted/UI result distinction on `ToolResult`
+//!   (currently the model-visible text only) and tool-role history conversion;
 //! - `AgentHook` surfacing of before/after-tool and result-rewrite behavior
 //!   (T7c), which also restores per-call `function_call_id` fidelity.
+//! `tool_concurrency(1)` keeps the shared context race-free meanwhile.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use futures::StreamExt;
 use rig::agent::{Agent, AgentBuilder, MultiTurnStreamItem, StreamingError};
+use rig::completion::message::{ToolResult as RigToolResult, ToolResultContent};
 use rig::completion::{CompletionModel, Message};
-use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
+use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat};
 use rig::tool::{ToolCallExtensions, ToolDyn};
 
 use crate::engine::{AgentEngine, StreamEventSink};
@@ -97,25 +102,28 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
     async fn run(
         &self,
         user_message: &str,
-        _history: &[ChatMessage],
+        history: &[ChatMessage],
         stop_flag: Option<Arc<AtomicBool>>,
         on_event: &mut StreamEventSink<'_>,
     ) -> Result<(), ExecutorError> {
-        // TODO(T7): convert AgentZero ChatMessage history into rig Messages
-        // (role + Part contents) and switch to `stream_chat`. For now the
-        // current prompt is the only message carried.
         let prompt = Message::user(user_message.to_string());
+        let chat_history = convert_history(history);
 
         let mut extensions = ToolCallExtensions::new();
         extensions.insert::<SharedToolContext>(self.shared_context.clone());
 
         // Awaiting the `StreamingPromptRequest` IntoFuture yields the agent
         // stream directly: `Stream<Item = Result<MultiTurnStreamItem, _>>`.
+        // `tool_concurrency(1)` keeps tool execution sequential within a turn,
+        // matching the legacy executor and keeping the shared `ToolContext`'s
+        // per-call state (e.g. function_call_id) race-free until T7c moves it
+        // onto a proper per-call carrier.
         let mut stream = self
             .agent
-            .stream_prompt(prompt)
+            .stream_chat(prompt, chat_history)
             .tool_extensions(extensions)
             .multi_turn(self.max_turns)
+            .tool_concurrency(1)
             .await;
 
         let mut final_message = String::new();
@@ -150,22 +158,34 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
                             args: tool_call.function.arguments.clone(),
                         });
                     }
-                    StreamedAssistantContent::Reasoning(_) => {
-                        // TODO(T7): extract reasoning text once ReasoningContent
-                        // accessors are confirmed; emit StreamEvent::Reasoning.
+                    StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
+                        on_event(StreamEvent::Reasoning {
+                            timestamp: current_timestamp(),
+                            content: reasoning,
+                        });
                     }
                     other => {
-                        // Deltas / unknown low-level items; surfaced later via
-                        // the full mapping and AgentHook.
+                        // Deltas / complete-reasoning / unknown low-level items
+                        // are folded into the aggregated assistant message by
+                        // Rig; full surfacing rides on the AgentHook (T7c).
                         let _ = other;
                     }
                 },
-                MultiTurnStreamItem::StreamUserItem(_) => {
-                    // TODO(T7): map StreamedUserContent::ToolResult ->
-                    //   StreamEvent::ToolResult { result, context_result, .. }.
-                }
+                MultiTurnStreamItem::StreamUserItem(user_content) => match user_content {
+                    StreamedUserContent::ToolResult { tool_result, .. } => {
+                        on_event(StreamEvent::ToolResult {
+                            timestamp: current_timestamp(),
+                            tool_id: tool_result.id.clone(),
+                            result: tool_result_text(&tool_result),
+                            context_result: None,
+                            error: None,
+                            duration_ms: None,
+                        });
+                    }
+                },
                 MultiTurnStreamItem::CompletionCall(_) => {
-                    // TODO(T7): emit StreamEvent::TokenUpdate from Usage.
+                    // TODO(T7): emit StreamEvent::TokenUpdate once usage is
+                    // threaded through the LlmCompletionModel bridge.
                 }
                 MultiTurnStreamItem::FinalResponse(_) => {
                     // Terminal; final_message accumulated from tokens above.
@@ -183,6 +203,35 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
         });
         Ok(())
     }
+}
+
+/// Convert AgentZero chat history into rig `Message`s (text-first).
+///
+/// Tool-result (`role: "tool"`) and multimodal content are not yet converted;
+/// that fidelity rides on the remaining T7 work.
+fn convert_history(history: &[ChatMessage]) -> Vec<Message> {
+    history
+        .iter()
+        .filter_map(|message| match message.role.as_str() {
+            "user" => Some(Message::user(message.text_content())),
+            "assistant" => Some(Message::assistant(message.text_content())),
+            "system" => Some(Message::system(message.text_content())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Extract the model-visible text from a rig tool result.
+fn tool_result_text(tool_result: &RigToolResult) -> String {
+    tool_result
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            ToolResultContent::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[async_trait::async_trait]
@@ -411,5 +460,86 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, StreamEvent::Done { .. })));
+    }
+
+    // End-to-end: the real LlmCompletionModel bridge over a stub AgentZero
+    // LlmClient, driven through RigAgentEngine. Proves LlmClient -> Rig agent
+    // loop -> StreamEvent without any real network call.
+    #[tokio::test]
+    async fn llm_completion_model_drives_engine_end_to_end() {
+        use crate::llm::{ChatResponse, LlmClient, LlmError, StreamCallback, StreamChunk};
+        use crate::rig_adapter::model::LlmCompletionModel;
+        use serde_json::Value;
+
+        struct StubLlm {
+            chunks: Vec<String>,
+        }
+        #[async_trait::async_trait]
+        impl LlmClient for StubLlm {
+            fn model(&self) -> &str {
+                "stub"
+            }
+            fn provider(&self) -> &str {
+                "stub"
+            }
+            async fn chat(
+                &self,
+                _messages: Vec<ChatMessage>,
+                _tools: Option<Value>,
+            ) -> Result<ChatResponse, LlmError> {
+                Ok(ChatResponse {
+                    content: self.chunks.join(""),
+                    tool_calls: None,
+                    reasoning: None,
+                    usage: None,
+                })
+            }
+            async fn chat_stream(
+                &self,
+                _messages: Vec<ChatMessage>,
+                _tools: Option<Value>,
+                callback: StreamCallback,
+            ) -> Result<ChatResponse, LlmError> {
+                for chunk in &self.chunks {
+                    callback(StreamChunk::Token(chunk.clone()));
+                }
+                Ok(ChatResponse {
+                    content: self.chunks.join(""),
+                    tool_calls: None,
+                    reasoning: None,
+                    usage: None,
+                })
+            }
+        }
+
+        let client: Arc<dyn LlmClient> = Arc::new(StubLlm {
+            chunks: vec!["ri".to_string(), "gged".to_string()],
+        });
+        let model = LlmCompletionModel::new(client, "stub");
+        let engine = RigAgentEngine::new(
+            sample_config(),
+            model,
+            Vec::new(),
+            Arc::new(crate::tools::context::ToolContext::default()),
+        );
+
+        let mut events = Vec::new();
+        engine
+            .execute_stream("hi", &[], &mut |event| events.push(event))
+            .await
+            .expect("engine should complete");
+
+        let tokens: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::Token { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tokens, vec!["ri".to_string(), "gged".to_string()]);
+        assert!(events.iter().any(|e| matches!(
+            e,
+            StreamEvent::Done { final_message, .. } if final_message == "rigged"
+        )));
     }
 }
