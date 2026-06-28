@@ -40,6 +40,7 @@ use rig::completion::{CompletionModel, Message};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat};
 use rig::tool::{ToolCallExtensions, ToolDyn};
 use serde_json::Value;
+use zero_core::CallbackContext;
 
 use crate::engine::{AgentEngine, StreamEventSink};
 use crate::executor::{AfterToolCallHook, BeforeToolCallHook, ExecutorError, ToolCallDecision};
@@ -456,6 +457,17 @@ impl<M: CompletionModel> AgentHook<M> for RigExecutionHook<M> {
                             return Flow::skip(reason);
                         }
                     }
+                    Flow::cont()
+                }
+                StepEvent::CompletionCall { .. } => {
+                    // Mirror the legacy executor's per-turn reset of the
+                    // delegation claim. Without this, the first delegation's
+                    // `app:delegation_active=true` is never released on the Rig
+                    // path, so every subsequent `delegate_to_agent` is blocked
+                    // with "You already have an active delegation" and the root
+                    // deadlocks looping on queued delegations that never spawn.
+                    self.ctx
+                        .set_state("app:delegation_active".to_string(), Value::Bool(false));
                     Flow::cont()
                 }
                 StepEvent::ToolResult {
