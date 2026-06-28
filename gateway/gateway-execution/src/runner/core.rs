@@ -33,8 +33,8 @@ use crate::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationReq
 pub use crate::handle::ExecutionHandle;
 use crate::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
-    spawn_batch_writer_with_repo, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
-    ToolCallAccumulator,
+    select_engine, spawn_batch_writer_with_repo, AgentLoader, ExecutorBuilder,
+    ResponseAccumulator, StreamContext, ToolCallAccumulator,
 };
 use crate::lifecycle::{
     complete_execution, crash_execution, emit_agent_started, stop_execution, CompleteExecution,
@@ -1257,7 +1257,7 @@ pub(super) async fn invoke_continuation(args: ContinuationArgs<'_>) -> Result<()
         root_agent_id,
         session_ward_id.as_deref(),
     );
-    let executor: BoxedAgentEngine = Box::new(executor);
+    let executor: BoxedAgentEngine = select_engine(executor);
 
     // Build a focused continuation message with the plan injected if one exists.
     let continuation_message = build_continuation_message(

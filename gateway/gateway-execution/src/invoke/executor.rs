@@ -3,8 +3,8 @@
 //! Builds agent executors with all required components.
 
 use agent_runtime::{
-    AgentExecutor, ContextEditingConfig, ContextEditingMiddleware, DelegateTool, ExecutorConfig,
-    KeepPolicy, LlmClient, LlmConfig, McpManager, MiddlewarePipeline, OpenAiClient,
+    AgentExecutor, BoxedAgentEngine, ContextEditingConfig, ContextEditingMiddleware, DelegateTool,
+    ExecutorConfig, KeepPolicy, LlmClient, LlmConfig, McpManager, MiddlewarePipeline, OpenAiClient,
     PlanBlockMiddleware, RespondTool, RetryPolicy, RetryingLlmClient, RigAgentConfig,
     RigModelConfig, SummarizationConfig, SummarizationMiddleware, ToolCallDecision, ToolRegistry,
     TriggerCondition,
@@ -78,6 +78,104 @@ pub fn build_rig_agent_config(
         agent.instructions.clone(),
         RigModelConfig::from_llm_config(llm_config, context_window_tokens),
     )
+}
+
+/// Select the execution engine for a built [`AgentExecutor`].
+///
+/// Default: the legacy [`AgentExecutor`] (boxed). When `ZBOT_ENGINE=rig` is
+/// set, a [`RigAgentConfig`] was resolved, and **no MCP servers are
+/// configured**, the Rig-backed engine drives instead — same `LlmClient`, same
+/// actor-filtered tool inventory, same shared context, and the same
+/// before/after-tool hooks.
+///
+/// # Current limitations of the Rig path (live A/B validation only)
+/// - No middleware/compaction (long conversations can overflow the context
+///   window); live context control is not yet wired into the Rig loop.
+/// - No token-usage events.
+/// - No mid-session recall or steering hooks.
+/// - MCP is intentionally unsupported here (falls back to legacy) until the MCP
+///   lifecycle is bridged — `McpManager` has no `Drop` cleanup, so routing an
+///   MCP-bearing session through Rig would orphan the subprocesses.
+pub fn select_engine(executor: AgentExecutor) -> BoxedAgentEngine {
+    let use_rig = std::env::var("ZBOT_ENGINE")
+        .map(|v| v.eq_ignore_ascii_case("rig"))
+        .unwrap_or(false);
+    select_engine_with(executor, use_rig)
+}
+
+/// Pure routing core of [`select_engine`], testable without touching the
+/// process environment.
+fn select_engine_with(executor: AgentExecutor, use_rig: bool) -> BoxedAgentEngine {
+    use agent_runtime::rig_adapter::engine::RigAgentEngine;
+    use agent_runtime::rig_adapter::model::LlmCompletionModel;
+    use agent_runtime::rig_adapter::RigToolAdapter;
+    use agent_runtime::tools::ToolContext;
+
+    if !use_rig {
+        return Box::new(executor);
+    }
+
+    // Extract everything needed from the config up front so the immutable
+    // borrow ends before any branch moves `executor`.
+    let cfg = executor.config();
+    let mcps_empty = cfg.mcps.is_empty();
+    let agent_id = cfg.agent_id.clone();
+    let conversation_id = cfg.conversation_id.clone();
+    let skills = cfg.skills.clone();
+    let initial_state = cfg.initial_state.clone();
+    let model_name = cfg.model.clone();
+    let before = cfg.before_tool_call.clone();
+    let after = cfg.after_tool_call.clone();
+    let rig_config = cfg.rig_agent_config.clone();
+
+    if !mcps_empty {
+        tracing::warn!(
+            target: "rig_cutover",
+            agent = %agent_id,
+            "ZBOT_ENGINE=rig ignored: MCP servers are configured and the Rig path does not yet bridge the MCP lifecycle; using legacy executor"
+        );
+        return Box::new(executor);
+    }
+    let Some(rig_config) = rig_config else {
+        tracing::warn!(
+            target: "rig_cutover",
+            agent = %agent_id,
+            "ZBOT_ENGINE=rig ignored: no RigAgentConfig resolved; using legacy executor"
+        );
+        return Box::new(executor);
+    };
+
+    // `tools` is inferred as `Vec<Box<dyn ToolDyn>>` from `RigToolAdapter::boxed`
+    // — the Rig `ToolDyn` type is never named here (Rig stays confined to
+    // `agent-runtime`; gateway-execution does not depend on it).
+    let tools: Vec<_> = executor
+        .tool_registry()
+        .get_all()
+        .iter()
+        .cloned()
+        .map(RigToolAdapter::boxed)
+        .collect();
+    let shared = Arc::new(ToolContext::full_with_state(
+        agent_id.clone(),
+        conversation_id,
+        skills,
+        initial_state,
+    ));
+    let model = LlmCompletionModel::new(executor.llm_client(), model_name);
+
+    tracing::info!(
+        target: "rig_cutover",
+        agent = %agent_id,
+        "ZBOT_ENGINE=rig: driving RigAgentEngine"
+    );
+    Box::new(RigAgentEngine::with_tool_hooks(
+        rig_config,
+        model,
+        tools,
+        shared,
+        before,
+        after,
+    ))
 }
 
 fn resolve_effective_max_input(agent: &Agent, provider: &Provider) -> u64 {
@@ -1291,6 +1389,61 @@ mod tests {
                 "thinking": {"type": "enabled"}
             })))
         );
+    }
+
+    #[tokio::test]
+    async fn select_engine_defaults_to_legacy_and_routes_to_rig_when_enabled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = Arc::new(gateway_services::VaultPaths::new(dir.path().to_path_buf()));
+        paths.ensure_dirs_exist().expect("vault dirs");
+        let mcp_service = McpService::new(paths);
+        let mut agent = sample_agent();
+        agent.max_input_tokens = DEFAULT_MAX_INPUT_TOKENS;
+        agent.max_input_tokens_explicit = false;
+        agent.max_tokens = 4_096;
+        agent.mcps.clear(); // no MCP → clears the Rig path's MCP safety gate
+        agent.skills.clear();
+        let provider = sample_provider();
+
+        async fn build(
+            dir: &tempfile::TempDir,
+            agent: &Agent,
+            provider: &Provider,
+            mcp_service: &McpService,
+        ) -> AgentExecutor {
+            ExecutorBuilder::new(dir.path().to_path_buf(), ToolSettings::default())
+                .build(agent, provider, "c", "s", &[], &[], None, mcp_service, None)
+                .await
+                .expect("executor build")
+        }
+
+        // Default: legacy executor.
+        let legacy = build(&dir, &agent, &provider, &mcp_service).await;
+        assert_eq!(select_engine_with(legacy, false).engine_name(), "agent-executor");
+
+        // ZBOT_ENGINE=rig + no MCP + rig_agent_config present → RigAgentEngine.
+        let rig = build(&dir, &agent, &provider, &mcp_service).await;
+        assert_eq!(select_engine_with(rig, true).engine_name(), "rig");
+    }
+
+    #[tokio::test]
+    async fn select_engine_falls_back_when_mcp_configured() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = Arc::new(gateway_services::VaultPaths::new(dir.path().to_path_buf()));
+        paths.ensure_dirs_exist().expect("vault dirs");
+        let mcp_service = McpService::new(paths);
+        let mut agent = sample_agent();
+        agent.mcps = vec!["filesystem".to_string()]; // MCP configured → safety gate fires
+        agent.skills.clear();
+        let provider = sample_provider();
+
+        let executor = ExecutorBuilder::new(dir.path().to_path_buf(), ToolSettings::default())
+            .build(&agent, &provider, "c", "s", &[], &[], None, &mcp_service, None)
+            .await
+            .expect("executor build");
+
+        // Rig requested but MCP present → must fall back to legacy (no orphan).
+        assert_eq!(select_engine_with(executor, true).engine_name(), "agent-executor");
     }
 
     #[tokio::test]

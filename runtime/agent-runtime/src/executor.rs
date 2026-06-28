@@ -419,6 +419,19 @@ impl AgentExecutor {
         &self.config
     }
 
+    /// Clone of the LLM client (for the Rig cutover to wrap the same client).
+    #[must_use]
+    pub fn llm_client(&self) -> Arc<dyn LlmClient> {
+        self.llm_client.clone()
+    }
+
+    /// Borrow the tool registry (for the Rig cutover to bridge the same,
+    /// already actor-filtered tool inventory).
+    #[must_use]
+    pub fn tool_registry(&self) -> &Arc<ToolRegistry> {
+        &self.tool_registry
+    }
+
     /// Execute the agent with streaming
     ///
     /// The callback receives events as they occur during execution.

@@ -307,6 +307,10 @@ impl<M: CompletionModel + Send + Sync + 'static> AgentEngine for RigAgentEngine<
         .await?;
         Ok(accumulated)
     }
+
+    fn engine_name(&self) -> &'static str {
+        "rig"
+    }
 }
 
 /// Map a Rig streaming error onto the AgentZero executor error.

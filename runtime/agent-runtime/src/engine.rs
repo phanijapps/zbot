@@ -44,6 +44,12 @@ pub trait AgentEngine: Send + Sync {
         user_message: &str,
         history: &[ChatMessage],
     ) -> Result<String, ExecutorError>;
+
+    /// Identifier for which engine implementation is driving — for observability
+    /// and for testing the Rig cutover selector.
+    fn engine_name(&self) -> &'static str {
+        "agent-executor"
+    }
 }
 
 #[async_trait]
