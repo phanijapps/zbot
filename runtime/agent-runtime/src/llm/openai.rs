@@ -378,14 +378,14 @@ impl OpenAiClient {
                             .as_str()?
                             .to_string();
 
-                        // Parse arguments from string to Value for internal use
-                        let arguments = serde_json::from_str(&arguments_str)
-                            .or_else(|_| {
-                                recover_first_json(&arguments_str).ok_or_else(|| {
-                                    serde_json::from_str::<Value>("null").unwrap_err()
-                                })
-                            })
-                            .ok()?;
+                        // Parse arguments from string to Value for internal use.
+                        // If the arguments can't be parsed or recovered, skip
+                        // this tool call (return None) rather than panicking —
+                        // the previous `from_str("null").unwrap_err()` crashed
+                        // because `from_str("null")` is `Ok(Null)`.
+                        let arguments = serde_json::from_str::<Value>(&arguments_str)
+                            .ok()
+                            .or_else(|| recover_first_json(&arguments_str))?;
 
                         Some(ToolCall::new(id, name, arguments))
                     })
@@ -821,6 +821,30 @@ mod tests {
     // for upstream prompt caching: any per-call drift in the serialized
     // body invalidates the provider-side cache and is billed as a miss.
     // ------------------------------------------------------------------
+
+    #[test]
+    fn parse_tool_calls_skips_unparseable_arguments_without_panicking() {
+        // Regression: a tool call whose `arguments` can't be parsed as JSON
+        // must be skipped, not panic. Previously the recovery fallback did
+        // `serde_json::from_str::<Value>("null").unwrap_err()`, which panics
+        // because `from_str("null")` is `Ok(Null)`. This was latent until the
+        // Rig extractor (intent analysis) started sending a `submit` tool and
+        // the model occasionally returned malformed submit arguments.
+        let client = test_client();
+        let response = serde_json::json!({
+            "choices": [{"message": {"tool_calls": [
+                {"id": "call_bad", "function": {"name": "submit", "arguments": "not valid json {{"}},
+                {"id": "call_ok", "function": {"name": "submit", "arguments": "{\"x\":1}"}}
+            ]}}]
+        });
+        let calls = client.parse_tool_calls(&response);
+        assert_eq!(
+            calls.len(),
+            1,
+            "the malformed-args call must be skipped, the valid one kept: {calls:?}"
+        );
+        assert_eq!(calls[0].id, "call_ok");
+    }
 
     fn test_client() -> OpenAiClient {
         let config = LlmConfig::new(
