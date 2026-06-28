@@ -18,26 +18,31 @@
 //! `LlmCompletionModel` bridge (`model.rs`) lets Rig drive the real
 //! OpenAI-compatible `LlmClient`.
 //!
-//! Still deferred (see TODOs + T7c):
+//! Still deferred (see TODOs):
 //! - token-usage accounting through the bridge (`TokenUpdate`);
 //! - the raw/context/persisted/UI result distinction on `ToolResult`
-//!   (currently the model-visible text only) and tool-role history conversion;
-//! - `AgentHook` surfacing of before/after-tool and result-rewrite behavior
-//!   (T7c), which also restores per-call `function_call_id` fidelity.
-//! `tool_concurrency(1)` keeps the shared context race-free meanwhile.
+//!   (currently the model-visible text only) and tool-role history conversion.
+//!
+//! T7c is wired: [`RigExecutionHook`] surfaces `before_tool_call`
+//! (`Block`→`Flow::Skip`) and `after_tool_call` (→`Flow::RewriteResult`), and
+//! sets the per-call `function_call_id` from `StepEvent::ToolCall`.
+//! `tool_concurrency(1)` keeps the shared context race-free.
 
+use std::future::Future;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use futures::StreamExt;
-use rig::agent::{Agent, AgentBuilder, MultiTurnStreamItem, StreamingError};
+use rig::agent::{Agent, AgentBuilder, AgentHook, Flow, MultiTurnStreamItem, StepEvent, StreamingError};
 use rig::completion::message::{ToolResult as RigToolResult, ToolResultContent};
 use rig::completion::{CompletionModel, Message};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat};
 use rig::tool::{ToolCallExtensions, ToolDyn};
+use serde_json::Value;
 
 use crate::engine::{AgentEngine, StreamEventSink};
-use crate::executor::ExecutorError;
+use crate::executor::{AfterToolCallHook, BeforeToolCallHook, ExecutorError, ToolCallDecision};
 use crate::rig_adapter::{RigAgentConfig, SharedToolContext};
 use crate::types::events::current_timestamp;
 use crate::types::{ChatMessage, StreamEvent};
@@ -82,10 +87,43 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
         shared_context: SharedToolContext,
         max_turns: usize,
     ) -> Self {
+        Self::build(config, model, tools, shared_context, max_turns, None, None)
+    }
+
+    /// Same as [`Self::new`] with before/after-tool hooks (T7c). The hooks map
+    /// onto Rig's `Flow` model: `before_tool_call` returning [`ToolCallDecision::Block`]
+    /// becomes `Flow::Skip` (the reason is returned to the model as the tool
+    /// result), and `after_tool_call` returning a replacement becomes
+    /// `Flow::RewriteResult`. The hook also sets the per-call `function_call_id`
+    /// on the shared context from `StepEvent::ToolCall`, resolving the race
+    /// noted in the T6 review.
+    #[must_use]
+    pub fn with_tool_hooks(
+        config: RigAgentConfig,
+        model: M,
+        tools: Vec<Box<dyn ToolDyn>>,
+        shared_context: SharedToolContext,
+        before: Option<BeforeToolCallHook>,
+        after: Option<AfterToolCallHook>,
+    ) -> Self {
+        Self::build(config, model, tools, shared_context, DEFAULT_MAX_TURNS, before, after)
+    }
+
+    fn build(
+        config: RigAgentConfig,
+        model: M,
+        tools: Vec<Box<dyn ToolDyn>>,
+        shared_context: SharedToolContext,
+        max_turns: usize,
+        before: Option<BeforeToolCallHook>,
+        after: Option<AfterToolCallHook>,
+    ) -> Self {
+        let hook = RigExecutionHook::<M>::new(shared_context.clone(), before, after);
         let agent = AgentBuilder::new(model)
             .preamble(&config.instructions)
             .tools(tools)
             .default_max_turns(max_turns)
+            .add_hook(hook)
             .build();
         Self {
             config,
@@ -280,15 +318,94 @@ fn map_streaming_error(error: StreamingError) -> ExecutorError {
     ExecutorError::LlmError(error.to_string())
 }
 
+/// AgentZero execution hook bridging before/after-tool behavior onto Rig's
+/// [`Flow`] model and threading the per-call function-call id onto the shared
+/// [`ToolContext`].
+///
+/// - `StepEvent::ToolCall` sets `function_call_id` (resolving the T6 race —
+///   `tool_concurrency(1)` keeps the shared context safe), then applies
+///   `before_tool_call`; [`ToolCallDecision::Block`] becomes [`Flow::skip`].
+/// - `StepEvent::ToolResult` applies `after_tool_call`; a returned replacement
+///   becomes [`Flow::rewrite_result`] (model-visible only — the real result
+///   still ran).
+struct RigExecutionHook<M: CompletionModel> {
+    ctx: SharedToolContext,
+    before: Option<BeforeToolCallHook>,
+    after: Option<AfterToolCallHook>,
+    _marker: PhantomData<M>,
+}
+
+impl<M: CompletionModel> RigExecutionHook<M> {
+    fn new(
+        ctx: SharedToolContext,
+        before: Option<BeforeToolCallHook>,
+        after: Option<AfterToolCallHook>,
+    ) -> Self {
+        Self {
+            ctx,
+            before,
+            after,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<M: CompletionModel> AgentHook<M> for RigExecutionHook<M> {
+    fn on_event(&self, event: StepEvent<'_, M>) -> impl Future<Output = Flow> + Send {
+        async move {
+            match event {
+                StepEvent::ToolCall {
+                    tool_name,
+                    tool_call_id,
+                    args,
+                    ..
+                } => {
+                    if let Some(id) = tool_call_id.filter(|id: &&str| !id.is_empty()) {
+                        self.ctx.set_function_call_id((*id).to_string());
+                    }
+                    if let Some(before) = &self.before {
+                        let args_value = serde_json::from_str::<Value>(args).unwrap_or(Value::Null);
+                        if let ToolCallDecision::Block { reason } = before(tool_name, &args_value) {
+                            return Flow::skip(reason);
+                        }
+                    }
+                    Flow::cont()
+                }
+                StepEvent::ToolResult {
+                    tool_name,
+                    args,
+                    result,
+                    ..
+                } => {
+                    if let Some(after) = &self.after {
+                        let args_value = serde_json::from_str::<Value>(args).unwrap_or(Value::Null);
+                        // rig's ToolResult fires for completed calls; the legacy
+                        // executor calls after_tool_call with succeeded=true on
+                        // this path, so we match it.
+                        if let Some(replacement) = after(tool_name, &args_value, result, true) {
+                            return Flow::rewrite_result(replacement);
+                        }
+                    }
+                    Flow::cont()
+                }
+                _ => Flow::cont(),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rig_adapter::RigToolAdapter;
     use rig::completion::{
         AssistantContent, CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
         Usage,
     };
     use rig::one_or_many::OneOrMany;
     use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
+    use std::sync::atomic::AtomicU32;
+    use std::sync::Mutex;
 
     /// Stub completion model that streams a fixed sequence of text chunks then
     /// a final-response marker. `type Response = type StreamingResponse = ()`
@@ -541,5 +658,185 @@ mod tests {
             e,
             StreamEvent::Done { final_message, .. } if final_message == "rigged"
         )));
+    }
+
+    // T7c: the AgentHook surfaces before_tool_call (Block -> Skip, tool not run)
+    // and threads the per-call function_call_id.
+    #[tokio::test]
+    async fn before_tool_call_block_prevents_execution() {
+        use std::sync::atomic::AtomicU32;
+
+        let calls = Arc::new(AtomicU32::new(0));
+        let tool = RigToolAdapter::boxed(Arc::new(RecordingTool::new("recorder", &calls)));
+        let before: BeforeToolCallHook =
+            Arc::new(|_name, _args| ToolCallDecision::Block { reason: "blocked".to_string() });
+
+        let engine = RigAgentEngine::with_tool_hooks(
+            sample_config(),
+            ToolCallModel::new("recorder"),
+            vec![tool],
+            Arc::new(crate::tools::context::ToolContext::default()),
+            Some(before),
+            None,
+        );
+
+        let mut events = Vec::new();
+        engine
+            .execute_stream("hi", &[], &mut |event| events.push(event))
+            .await
+            .expect("run");
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "a blocked tool call must not execute"
+        );
+        assert!(events.iter().any(|e| matches!(e, StreamEvent::Done { .. })));
+    }
+
+    #[tokio::test]
+    async fn hook_runs_tool_and_sets_call_id_when_allowed() {
+        use std::sync::atomic::AtomicU32;
+
+        let calls = Arc::new(AtomicU32::new(0));
+        let fcid = Arc::new(Mutex::new(None));
+        let tool =
+            RigToolAdapter::boxed(Arc::new(RecordingTool::with_fcid("recorder", &calls, &fcid)));
+
+        let engine = RigAgentEngine::new(
+            sample_config(),
+            ToolCallModel::new("recorder"),
+            vec![tool],
+            Arc::new(crate::tools::context::ToolContext::default()),
+        );
+
+        let mut events = Vec::new();
+        engine
+            .execute_stream("hi", &[], &mut |event| events.push(event))
+            .await
+            .expect("run");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "allowed tool should execute once");
+        assert_eq!(
+            *fcid.lock().unwrap(),
+            Some("call_7".to_string()),
+            "function_call_id should be set from the ToolCall hook"
+        );
+        // The bridged tool result surfaces as a ToolResult event.
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::ToolResult { .. })));
+    }
+
+    /// Stub model that emits one tool call (to `tool_name`) on its first turn,
+    /// then plain text on subsequent turns. The `emitted` flag is shared across
+    /// clones so it survives Rig's model cloning between turns.
+    #[derive(Clone)]
+    struct ToolCallModel {
+        tool_name: String,
+        emitted: Arc<AtomicU32>,
+    }
+
+    impl ToolCallModel {
+        fn new(tool_name: &str) -> Self {
+            Self {
+                tool_name: tool_name.to_string(),
+                emitted: Arc::new(AtomicU32::new(0)),
+            }
+        }
+    }
+
+    impl CompletionModel for ToolCallModel {
+        type Response = ();
+        type StreamingResponse = ();
+        type Client = ();
+
+        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+            Self {
+                tool_name: String::new(),
+                emitted: Arc::new(AtomicU32::new(0)),
+            }
+        }
+
+        async fn completion(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+            Ok(CompletionResponse {
+                choice: OneOrMany::one(AssistantContent::text("ok")),
+                usage: Usage::new(),
+                raw_response: (),
+                message_id: None,
+            })
+        }
+
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+            use rig::streaming::RawStreamingToolCall;
+            // Emit the tool call only on the first turn.
+            let first_turn = self.emitted.fetch_or(1, Ordering::SeqCst) == 0;
+            let mut choices: Vec<Result<RawStreamingChoice<()>, CompletionError>> = Vec::new();
+            if first_turn {
+                choices.push(Ok(RawStreamingChoice::ToolCall(RawStreamingToolCall {
+                    id: "call_7".to_string(),
+                    internal_call_id: "call_7".to_string(),
+                    call_id: Some("call_7".to_string()),
+                    name: self.tool_name.clone(),
+                    arguments: serde_json::json!({}),
+                    signature: None,
+                    additional_params: None,
+                })));
+            }
+            choices.push(Ok(RawStreamingChoice::Message("done".to_string())));
+            choices.push(Ok(RawStreamingChoice::FinalResponse(())));
+            Ok(StreamingCompletionResponse::stream(Box::pin(
+                futures::stream::iter(choices),
+            )))
+        }
+    }
+
+    /// AgentZero tool that records whether it ran and the function_call_id it saw.
+    struct RecordingTool {
+        name: String,
+        calls: Arc<AtomicU32>,
+        fcid: Arc<Mutex<Option<String>>>,
+    }
+
+    impl RecordingTool {
+        fn new(name: &str, calls: &Arc<AtomicU32>) -> Self {
+            Self {
+                name: name.to_string(),
+                calls: calls.clone(),
+                fcid: Arc::new(Mutex::new(None)),
+            }
+        }
+        fn with_fcid(name: &str, calls: &Arc<AtomicU32>, fcid: &Arc<Mutex<Option<String>>>) -> Self {
+            Self {
+                name: name.to_string(),
+                calls: calls.clone(),
+                fcid: fcid.clone(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl zero_core::Tool for RecordingTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "records execution"
+        }
+        async fn execute(
+            &self,
+            ctx: Arc<dyn zero_core::ToolContext>,
+            _args: Value,
+        ) -> Result<Value, zero_core::error::ZeroError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            *self.fcid.lock().unwrap() = Some(ctx.function_call_id());
+            Ok(serde_json::json!({"ok": true}))
+        }
     }
 }
