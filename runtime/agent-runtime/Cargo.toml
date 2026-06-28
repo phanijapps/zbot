@@ -64,6 +64,9 @@ tiktoken-rs = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
+# JSON Schema derivation for Rig extractor tests (typed structured output).
+# Pinned to the version rig 0.39.0 resolves, so the lockfile stays single-version.
+schemars = "1.2.1"
 
 # NOTE: ADK-Rust evaluation completed - decision: DO NOT MIGRATE
 # See: tests/adk_evaluation.rs and adkrust-migration.md for details

@@ -3,11 +3,13 @@
 //! The implementation adapter lands in later migration tasks. This module owns
 //! the dependency pin so Rig stays confined to `agent-runtime`.
 
+pub mod client;
 pub mod config;
 pub mod engine;
 pub mod model;
 pub mod tool;
 
+pub use client::LlmCompletionClient;
 pub use config::{RigAgentConfig, RigConfigError, RigModelConfig};
 pub use tool::{RigToolAdapter, SharedToolContext};
 

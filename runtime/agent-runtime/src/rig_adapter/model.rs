@@ -60,10 +60,10 @@ impl LlmCompletionModel {
 impl CompletionModel for LlmCompletionModel {
     type Response = ();
     type StreamingResponse = ();
-    type Client = Arc<dyn LlmClient>;
+    type Client = super::client::LlmCompletionClient;
 
     fn make(client: &Self::Client, model: impl Into<String>) -> Self {
-        Self::new(client.clone(), model)
+        Self::new(client.client.clone(), model)
     }
 
     async fn completion(
