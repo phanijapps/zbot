@@ -15,7 +15,6 @@
       --accent: #276b5f;
       --accent-2: #b64926;
       --shadow: 0 12px 34px rgba(29, 35, 38, 0.12);
-      --framework: #2f6f9f;
       --runtime: #a84f29;
       --stores: #55752f;
       --services: #885a9a;
@@ -449,14 +448,14 @@
       { id: "zbot-stores", group: "stores", layer: 2, row: 2, kind: "lib", path: "stores/zbot-stores", description: "Persistence layer facade.", deps: ["knowledge-graph", "zbot-stores-domain", "zbot-stores-traits"] },
 
       { id: "agent-runtime", group: "runtime", layer: 3, row: 0, kind: "lib", path: "runtime/agent-runtime", description: "Agent execution framework with Rig-backed orchestration and MCP support.", deps: ["agent-primitives", "agent-tools", "zbot-stores-traits"] },
-      { id: "gateway-memory", group: "gateway", layer: 3, row: 1, kind: "lib", path: "gateway/gateway-memory", description: "Memory subsystem config and shared types.", deps: ["agent-runtime", "gateway-events", "knowledge-graph", "zbot-stores", "zbot-stores-domain", "zbot-stores-traits", "gateway-services", "zbot-stores-sqlite"] },
-      { id: "zbot-stores-sqlite", group: "stores", layer: 3, row: 2, kind: "lib", path: "stores/zbot-stores-sqlite", description: "SQLite-backed store implementation.", deps: ["agent-primitives", "agent-runtime", "api-logs", "execution-state", "gateway-services", "knowledge-graph", "zbot-stores", "zbot-stores-domain", "zbot-stores-traits", "zbot-stores-conformance"] },
+      { id: "gateway-memory", group: "gateway", layer: 3, row: 1, kind: "lib", path: "gateway/gateway-memory", description: "Memory subsystem config and shared types.", deps: ["agent-runtime", "gateway-events", "knowledge-graph", "zbot-stores", "zbot-stores-domain", "zbot-stores-traits"] },
+      { id: "zbot-stores-sqlite", group: "stores", layer: 3, row: 2, kind: "lib", path: "stores/zbot-stores-sqlite", description: "SQLite-backed store implementation.", deps: ["agent-primitives", "agent-runtime", "api-logs", "execution-state", "gateway-services", "knowledge-graph", "zbot-stores", "zbot-stores-domain", "zbot-stores-traits"] },
       { id: "zbot-stores-conformance", group: "stores", layer: 3, row: 3, kind: "lib", path: "stores/zbot-stores-conformance", description: "Persistence conformance test harness.", deps: ["knowledge-graph", "zbot-stores", "zbot-stores-traits"] },
 
       { id: "gateway-services", group: "gateway", layer: 4, row: 0, kind: "lib", path: "gateway/gateway-services", description: "Config services for the gateway.", deps: ["agent-primitives", "agent-runtime", "agent-tools", "discovery", "gateway-memory"] },
       { id: "gateway-templates", group: "gateway", layer: 4, row: 1, kind: "lib", path: "gateway/gateway-templates", description: "Embedded templates and prompt assembly.", deps: ["gateway-services"] },
       { id: "gateway-connectors", group: "gateway", layer: 4, row: 2, kind: "lib", path: "gateway/gateway-connectors", description: "External connector management.", deps: ["agent-primitives", "gateway-services"] },
-      { id: "gateway-bridge", group: "gateway", layer: 4, row: 3, kind: "lib", path: "gateway/gateway-bridge", description: "WebSocket bridge for worker connections.", deps: ["agent-primitives", "gateway-bus", "zbot-stores-sqlite", "zbot-stores-traits", "gateway-services"] },
+      { id: "gateway-bridge", group: "gateway", layer: 4, row: 3, kind: "lib", path: "gateway/gateway-bridge", description: "WebSocket bridge for worker connections.", deps: ["agent-primitives", "gateway-bus", "zbot-stores-sqlite", "zbot-stores-traits"] },
       { id: "gateway-cron", group: "gateway", layer: 4, row: 4, kind: "lib", path: "gateway/gateway-cron", description: "Cron job configuration and persistence.", deps: ["gateway-services"] },
 
       { id: "gateway-execution", group: "gateway", layer: 5, row: 0, kind: "lib", path: "gateway/gateway-execution", description: "Agent execution engine for the gateway.", deps: ["agent-primitives", "agent-runtime", "agent-tools", "api-logs", "execution-state", "gateway-bridge", "gateway-connectors", "gateway-events", "gateway-memory", "gateway-services", "gateway-templates", "knowledge-graph", "zbot-stores", "zbot-stores-domain", "zbot-stores-sqlite", "zbot-stores-traits"] },

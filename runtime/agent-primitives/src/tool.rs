@@ -67,25 +67,6 @@ pub trait Tool: Send + Sync {
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
 }
 
-/// Predicate function for filtering tools.
-pub type ToolPredicate = Box<dyn Fn(&dyn Tool) -> bool + Send + Sync>;
-
-/// Toolset trait for collections of tools.
-#[async_trait]
-pub trait Toolset: Send + Sync {
-    /// Get the toolset's name.
-    fn name(&self) -> &str;
-
-    /// Get all tools in this toolset.
-    async fn tools(&self) -> Result<Vec<Arc<dyn Tool>>>;
-
-    /// Get tools filtered by a predicate.
-    async fn filtered_tools(&self, predicate: ToolPredicate) -> Result<Vec<Arc<dyn Tool>>> {
-        let all = self.tools().await?;
-        Ok(all.into_iter().filter(|t| predicate(t.as_ref())).collect())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

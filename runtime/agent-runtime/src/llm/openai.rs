@@ -226,7 +226,12 @@ impl OpenAiClient {
     /// References:
     ///   - OpenAI prompt caching: <https://platform.openai.com/docs/guides/prompt-caching>
     ///   - GLM / z.ai cache fields: `prompt_cache_hit_tokens` in response usage
-    fn build_request_body(&self, messages: Vec<ChatMessage>, tools: Option<Value>) -> Value {
+    fn build_request_body(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Option<Value>,
+        output_schema: Option<Value>,
+    ) -> Value {
         let messages = Self::rehydrate_messages(messages);
         let mut body_obj = json!({
             "model": self.config.model,
@@ -240,6 +245,22 @@ impl OpenAiClient {
         if let Some(tools_val) = &tools {
             if let Some(body_map) = body_obj.as_object_mut() {
                 body_map.insert("tools".to_string(), tools_val.clone());
+            }
+        }
+
+        if let Some(schema) = output_schema {
+            if let Some(body_map) = body_obj.as_object_mut() {
+                body_map.insert(
+                    "response_format".to_string(),
+                    json!({
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "structured_output",
+                            "strict": true,
+                            "schema": schema,
+                        }
+                    }),
+                );
             }
         }
 
@@ -413,11 +434,34 @@ impl LlmClient for OpenAiClient {
     ) -> Result<ChatResponse, LlmError> {
         tracing::info!("Starting chat with {} messages", messages.len());
 
-        let body = self.build_request_body(messages, tools);
+        let body = self.build_request_body(messages, tools, None);
         let response = self.make_request(body).await?;
         let parsed = self.parse_response(response);
 
         tracing::info!("Chat completed, response length: {}", parsed.content.len());
+        Ok(parsed)
+    }
+
+    async fn chat_with_schema(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Option<Value>,
+        output_schema: Option<Value>,
+    ) -> Result<ChatResponse, LlmError> {
+        tracing::info!(
+            has_schema = output_schema.is_some(),
+            "Starting structured chat with {} messages",
+            messages.len()
+        );
+
+        let body = self.build_request_body(messages, tools, output_schema);
+        let response = self.make_request(body).await?;
+        let parsed = self.parse_response(response);
+
+        tracing::info!(
+            "Structured chat completed, response length: {}",
+            parsed.content.len()
+        );
         Ok(parsed)
     }
 
@@ -435,7 +479,7 @@ impl LlmClient for OpenAiClient {
 
         let url = format!("{}/chat/completions", self.config.base_url);
 
-        let mut body_obj = self.build_request_body(messages, tools);
+        let mut body_obj = self.build_request_body(messages, tools, None);
         // Enable streaming with usage reporting
         if let Some(obj) = body_obj.as_object_mut() {
             obj.insert("stream".to_string(), json!(true));
@@ -508,7 +552,7 @@ impl LlmClient for OpenAiClient {
                     // If we haven't emitted anything yet, retry as non-streaming
                     if full_content.is_empty() && tool_accumulators.is_empty() {
                         tracing::info!("No content emitted yet, retrying as non-streaming request");
-                        let body = self.build_request_body(fallback_messages, fallback_tools);
+                        let body = self.build_request_body(fallback_messages, fallback_tools, None);
                         let response = self.make_request(body).await?;
                         let parsed = self.parse_response(response);
                         // Emit the full response as a single token
@@ -885,8 +929,8 @@ mod tests {
     #[test]
     fn request_body_is_byte_stable_across_identical_calls() {
         let client = test_client();
-        let a = client.build_request_body(fixture_messages(), Some(fixture_tools()));
-        let b = client.build_request_body(fixture_messages(), Some(fixture_tools()));
+        let a = client.build_request_body(fixture_messages(), Some(fixture_tools()), None);
+        let b = client.build_request_body(fixture_messages(), Some(fixture_tools()), None);
 
         let a_bytes = serde_json::to_vec(&a).expect("serialize a");
         let b_bytes = serde_json::to_vec(&b).expect("serialize b");
@@ -902,12 +946,41 @@ mod tests {
     fn request_body_is_byte_stable_without_tools() {
         // Absence of `tools` must not introduce drift either.
         let client = test_client();
-        let a = client.build_request_body(fixture_messages(), None);
-        let b = client.build_request_body(fixture_messages(), None);
+        let a = client.build_request_body(fixture_messages(), None, None);
+        let b = client.build_request_body(fixture_messages(), None, None);
 
         let a_bytes = serde_json::to_vec(&a).expect("serialize a");
         let b_bytes = serde_json::to_vec(&b).expect("serialize b");
         assert_eq!(a_bytes, b_bytes);
+    }
+
+    #[test]
+    fn request_body_includes_json_schema_response_format() {
+        let client = test_client();
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "intent": { "type": "string" }
+            },
+            "required": ["intent"]
+        });
+
+        let body = client.build_request_body(fixture_messages(), None, Some(schema.clone()));
+
+        assert_eq!(
+            body.pointer("/response_format/type")
+                .and_then(Value::as_str),
+            Some("json_schema")
+        );
+        assert_eq!(
+            body.pointer("/response_format/json_schema/strict")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            body.pointer("/response_format/json_schema/schema"),
+            Some(&schema)
+        );
     }
 
     #[test]

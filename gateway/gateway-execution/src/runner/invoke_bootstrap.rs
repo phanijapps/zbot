@@ -34,7 +34,7 @@ use crate::invoke::{
 };
 use crate::lifecycle::{emit_agent_started, get_or_create_session, start_execution};
 use crate::middleware::intent_analysis::{
-    analyze_intent, format_intent_injection, index_resources,
+    analyze_intent, format_intent_injection, index_resources, WardAction,
 };
 
 // ============================================================================
@@ -347,10 +347,21 @@ impl InvokeBootstrap {
         let execution_id = session_setup.execution_id;
         let ward_id = session_setup.ward_id;
 
-        // If session has a persisted mode, use it (overrides invoke mode)
+        // If session has a persisted mode, use it (overrides invoke mode).
+        // Otherwise persist the effective invoke mode so replay/monitoring can
+        // explain why intent analysis did or did not run for this session.
         if let Ok(Some(session)) = self.state_service.get_session(&session_id) {
             if let Some(ref persisted_mode) = session.mode {
                 config.mode = Some(persisted_mode.clone());
+            } else if let Some(ref mode) = config.mode {
+                if let Err(e) = self.state_service.set_session_mode(&session_id, mode) {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        mode = %mode,
+                        "Failed to persist session mode: {}",
+                        e
+                    );
+                }
             }
         }
 
@@ -937,6 +948,7 @@ impl InvokeBootstrap {
                 self.emit_intent_fallback_complete(
                     session_id,
                     execution_id,
+                    &config.agent_id,
                     "LLM client creation failed — using scratch ward",
                     "Intent analysis unavailable (no LLM client)",
                 )
@@ -973,6 +985,7 @@ impl InvokeBootstrap {
                 self.emit_intent_fallback_complete(
                     session_id,
                     execution_id,
+                    &config.agent_id,
                     "Intent analysis failed — using scratch ward",
                     "Intent analysis unavailable",
                 )
@@ -1003,19 +1016,19 @@ impl InvokeBootstrap {
             )
             .await;
         let authoritative_action = if ward_graduated {
-            "use_existing"
+            WardAction::UseExisting
         } else {
-            "create_new"
+            WardAction::CreateNew
         };
         if analysis.ward_recommendation.action != authoritative_action {
             tracing::info!(
                 ward = %analysis.ward_recommendation.ward_name,
                 classifier_action = %analysis.ward_recommendation.action,
-                corrected = authoritative_action,
+                corrected = %authoritative_action,
                 graduated = ward_graduated,
                 "Correcting ward action from filesystem ground truth"
             );
-            analysis.ward_recommendation.action = authoritative_action.to_string();
+            analysis.ward_recommendation.action = authoritative_action;
         }
 
         tracing::info!(
@@ -1091,13 +1104,48 @@ impl InvokeBootstrap {
 
     /// Emit the fallback `IntentAnalysisComplete` event used when the LLM
     /// client can't be built or the analysis call fails.
+    ///
+    /// Also records a degraded Intent-category execution_log so the session
+    /// never appears as if intent analysis was skipped. Without this, a model
+    /// that returns truncated/non-JSON (e.g. glm-5.2 intermittently cutting
+    /// off mid-string) leaves no intent log even though analysis ran and
+    /// deliberately fell back to a scratch ward — which looked identical to
+    /// "intent analysis off" on the /research info icon and in replay.
     async fn emit_intent_fallback_complete(
         &self,
         session_id: &str,
         execution_id: &str,
+        agent_id: &str,
         ward_reason: &str,
         strategy_explanation: &str,
     ) {
+        // Metadata mirrors the fallback event so session-state derivation
+        // (title/ward) treats the degraded result consistently with a real one.
+        let metadata = serde_json::json!({
+            "primary_intent": "general",
+            "fallback": true,
+            "ward_recommendation": {
+                "action": "create_new",
+                "ward_name": "scratch",
+                "subdirectory": null,
+                "reason": ward_reason,
+            },
+            "execution_strategy": {
+                "approach": "simple",
+                "explanation": strategy_explanation,
+            },
+        });
+        let log_entry = api_logs::ExecutionLog::new(
+            execution_id,
+            session_id,
+            agent_id,
+            api_logs::LogLevel::Warn,
+            api_logs::LogCategory::Intent,
+            format!("Intent analysis unavailable: {strategy_explanation}"),
+        )
+        .with_metadata(metadata);
+        let _ = self.log_service.log(log_entry);
+
         self.event_bus
             .publish(GatewayEvent::IntentAnalysisComplete {
                 session_id: session_id.to_string(),
@@ -1320,5 +1368,71 @@ mod tests {
             event_bus: Arc::new(EventBus::new()),
             handles,
         };
+    }
+
+    /// Regression: when intent analysis can't produce a result (e.g. the
+    /// model returned truncated JSON that fails to parse), the fallback
+    /// path must still record an Intent-category execution_log. Otherwise
+    /// the DB shows no intent log and the session looks like intent
+    /// analysis never ran — the exact symptom behind the missing
+    /// /research intent info icon.
+    #[tokio::test]
+    async fn intent_fallback_writes_intent_log() {
+        #[allow(deprecated)]
+        let dir = tempfile::tempdir().unwrap();
+        #[allow(deprecated)]
+        let path = dir.into_path();
+        let paths = Arc::new(VaultPaths::new(path));
+        let db = Arc::new(DatabaseManager::new(paths.clone()).unwrap());
+        let handles: Arc<RwLock<HashMap<String, ExecutionHandle>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        let log_service = Arc::new(LogService::new(db.clone()));
+
+        let bootstrap = InvokeBootstrap {
+            agent_service: Arc::new(gateway_services::AgentService::new(paths.agents_dir())),
+            provider_service: Arc::new(gateway_services::ProviderService::new(paths.clone())),
+            mcp_service: Arc::new(gateway_services::McpService::new(paths.clone())),
+            skill_service: Arc::new(gateway_services::SkillService::new(paths.skills_dir())),
+            state_service: Arc::new(StateService::new(db.clone())),
+            log_service: log_service.clone(),
+            conversation_repo: Arc::new(ConversationRepository::new(db)),
+            paths,
+            memory_store: None,
+            memory_recall: None,
+            model_registry: Arc::new(ArcSwapOption::empty()),
+            rate_limiters: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            connector_registry: None,
+            bridge_registry: None,
+            bridge_outbox: None,
+            kg_store: None,
+            ingestion_adapter: None,
+            goal_adapter: None,
+            steering_registry: None,
+            agent_result_bus: None,
+            procedure_store: None,
+            procedure_recommendation_cfg: gateway_memory::ProcedureRecommendationConfig::default(),
+            ward_usage: Arc::new(gateway_services::WardUsage::new(
+                std::env::temp_dir().join("zbot-test-wards-fallback"),
+            )),
+            event_bus: Arc::new(EventBus::new()),
+            handles,
+        };
+
+        let execution_id = "exec-fallback-test";
+        bootstrap
+            .emit_intent_fallback_complete(
+                "sess-test",
+                execution_id,
+                "root",
+                "model returned incomplete JSON",
+                "Intent analysis unavailable",
+            )
+            .await;
+
+        assert!(
+            bootstrap.log_service.has_intent_log(execution_id),
+            "fallback path must record an Intent-category log so the session \
+             never appears as if intent analysis was skipped"
+        );
     }
 }

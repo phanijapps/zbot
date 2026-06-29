@@ -2,7 +2,7 @@
 
 SQLite-backed persistence for AgentZero. The single production backend implementing all `zbot-stores` traits plus the connection pool, schema management, and the vector index.
 
-This crate absorbed `gateway-database` in Slice D8 (2026-04). There is now one SQLite crate.
+There is one SQLite crate for zbot persistence.
 
 ## Key Exports
 
@@ -17,7 +17,7 @@ pub use knowledge_graph::SqliteKgStore;
 pub use memory_fact_store::GatewayMemoryFactStore;
 pub use memory_fact_store::GatewayMemoryFactStore as SqliteMemoryStore;
 
-// Conversation / execution repositories (formerly gateway-database)
+// Conversation / execution repositories
 pub use repository::{ConversationRepository, Message};
 pub use episode_repository::{EpisodeRepository, SessionEpisode};
 pub use memory_repository::{MemoryRepository, MemoryFact, ScoredFact};

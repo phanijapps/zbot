@@ -5,8 +5,7 @@
 //! connection pool, schema management, and per-table repositories that the
 //! gateway uses.
 //!
-//! Slice D8 (2026-04) merged the historic `gateway-database` crate into
-//! this one — there is now a single SQLite crate. See
+//! There is one SQLite crate for zbot persistence. See
 //! `memory-bank/architecture.md` for the broader persistence story.
 
 // -- KnowledgeGraphStore impl + supporting glue (originally D6/D6b) -----------
@@ -16,7 +15,7 @@ pub mod kg;
 mod knowledge_graph;
 pub mod reindex;
 
-// -- Per-table stores (originally gateway-database) ---------------------------
+// -- Per-table stores ---------------------------------------------------------
 pub mod auxiliary_stores;
 pub mod belief_contradiction_store;
 pub mod belief_store;
@@ -47,7 +46,7 @@ pub mod wiki_store;
 // -- Public surface (D6b symbols) --------------------------------------------
 pub use knowledge_graph::SqliteKgStore;
 
-// -- Public surface (originally gateway-database lib.rs) ----------------------
+// -- Public surface -----------------------------------------------------------
 pub use auxiliary_stores::{GatewayDistillationStore, GatewayGoalStore, GatewayRecallLogStore};
 pub use belief_contradiction_store::SqliteBeliefContradictionStore;
 pub use belief_store::SqliteBeliefStore;

@@ -2,6 +2,8 @@ TOOLING & SKILLS
 
 ## Core Tools
 
+Only call tools that are present in your tool set — anything listed here that you don't have is reference for what teammate agents can do.
+
 ### shell
 Run commands, install packages, execute scripts, read output.
 - Use `grep` to search files. Do NOT `cat` entire files.
@@ -50,6 +52,9 @@ Search file contents by regex.
 - `handoff_to_agent(execution_id, message)` — send a concise one-way note to a
   running child agent. This is not a reply channel; use `wait_agent` for
   completed results.
+- `wait_agent(execution_id)` — block for a fire-and-forget delegated agent's
+  completed result. Do not call this after `delegate_to_agent` with
+  `wait_for_result: true`; that path auto-resumes you with the result.
 
 ### Discovering agents and skills — recall first, tool as fallback
 

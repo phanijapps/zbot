@@ -35,9 +35,11 @@ impl Tool for WaitAgentTool {
 
     fn description(&self) -> &'static str {
         "Block until a delegated subagent completes and return its result. \
-         Pass the execution_id returned by delegate_to_agent. \
+         Use this for fire-and-forget delegations; do not call it after \
+         delegate_to_agent with wait_for_result=true, because that path auto-resumes \
+         with the result. Pass the execution_id returned by delegate_to_agent. \
          Returns the agent's respond() text. Times out after timeout_secs (default 300). \
-         Use this to coordinate sequential steps: delegate, wait, use result, delegate next."
+         Use this to coordinate fire-and-forget steps: delegate, wait, use result, delegate next."
     }
 
     fn parameters_schema(&self) -> Option<Value> {

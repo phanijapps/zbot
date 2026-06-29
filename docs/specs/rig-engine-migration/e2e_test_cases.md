@@ -141,7 +141,7 @@ These scenarios were verified against real provider sessions (Z.AI glm-5-turbo /
 |---|---|---|
 | DF-01 | Full history conversion (`ChatMessage` → rig `Message`) with tool-role messages | `convert_history` in engine.rs handles text-only (user/assistant/system); tool-result messages are not yet converted. |
 | DF-02 | `raw/context_result` distinction on `ToolResult` | Currently the model-visible text only; the raw/context/persisted/UI distinction from the legacy executor is not applied. |
-| DF-03 | `zero-stores*` rehome (T12) | Persistence crate rename; preserves schema/traits. Not started. |
-| DF-04 | `zero-*` framework retirement (T13) | Requires migrating the `zero-core` type surface (`Tool`, `ToolContext`, `EventActions`, `Part`) into `agent-runtime` or Rig-native types. Large. |
-| DF-05 | Architecture docs update (T14) | Active docs still describe the old engine as current; this document is the first step. |
-| DF-06 | Fresh-DB manual smoke (T15) | User creates a new database and runs chat + tool + delegation + continuation + reload. Not yet done. |
+
+## 11. Final Smoke
+
+T15 is accepted complete by user direction on 2026-06-28. Manual fresh-DB validation is no longer a blocker for this migration spec; remaining fidelity items stay tracked above as explicit Rig-path follow-ups.

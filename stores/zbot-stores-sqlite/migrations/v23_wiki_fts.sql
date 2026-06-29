@@ -1,4 +1,4 @@
--- gateway/gateway-database/migrations/v23_wiki_fts.sql
+-- stores/zbot-stores-sqlite/migrations/v23_wiki_fts.sql
 CREATE VIRTUAL TABLE IF NOT EXISTS ward_wiki_articles_fts USING fts5(
     title,
     content,

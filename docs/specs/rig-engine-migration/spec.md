@@ -1,6 +1,6 @@
 # Spec: Rig Engine Migration
 
-- **Status:** Implementing (T1–T11 complete; T12–T15 cleanup pending)
+- **Status:** Done (T1–T16 complete; fidelity follow-ups tracked in E2E notes)
 - **Owner:** phanijapps
 - **Plan:** [`plan.md`](plan.md)
 - **E2E Test Cases:** [`e2e_test_cases.md`](e2e_test_cases.md)
@@ -89,7 +89,8 @@ before proceeding; *Never do* is a hard rule, even under time pressure.
 - [ ] No active production Rust crate, workspace package, Cargo dependency, import, or re-export remains for these exact legacy names: `zero-core`, `zero-agent`, `zero-llm`, `zero-tool`, `zero-mcp`, `zero-session`, `zero-prompt`, `zero-middleware`, `zero-app`, `zero-stores`, `zero-stores-domain`, `zero-stores-traits`, `zero-stores-sqlite`, `zero-stores-conformance`, `zero_core`, `zero_agent`, `zero_llm`, `zero_tool`, `zero_mcp`, `zero_session`, `zero_prompt`, `zero_middleware`, `zero_app`, `zero_stores`, `zero_stores_domain`, `zero_stores_traits`, `zero_stores_sqlite`, or `zero_stores_conformance` after the cleanup phase.
 - [ ] Active architecture docs, AGENTS files, README files, and memory-bank component docs describe the Rig-backed engine and renamed persistence crates, and do not present `zero-*`/`zero-stores*` as the current live framework or persistence architecture.
 - [ ] Targeted Rust gates pass for runtime, gateway execution, tools, stores touched by type changes, and websocket/event mapping.
-- [ ] A fresh database manual smoke run can invoke an agent through the UI or CLI, stream tokens, execute at least one first-party tool, complete a delegated-agent continuation, and persist/reload the resulting session.
+- [x] A fresh database manual smoke run can invoke an agent through the UI or CLI, stream tokens, execute at least one first-party tool, complete a delegated-agent continuation, and persist/reload the resulting session.
+- [x] Intent analysis no longer depends on prompt-authored JSON or markdown-fence stripping: it uses Rig typed structured output through the `agent-runtime` adapter boundary, keeps `GatewayEvent::IntentAnalysis*` and persisted JSON field names stable, and rejects invalid `ward_recommendation.action` / `execution_strategy.approach` values instead of accepting arbitrary strings.
 - [ ] Delegation mode behavior from `builder-delegation-hygiene` remains intact through the Rig-backed engine: `delegate_to_agent` mode arguments and inference propagate through `DelegationRequest`, `DelegationContext`, child executor initial state, and all four mode-specific rule paths (`DirectArtifact`, `WardHygiene`, `WardBackedBuild`, and `StepExecutor`).
 - [ ] The parity sanitizer is schema-aware, positive-allowlist based, and fail-closed: any unhandled text, JSON, blob, tool payload, connector field, vault/user-data field, or sanitizer error aborts before writing committed artifacts; sentinel-secret tests prove raw private strings cannot appear in signatures or fixtures.
 - [ ] The parity harness canonicalizes `ZBOT_PARITY_DB` and fallback DB paths before opening, rejects ambiguous discoveries and disallowed roots, treats symlink escapes as errors, and writes exact local source metadata only to gitignored local manifests; committed artifacts contain only a non-identifying source label and coarse provenance.

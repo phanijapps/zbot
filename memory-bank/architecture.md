@@ -8,7 +8,7 @@
 ├─────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────┐       ┌─────────────────────────┐          │
 │  │     Web Dashboard       │       │          CLI            │          │
-│  │    (React + Vite)       │       │        (zero)           │          │
+│  │    (React + Vite)       │       │        (zbot)           │          │
 │  │    localhost:3000       │       │                         │          │
 │  └───────────┬─────────────┘       └───────────┬─────────────┘          │
 │              │ HTTP/WebSocket                   │ HTTP/WebSocket         │
@@ -89,7 +89,7 @@
 │  │   │                                #   memory_facts, embedding_cache  │
 │  │   └── knowledge.db                 #   Knowledge graph + vec0 indexes │
 │  ├── logs/                            # Daemon log files (when enabled)  │
-│  │   └── zerod.YYYY-MM-DD.log         #   Rolling log files (see note)   │
+│  │   └── zbotd.YYYY-MM-DD.log         #   Rolling log files              │
 │  ├── agents/{name}/                   # Agent configurations             │
 │  │   ├── config.yaml                  #   Model, provider, temperature   │
 │  │   └── AGENTS.md                    #   System instructions            │
@@ -129,8 +129,6 @@
 
 > **Vault-path source of truth:** `gateway/gateway-services/src/paths.rs`. Schema for `config/*.json` files lives in the consuming services (e.g. `gateway-services::SettingsService`, `gateway-cron::CronJobsStore`). System-wide skills also load from `~/.agents/skills/` outside the vault.
 >
-> **Note on `zerod.YYYY-MM-DD.log`:** the daemon binary on disk is `zbotd`, but it still self-identifies as `zerod` via `apps/daemon/src/main.rs` (`#[command(name = "zerod")]` and `filename_prefix("zerod")`). The log filename matches the runtime string, not the binary. A follow-up rename will close that drift.
-
 ## Technology Stack
 
 | Layer | Technology | Purpose |
@@ -261,9 +259,9 @@ zbotd --log-level debug
 
 ```
 {data_dir}/logs/
-├── zerod.2024-02-14.log      # Current (daily rotation)
-├── zerod.2024-02-13.log      # Rotated yesterday
-├── zerod.2024-02-12.log      # Rotated 2 days ago
+├── zbotd.2024-02-14.log      # Current (daily rotation)
+├── zbotd.2024-02-13.log      # Rotated yesterday
+├── zbotd.2024-02-12.log      # Rotated 2 days ago
 └── ...                        # Older logs (deleted when > maxFiles)
 ```
 
@@ -709,7 +707,6 @@ Network layer, decomposed into focused crates:
 ```
 gateway/
 ├── gateway-events/      # EventBus, GatewayEvent, HookContext
-├── gateway-database/    # DatabaseManager, pool, schema, ConversationRepository
 ├── gateway-templates/   # Prompt assembly, shard injection
 ├── gateway-connectors/  # ConnectorRegistry, dispatch (Discord, Telegram, Slack)
 ├── gateway-services/    # AgentService, ProviderService, ModelRegistry, McpService, SkillService, SettingsService
@@ -735,17 +732,18 @@ apps/
 
 ## Core Abstractions
 
-### Agent Trait
+### Agent Engine Facade
 ```rust
 #[async_trait]
-pub trait Agent: Send + Sync {
-    fn name(&self) -> &str;
-    fn description(&self) -> &str;
+pub trait AgentEngine: Send {
+    fn engine_name(&self) -> &'static str;
 
-    async fn invoke(
-        &self,
-        context: InvocationContext,
-    ) -> Result<EventStream>;
+    async fn execute_stream(
+        &mut self,
+        user_message: &str,
+        history: &[ChatMessage],
+        on_event: StreamCallback,
+    ) -> Result<(), ExecutorError>;
 }
 ```
 
@@ -1422,8 +1420,8 @@ Recall is **tool-call based** — the agent explicitly calls `memory recall` (no
 #### Session Offload
 
 Old session transcripts are archived to JSONL.gz files to keep SQLite lean:
-- `zero sessions archive --older-than 7` — offload transcripts older than N days
-- `zero sessions restore <session_id>` — restore an archived session
+- `zbot sessions archive --older-than 7` — offload transcripts older than N days
+- `zbot sessions restore <session_id>` — restore an archived session
 - `sessions.archived` column tracks offload state
 
 #### Fact Pruning
@@ -1434,7 +1432,7 @@ Temporal decay moves old facts past their category half-life to `memory_facts_ar
 - `runtime/agent-runtime/src/llm/embedding.rs` — EmbeddingClient trait, EmbeddingConfig
 - `runtime/agent-runtime/src/llm/openai_embedding.rs` — OpenAI-compatible embedding client
 - `runtime/agent-runtime/src/llm/local_embedding.rs` — fastembed local client (default)
-- `gateway/gateway-database/src/memory_repository.rs` — MemoryFact CRUD, hybrid search, embedding cache
+- `stores/zbot-stores-sqlite/src/memory_repository.rs` — MemoryFact CRUD, hybrid search, embedding cache
 - `gateway/gateway-execution/src/distillation.rs` — SessionDistiller (health reporting, episode extraction, strategy emergence, failure clustering, ward file sync)
 - `gateway/gateway-execution/src/recall.rs` — MemoryRecall (priority engine, graph expansion, corrections as rules, nudges)
 - `runtime/agent-tools/src/tools/memory.rs` — save_fact, recall, graph actions
@@ -2133,9 +2131,9 @@ Implementation: `services/knowledge-graph/src/traversal.rs`
 
 | Command | Description |
 |---------|-------------|
-| `zero distill backfill` | Retroactive distillation for sessions that pre-date the pipeline |
-| `zero sessions archive --older-than 7` | Offload old transcripts to JSONL.gz |
-| `zero sessions restore <session_id>` | Restore an archived session |
+| `zbot distill backfill` | Retroactive distillation for sessions that pre-date the pipeline |
+| `zbot sessions archive --older-than 7` | Offload old transcripts to JSONL.gz |
+| `zbot sessions restore <session_id>` | Restore an archived session |
 
 ## Runtime Memory Profile
 
@@ -2155,10 +2153,10 @@ Typical daemon (`zbotd`) memory usage: **~150 MB** at idle after first request.
 
 | Setting | Value | File | Impact |
 |---------|-------|------|--------|
-| SQLite `cache_size` | `-8000` (8 MB) | `gateway/gateway-database/src/pool.rs` | Per-connection page cache. Multiply by pool size. |
-| Pool `max_size` | `8` | `gateway/gateway-database/src/pool.rs` | Number of SQLite connections kept open. |
+| SQLite `cache_size` | System-profiled | `stores/zbot-stores-sqlite/src/connection.rs`, `stores/zbot-stores-sqlite/src/knowledge_db.rs` | Per-connection page cache. Multiply by pool size. |
+| Pool `max_size` | System-profiled | `stores/zbot-stores-sqlite/src/connection.rs`, `stores/zbot-stores-sqlite/src/knowledge_db.rs` | Number of SQLite connections kept open. |
 | Embedding model | `AllMiniLmL6V2` | `runtime/agent-runtime/src/llm/embedding.rs` | ~100 MB ONNX model. Switch to provider-based embeddings (`EmbeddingConfig::Provider`) to eliminate. |
-| BatchWriter flush | `100ms` | `gateway/gateway-database/src/batch_writer.rs` | Batches inserts; small buffer (~KB). |
+| BatchWriter flush | `100ms` | `gateway/gateway-execution/src/invoke/batch_writer.rs` | Batches inserts; small buffer (~KB). |
 | BridgeRegistry | Unbounded `HashMap` | `gateway/gateway-bridge/src/registry.rs` | Grows with connected workers; negligible at typical scale. |
 
 ### Optimization Levers

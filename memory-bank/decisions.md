@@ -68,7 +68,7 @@ The agent — not the user — decides which ward to work in. System prompt inst
 ### Gateway Crate Decomposition (13 Crates)
 Gateway was a 73-file monolith (~15,675 LOC). Extracted into focused crates:
 - `gateway-events` — EventBus, GatewayEvent, HookContext
-- `gateway-database` — DatabaseManager, pool, schema, ConversationRepository
+- `stores/zbot-stores-sqlite` — DatabaseManager, pool, schema, ConversationRepository
 - `gateway-templates` — Prompt assembly, shard injection
 - `gateway-connectors` — ConnectorRegistry, dispatch
 - `gateway-services` — AgentService, ProviderService, McpService, SkillService, SettingsService

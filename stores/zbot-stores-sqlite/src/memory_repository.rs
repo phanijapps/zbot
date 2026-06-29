@@ -46,8 +46,8 @@ pub fn sanitize_fts_query(raw: &str) -> String {
 
 // `SkillIndexRow` is defined in `zbot-stores-traits` so the
 // `MemoryFactStore` trait can use it in its method signatures without a
-// reverse dependency on this crate. Re-exported via this module so existing
-// callers that imported it from `gateway-database` keep working.
+// reverse dependency on this crate. Re-exported via this module for callers
+// that still use the repository module as their persistence prelude.
 pub use zbot_stores_traits::SkillIndexRow;
 
 // MemoryFact + ScoredFact moved to `zbot-stores-domain` (Phase D1) so any

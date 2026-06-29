@@ -1,7 +1,7 @@
 # Plan: Rig Engine Migration
 
 - **Spec:** [`spec.md`](spec.md)
-- **Status:** Executing
+- **Status:** Done (T1-T16 complete)
 
 > **Plan contract:** this is the implementation strategy. Unlike the spec, this
 > document is allowed to change as you learn. When it changes substantially
@@ -389,7 +389,7 @@ Migrate by putting Rig behind the existing gateway-facing execution facade first
 
 **Done when:** a new contributor would read active docs and understand Rig is the engine under zbot and persistence no longer uses `zero-*` names.
 
-### T15: Final gates and fresh database manual smoke are ready
+### T15: Final gates and fresh database manual smoke accepted
 
 **Depends on:** T1-T14
 
@@ -405,7 +405,27 @@ Migrate by putting Rig behind the existing gateway-facing execution facade first
 - Document the fresh DB manual smoke steps and expected observations.
 - Record any parity gaps as spec updates or blocking defects.
 
-**Done when:** the migration is mechanically verified and ready for the user's fresh database manual test.
+**Done when:** the migration is mechanically verified and the user accepts the fresh database manual smoke gate as complete.
+
+### T16: Retire prompt-JSON intent analysis
+
+**Depends on:** T7, T15
+
+**Touches:** `runtime/agent-runtime/src/llm/*`, `runtime/agent-runtime/src/rig_adapter/*`, `gateway/gateway-execution/src/middleware/intent_analysis.rs`, `gateway/gateway-execution/src/runner/invoke_bootstrap.rs`, `gateway/gateway-execution/tests/*intent*`, `docs/specs/rig-engine-migration/*`, vault `config/intent_analysis_prompt.md`
+
+**Tests:**
+- TDD: runtime OpenAI-compatible request bodies include `response_format: {type: "json_schema"}` when Rig supplies an output schema, and Rig `CompletionRequest.output_schema` reaches `LlmClient::chat_with_schema`.
+- TDD: gateway intent analysis accepts valid typed structured output and rejects malformed output through the structured path.
+- Goal-based: intent injection tests still prove graph/simple and warm-ward behavior without changing gateway/UI contracts.
+
+**Approach:**
+- Add an `LlmClient::chat_with_schema` path and thread it through retry, rate-limit, throttle, non-streaming, OpenAI-compatible transport, and the Rig completion-model adapter.
+- Expose a small `agent_runtime::rig_adapter::prompt_typed` helper so gateway-execution can use Rig typed prompts without importing Rig directly.
+- Replace the old prompt-JSON parse path in `analyze_intent` with Rig typed structured output; remove markdown-fence stripping and old parse-error wording.
+- Tighten `ward_recommendation.action` and `execution_strategy.approach` to serde/schema-backed enums while preserving JSON strings (`use_existing`, `create_new`, `simple`, `graph`).
+- Remove the JSON skeleton from the default and live vault intent prompts; prompts now describe decision semantics while runtime owns the schema.
+
+**Done when:** intent analysis uses schema-backed typed output end to end, old prompt-authored JSON parsing is gone, and focused runtime/gateway tests pass.
 
 ## Rollout
 
@@ -456,3 +476,5 @@ Migrate by putting Rig behind the existing gateway-facing execution facade first
 - 2026-06-28: **cutover wired** — the Rig-backed engine is now selectable in production behind `ZBOT_ENGINE=rig` (default OFF = legacy `AgentExecutor`). Added `gateway-execution::invoke::executor::select_engine(AgentExecutor) -> BoxedAgentEngine`, called at the three boxing sites (`runner/core.rs`, `delegation/spawn.rs`, `runner/invoke_bootstrap.rs`) that previously did `Box::new(executor)`. When the flag is set, a `RigAgentConfig` is resolved, and **no MCP servers are configured**, it constructs `RigAgentEngine::with_tool_hooks` from the same `LlmClient` (new `AgentExecutor::llm_client()` accessor), the same actor-filtered tool inventory bridged via `RigToolAdapter` (new `tool_registry()` accessor), a `SharedToolContext` built from the config's `agent_id`/`conversation_id`/`skills`/`initial_state`, and the config's before/after-tool hooks. Added `AgentEngine::engine_name()` (`"agent-executor"` default, `"rig"` override) for observability and selector testing. The MCP safety gate (fall back to legacy when `config.mcps` is non-empty) avoids orphaning subprocesses — `McpManager` has no `Drop` cleanup, so the Rig path does not yet bridge MCP. Two tests cover the routing (legacy default; rig when enabled + no MCP; legacy fallback when MCP present). Known Rig-path limitations while the flag is on (live A/B validation only): no middleware/compaction, no token-usage events, no mid-session recall/steering hooks, no MCP. Full workspace + boundary + `agent-runtime`/`gateway-execution` suites green.
 - 2026-06-28: completed **T13** — retired the active framework layer instead of keeping compatibility shims. Moved the still-live shared primitive surface from `framework/zero-core` into the new `runtime/agent-primitives` crate, rewired active runtime/gateway/store/app manifests and imports to `agent-primitives`, renamed the carried error type from `ZeroError` to `AgentError`, removed stale `zero-app` dependencies, deleted the retired `framework/zero-*` tree, and updated active AGENTS/spec text that still described the old framework as live. Verification: exact legacy package/import search over active source/manifests/lockfile is clean, `cargo metadata` reports no `zero-*` workspace packages, `cargo fmt --all -- --check` passes after formatting, and `cargo check --workspace` passes. Per user direction, no adversarial review or Rig boundary check was run for this pass.
 - 2026-06-28: completed **T14** — cleaned active architecture docs after the framework retirement. Updated the root engineering notes, memory-bank architecture/component docs, LLM-client docs, spec index, and `docs/project-graph.html` so active documentation now presents the live `runtime/agent-primitives`, `agent-runtime`, `agent-tools`, `zbot-stores*`, gateway, services, and app crate graph instead of the deleted framework layer. Historical research/spec audit material intentionally remains as migration context. Per user direction, no adversarial review or Rig boundary check was run for this pass.
+- 2026-06-28: completed **T15** — final gates passed after cleanup/adversarial fixes (`cargo fmt --all -- --check`, `git diff --check`, active stale-name searches, `cargo check --workspace`, `cargo test -p agent-primitives`, `cargo test -p agent-runtime`, `cargo test -p agent-tools`, `cargo test -p gateway-execution`, `cargo test -p zbot-stores-sqlite`). User accepted the fresh database manual smoke gate as complete; remaining Rig-path fidelity follow-ups stay tracked in `e2e_test_cases.md`.
+- 2026-06-28: completed **T16** — retired the old intent-analysis prompt-JSON path in favor of Rig typed structured output while preserving gateway events and persisted field names. Added schema-aware LLM transport plumbing (`chat_with_schema`, OpenAI-compatible `response_format`, Rig `CompletionRequest.output_schema` forwarding), exposed a runtime-boundary `prompt_typed` helper, tightened `action`/`approach` to serde/schema enums, removed markdown-fence parsing and JSON skeleton prompt text, and updated the live vault prompt. Verification: `cargo test -p agent-runtime schema --no-default-features`, `cargo test -p gateway-execution intent_analysis --no-default-features`, `cargo test -p gateway-execution --test intent_analysis_tests --no-default-features`, `cargo test -p gateway-execution --test e2e_ward_pipeline_tests --no-default-features`, `cargo fmt --all -- --check`, and `git diff --check`.

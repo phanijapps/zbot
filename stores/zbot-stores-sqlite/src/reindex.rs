@@ -637,7 +637,7 @@ mod tests {
         let _ = reindex_table(&db, client, &REINDEX_TARGETS[0], 384, |_, _, _| {})
             .await
             .unwrap();
-        // Also run the gateway-database helper explicitly — must not error.
+        // Also run the vec-table helper explicitly — must not error.
         db.with_connection(crate::knowledge_schema::cleanup_orphan_reindex_tables)
             .unwrap();
     }
@@ -684,7 +684,7 @@ mod tests {
     #[test]
     fn reindex_targets_covers_all_vec0_tables() {
         // Each entry must map 1:1 with a vec0 virtual table created by
-        // `initialize_vec_tables_with_dim` in gateway-database. Update
+        // `initialize_vec_tables_with_dim`. Update
         // both when adding a new embedded source.
         let expected = [
             "memory_facts_index",

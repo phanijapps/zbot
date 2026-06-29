@@ -1336,7 +1336,7 @@ function PluginsWorkersTab({ plugins, workers, allWorkers, search, onSearchChang
         <EmptyState
           icon={Cable}
           title="No plugins or workers connected"
-          description={`To install a plugin, drop its folder into ${pluginsHint}/ and restart zerod`}
+          description={`To install a plugin, drop its folder into ${pluginsHint}/ and restart zbotd`}
         />
       ) : (
         <div className="card-grid">

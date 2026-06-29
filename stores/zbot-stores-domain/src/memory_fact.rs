@@ -1,8 +1,7 @@
 //! `MemoryFact` and related domain types.
 //!
-//! Relocated from `gateway-database` so any backend impl (SQLite,
-//! SurrealDB, …) can round-trip the type without depending on the
-//! SQLite-coupled crate.
+//! Shared domain shape so any backend impl can round-trip the type without
+//! depending on the SQLite-coupled crate.
 
 use serde::{Deserialize, Serialize};
 

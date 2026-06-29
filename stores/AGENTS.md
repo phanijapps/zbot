@@ -42,7 +42,7 @@ Trait surfaces for each storage concern:
 `OutboxStore`, `GoalStore`, `DistillationStore`, `RecallLogStore`, `WikiStore`, `ProcedureStore`.
 
 ### zbot-stores-sqlite
-The production backend. Also absorbed `gateway-database` (Slice D8, 2026-04):
+The production backend. It owns the full SQLite persistence surface:
 - `DatabaseManager` — r2d2 connection pool, WAL mode, 8 connections
 - `SqliteKgStore` — implements `KnowledgeGraphStore`
 - `SqliteMemoryStore` / `GatewayMemoryFactStore` — implements `MemoryFactStore`

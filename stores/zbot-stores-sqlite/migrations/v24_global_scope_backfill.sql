@@ -1,4 +1,4 @@
--- gateway/gateway-database/migrations/v24_global_scope_backfill.sql
+-- stores/zbot-stores-sqlite/migrations/v24_global_scope_backfill.sql
 --
 -- One-time backfill: promote facts in "global-type" categories from the
 -- default scope='agent' to scope='global' so they are visible to every

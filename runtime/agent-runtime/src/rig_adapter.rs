@@ -7,10 +7,12 @@ pub mod client;
 pub mod config;
 pub mod engine;
 pub mod model;
+pub mod structured;
 pub mod tool;
 
 pub use client::LlmCompletionClient;
 pub use config::{RigAgentConfig, RigConfigError, RigModelConfig};
+pub use structured::prompt_typed;
 pub use tool::{RigToolAdapter, SharedToolContext};
 
 // Re-exported through the adapter boundary so gateway crates can use Rig

@@ -443,8 +443,8 @@ async fn handle_client_message(
                     })
                 });
 
-            // Invoke the agent via runtime service with hook context and callback
-            let invoke_mode = if mode == "deep" { None } else { Some(mode) };
+            // Invoke the agent via runtime service with hook context and callback.
+            let invoke_mode = normalized_invoke_mode(&conversation_id, &mode);
             match runtime
                 .invoke_with_hook_and_callback(
                     &agent_id,
@@ -1194,6 +1194,17 @@ pub(crate) fn gateway_event_to_server_message(event: GatewayEvent) -> Option<Ser
     }
 }
 
+fn normalized_invoke_mode(conversation_id: &str, mode: &str) -> Option<String> {
+    if conversation_id.starts_with("research-") {
+        return Some("research".to_string());
+    }
+
+    match mode {
+        "deep" | "research" => Some("research".to_string()),
+        other => Some(other.to_string()),
+    }
+}
+
 /// Extract event metadata for scope-based filtering decisions.
 ///
 /// Returns metadata indicating:
@@ -1209,5 +1220,42 @@ fn gateway_event_to_metadata(event: &GatewayEvent) -> EventMetadata {
     EventMetadata {
         execution_id: event.execution_id().map(|s| s.to_string()),
         is_delegation_event,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalized_invoke_mode;
+
+    #[test]
+    fn research_conversation_ids_force_research_mode() {
+        assert_eq!(
+            normalized_invoke_mode("research-abc", "fast"),
+            Some("research".to_string())
+        );
+        assert_eq!(
+            normalized_invoke_mode("research-abc", "chat"),
+            Some("research".to_string())
+        );
+        assert_eq!(
+            normalized_invoke_mode("research-abc", "deep"),
+            Some("research".to_string())
+        );
+    }
+
+    #[test]
+    fn non_research_conversation_ids_preserve_explicit_chat_mode() {
+        assert_eq!(
+            normalized_invoke_mode("chat-abc", "fast"),
+            Some("fast".to_string())
+        );
+        assert_eq!(
+            normalized_invoke_mode("sess-chat-abc", "chat"),
+            Some("chat".to_string())
+        );
+        assert_eq!(
+            normalized_invoke_mode("chat-abc", "deep"),
+            Some("research".to_string())
+        );
     }
 }

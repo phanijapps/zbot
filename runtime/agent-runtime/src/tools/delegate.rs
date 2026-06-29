@@ -52,8 +52,10 @@ impl Tool for DelegateTool {
 
     fn description(&self) -> &'static str {
         "Delegate a task to a specialized subagent. The subagent will work on the task \
-         independently. Returns an execution_id you can pass to wait_agent (block until result), \
-         steer_agent (send mid-run instructions), or kill_agent (stop it). \
+         independently. For fire-and-forget delegations, returns an execution_id you can pass \
+         to wait_agent (block until result), steer_agent (send mid-run instructions), or \
+         kill_agent (stop it). For wait_for_result=true, the caller is auto-resumed with the \
+         result and should not call wait_agent. \
          Use this for complex subtasks that require specialized expertise."
     }
 

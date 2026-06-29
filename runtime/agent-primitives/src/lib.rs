@@ -4,24 +4,19 @@
 //!
 //! ## Overview
 //!
-//! This crate provides the foundational abstractions:
+//! This crate provides the shared runtime primitives that sit outside Rig:
 //!
-//! - [`Agent`] - Core agent interface
 //! - [`Tool`] - Tool execution interface
-//! - [`Toolset`] - Collection of tools
 //! - [`ToolContext`] - Context provided to tools
-//! - [`Event`] - Immutable conversation event
-//! - [`InvocationContext`] - Context during agent invocation
+//! - [`EventActions`] - tool-triggered side effects consumed by the gateway
+//! - [`Part`] and [`Content`] - text and multimodal message content
 //!
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use agent_primitives::{Agent, Tool, Event, Result};
-//! use std::sync::Arc;
+//! use agent_primitives::{Result, Tool, ToolContext};
 //!
-//! // All agents implement the Agent trait
 //! // All tools implement the Tool trait
-//! // Events are streamed as the agent executes
 //! ```
 
 // ============================================================================
@@ -42,9 +37,7 @@ pub const USER_AGENT: &str = concat!(
 // PUBLIC API RE-EXPORTS
 // ============================================================================
 
-pub mod agent;
 pub mod callbacks;
-pub mod capability;
 pub mod connectors;
 pub mod context;
 pub mod error;
@@ -52,7 +45,6 @@ pub mod event;
 pub mod filesystem;
 pub mod multimodal;
 pub mod policy;
-pub mod registry;
 pub mod tool;
 pub mod types;
 
@@ -60,25 +52,14 @@ pub mod types;
 // CONVENIENCE RE-EXPORTS
 // ============================================================================
 
-pub use agent::{Agent, EventStream};
 pub use callbacks::{AfterAgentCallback, BeforeAgentCallback};
-pub use capability::{
-    AgentCapabilities, Capability, CapabilityDescriptor, CapabilityKind, CapabilityProvider,
-    CapabilityQuery,
-};
 pub use connectors::{CapabilityInfo, ConnectorResourceProvider};
-pub use context::{
-    CallbackContext, InvocationContext, ReadonlyContext, RunConfig, StreamingMode, ToolContext,
-};
+pub use context::{CallbackContext, ReadonlyContext, ToolContext};
 pub use error::{AgentError, Result};
 pub use event::{DelegateAction, Event, EventActions, RespondAction};
 pub use filesystem::{FileSystemContext, NoFileSystemContext};
-pub use policy::{CapabilityCategory, ResourceLimits, ToolPermissions, ToolRiskLevel};
-pub use registry::{
-    shared_unified_registry, CapabilityRegistry, CapabilityRouter, RoutingResult,
-    SharedCapabilityRegistry, SharedUnifiedRegistry, UnifiedCapabilityRegistry,
-};
-pub use tool::{Tool, ToolPredicate, Toolset};
+pub use policy::{ToolPermissions, ToolRiskLevel};
+pub use tool::Tool;
 pub use types::{Content, Part};
 
 // ============================================================================

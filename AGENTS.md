@@ -61,7 +61,7 @@ All apps default to `~/Documents/agentzero/`:
 
 ```
 agentzero/
-├── conversations.db      # SQLite (gateway-database / zbot-stores-sqlite)
+├── conversations.db      # SQLite (zbot-stores-sqlite)
 ├── config/               # SOUL.md, INSTRUCTIONS.md, OS.md, shards/
 ├── agents/{name}/        # Agent YAML configs
 ├── wards/                # Code project directories

@@ -43,9 +43,8 @@ pub struct MemoryHealthMetrics {
     pub failed_recent: u64,
 }
 
-/// One row in the per-skill staleness tracker. Lives in `agent-primitives`
-/// (rather than `gateway-database`) so this trait can use it without
-/// dragging the SQLite stack into agent-tools.
+/// One row in the per-skill staleness tracker. Lives in this dependency-light
+/// trait crate so consumers can use it without dragging in the SQLite stack.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillIndexRow {
     /// Skill identifier (directory name, after vault-wins dedup).
@@ -73,8 +72,8 @@ pub struct SkillIndexRow {
 /// Implementations can wrap a database (SQLite via `MemoryRepository`),
 /// a remote API, or an in-memory store for testing.
 ///
-/// This trait lives in `agent-primitives` so that `agent-tools` (which depends on
-/// `agent-primitives` but not `gateway-database`) can call DB operations via the trait.
+/// This trait lives here so `agent-tools` and `agent-runtime` can call DB
+/// operations without depending on the concrete SQLite backend.
 #[async_trait]
 pub trait MemoryFactStore: Send + Sync {
     /// Save a structured fact to durable memory.
@@ -287,8 +286,8 @@ pub trait MemoryFactStore: Send + Sync {
 
     /// Paginated list of memory facts with optional `agent_id`, `category`,
     /// and `scope` filters. Returns each row as a `serde_json::Value` so
-    /// that the trait surface stays free of the gateway-database
-    /// `MemoryFact` struct (dep-cycle avoidance). Default returns empty.
+    /// that the trait surface stays free of concrete backend structs.
+    /// Default returns empty.
     async fn list_memory_facts(
         &self,
         _agent_id: Option<&str>,
@@ -333,7 +332,7 @@ pub trait MemoryFactStore: Send + Sync {
     }
 
     /// Upsert a fully-shaped memory fact. The `fact` Value must contain the
-    /// gateway-database `MemoryFact` JSON shape (id, agent_id, scope,
+    /// `MemoryFact` JSON shape (id, agent_id, scope,
     /// category, key, content, confidence, mention_count, source_summary,
     /// ward_id, contradicted_by, created_at, updated_at, expires_at,
     /// valid_from, valid_until, superseded_by, pinned, etc.). The optional

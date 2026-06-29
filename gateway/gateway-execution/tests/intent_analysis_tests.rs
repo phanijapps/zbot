@@ -6,7 +6,7 @@
 use agent_runtime::{ChatMessage, ChatResponse, LlmClient, LlmError, StreamCallback};
 use async_trait::async_trait;
 use gateway_execution::middleware::intent_analysis::{
-    analyze_intent, format_intent_injection, DEFAULT_INTENT_ANALYSIS_PROMPT,
+    analyze_intent, format_intent_injection, ExecutionApproach, DEFAULT_INTENT_ANALYSIS_PROMPT,
 };
 use serde_json::Value;
 use zbot_stores::MemoryFactStore;
@@ -46,7 +46,7 @@ impl LlmClient for MockLlmClient {
         _callback: StreamCallback,
     ) -> Result<ChatResponse, LlmError> {
         Err(LlmError::ApiError(
-            "chat_stream not used by extractor".into(),
+            "chat_stream not used by typed intent analysis".into(),
         ))
     }
 }
@@ -189,7 +189,10 @@ async fn test_full_enrichment_flow() {
         vec!["web-search", "code-exec", "file-write"]
     );
     assert_eq!(analysis.recommended_agents, vec!["researcher", "analyst"]);
-    assert_eq!(analysis.execution_strategy.approach, "graph");
+    assert_eq!(
+        analysis.execution_strategy.approach,
+        ExecutionApproach::Graph
+    );
 
     let graph = analysis
         .execution_strategy
@@ -227,13 +230,13 @@ async fn test_graceful_degradation_on_llm_failure() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        err.contains("Intent analysis LLM call failed"),
+        err.contains("Intent analysis structured output failed"),
         "unexpected error message: {}",
         err
     );
 }
 
-/// Malformed (non-JSON) LLM output should return a parse error.
+/// Malformed LLM output should fail the structured intent path.
 #[tokio::test]
 async fn test_graceful_degradation_on_malformed_json() {
     let mock = MockLlmClient {
@@ -256,7 +259,7 @@ async fn test_graceful_degradation_on_malformed_json() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        err.contains("Failed to parse intent analysis JSON"),
+        err.contains("Intent analysis structured output failed"),
         "unexpected error message: {}",
         err
     );
@@ -302,7 +305,10 @@ async fn test_simple_request_no_graph() {
     .expect("should parse simple intent");
 
     assert_eq!(analysis.primary_intent, "greeting");
-    assert_eq!(analysis.execution_strategy.approach, "simple");
+    assert_eq!(
+        analysis.execution_strategy.approach,
+        ExecutionApproach::Simple
+    );
     assert!(analysis.execution_strategy.graph.is_none());
 }
 
@@ -332,5 +338,8 @@ async fn test_skills_recommended() {
         vec!["web-search", "code-exec", "file-write"]
     );
     assert_eq!(analysis.recommended_agents, vec!["researcher", "analyst"]);
-    assert_eq!(analysis.execution_strategy.approach, "graph");
+    assert_eq!(
+        analysis.execution_strategy.approach,
+        ExecutionApproach::Graph
+    );
 }

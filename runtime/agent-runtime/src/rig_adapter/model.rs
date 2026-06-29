@@ -115,9 +115,13 @@ impl CompletionModel for LlmCompletionModel {
     ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
         let messages = convert_messages(&request)?;
         let tools = convert_tools(&request.tools);
+        let output_schema = request
+            .output_schema
+            .as_ref()
+            .map(|schema| schema.as_value().clone());
         let response = self
             .client
-            .chat(messages, tools)
+            .chat_with_schema(messages, tools, output_schema)
             .await
             .map_err(llm_error_to_completion)?;
 
@@ -356,6 +360,7 @@ mod tests {
         final_text: String,
         tool_calls: Vec<AgentToolCall>,
         seen: Arc<Mutex<Vec<Vec<ChatMessage>>>>,
+        seen_schema: Arc<Mutex<Vec<Option<Value>>>>,
     }
 
     impl StubLlm {
@@ -366,6 +371,7 @@ mod tests {
                 final_text: chunks.join(""),
                 tool_calls: Vec::new(),
                 seen: seen.clone(),
+                seen_schema: Arc::new(Mutex::new(Vec::new())),
             });
             (stub, seen)
         }
@@ -385,6 +391,22 @@ mod tests {
             _tools: Option<Value>,
         ) -> Result<ChatResponse, LlmError> {
             self.seen.lock().unwrap().push(messages);
+            self.seen_schema.lock().unwrap().push(None);
+            Ok(ChatResponse {
+                content: self.final_text.clone(),
+                tool_calls: None,
+                reasoning: None,
+                usage: None,
+            })
+        }
+        async fn chat_with_schema(
+            &self,
+            messages: Vec<ChatMessage>,
+            _tools: Option<Value>,
+            output_schema: Option<Value>,
+        ) -> Result<ChatResponse, LlmError> {
+            self.seen.lock().unwrap().push(messages);
+            self.seen_schema.lock().unwrap().push(output_schema);
             Ok(ChatResponse {
                 content: self.final_text.clone(),
                 tool_calls: None,
@@ -454,6 +476,7 @@ mod tests {
             final_text: "think".to_string(),
             tool_calls: vec![agent_tool_call("call_1", "calculator", json!({"x": 1}))],
             seen: Arc::new(Mutex::new(Vec::new())),
+            seen_schema: Arc::new(Mutex::new(Vec::new())),
         });
         let model = LlmCompletionModel::new(stub as Arc<dyn LlmClient>, "stub");
 
@@ -588,5 +611,25 @@ mod tests {
         // The tool result's tool_call_id must match the assistant's tool call id.
         assert_eq!(tool.tool_call_id.as_deref(), Some("call_1"));
         assert!(tool.text_content().contains("echo-result"));
+    }
+
+    #[tokio::test]
+    async fn completion_forwards_output_schema_to_llm_client() {
+        let (stub, _seen) = StubLlm::text(&[r#"{"value":"ok"}"#]);
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "value": { "type": "string" }
+            },
+            "required": ["value"]
+        });
+        let model = LlmCompletionModel::new(stub.clone() as Arc<dyn LlmClient>, "stub");
+        let mut request = rig_request("typed");
+        request.output_schema = Some(schemars::Schema::try_from(schema.clone()).unwrap());
+
+        let _ = model.completion(request).await.expect("completion");
+
+        let seen_schema = stub.seen_schema.lock().unwrap();
+        assert_eq!(seen_schema.as_slice(), &[Some(schema)]);
     }
 }

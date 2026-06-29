@@ -2,8 +2,7 @@
 //!
 //! This crate holds the trait surface that consumers deep in the dep graph
 //! (e.g. `agent-tools`) need to call without inheriting the full
-//! `zbot-stores` transitive dependency on `knowledge-graph` (which loops
-//! back to `agent-tools` via `gateway-database -> agent-runtime`).
+//! `zbot-stores` transitive dependency on `knowledge-graph`.
 //!
 //! Re-exported from `zbot-stores` for the design-canonical
 //! `zbot_stores::*` import paths.
