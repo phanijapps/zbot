@@ -230,6 +230,15 @@ pub struct RecallConfig {
     /// Minimum score threshold — results scoring below this are suppressed.
     /// Prevents low-relevance facts from appearing for short generic queries.
     pub min_score: f64,
+    /// Soft floor: borderline facts scoring >= `low_conf_floor` (but <
+    /// `min_score`) surface as a small low-confidence tail instead of being
+    /// silently dropped. SQLite-vec hybrid routinely scores relevant facts
+    /// 0.1–0.3; the agent sees the tail's low score (rendered inline) and
+    /// down-weights them.
+    pub low_conf_floor: f64,
+    /// Max borderline facts (< `min_score`, >= `low_conf_floor`) kept per
+    /// recall. Bounds noise so the soft floor doesn't flood recall.
+    pub low_conf_tail: usize,
     pub mid_session_recall: MidSessionRecallConfig,
     pub graph_traversal: GraphTraversalConfig,
     pub temporal_decay: TemporalDecayConfig,
@@ -268,6 +277,8 @@ impl Default for RecallConfig {
             high_confidence_threshold: 0.9,
             contradiction_penalty: 0.7,
             min_score: 0.3,
+            low_conf_floor: 0.1,
+            low_conf_tail: 3,
             mid_session_recall: MidSessionRecallConfig::default(),
             graph_traversal: GraphTraversalConfig::default(),
             temporal_decay: TemporalDecayConfig::default(),

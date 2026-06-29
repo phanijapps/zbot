@@ -483,6 +483,9 @@ impl InvokeBootstrap {
                         count = items.len(),
                         "Recalled unified context for first message"
                     );
+                    // Observability: record which facts surfaced this turn
+                    // (conversations.recall_log). Best-effort, never blocks recall.
+                    recall.log_recalled(&session_id, &items).await;
                 }
                 Ok(_) => {
                     tracing::debug!(

@@ -1900,14 +1900,18 @@ impl GraphStorage {
                     let tx = conn.unchecked_transaction().map_err(GraphError::Database)?;
 
                     tx.execute(
+                        // entity_type via EntityType::Concept.as_str() (canonical lowercase
+                        // "concept"), not a hardcoded literal — keeps hierarchy/taxonomy
+                        // is_a/part_of traversal from splitting Concept vs concept.
                         "INSERT INTO kg_entities
                             (id, agent_id, entity_type, name, normalized_name, normalized_hash,
                              properties, first_seen_at, last_seen_at, mention_count,
                              layer, parent_cluster_id)
-                         VALUES (?1, ?2, 'Concept', ?3, ?4, ?5, ?6, ?7, ?7, 1, ?8, NULL)",
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, 1, ?9, NULL)",
                         params![
                             new_id_for_db,
                             agent_id_for_db,
+                            EntityType::Concept.as_str(),
                             name_for_db,
                             norm_name,
                             norm_hash,
@@ -4310,6 +4314,25 @@ mod tests {
             serde_json::json!("Three concepts grouped together for testing.")
         );
         assert_eq!(props_json["member_count"], serde_json::json!(3));
+    }
+
+    #[test]
+    fn promote_cluster_writes_canonical_lowercase_entity_type() {
+        // MEM-quality: aggregates must store the canonical lowercase
+        // entity_type ("concept" via EntityType::as_str()), not a
+        // hardcoded divergent literal, so taxonomy is_a/part_of
+        // traversal does not split Concept vs concept.
+        let storage = create_test_storage();
+        seed_entity_raw(&storage, "m1", "agent-h");
+        let agg_id = storage
+            .promote_cluster_to_aggregate("agent-h", 1, &["m1".to_string()], "agg", "desc", None)
+            .unwrap();
+        let etype: Option<String> = read_entity_field(&storage, &agg_id, "entity_type");
+        assert_eq!(
+            etype.as_deref(),
+            Some("concept"),
+            "aggregate entity_type must be canonical lowercase 'concept', got {etype:?}"
+        );
     }
 
     #[test]

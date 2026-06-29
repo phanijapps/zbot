@@ -65,7 +65,36 @@ pub struct MemoryRecall {
     /// recall stays silent. Production wiring attaches this in
     /// `MemoryServices::new()`.
     event_bus: Option<Arc<gateway_events::EventBus>>,
+    /// Per-session recall log (conversations.db). When `None`, recall
+    /// stays silent — no observability of which facts were surfaced.
+    recall_log_store: Option<Arc<dyn zbot_stores_traits::RecallLogStore>>,
     config: Arc<RecallConfig>,
+}
+
+/// Soft floor for recall: keep confident items (>= `min_score`) plus up
+/// to `low_conf_tail` borderline items (>= `low_conf_floor`, < `min_score`),
+/// highest-scoring first. Replaces the old hard `score >= min_score` drop
+/// that silently buried legitimately-relevant facts scoring 0.1–0.3
+/// (common for SQLite-vec hybrid). The agent sees each tail item's low
+/// score (rendered inline) and down-weights it.
+fn apply_soft_floor(
+    items: &mut Vec<ScoredItem>,
+    min_score: f64,
+    low_conf_floor: f64,
+    low_conf_tail: usize,
+) {
+    items.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    let mut kept: Vec<ScoredItem> = Vec::with_capacity(items.len());
+    let mut tail_taken = 0usize;
+    for it in items.drain(..) {
+        if it.score >= min_score {
+            kept.push(it);
+        } else if it.score >= low_conf_floor && tail_taken < low_conf_tail {
+            kept.push(it);
+            tail_taken += 1;
+        }
+    }
+    *items = kept;
 }
 
 impl MemoryRecall {
@@ -87,6 +116,7 @@ impl MemoryRecall {
             query_gate: None,
             mmr_config: None,
             event_bus: None,
+            recall_log_store: None,
             config,
         }
     }
@@ -96,6 +126,34 @@ impl MemoryRecall {
     /// byte-for-byte identical to its pre-Phase-3 behavior.
     pub fn set_event_bus(&mut self, bus: Arc<gateway_events::EventBus>) {
         self.event_bus = Some(bus);
+    }
+
+    /// Wire the per-session recall-log store (conversations.db) so
+    /// `log_recalled` records which facts were surfaced — recall
+    /// observability ("which facts does the system rely on?") and the
+    /// basis for future predictive recall. When unset, `log_recalled`
+    /// is a no-op.
+    pub fn set_recall_log_store(&mut self, store: Arc<dyn zbot_stores_traits::RecallLogStore>) {
+        self.recall_log_store = Some(store);
+    }
+
+    /// Best-effort log the recalled item ids for a session. No-op when no
+    /// store is wired; per-item errors are warned, never propagated —
+    /// logging must never break recall.
+    pub async fn log_recalled(&self, session_id: &str, items: &[ScoredItem]) {
+        let Some(store) = self.recall_log_store.as_ref() else {
+            return;
+        };
+        for item in items {
+            if let Err(e) = store.log_recall(session_id, &item.id).await {
+                tracing::warn!(
+                    session_id = %session_id,
+                    fact_id = %item.id,
+                    error = %e,
+                    "recall_log write failed"
+                );
+            }
+        }
     }
 
     /// Wire the belief store so `recall_unified` surfaces beliefs
@@ -359,7 +417,7 @@ impl MemoryRecall {
         // SQLite repo. On Surreal, scores aren't yet preserved by the
         // trait surface — we synthesize 0.5 so facts still rank into
         // the fused pool but don't dominate it.
-        let fact_items: Vec<ScoredItem> = if let Some(store) = self.memory_store.as_ref() {
+        let mut fact_items: Vec<ScoredItem> = if let Some(store) = self.memory_store.as_ref() {
             store
                 .search_memory_facts_hybrid(
                     Some(agent_id),
@@ -382,11 +440,20 @@ impl MemoryRecall {
                         .filter(|fact| fact.superseded_by.is_none())
                         .map(|fact| adapters::fact_to_item(&fact, score))
                 })
-                .filter(|item| item.score >= self.config.min_score)
                 .collect()
         } else {
             Vec::new()
         };
+        // Soft floor: keep confident facts (>= min_score) plus a small tail
+        // of borderline facts (>= low_conf_floor) so legitimately-relevant
+        // matches scoring 0.1–0.3 surface with visible low confidence
+        // instead of being silently dropped before fusion.
+        apply_soft_floor(
+            &mut fact_items,
+            self.config.min_score,
+            self.config.low_conf_floor,
+            self.config.low_conf_tail,
+        );
 
         // 2. Wiki articles (ward-scoped).
         let wiki_items: Vec<ScoredItem> =
@@ -1056,6 +1123,53 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn log_recalled_records_each_item_id_when_store_wired() {
+        use std::sync::{Arc, Mutex};
+        use async_trait::async_trait;
+        use zbot_stores_traits::RecallLogStore;
+
+        struct CapturingStore {
+            logs: Arc<Mutex<Vec<(String, String)>>>,
+        }
+        #[async_trait]
+        impl RecallLogStore for CapturingStore {
+            async fn log_recall(&self, session_id: &str, fact_key: &str) -> Result<(), String> {
+                self.logs
+                    .lock()
+                    .unwrap()
+                    .push((session_id.to_string(), fact_key.to_string()));
+                Ok(())
+            }
+        }
+
+        let logs = Arc::new(Mutex::new(Vec::new()));
+        let mut recall = MemoryRecall::new(None, Arc::new(RecallConfig::default()));
+        recall.set_recall_log_store(Arc::new(CapturingStore { logs: logs.clone() }));
+
+        let items = vec![
+            mk_item(ItemKind::Fact, "f1", "first", 0.9),
+            mk_item(ItemKind::Fact, "f2", "second", 0.5),
+        ];
+        recall.log_recalled("sess-1", &items).await;
+
+        let recorded = logs.lock().unwrap();
+        assert_eq!(recorded.len(), 2, "both recalled items logged: {recorded:?}");
+        assert!(recorded.contains(&("sess-1".to_string(), "f1".to_string())));
+        assert!(recorded.contains(&("sess-1".to_string(), "f2".to_string())));
+    }
+
+    #[tokio::test]
+    async fn log_recalled_is_noop_when_no_store_wired() {
+        // No set_recall_log_store — must not panic; best-effort logging
+        // never breaks recall.
+        let recall = MemoryRecall::new(None, Arc::new(RecallConfig::default()));
+        recall.log_recalled("sess-1", &[]).await;
+        recall
+            .log_recalled("sess-1", &[mk_item(ItemKind::Fact, "f1", "x", 0.5)])
+            .await;
+    }
+
     fn make_scored_fact(
         class: Option<&str>,
         superseded_by: Option<&str>,
@@ -1179,6 +1293,29 @@ mod tests {
         assert!(
             (sf.score - 1.0).abs() < 1e-6,
             "bi-temporal history (valid_until set, superseded_by None) should not be penalized"
+        );
+    }
+
+    #[test]
+    fn apply_soft_floor_keeps_confident_plus_bounded_borderline_tail() {
+        let mut items = vec![
+            mk_item(ItemKind::Fact, "high", "h", 0.9),
+            mk_item(ItemKind::Fact, "border1", "b1", 0.25),
+            mk_item(ItemKind::Fact, "border2", "b2", 0.20),
+            mk_item(ItemKind::Fact, "border3", "b3", 0.15),
+            mk_item(ItemKind::Fact, "noise", "n", 0.05),
+        ];
+        apply_soft_floor(&mut items, 0.3, 0.1, 2);
+        let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
+        assert!(ids.contains(&"high"), "confident item kept");
+        assert!(
+            ids.contains(&"border1") && ids.contains(&"border2"),
+            "top-2 borderline items kept: {ids:?}"
+        );
+        assert!(!ids.contains(&"border3"), "tail capped at 2: {ids:?}");
+        assert!(
+            !ids.contains(&"noise"),
+            "below low_conf_floor dropped: {ids:?}"
         );
     }
 

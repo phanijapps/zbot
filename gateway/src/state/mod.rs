@@ -543,6 +543,22 @@ impl AppState {
             recall.set_memory_store(mem.clone());
         }
 
+        // Recall observability: wire the per-session recall log
+        // (conversations.db) so the system records which facts it
+        // surfaced. Must attach before `memory_recall_inner` is moved
+        // into Arc below. Best-effort; safe to construct unconditionally.
+        {
+            let repo = Arc::new(zbot_stores_sqlite::RecallLogRepository::new(
+                db_manager.clone(),
+            ));
+            let store: Arc<dyn zbot_stores_traits::RecallLogStore> = Arc::new(
+                zbot_stores_sqlite::GatewayRecallLogStore::new(repo),
+            );
+            if let Some(recall) = memory_recall_inner.as_mut() {
+                recall.set_recall_log_store(store);
+            }
+        }
+
         // Build the trait-routed kg_store early enough to wire it on
         // MemoryRecall before that struct is moved into Arc::new below.
         // Wraps the SQLite GraphStorage.

@@ -180,16 +180,26 @@ fn extract_multimodal(parsed: Option<&Value>) -> Vec<Entity> {
 }
 
 fn extract_file_paths(text: &str) -> Vec<String> {
-    // Very conservative path matcher: tokens starting with / or ./ with
-    // at least one more /. Skip URLs (contain ://).
-    const TRIM_CHARS: [char; 7] = [',', ':', ';', ')', ']', '"', '\''];
+    // Path matcher: tokens starting with / or ./ with at least one /.
+    // Skip URLs (contain ://). Reject code syntax, globs, shell
+    // expansion, and API routes so the KG records only durable file
+    // paths — not `/*`, `/>`, `/api/...`, `/tmp/zbot-*`, `$(cmd)`, etc.
+    // (MEM-quality: keeps the knowledge graph clean for taxonomy use.)
+    const TRIM_CHARS: [char; 10] = [',', ':', ';', ')', ']', '"', '\'', '`', '<', '>'];
+    const SYNTAX: &[char] = &['*', '?', '<', '>', '`', '|'];
     text.split_whitespace()
         .filter_map(|tok| {
             let t = tok.trim_end_matches(TRIM_CHARS);
+            let last_segment = t.rsplit('/').next().unwrap_or("");
             let is_path = (t.starts_with('/') || t.starts_with("./"))
                 && t.matches('/').count() >= 1
                 && !t.contains("://")
-                && t.len() < 300;
+                && t.len() < 300
+                && !SYNTAX.iter().any(|&c| t.contains(c))
+                && !t.contains("${")
+                && !t.contains("$(")
+                && !(t.starts_with("/api/") || t == "/api")
+                && last_segment.chars().any(|c| c.is_alphanumeric());
             if is_path {
                 Some(t.to_string())
             } else {
@@ -298,6 +308,29 @@ mod tests {
         let result = r#"{"success": true, "stdout": "https://example.com/"}"#;
         let entities = extract_from_tool("shell", result);
         assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn extract_file_paths_rejects_junk_paths() {
+        // Code syntax, API routes, globs, and shell expansion are not
+        // durable file-path knowledge — reject so the KG stays clean.
+        let junk = "/api/curator/cleanup /tmp/zbot-* /* /> ./run.sh` https://x/y $(cmd) ${VAR}";
+        let paths = extract_file_paths(junk);
+        assert!(!paths.iter().any(|p| p.contains('*')), "globs rejected: {paths:?}");
+        assert!(!paths.iter().any(|p| p.starts_with("/api")), "API routes rejected: {paths:?}");
+        assert!(!paths.iter().any(|p| p == "/*" || p == "/>"), "code syntax rejected: {paths:?}");
+        assert!(!paths.iter().any(|p| p.contains('`')), "backtick trimmed: {paths:?}");
+        assert!(!paths.iter().any(|p| p.contains('$')), "shell expansion rejected: {paths:?}");
+    }
+
+    #[test]
+    fn extract_file_paths_keeps_real_file_paths() {
+        // Real file paths (incl. legit /tmp files) must survive the filter.
+        let real = "/tmp/foo.rs ./src/bar.rs ./AGENTS.md";
+        let paths = extract_file_paths(real);
+        assert!(paths.contains(&"/tmp/foo.rs".to_string()), "real tmp file kept: {paths:?}");
+        assert!(paths.contains(&"./src/bar.rs".to_string()));
+        assert!(paths.contains(&"./AGENTS.md".to_string()));
     }
 
     #[test]

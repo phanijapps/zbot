@@ -35,8 +35,15 @@ const PRIMITIVE_CATEGORY: &str = "primitive";
 /// to fit a necessary example. This cap is a backstop that keeps clearly
 /// malformed, oversized facts out of the store; the distillation prompt is
 /// the quality lever. `ctx` and `primitive` facts are machine-generated and
-/// exempt (see [`validate_fact_content`]).
+/// Soft target for fact content length — a 1-3 sentence fact, enforced as an
+/// estimate with a ~20% buffer ([`MAX_FACT_CONTENT_CHARS_HARD`]). Content a
+/// bit over this (e.g. a long skill description) is accepted; genuinely
+/// oversized content is rejected at the hard limit. `ctx` / `primitive` are
+/// exempt (machine-generated; see [`validate_fact_content`]).
 const MAX_FACT_CONTENT_CHARS: usize = 800;
+/// Hard reject limit — the estimate above + a 20% buffer (800 → 960). Content
+/// up to and including this length is accepted; above is rejected as too long.
+const MAX_FACT_CONTENT_CHARS_HARD: usize = MAX_FACT_CONTENT_CHARS * 6 / 5;
 
 /// Reject a fact whose `content` is too long to be a 1-3 sentence fact.
 ///
@@ -47,9 +54,9 @@ fn validate_fact_content(category: &str, content: &str) -> Result<(), String> {
         return Ok(());
     }
     let len = content.chars().count();
-    if len > MAX_FACT_CONTENT_CHARS {
+    if len > MAX_FACT_CONTENT_CHARS_HARD {
         return Err(format!(
-            "fact content too long: {len} chars (max {MAX_FACT_CONTENT_CHARS}) — \
+            "fact content too long: {len} chars (max {MAX_FACT_CONTENT_CHARS_HARD}, estimate {MAX_FACT_CONTENT_CHARS}) — \
              a fact must be 1-3 sentences"
         ));
     }
@@ -1107,8 +1114,19 @@ mod tests {
     }
 
     #[test]
+    fn validate_fact_content_accepts_within_20pct_buffer() {
+        // The 800 estimate has a 20% buffer (960); borderline-over content
+        // (e.g. an 836-char skill description) is accepted, not rejected.
+        let borderline = "x".repeat(MAX_FACT_CONTENT_CHARS + 36); // 836
+        assert!(validate_fact_content("pattern", &borderline).is_ok());
+        let at_buffer = "x".repeat(MAX_FACT_CONTENT_CHARS_HARD); // 960
+        assert!(validate_fact_content("pattern", &at_buffer).is_ok());
+    }
+
+    #[test]
     fn validate_fact_content_rejects_oversized_fact() {
-        let long = "x".repeat(MAX_FACT_CONTENT_CHARS + 1);
+        // Reject only above the buffered hard limit (961), not the 800 estimate.
+        let long = "x".repeat(MAX_FACT_CONTENT_CHARS_HARD + 1);
         assert!(validate_fact_content("pattern", &long).is_err());
     }
 

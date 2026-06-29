@@ -47,8 +47,9 @@ pub fn format_scored_items(items: &[ScoredItem]) -> String {
         lines.push("## Recalled Context".to_string());
         for item in &others {
             lines.push(format!(
-                "- [{}] {}",
+                "- [{} {:.2}] {}",
                 non_belief_tag(&item.kind),
+                item.score,
                 item.content
             ));
         }
@@ -117,6 +118,26 @@ mod tests {
     }
 
     #[test]
+    fn format_scored_items_renders_confidence_for_non_beliefs() {
+        // The agent must see each item's score to weight a 0.95 fact
+        // against a 0.31 borderline one — otherwise recall is applied
+        // uniformly ("hit and miss"). Score renders inline after the tag.
+        let items = vec![
+            mk_item(ItemKind::Fact, "f1", "strong fact", 0.95),
+            mk_item(ItemKind::Fact, "f2", "weak fact", 0.31),
+        ];
+        let out = format_scored_items(&items);
+        assert!(
+            out.contains("- [fact 0.95] strong fact"),
+            "high-conf score rendered: {out}"
+        );
+        assert!(
+            out.contains("- [fact 0.31] weak fact"),
+            "low-conf score rendered: {out}"
+        );
+    }
+
+    #[test]
     fn format_recall_failure_message_includes_error_and_guidance() {
         let msg = format_recall_failure_message("database timeout");
         assert!(msg.contains("database timeout"));
@@ -136,12 +157,12 @@ mod tests {
         ];
         let out = format_scored_items(&items);
         assert!(out.starts_with("## Recalled Context"));
-        assert!(out.contains("- [fact] fact content"));
-        assert!(out.contains("- [wiki] wiki content"));
-        assert!(out.contains("- [procedure] proc content"));
-        assert!(out.contains("- [entity] node content"));
-        assert!(out.contains("- [goal] goal content"));
-        assert!(out.contains("- [episode] ep content"));
+        assert!(out.contains("- [fact 1.00] fact content"));
+        assert!(out.contains("- [wiki 0.90] wiki content"));
+        assert!(out.contains("- [procedure 0.80] proc content"));
+        assert!(out.contains("- [entity 0.70] node content"));
+        assert!(out.contains("- [goal 0.60] goal content"));
+        assert!(out.contains("- [episode 0.50] ep content"));
         assert!(
             !out.contains("## Active Beliefs"),
             "no beliefs ⇒ no belief heading"
@@ -174,7 +195,7 @@ mod tests {
         let out = format_scored_items(&items);
 
         assert!(out.contains("## Recalled Context"));
-        assert!(out.contains("- [fact] fact content"));
+        assert!(out.contains("- [fact 1.00] fact content"));
         assert!(out.contains("## Active Beliefs"));
         assert!(out.contains("- [belief 0.92] user.location: User lives in Mason, OH"));
         assert!(out.contains("- [belief 0.85] user.diet: User is vegetarian"));
