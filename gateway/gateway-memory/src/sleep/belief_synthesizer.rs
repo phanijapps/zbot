@@ -2,7 +2,7 @@
 //! `(partition_id, subject)` from constituent `MemoryFact`s.
 //!
 //! Phase B-1 of the Belief Network (see
-//! `memory-bank/future-state/2026-05-15-belief-network-design.md`).
+//! `docs/architecture/future-state/2026-05-15-belief-network-design.md`).
 //!
 //! Key decisions baked into this implementation (the 5 originally-open
 //! questions, all resolved):

@@ -514,6 +514,55 @@ fn simple_analysis(message: &str) -> IntentAnalysis {
     }
 }
 
+/// Fallback when the LLM's structured output fails to deserialize: build a
+/// minimal analysis from the semantic-search ward matches so warm routing
+/// survives a malformed response (glm-5.2 occasionally returns invalid JSON:
+/// missing field, wrong type). With a matched ward → `use_existing` (warm);
+/// with none → `create_new` (cold is correct when nothing fits).
+fn fallback_analysis_from_semantic(message: &str, wards: &[String]) -> IntentAnalysis {
+    let mut analysis = simple_analysis(message);
+    match wards.first() {
+        Some(top_ward) => {
+            analysis.ward_recommendation = WardRecommendation {
+                action: WardAction::UseExisting,
+                ward_name: top_ward.clone(),
+                subdirectory: None,
+                structure: std::collections::HashMap::new(),
+                reason:
+                    "LLM structured output failed — warm-routing via top semantic-search ward match"
+                        .to_string(),
+            };
+        }
+        None => {
+            analysis.ward_recommendation.action = WardAction::CreateNew;
+            analysis.ward_recommendation.reason =
+                "LLM structured output failed and no ward matched — create_new".to_string();
+        }
+    }
+    analysis
+}
+
+#[cfg(test)]
+mod fallback_analysis_tests {
+    use super::*;
+
+    #[test]
+    fn routes_warm_to_top_ward_when_matched() {
+        let a = fallback_analysis_from_semantic(
+            "analyze goog",
+            &["financial-analysis".to_string(), "other".to_string()],
+        );
+        assert_eq!(a.ward_recommendation.action, WardAction::UseExisting);
+        assert_eq!(a.ward_recommendation.ward_name, "financial-analysis");
+    }
+
+    #[test]
+    fn routes_cold_when_no_ward_matched() {
+        let a = fallback_analysis_from_semantic("hello", &[]);
+        assert_eq!(a.ward_recommendation.action, WardAction::CreateNew);
+    }
+}
+
 /// Return `true` when every step's `action` in `steps_json` resolves against
 /// `known_tool_names`. Used to gate promotion of recalled procedures to an
 /// actionable `run_procedure` recommendation: if the procedure references a
@@ -796,9 +845,42 @@ pub async fn analyze_intent(
     );
 
     let mut analysis: IntentAnalysis =
-        agent_runtime::rig_adapter::prompt_typed(llm_client, system_prompt, user_content)
-            .await
-            .map_err(|e| format!("Intent analysis structured output failed: {}", e))?;
+        match agent_runtime::rig_adapter::prompt_typed(
+            llm_client.clone(),
+            system_prompt,
+            user_content.as_str(),
+        )
+        .await
+        {
+            Ok(a) => a,
+            Err(first_err) => {
+                // LLM structured output is occasionally malformed (glm-5.2). Retry
+                // once before falling back — the second attempt usually succeeds,
+                // preserving the FULL analysis (primary_intent, execution_strategy)
+                // instead of degrading to the simple fallback.
+                tracing::warn!(
+                    error = %first_err,
+                    "Intent analysis structured output failed on first attempt — retrying once"
+                );
+                match agent_runtime::rig_adapter::prompt_typed(
+                    llm_client,
+                    system_prompt,
+                    user_content.as_str(),
+                )
+                .await
+                {
+                    Ok(a) => a,
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            matched_wards = ?results.wards,
+                            "Intent analysis structured output failed twice — falling back to semantic-search ward match (warm-routing preserved)"
+                        );
+                        fallback_analysis_from_semantic(user_message, &results.wards)
+                    }
+                }
+            }
+        };
 
     // Step 6: Compute procedure recommendation and attach to the analysis.
     // This block is what `format_intent_injection` will render into the root
@@ -1432,6 +1514,53 @@ mod tests {
         }
     }
 
+    /// Stateful mock: returns `responses[i]` on the i-th call (for retry tests).
+    struct RetryMockLlmClient {
+        responses: Vec<String>,
+        call: std::sync::Arc<std::sync::Mutex<usize>>,
+    }
+
+    #[async_trait]
+    impl LlmClient for RetryMockLlmClient {
+        fn model(&self) -> &str {
+            "retry-mock"
+        }
+        fn provider(&self) -> &str {
+            "mock"
+        }
+        async fn chat(
+            &self,
+            _messages: Vec<ChatMessage>,
+            _tools: Option<Value>,
+        ) -> Result<ChatResponse, LlmError> {
+            let mut c = self.call.lock().unwrap();
+            let idx = *c;
+            *c += 1;
+            Ok(ChatResponse {
+                content: self.responses.get(idx).cloned().unwrap_or_default(),
+                tool_calls: None,
+                reasoning: None,
+                usage: None,
+            })
+        }
+        async fn chat_stream(
+            &self,
+            _messages: Vec<ChatMessage>,
+            _tools: Option<Value>,
+            _callback: StreamCallback,
+        ) -> Result<ChatResponse, LlmError> {
+            let mut c = self.call.lock().unwrap();
+            let idx = *c;
+            *c += 1;
+            Ok(ChatResponse {
+                content: self.responses.get(idx).cloned().unwrap_or_default(),
+                tool_calls: None,
+                reasoning: None,
+                usage: None,
+            })
+        }
+    }
+
     /// Minimal mock fact store that accepts writes and returns empty results.
     struct MockFactStore;
 
@@ -2040,7 +2169,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_analyze_intent_malformed_json() {
+    async fn test_analyze_intent_malformed_json_falls_back() {
+        // Malformed LLM output no longer errors — it falls back to a
+        // semantic-search-derived analysis (warm if a ward matched, cold
+        // otherwise) so a bad glm-5.2 response doesn't kill intent analysis
+        // or force cold routing.
         let mock = MockLlmClient {
             response: "This is not valid JSON at all.".to_string(),
         };
@@ -2057,13 +2190,65 @@ mod tests {
             &[],
         )
         .await;
-        assert!(result.is_err());
-        let err = result.unwrap_err();
         assert!(
-            err.contains("Intent analysis structured output failed"),
-            "unexpected error: {}",
-            err
+            result.is_ok(),
+            "malformed JSON should fall back, not error: {:?}",
+            result.err()
         );
+        let analysis = result.unwrap();
+        assert!(
+            matches!(
+                analysis.ward_recommendation.action,
+                WardAction::UseExisting | WardAction::CreateNew
+            ),
+            "fallback produced a valid ward action: {:?}",
+            analysis.ward_recommendation.action
+        );
+    }
+
+    #[tokio::test]
+    async fn test_analyze_intent_retries_and_recovers_on_second_attempt() {
+        // First attempt returns malformed JSON; second returns a valid analysis.
+        // Intent analysis should retry once and use the valid second response
+        // (the full analysis), not fall back.
+        let valid = serde_json::to_string(&IntentAnalysis {
+            primary_intent: "stock-valuation".to_string(),
+            hidden_intents: vec![],
+            recommended_skills: vec![],
+            recommended_agents: vec![],
+            ward_recommendation: WardRecommendation {
+                action: WardAction::CreateNew,
+                ward_name: "x".to_string(),
+                subdirectory: None,
+                structure: Default::default(),
+                reason: "r".to_string(),
+            },
+            execution_strategy: ExecutionStrategy {
+                approach: ExecutionApproach::Simple,
+                graph: None,
+                explanation: "e".to_string(),
+            },
+            rewritten_prompt: String::new(),
+            procedure_recommendation: None,
+        })
+        .unwrap();
+        let mock = RetryMockLlmClient {
+            responses: vec!["not json".to_string(), valid],
+            call: std::sync::Arc::new(std::sync::Mutex::new(0)),
+        };
+        let result = analyze_intent(
+            std::sync::Arc::new(mock),
+            "analyze goog",
+            &MockFactStore,
+            None,
+            DEFAULT_INTENT_ANALYSIS_PROMPT,
+            &[],
+            None,
+            &[],
+        )
+        .await;
+        assert!(result.is_ok(), "should recover on retry: {:?}", result.err());
+        assert_eq!(result.unwrap().primary_intent, "stock-valuation");
     }
 
     // NOTE: `test_analyze_intent_strips_markdown_fences` was removed — markdown

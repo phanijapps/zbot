@@ -220,11 +220,20 @@ fn format_goals_block(goals: &[agent_tools::GoalSummary]) -> Option<String> {
 }
 
 /// Doctrine half of the graduation gate: true when a ward's `AGENTS.md`
-/// carries a real Purpose/Scope section (not a missing, empty, or stub
-/// file). The full gate also requires ≥1 promoted procedure — see
+/// carries either the canonical `## Purpose` section OR a rich, structured
+/// doctrine (≥2 distinct `## ` sections — e.g. Conventions + DO + DON'T).
+/// Rejects missing, empty, title-only, and single-section stub files. The
+/// full gate also requires ≥1 promoted procedure — see
 /// [`ward_has_promoted_procedure`] and §8 of the ward-as-agent design.
 fn ward_doctrine_is_graduated(agents_md: &str) -> bool {
-    agents_md.contains("## Purpose")
+    if agents_md.contains("## Purpose") {
+        return true;
+    }
+    // Rich-doctrine fallback: a structured ward (≥2 sections) graduates even
+    // without the canonical `## Purpose` heading, so well-formed wards aren't
+    // silently forced cold. Single-section / empty / title-only files are stubs.
+    let sections = agents_md.lines().filter(|l| l.starts_with("## ")).count();
+    sections >= 2
 }
 
 /// Procedure half of the graduation gate (§8): a ward graduates to
@@ -1242,6 +1251,15 @@ mod tests {
         assert!(!ward_doctrine_is_graduated(
             "# automotive-research\n\n## Conventions\n- reuse core/\n"
         ));
+    }
+
+    #[test]
+    fn ward_doctrine_is_graduated_for_rich_doctrine_without_purpose() {
+        // A ward with a rich, structured doctrine (≥2 sections) but no
+        // canonical `## Purpose` heading still graduates — so well-formed wards
+        // (e.g. Conventions + DO + DON'T) aren't silently forced cold.
+        let md = "# financial-analysis\n\n## Conventions\n- reuse core/\n\n## DO\n- fetch data\n\n## DON'T\n- skip json_safe\n";
+        assert!(ward_doctrine_is_graduated(md));
     }
 
     struct FakeProcStore {

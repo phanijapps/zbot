@@ -4,7 +4,7 @@
 // ============================================================================
 //
 // Conversations stay SQLite forever per the design
-// (`memory-bank/future-state/persistence-readiness-design.md`). This trait
+// (`docs/architecture/future-state/persistence-readiness-design.md`). This trait
 // exists for hygiene + symmetry with `KnowledgeGraphStore` and
 // `MemoryFactStore`. The concrete SQLite impl in `zbot-stores-sqlite`
 // implements this trait.

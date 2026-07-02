@@ -6,7 +6,7 @@
 //! gateway uses.
 //!
 //! There is one SQLite crate for zbot persistence. See
-//! `memory-bank/architecture.md` for the broader persistence story.
+//! `docs/architecture/architecture.md` for the broader persistence story.
 
 // -- KnowledgeGraphStore impl + supporting glue (originally D6/D6b) -----------
 mod blocking;

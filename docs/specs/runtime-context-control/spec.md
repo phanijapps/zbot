@@ -108,11 +108,11 @@ before proceeding; *Never do* is a hard rule, even under time pressure.
 ## Assumptions
 
 - Technical: durable facts live in `knowledge.db`, not `conversations.db`
-  (source: `memory-bank/architecture.md`; `stores/zbot-stores-sqlite/src/schema.rs`).
+  (source: `docs/architecture/architecture.md`; `stores/zbot-stores-sqlite/src/schema.rs`).
 - Technical: `knowledge.db` contains facts, KG, wiki, procedures, episodes,
   embeddings, and vec0 indexes, while `conversations.db` contains sessions,
   messages, logs, recall metadata, and distillation run metadata (source:
-  `memory-bank/architecture.md`).
+  `docs/architecture/architecture.md`).
 - Technical: current gateway executor wiring already installs
   `ContextEditingMiddleware` before `PlanBlockMiddleware` (source:
   `gateway/gateway-execution/src/invoke/executor.rs`).

@@ -209,7 +209,7 @@ archives plus `checksums.sha256`.
 **Depends on:** T1-T5
 
 **Touches:** `README.md`, `memory-bank/PUBLISHING.md`,
-`memory-bank/future-state/path-to-release.md`, `docs/specs/github-release-installer/*`
+`docs/architecture/future-state/path-to-release.md`, `docs/specs/github-release-installer/*`
 
 **Mode:** Goal-based check
 

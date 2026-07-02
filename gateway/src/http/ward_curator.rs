@@ -1,5 +1,5 @@
 //! Ward-curator HTTP endpoints. Spec:
-//! `memory-bank/future-state/2026-05-23-ward-curator-spec.md`.
+//! `docs/architecture/future-state/2026-05-23-ward-curator-spec.md`.
 //!
 //! - `POST /api/curator/cleanup` — Phase B Layer-1 transitions (archive,
 //!   stale, reactivate). Backup + audit log written on a live run.

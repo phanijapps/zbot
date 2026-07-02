@@ -1,6 +1,6 @@
 //! # Ward curator — Layer-1 heuristic cleanup
 //!
-//! Spec: `memory-bank/future-state/2026-05-23-ward-curator-spec.md` §2.
+//! Spec: `docs/architecture/future-state/2026-05-23-ward-curator-spec.md` §2.
 //!
 //! Operates on agent-created, non-pinned wards. Inactive longer than
 //! `archive_days` → archived (directory moved to `_archive/`); inactive

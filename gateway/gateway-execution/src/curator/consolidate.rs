@@ -1,5 +1,5 @@
 //! LLM-driven ward consolidation. Spec: §3 of
-//! `memory-bank/future-state/2026-05-23-ward-curator-spec.md`.
+//! `docs/architecture/future-state/2026-05-23-ward-curator-spec.md`.
 //!
 //! Pipeline:
 //! 1. `WardCurator::build_candidates()` — flatten the sidecar.

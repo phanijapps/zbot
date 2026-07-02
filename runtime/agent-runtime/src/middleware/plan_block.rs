@@ -23,7 +23,7 @@
 //!     anti-pattern the flag was introduced for.
 //!
 //! Research context: the "Layer 1 pinned scratchpad" from
-//! `memory-bank/future-state/compaction-strategy.md` §4 and from the
+//! `docs/architecture/future-state/compaction-strategy.md` §4 and from the
 //! Manus `todo.md` / Claude Code `claude-progress.txt` / Devin
 //! progress-file pattern. This is the minimum useful version —
 //! no subagent rewrite, no post-turn executor hook, just take what

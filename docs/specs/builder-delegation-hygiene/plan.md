@@ -197,8 +197,8 @@ expected delegation mode.
 **Depends on:** T1-T6
 
 **Touches:** `docs/specs/README.md`,
-`memory-bank/components/subagent-capability-policy/overview.md`,
-`memory-bank/components/execution-loop/data-flow.md`,
+`docs/architecture/components/subagent-capability-policy/overview.md`,
+`docs/architecture/components/execution-loop/data-flow.md`,
 `docs/rfc/0005-builder-delegation-and-ward-context-hygiene.md`
 
 **Tests:**

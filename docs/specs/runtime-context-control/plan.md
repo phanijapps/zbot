@@ -158,7 +158,7 @@ output, the stable prefix, the plan block, or prior summaries.
 
 **Touches:** `gateway/gateway-memory/src/sleep/compactor.rs`,
 `gateway/gateway-memory/src/sleep/worker.rs`,
-`memory-bank/future-state/compaction-strategy.md`
+`docs/architecture/future-state/compaction-strategy.md`
 
 **Tests:**
 - TDD: a verifier-enabled compactor skips a candidate when either entity cannot

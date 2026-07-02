@@ -4,7 +4,7 @@
 // ============================================================================
 //
 // The outbox sits on the conversations side and stays SQLite forever per the
-// design (`memory-bank/future-state/persistence-readiness-design.md`). This
+// design (`docs/architecture/future-state/persistence-readiness-design.md`). This
 // trait exists for hygiene — no leakage of `rusqlite::Connection` through the
 // public API. The concrete impl in `gateway-bridge/src/outbox.rs` implements
 // this trait.

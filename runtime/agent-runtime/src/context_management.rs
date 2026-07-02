@@ -685,7 +685,7 @@ mod compaction_tests {
 
     // ========================================================================
     // Phase 2 minimal-patch regression tests — these target the two bugs
-    // documented in memory-bank/future-state/compaction-strategy.md:
+    // documented in docs/architecture/future-state/compaction-strategy.md:
     //   1. `total_tokens_in` accumulator overcount (executor.rs:498, :852)
     //   2. `compact_messages` no-op on short high-token conversations
     // ========================================================================
