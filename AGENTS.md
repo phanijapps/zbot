@@ -11,6 +11,10 @@ stores/      — zbot-stores* persistence layer (traits, domain types, SQLite im
 gateway/     — gateway-* sub-crates + gateway shell (HTTP/WS network layer)
 discovery/   — LAN mDNS advertisement
 apps/        — daemon (zbotd), cli (zbot), ui (React dashboard)
+docs/        — Architecture, specs, ADRs, and product documentation
+tools/       — Build, dev, and ops tooling
+docker/      — Container configurations
+e2e/         — End-to-end tests
 ```
 
 ## Dependency Order (bottom → top)
@@ -57,10 +61,10 @@ npm run dev            # React UI on port 3000 (from apps/ui/)
 
 ## Data Directory
 
-All apps default to `~/Documents/agentzero/`:
+All apps default to `~/Documents/zbot/`:
 
 ```
-agentzero/
+zbot/
 ├── conversations.db      # SQLite (zbot-stores-sqlite)
 ├── config/               # SOUL.md, INSTRUCTIONS.md, OS.md, shards/
 ├── agents/{name}/        # Agent YAML configs
@@ -71,5 +75,17 @@ agentzero/
 ├── connectors.json       # External connectors
 └── cron_jobs.json        # Scheduled tasks
 ```
+
+## Documentation
+
+Architecture, design, and product documentation lives in `docs/`:
+
+- `docs/architecture/` — Technical architecture, components, and future-state designs
+- `docs/adr/` — Architecture Decision Records (why X over Y)
+- `docs/specs/` — Feature specifications and implementation plans
+- `docs/product/` — Product roadmap, changelog, and context
+- `docs/publishing.md` — Release and build procedures
+
+See `docs/architecture/architecture.md` for the complete system overview.
 
 Also see `CLAUDE.md` for behavioral guidelines and development patterns.
