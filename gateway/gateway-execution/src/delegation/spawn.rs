@@ -1895,9 +1895,27 @@ fn bind_parent_ward_for_delegation(
     request: &DelegationRequest,
 ) -> Result<(Option<String>, Option<String>), String> {
     let Some(ward_id) = request.child_agent_id.strip_prefix("ward:") else {
-        let bound = state_service
-            .get_session(&request.session_id)?
-            .and_then(|session| session.ward_id);
+        // Resolution order, freshest first:
+        // 1. request context — stamped synchronously by the delegate tool
+        //    from engine ctx state (the ward tool set it at execution) —
+        //    cannot lose the dispatch race.
+        // 2. sessions.ward_id — async stream-processor write (lost a 9ms
+        //    race once: sess-70d057a3).
+        // 3. the session's durable __ward_changed__ tool result (lost a
+        //    2ms race: sess-5b433b24 — kept as the final fallback).
+        let request_context_ward = request
+            .context
+            .as_ref()
+            .and_then(|context| context.get("ward_id"))
+            .and_then(|value| value.as_str())
+            .filter(|ward| !ward.trim().is_empty())
+            .map(str::to_string);
+        let bound = request_context_ward.or_else(|| {
+            state_service
+                .get_session(&request.session_id)
+                .ok()
+                .and_then(|session| session.and_then(|s| s.ward_id))
+        });
         return Ok((
             bound.or_else(|| fallback_ward_from_tool_results(state_service, request)),
             None,
@@ -2125,6 +2143,48 @@ mod tests {
             bind_parent_ward_for_delegation(&state_service, &request).expect("bind");
         assert_eq!(ward.as_deref(), Some("finance-geopolitics"));
         assert!(claimed.is_none(), "non-ward children never claim");
+    }
+
+    /// Regression (sess-5b433b24): a fast model dispatched the planner 2ms
+    /// after the ward tool returned — BEFORE both the sessions.ward_id write
+    /// and the messages-row persistence. The synchronous chain (ward tool →
+    /// ctx state → delegate request context) is now the FIRST resolution
+    /// source and cannot lose the race.
+    #[test]
+    fn request_context_ward_wins_over_stale_db() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = Arc::new(agent_primitives::vault_paths::VaultPaths::new(
+            dir.path().to_path_buf(),
+        ));
+        paths.ensure_dirs_exist().expect("vault dirs");
+        let db = Arc::new(DatabaseManager::new(paths).expect("state db"));
+        let state_service = StateService::new(db);
+        let (session, root_execution) = state_service.create_session("root").expect("session");
+        // NOTE: sessions.ward_id NOT set, messages NOT written — both lost
+        // the race. Only the request context carries the ward.
+
+        let request = DelegationRequest {
+            parent_agent_id: "root".to_string(),
+            session_id: session.id.clone(),
+            parent_execution_id: root_execution.id,
+            parent_conversation_id: session.id.clone(),
+            child_agent_id: "planner-agent".to_string(),
+            child_execution_id: "exec-planner-ctx".to_string(),
+            task: "plan".to_string(),
+            context: Some(serde_json::json!({"ward_id": "agent-harness-review"})),
+            max_iterations: None,
+            output_schema: None,
+            skills: Vec::new(),
+            capability_assignment: None,
+            planning_capability_catalog: None,
+            complexity: None,
+            parallel: false,
+            mode: None,
+        };
+        let (ward, claimed) =
+            bind_parent_ward_for_delegation(&state_service, &request).expect("bind");
+        assert_eq!(ward.as_deref(), Some("agent-harness-review"));
+        assert!(claimed.is_none());
     }
 
     #[test]

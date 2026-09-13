@@ -621,6 +621,10 @@ fn parse_components(args: &Value) -> Result<Vec<String>> {
 }
 
 fn ok_envelope(action: &str, ward: &str, digest: &str, data: Value) -> Value {
+    // Synchronous ward binding: the engine context is the ONE surface the
+    // very next action (typically the planner delegation) can read without
+    // racing the async stream-processor DB writes (sessions.ward_id AND the
+    // messages row both lost a 2ms race in the wild — sess-5b433b24).
     json!({"ok":true,"action":action,"ward_id":ward,"template_digest":digest,"data":data})
 }
 
@@ -1379,6 +1383,15 @@ impl Tool for WardTool {
 
                 // Best-effort recall of ward-scoped knowledge
                 let ward_knowledge = self.recall_ward_facts(name, &ctx).await;
+
+                // Synchronous ward binding for the very next action —
+                // see the ctx.set_state note on the template path. Both the
+                // sessions.ward_id write and the messages row are async and
+                // lost 2ms races in the wild (sess-5b433b24).
+                ctx.set_state(
+                    "ward_id".to_string(),
+                    serde_json::Value::String(name.to_string()),
+                );
 
                 // Return result with __ward_changed__ marker for the executor.
                 // Slim by contract (spec ward-slim AC1): only model-actionable
