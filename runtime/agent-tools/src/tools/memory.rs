@@ -170,9 +170,10 @@ impl MemoryWriteTool {
         }
 
         if content.len() > 500 {
-            return Err(AgentError::Tool(
-                "Fact content too long. Keep to 1-2 sentences (max 500 chars).".to_string(),
-            ));
+            return Err(AgentError::Tool(format!(
+                "Fact content is {} chars — max 500. Condense to 1-2 sentences or split into multiple keyed facts.",
+                content.len()
+            )));
         }
 
         if let Some(intake) = &self.evidence_intake {
