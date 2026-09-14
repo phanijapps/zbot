@@ -19,6 +19,15 @@ pub struct IntentAgentDeps {
     pub max_tokens: u64,
 }
 
+/// Wall-clock budget for the ENTIRE intent agent run. Intent is a
+/// preflight: it must never hold the session hostage. Observed
+/// (sess-c1ce218a): one stalled cloud LLM call hung the loop with no
+/// deadline but the 600s HTTP timeout × rig's 20 turns — the durable
+/// dispatcher renewed heartbeats for minutes while the session sat
+/// frozen in bootstrap. 45s is ~10× the observed healthy run (5–6
+/// sub-second calls); expiry routes to the labeled fallback.
+const INTENT_AGENT_BUDGET: std::time::Duration = std::time::Duration::from_secs(45);
+
 /// Run the intent agent: MemorySearchTool + prompt → JSON.
 /// The model calls search_memory as many times as it needs,
 /// then outputs its analysis as JSON.
@@ -36,8 +45,9 @@ pub async fn run_intent_agent(deps: &IntentAgentDeps, message: &str) -> Option<I
     let client: Arc<dyn agent_runtime::llm::LlmClient> =
         Arc::new(agent_runtime::OpenAiClient::new(llm_config).ok()?);
 
-    // Agent with MemorySearchTool — the model drives the search
-    let result = agent_runtime::rig_adapter::agent_with_tools(
+    // Agent with MemorySearchTool — the model drives the search,
+    // under the wall-clock budget (see INTENT_AGENT_BUDGET).
+    let agent_fut = agent_runtime::rig_adapter::agent_with_tools(
         client,
         deps.model.clone(),
         super::prompt::INTENT_AGENT_PROMPT,
@@ -45,8 +55,17 @@ pub async fn run_intent_agent(deps: &IntentAgentDeps, message: &str) -> Option<I
             deps.fact_store.clone(),
         )))],
         message,
-    )
-    .await;
+    );
+    let result = match tokio::time::timeout(INTENT_AGENT_BUDGET, agent_fut).await {
+        Ok(result) => result,
+        Err(_elapsed) => {
+            tracing::warn!(
+                budget_secs = INTENT_AGENT_BUDGET.as_secs(),
+                "intent agent exceeded its wall-clock budget — falling back"
+            );
+            return None;
+        }
+    };
 
     match result {
         Ok(text) => {
@@ -102,5 +121,18 @@ mod empty_intent_tests {
         let raw = r#"{"primary_intent":"","hidden_intents":[],"solution_path":[],"recommended_skills":[],"recommended_agents":[],"recommended_procedures":[],"recommended_capabilities":[],"ward_recommendation":{"action":"use_existing","ward_name":"general","subdirectory":null,"structure":{},"reason":""},"execution_strategy":{"approach":"simple","explanation":""},"complexity":null,"explanation":""}"#;
         let analysis: IntentAnalysis = serde_json::from_str(raw).expect("parses");
         assert!(analysis.primary_intent.trim().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    #[tokio::test(start_paused = true)]
+    async fn budget_expiry_cuts_off_a_pending_future() {
+        // The run_intent_agent budget path maps this exact shape to None
+        // (labeled fallback): a future that never resolves is cut off at
+        // the wall-clock budget instead of hanging for the HTTP timeout.
+        let never = std::future::pending::<()>();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), never).await;
+        assert!(outcome.is_err(), "pending future must hit the budget");
     }
 }
