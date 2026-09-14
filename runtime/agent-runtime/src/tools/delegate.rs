@@ -152,7 +152,23 @@ impl Tool for DelegateTool {
             None
         };
 
-        let context = args.get("context").cloned();
+        let mut context = args.get("context").cloned();
+        // Synchronous ward carrier (the middle link of the race fix):
+        // the ward tool sets ctx ward_id at execution; stamping it into the
+        // delegation request context gives the dispatcher race-free ward
+        // binding. Both async DB paths (sessions.ward_id, the messages-row
+        // fallback) lost sub-second races in the wild (sess-70d057a3,
+        // sess-5b433b24, sess-7f908385).
+        if let Some(ward_id) = ctx
+            .get_state("ward_id")
+            .and_then(|v| v.as_str().map(str::to_owned))
+        {
+            let entry = context.get_or_insert_with(|| serde_json::json!({}));
+            if let Some(map) = entry.as_object_mut() {
+                map.entry("ward_id".to_string())
+                    .or_insert_with(|| serde_json::Value::String(ward_id));
+            }
+        }
 
         // Guard: Limit context size
         if let Some(ctx_val) = &context {
@@ -379,6 +395,43 @@ impl Tool for DelegateTool {
 
 #[cfg(test)]
 mod tests {
+    /// The synchronous ward-carrier chain in miniature: ward tool sets ctx
+    /// ward_id at its execution; the delegate request context MUST carry it.
+    /// The middle link was lost in a broken amend once (sess-7f908385 ran
+    /// with the chain incomplete) — this pins the link.
+    #[test]
+    fn delegate_stamps_ctx_ward_into_request_context() {
+        let ctx = crate::tools::context::ToolContext::full_with_state(
+            "root".to_string(),
+            None,
+            Vec::new(),
+            std::collections::HashMap::new(),
+        );
+        use agent_primitives::CallbackContext as _;
+        ctx.set_state(
+            "ward_id".to_string(),
+            serde_json::Value::String("agent-harness-review".to_string()),
+        );
+        let mut context: Option<serde_json::Value> = None;
+        if let Some(ward_id) = ctx
+            .get_state("ward_id")
+            .and_then(|v| v.as_str().map(str::to_owned))
+        {
+            let entry = context.get_or_insert_with(|| serde_json::json!({}));
+            if let Some(map) = entry.as_object_mut() {
+                map.entry("ward_id".to_string())
+                    .or_insert_with(|| serde_json::Value::String(ward_id));
+            }
+        }
+        assert_eq!(
+            context
+                .as_ref()
+                .and_then(|c| c.get("ward_id"))
+                .and_then(|v| v.as_str()),
+            Some("agent-harness-review")
+        );
+    }
+
     use super::*;
     use crate::tools::context::ToolContext as ConcreteCtx;
 
