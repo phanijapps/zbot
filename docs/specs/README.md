@@ -19,6 +19,7 @@ Feature specs for AgentZero. Each spec is the canonical artifact for its scope, 
 
 | Spec | Summary |
 | --- | --- |
+| [Slide Panel Overflow](slide-panel-overflow/spec.md) | Keeps artifact, vault, and generic slide-over content and controls within the viewport. |
 | [Rig-only Execution](rig-only-execution/spec.md) | Complete Rig cutover for root/subagent execution, MCP and skills; removes the legacy executor and all engine-selection fallback paths. 11 waves, all acceptance criteria met. |
 | [Engine Hook Framework](engine-hook-framework/spec.md) | One `EngineHook` trait + ordered `HookSet` replaces 4 single-slot closure aliases. Extensible by design. |
 | [Execution Errors](execution-errors/spec.md) | `ExecutionError` enum replaces 155 `Result<_, String>` sites across gateway-execution. |

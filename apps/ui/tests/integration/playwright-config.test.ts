@@ -15,6 +15,7 @@ const EXPECTED_PROJECTS = [
 const EXPECTED_REQUIRED_FILES = [
   'navigation.spec.ts',
   'persistent-surfaces.spec.ts',
+  'slide-panel-layout.spec.ts',
   'smoke.spec.ts',
 ];
 
@@ -41,7 +42,7 @@ describe('Playwright E2E suite ownership', () => {
     expect([...new Set(assigned)].sort()).toEqual(specFiles().sort());
   });
 
-  // STUB: AC3/AC4 — the required lane remains the deliberate three-file set.
+  // The required lane contains only deterministic, daemon-independent files.
   it('keeps the required project fixed to the deterministic files', () => {
     expect(projectFiles('required').sort()).toEqual(EXPECTED_REQUIRED_FILES);
   });
