@@ -556,8 +556,21 @@ describe("<ResearchPage>", () => {
   it("shows Stop button only while running and fires stopAgent on click", () => {
     // Idle: no Stop button
     renderPage();
-    expect(screen.queryByTitle("Stop")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop research" })).toBeNull();
 
+    const stopSpy = vi.fn();
+    researchRef.current = {
+      ...makeIdleResearch(),
+      state: { ...makeIdleResearch().state, status: "running", sessionId: "sess-1" },
+      stopAgent: stopSpy,
+    };
+    renderPage();
+    const btn = screen.getByTitle("Stop");
+    fireEvent.click(btn);
+    expect(stopSpy).toHaveBeenCalled();
+  });
+
+  it("disables Stop while running without a session identity", () => {
     const stopSpy = vi.fn();
     researchRef.current = {
       ...makeIdleResearch(),
@@ -565,9 +578,11 @@ describe("<ResearchPage>", () => {
       stopAgent: stopSpy,
     };
     renderPage();
-    const btn = screen.getByTitle("Stop");
+
+    const btn = screen.getByRole("button", { name: "Stop research" });
+    expect(btn).toBeDisabled();
     fireEvent.click(btn);
-    expect(stopSpy).toHaveBeenCalled();
+    expect(stopSpy).not.toHaveBeenCalled();
   });
 
   it("New research button fires startNewResearch", () => {
