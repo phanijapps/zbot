@@ -24,6 +24,11 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # The hosted image makes /usr/local/bin writable for global npm installs.
+      # Hook tests intentionally require operator-managed, non-writable programs.
+      - name: Harden Node executable for hook tests
+        run: sudo chmod go-w /usr/local/bin/node
+
       - name: Run Rust unit tests
         run: cargo test --workspace --lib
 
@@ -53,6 +58,11 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+
+      # The hosted image makes /usr/local/bin writable for global npm installs.
+      # Hook tests intentionally require operator-managed, non-writable programs.
+      - name: Harden Node executable for hook tests
+        run: sudo chmod go-w /usr/local/bin/node
 
       - name: Run Rust integration tests
         run: cargo test --workspace
@@ -235,6 +245,11 @@ jobs:
 
       - name: Install cargo-llvm-cov
         run: cargo llvm-cov --version || cargo install cargo-llvm-cov --locked
+
+      # The hosted image makes /usr/local/bin writable for global npm installs.
+      # Hook tests intentionally require operator-managed, non-writable programs.
+      - name: Harden Node executable for hook tests
+        run: sudo chmod go-w /usr/local/bin/node
 
       - name: Generate Rust coverage (LCOV)
         # Excludes: agent-runtime MCP transports (stdio/http/sse/manager) drive real

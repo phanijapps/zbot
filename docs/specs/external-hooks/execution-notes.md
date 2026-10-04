@@ -95,3 +95,28 @@ and test lines alone. Review shape remains MIXED, with sealed dependency-ordered
 T1 configuration, T2 subprocess, T3 lifecycle and T4 Activity boundaries.
 This is one joined feature; the construction proofs permit independent review
 of those layers without introducing a second executor.
+
+## PR #278 CI merge follow-up
+
+Plan: fix only GitHub-hosted Ubuntu test provisioning in .github/workflows/test.yml
+for unit, integration and Rust coverage jobs. The upstream runner image's
+install-nodejs.sh runs chmod -R 777 /usr/local/bin; hook program trust rejects
+that writable executable. Preserve runtime checks and all existing assertions.
+Verify with an isolated real Node permission probe (777 rejected/no spawn, then
+go-w succeeds), the existing Node hook fixture, workflow parsing/order and diff
+checks. Re-review the bounded change before push/merge. No production runtime
+change, interpreter framework, test skip or host policy expansion.
+
+Hypotheses: unsupported reaper would reject every hook, but Python/Go and other
+process fixtures passed; Node JSON/argv semantics pass locally with the same
+script; runner-provided writable Node is consistent with upstream installer and
+the trust gate. The original CI run has 494 passing runtime tests and just the
+Node observer failing. Security fails on unchanged rustls RUSTSEC-2026-0285,
+already registered in backlog; this follow-up does not claim a clean scanner.
+
+Source: https://github.com/actions/runner-images/blob/main/images/ubuntu/scripts/build/install-nodejs.sh
+
+Resolved: real Node permission probe and original Node fixture pass; YAML ordering,
+format and diff gates pass. CI follow-up adversarial, quality and security reviews
+are Clean. The unchanged frontend retains its prior Clean review. No findings
+remain in this bounded correction; hosted confirmation is the remaining merge check.

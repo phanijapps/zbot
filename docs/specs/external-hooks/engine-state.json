@@ -6,7 +6,7 @@
   "state": "CODE-HUMAN-GATE",
   "last_event": "reviewers-clean",
   "last_event_context": null,
-  "transition_sequence": 20,
-  "last_transition_at": "2026-10-04T14:46:57Z",
+  "transition_sequence": 24,
+  "last_transition_at": "2026-10-04T16:25:38Z",
   "gate_question": "Are these changes correct and ready to merge?"
 }

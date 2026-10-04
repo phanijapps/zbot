@@ -183,3 +183,16 @@ Logs: /tmp/zbot-hooks-final-{workspace-check,ui-lint,ui-type,parent-runtime,daem
 Final rendered recapture/keyboard inspection, axe (zero violations, fifteen
 passing rules per route), and Activity subtree HTML validation pass.
 Final independent re-reviews are Clean (review.md).
+
+PR #278 merge-time CI correction: the hosted Ubuntu image installs a world-writable
+/usr/local/bin/node. The hook trust gate correctly rejects it. An isolated real
+Node binary with mode 0777 is rejected before its script writes a marker; changing
+only that binary to 0755 runs the same script successfully. The diagnostic fixture
+was removed after the probe. Existing Node argv/JSON hook regression also passes.
+Logs: /tmp/zbot-hooks-pr278-{permissions-probe,node-fixture}.log.
+
+The CI-only fix removes group/world write from the image's Node binary before
+unit, integration and coverage invocation; workflow YAML/order and diff checks
+pass. Runtime permissions, test assertions and production code are unchanged.
+The original security job failed on the recorded rustls advisory. Bounded independent adversarial, quality and security follow-up reviews are
+Clean. Hosted rerun remains pending before merge.
