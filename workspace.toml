@@ -62,6 +62,12 @@ open = [
   # (engram-ingest). Develop's scan has been red since 2026-09-10; the fix
   # belongs upstream in engram, not in this workspace.
   { slug = "pre-existing-serde-yml-rustsec", source = "pre-flight/2026-10-04-external-hooks" },
+  # deferred (desktop-session-completion AC1): the CLI --host flag is silently
+  # overridden by settings-backed bind resolution (both directions); original
+  # shell AC13's "--host can still select a LAN bind" half awaits the owner's
+  # precedence correction or a config-only AC13 amendment. Docker entrypoint
+  # (--host 0.0.0.0) demotion on fresh volumes rides on the same decision.
+  { slug = "cli-host-bind-precedence", source = "spec/desktop-session-completion AC1" },
   # cargo deny check fails because services/distillation/Cargo.toml declares no
   # package license. Reconcile metadata with the existing workspace license.
   { slug = "pre-existing-distillation-license", source = "pre-flight/2026-10-03-ci-recovery" },
