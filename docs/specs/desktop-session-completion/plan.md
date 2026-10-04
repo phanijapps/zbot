@@ -1,7 +1,7 @@
 # Plan: Desktop session completion
 
 - **Spec:** [`spec.md`](spec.md)
-- **Status:** Drafting
+- **Status:** Executing
 
 ## Approach
 

@@ -1,6 +1,6 @@
 # Spec: Desktop session completion
 
-- **Status:** Approved
+- **Status:** Implementing
 - **Owner:** @videogamer
 - **Plan:** [`plan.md`](plan.md)
 - **Constrained by:** [RFC-0021](../../rfc/0021-conversation-first-desktop-agent.md); [existing Desktop Session Shell](../desktop-session-shell/spec.md)
