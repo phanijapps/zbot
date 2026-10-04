@@ -12,17 +12,20 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 const health = vi.fn();
 const connect = vi.fn();
 const disconnect = vi.fn();
+const commissioningStatus = vi.fn();
+const createChatSession = vi.fn();
+const deleteChatSession = vi.fn();
 
 vi.mock("@/services/transport", () => ({
   initializeTransport: vi.fn(async () => {}),
-  getTransport: vi.fn(async () => ({ health, connect, disconnect })),
+  getTransport: vi.fn(async () => ({ health, connect, disconnect, getCommissioningStatus: commissioningStatus, createChatSession, deleteChatSession, listSessionsFull: async () => ({success:true,data:[]}) })),
 }));
 
 // Mock all the heavy child pages so they don't need their own transport
-vi.mock("./features/commissioning", () => ({
-  CommissioningScreen: () => <div>CommissioningScreen</div>,
-  CommissioningGuard: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}));
+vi.mock("./features/commissioning", async () => {
+  const actual = await vi.importActual<typeof import("./features/commissioning/CommissioningGuard")>("./features/commissioning/CommissioningGuard");
+  return { CommissioningGuard: actual.CommissioningGuard, CommissioningScreen: () => <div>CommissioningScreen</div> };
+});
 vi.mock("./features/agent/WebAgentsPanel", () => ({ WebAgentsPanel: () => <div>WebAgentsPanel</div> }));
 vi.mock("./features/settings/WebSettingsPanel", () => ({ WebSettingsPanel: () => <div>WebSettingsPanel</div> }));
 vi.mock("./features/integrations/WebIntegrationsPanel", () => ({ WebIntegrationsPanel: () => <div>WebIntegrationsPanel</div> }));
@@ -35,6 +38,100 @@ vi.mock("./components/AccentPicker", () => ({ AccentPicker: () => <button aria-l
 
 import { initializeTransport } from "@/services/transport";
 import App from "./App";
+
+// STUB: AC11 — real App routing/guard, existing page doubles, no production migration yet.
+describe("Desktop administration routes", () => {
+  const pages = [["/agents", "WebAgentsPanel"], ["/settings", "WebSettingsPanel"], ["/integrations", "WebIntegrationsPanel"]];
+
+  it.each(pages)("renders %s with desktop navigation and reload-safe session return", async (path, content) => {
+    window.history.replaceState({}, "", `${path}?returnTo=%2Fsession%2Fsess-kept`);
+    const first = render(<App />);
+    expect(await screen.findByText(content)).toBeVisible();
+    expect(screen.queryByRole("navigation", {name:"Primary"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", {name:"Mobile primary"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", {name:"z-Bot home"})).not.toBeInTheDocument();
+    expect(screen.getByRole("complementary", {name:"Conversation navigation"})).toBeVisible();
+    expect(screen.queryByRole("button", {name:/theme accent/i})).not.toBeInTheDocument();
+    expect(screen.getByRole("link", {name:"Back to conversation"})).toHaveAttribute("href", "/session/sess-kept");
+    first.unmount();
+    render(<App />);
+    await screen.findByText(content);
+    expect(screen.queryByRole("navigation", {name:"Primary"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", {name:"Mobile primary"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", {name:"z-Bot home"})).not.toBeInTheDocument();
+    expect(screen.getByRole("link", {name:"Back to conversation"})).toHaveAttribute("href", "/session/sess-kept");
+    expect(createChatSession).not.toHaveBeenCalled();
+    expect(deleteChatSession).not.toHaveBeenCalled();
+  });
+
+  it.each(pages)("keeps %s behind the real commissioning guard", async (path, content) => {
+    commissioningStatus.mockResolvedValue({success:true,data:{state:"pending"}});
+    window.history.replaceState({}, "", path);
+    render(<App />);
+    expect(await screen.findByText("CommissioningScreen")).toBeVisible();
+    expect(screen.queryByText(content)).not.toBeInTheDocument();
+    expect(window.location.pathname).toBe("/commission");
+    expect(createChatSession).not.toHaveBeenCalled();
+    expect(deleteChatSession).not.toHaveBeenCalled();
+  });
+
+  it.each(pages)("rejects an external return target on %s", async (path, content) => {
+    window.history.replaceState({}, "", `${path}?returnTo=${encodeURIComponent("https://example.test/session")}`);
+    render(<App />);
+    await screen.findByText(content);
+    expect(screen.getByRole("link", {name:"Back to conversation"})).toHaveAttribute("href", "/session");
+  });
+
+  it.each([
+    ["/providers", "/settings", "", "WebSettingsPanel"],
+    ["/skills", "/agents", "skills", "WebAgentsPanel"],
+    ["/hooks", "/agents", "schedules", "WebAgentsPanel"],
+    ["/connectors", "/integrations", "plugins", "WebIntegrationsPanel"],
+    ["/mcps", "/integrations", "", "WebIntegrationsPanel"],
+  ])("preserves the legacy %s alias and target tab", async (alias, path, tab, content) => {
+    for (const target of [null, "/session/sess-kept", "https://example.test/session"]) {
+      window.history.replaceState({}, "", target ? `${alias}?returnTo=${encodeURIComponent(target)}` : alias);
+      const view = render(<App />);
+      expect(await screen.findByText(content)).toBeVisible();
+      expect(window.location.pathname).toBe(path);
+      expect(new URLSearchParams(window.location.search).get("tab") ?? "").toBe(tab);
+      expect(screen.getByRole("link", {name:"Back to conversation"})).toHaveAttribute("href", target === "/session/sess-kept" ? target : "/session");
+      expect(screen.getByRole("complementary", {name:"Conversation navigation"})).toBeVisible();
+      expect(createChatSession).not.toHaveBeenCalled();
+      expect(deleteChatSession).not.toHaveBeenCalled();
+      view.unmount();
+    }
+  });
+});
+
+// STUB: AC8 — observable route chrome and refresh-safe return destination.
+describe("Desktop knowledge routes", () => {
+  it.each([["/memory", "MemoryTab"], ["/observatory", "ObservatoryPage"]])("renders %s with desktop navigation, not legacy chrome", async (path, content) => {
+    window.history.replaceState({}, "", `${path}?returnTo=${encodeURIComponent("/session/sess-kept")}`);
+    render(<App />);
+    expect(await screen.findByText(content)).toBeVisible();
+    expect(screen.getByRole("complementary", {name:"Conversation navigation"})).toBeInTheDocument();
+    expect(screen.queryByRole("button", {name:/theme accent/i})).not.toBeInTheDocument();
+    expect(screen.getByRole("link", {name:"Back to conversation"})).toHaveAttribute("href", "/session/sess-kept");
+  });
+
+  it("retains the selected conversation across a knowledge-page remount", async () => {
+    window.history.replaceState({}, "", "/observatory?returnTo=%2Fsession%2Fsess-kept");
+    const first = render(<App />);
+    await screen.findByText("ObservatoryPage");
+    first.unmount();
+    render(<App />);
+    await screen.findByText("ObservatoryPage");
+    expect(screen.getByRole("link", {name:"Back to conversation"})).toHaveAttribute("href", "/session/sess-kept");
+  });
+
+  it.each(["https://example.com", "//example.com", "/session/sess-kept/../../settings", "/session/sess-kept?token=secret"])("rejects an unsafe return destination %s", async target => {
+    window.history.replaceState({}, "", `/memory?returnTo=${encodeURIComponent(target)}`);
+    render(<App />);
+    await screen.findByText("MemoryTab");
+    expect(screen.getByRole("link", {name:"Back to conversation"})).toHaveAttribute("href", "/session");
+  });
+});
 
 // jsdom doesn't implement matchMedia — provide a minimal stub for Sonner/Toaster
 Object.defineProperty(window, "matchMedia", {
@@ -52,10 +149,15 @@ Object.defineProperty(window, "matchMedia", {
 });
 
 beforeEach(() => {
+  window.history.replaceState({}, "", "/");
   vi.mocked(initializeTransport).mockClear();
   health.mockReset();
   connect.mockReset();
   disconnect.mockReset();
+  commissioningStatus.mockReset();
+  commissioningStatus.mockResolvedValue({success:true,data:{state:"complete"}});
+  createChatSession.mockReset();
+  deleteChatSession.mockReset();
   health.mockResolvedValue({ success: true, data: { status: "ok", version: "1.0.0" } });
   connect.mockResolvedValue({ success: true });
   disconnect.mockResolvedValue(undefined);
@@ -94,7 +196,8 @@ describe("App — initialization flow", () => {
     expect(initializeTransport).toHaveBeenCalledTimes(1);
     expect(health).toHaveBeenCalledTimes(1);
     expect(connect).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("v1.0.0")).toBeInTheDocument();
+    // The real commissioning guard resolves after gateway initialization.
+    expect(await screen.findByText("v1.0.0")).toBeInTheDocument();
   });
 
   it("renders build date metadata from health in the version badge", async () => {

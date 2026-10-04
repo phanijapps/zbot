@@ -412,7 +412,14 @@ fn test_intent_injection_sdlc_for_graph() {
         injection.contains("## Task Analysis"),
         "Graph approach should include task analysis"
     );
-    assert!(injection.contains("Goal:"), "Should include the goal");
+    // Advisory fields now cross the prompt boundary as delimited JSON data.
+    let start = injection.find("<intent-data>").unwrap() + "<intent-data>".len();
+    let end = injection[start..].find("</intent-data>").unwrap() + start;
+    let data: serde_json::Value = serde_json::from_str(&injection[start..end]).unwrap();
+    assert_eq!(
+        data["goal"], analysis.primary_intent,
+        "Should include the goal"
+    );
     assert!(
         injection.contains("planner-agent"),
         "Should route to planner for graph tasks"

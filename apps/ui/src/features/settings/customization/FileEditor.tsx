@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { ConflictBanner } from "./ConflictBanner";
 
 type Props = {
@@ -8,6 +8,7 @@ type Props = {
 type Conflict = { currentContent: string; currentVersion: string };
 
 export function FileEditor({ path }: Props) {
+  const editorId = useId();
   const [diskContent, setDiskContent] = useState("");
   const [editorContent, setEditorContent] = useState("");
   const [version, setVersion] = useState<string>("");
@@ -93,9 +94,9 @@ export function FileEditor({ path }: Props) {
 
   return (
     <div className="customization-editor">
-      <header className="row" style={{ display: "flex", alignItems: "center", gap: "var(--spacing-2)" }}>
-        <h4 style={{ margin: 0 }}>
-          <code>{path}</code>
+      <header className="customization-editor__header">
+        <h4>
+          <label htmlFor={editorId}><code>{path}</code></label>
         </h4>
         {isDirty && <span className="muted small">• Modified</span>}
       </header>
@@ -108,18 +109,13 @@ export function FileEditor({ path }: Props) {
         </div>
       )}
       <textarea
+        id={editorId}
+        className="customization-editor__input"
         value={editorContent}
         onChange={(e) => setEditorContent(e.target.value)}
-        style={{
-          width: "100%",
-          minHeight: 400,
-          fontFamily: "monospace",
-          fontSize: "var(--font-size-sm)",
-          padding: "var(--spacing-3)",
-        }}
         spellCheck={false}
       />
-      <div className="row" style={{ display: "flex", gap: "var(--spacing-2)", marginTop: "var(--spacing-2)" }}>
+      <div className="customization-editor__actions">
         <button
           type="button"
           className="btn btn--outline btn--sm"

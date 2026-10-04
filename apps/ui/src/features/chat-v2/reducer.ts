@@ -2,7 +2,8 @@ import { randomId } from "@/shared/utils/randomId";
 import type { QuickChatArtifactRef, QuickChatMessage, QuickChatState, QuickChatInlineChip } from "./types";
 
 export type QuickChatAction =
-  | { type: "HYDRATE"; sessionId: string; conversationId: string; messages: QuickChatMessage[]; wardName: string | null; artifacts: QuickChatArtifactRef[] }
+  | { type: "RESET" }
+  | { type: "HYDRATE"; sessionId: string; conversationId: string; messages: QuickChatMessage[]; wardName: string | null; artifacts: QuickChatArtifactRef[]; isLive?: boolean }
   | { type: "APPEND_USER"; message: QuickChatMessage }
   | { type: "SESSION_BOUND"; sessionId: string }
   | { type: "AGENT_STARTED"; agentId: string }
@@ -60,6 +61,8 @@ function attachChipToLatestAssistant(
 
 export function reduceQuickChat(state: QuickChatState, action: QuickChatAction): QuickChatState {
   switch (action.type) {
+    case "RESET":
+      return { ...state, sessionId: null, conversationId: null, messages: [], artifacts: [], activeWardName: null, status: "idle" };
     case "HYDRATE":
       return {
         ...state,
@@ -67,7 +70,7 @@ export function reduceQuickChat(state: QuickChatState, action: QuickChatAction):
         conversationId: action.conversationId,
         messages: action.messages,
         activeWardName: action.wardName,
-        status: "idle",
+        status: action.isLive ? "running" : "idle",
         artifacts: action.artifacts,
       };
     case "APPEND_USER":

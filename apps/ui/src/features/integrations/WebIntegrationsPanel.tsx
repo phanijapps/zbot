@@ -145,11 +145,16 @@ function authStatusVariant(status?: McpAuthStatus): "enabled" | "disabled" | "er
 
 export function WebIntegrationsPanel() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = searchParams.get("tab") || "tools";
+  const requestedTab = searchParams.get("tab") || "tools";
+  const activeTab = ["tools", "plugins"].includes(requestedTab) ? requestedTab : "tools";
 
   const setActiveTab = useCallback(
     (tab: string) => {
-      setSearchParams(tab === "tools" ? {} : { tab });
+      setSearchParams(previous => {
+        const next = new URLSearchParams(previous);
+        if (tab === "tools") next.delete("tab"); else next.set("tab", tab);
+        return next;
+      });
     },
     [setSearchParams],
   );

@@ -225,6 +225,30 @@ afterEach(() => {
 // 1 — Loading state
 // ===========================================================================
 
+// STUB: AC11 — existing page tab changes must not discard desktop return state.
+describe("WebAgentsPanel desktop return", () => {
+  it("falls back to a keyboard-reachable My Agents panel for an unknown tab", async () => {
+    window.history.replaceState({}, "", "/agents?tab=bogus&returnTo=%2Fsession%2Fsess-kept");
+    await mountPanel();
+    const tab = await screen.findByRole("tab", { name: /My Agents/ });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(tab).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("id", "tabpanel-agents");
+    expect(new URLSearchParams(window.location.search).get("returnTo")).toBe("/session/sess-kept");
+  });
+
+  it("preserves the selected conversation when switching to Skills Library and back", async () => {
+    window.history.replaceState({}, "", "/agents?returnTo=%2Fsession%2Fsess-kept");
+    await mountPanel();
+    fireEvent.click(await screen.findByRole("tab", {name:/Skills Library/}));
+    expect(new URLSearchParams(window.location.search).get("tab")).toBe("skills");
+    expect(new URLSearchParams(window.location.search).get("returnTo")).toBe("/session/sess-kept");
+    fireEvent.click(screen.getByRole("tab", {name:/My Agents/}));
+    expect(new URLSearchParams(window.location.search).get("tab")).toBeNull();
+    expect(new URLSearchParams(window.location.search).get("returnTo")).toBe("/session/sess-kept");
+  });
+});
+
 describe("WebAgentsPanel — loading state", () => {
   it("renders a spinner before the transport resolves and not the page header", async () => {
     const { container } = await mountPanel({ resolveTransport: false });

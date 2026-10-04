@@ -70,13 +70,15 @@ impl MemoryFactStore for MockFactStore {
 // ---------------------------------------------------------------------------
 
 fn ollama_provider() -> Provider {
+    let model =
+        std::env::var("INTENT_SMOKE_MODEL").expect("set INTENT_SMOKE_MODEL for a live test");
     Provider {
         id: Some("provider-ollama".to_string()),
         name: "Ollama".to_string(),
         description: "local".to_string(),
-        api_key: "ollama".to_string(),
-        base_url: "http://localhost:11434/v1".to_string(),
-        models: vec!["deepseek-v4-flash:cloud".to_string()],
+        api_key: std::env::var("INTENT_SMOKE_API_KEY").unwrap_or_default(),
+        base_url: std::env::var("INTENT_SMOKE_BASE_URL").expect("set INTENT_SMOKE_BASE_URL"),
+        models: vec![model.clone()],
         embedding_models: None,
         embedding_dimensions: None,
         verified: Some(true),
@@ -84,7 +86,7 @@ fn ollama_provider() -> Provider {
         created_at: None,
         max_concurrent_requests: None,
         context_window: Some(32_768),
-        default_model: Some("deepseek-v4-flash:cloud".to_string()),
+        default_model: Some(model),
         rate_limits: None,
         model_configs: None,
     }
@@ -99,13 +101,14 @@ fn deps(tmp: &tempfile::TempDir) -> IntentAgentDeps {
         procedure_store: None,
         paths,
         provider: ollama_provider(),
-        model: "deepseek-v4-flash:cloud".to_string(),
-        max_tokens: 2000,
+        model: std::env::var("INTENT_SMOKE_MODEL").expect("model"),
+        max_tokens: 4096,
+        resources: serde_json::json!({"skills":[{"id":"web-search"},{"id":"coding"}],"agents":[{"id":"research-agent"},{"id":"writing-agent"}],"mcps":[],"wards":[{"id":"financial-analysis"}]}),
     }
 }
 
 #[tokio::test]
-#[ignore = "requires Ollama on localhost:11404"]
+#[ignore = "requires explicitly configured INTENT_SMOKE provider"]
 async fn intent_agent_comprehensive_research() {
     let tmp = tempfile::tempdir().unwrap();
     let deps = deps(&tmp);
@@ -130,7 +133,7 @@ async fn intent_agent_comprehensive_research() {
 }
 
 #[tokio::test]
-#[ignore = "requires Ollama on localhost:11434"]
+#[ignore = "requires explicitly configured INTENT_SMOKE provider"]
 async fn intent_agent_simple_question() {
     let tmp = tempfile::tempdir().unwrap();
     let deps = deps(&tmp);
@@ -143,36 +146,4 @@ async fn intent_agent_simple_question() {
         ),
         None => println!("✓ returned None (acceptable for simple)"),
     }
-}
-
-#[tokio::test]
-#[ignore = "requires Ollama on localhost:11434"]
-async fn debug_raw_model_output() {
-    let tmp = tempfile::tempdir().unwrap();
-    let deps = deps(&tmp);
-
-    let llm_config = agent_runtime::LlmConfig::new(
-        deps.provider.base_url.clone(),
-        deps.provider.api_key.clone(),
-        deps.model.clone(),
-        "provider-ollama".to_string(),
-    )
-    .with_max_tokens(2000);
-    let client: Arc<dyn agent_runtime::llm::LlmClient> =
-        Arc::new(agent_runtime::OpenAiClient::new(llm_config).unwrap());
-
-    // Plain chat call — no response_format, no tools
-    let msgs = vec![agent_runtime::ChatMessage::system(
-        "You are an intent analyzer. Available resources:\n- [skill] web-search: Search the web\n- [agent] research-agent: Web research specialist\n\nRespond with ONLY a JSON object with these fields: primary_intent, hidden_intents, solution_path, recommended_skills, recommended_agents, recommended_procedures, recommended_capabilities, ward_recommendation (object with action, ward_name, reason), execution_strategy (object with approach, explanation), complexity, explanation. No markdown, no prose, just JSON.".to_string(),
-    ), agent_runtime::ChatMessage::user(
-        "Perform comprehensive analysis of renewable energy sector trends".to_string(),
-    )];
-
-    let response = client.chat(msgs, None).await.unwrap();
-    println!("RAW_CONTENT: [{}]", response.content);
-    println!(
-        "RAW_REASONING: [{}]",
-        response.reasoning.unwrap_or_default()
-    );
-    println!("CONTENT_LEN: {}", response.content.len());
 }

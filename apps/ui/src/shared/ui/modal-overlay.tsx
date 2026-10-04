@@ -3,8 +3,9 @@
 // Consistent full-screen modal with proper animations
 // ============================================================================
 
-import { memo, useEffect, useRef } from "react";
+import { memo, useId, useRef } from "react";
 import { cn } from "./utils";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 
 // -----------------------------------------------------------------------------
 // Types
@@ -52,46 +53,13 @@ export const ModalOverlay = memo(({
   closeOnBackdropClick = false,
 }: ModalOverlayProps) => {
   const contentRef = useRef<HTMLDivElement>(null);
-
-  // Handle ESC key
-  useEffect(() => {
-    if (!closeOnEscape || !open) return;
-
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-      }
-    };
-
-    document.addEventListener("keydown", handleEscape);
-    return () => document.removeEventListener("keydown", handleEscape);
-  }, [open, onClose, closeOnEscape]);
-
-  // Prevent body scroll when modal is open
-  useEffect(() => {
-    if (open) {
-      document.body.style.overflow = "hidden";
-      return () => {
-        document.body.style.overflow = "";
-      };
-    }
-  }, [open]);
-
-  // Focus trap
-  useEffect(() => {
-    if (open && contentRef.current) {
-      const focusableElements = contentRef.current.querySelectorAll(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-      );
-      const firstElement = focusableElements[0] as HTMLElement;
-      firstElement?.focus();
-    }
-  }, [open]);
+  const titleId = useId();
+  useDialogFocus(open, contentRef, closeOnEscape ? onClose : undefined);
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="modal-overlay fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
         className={cn(
@@ -106,20 +74,22 @@ export const ModalOverlay = memo(({
       <div
         ref={contentRef}
         className={cn(
-          "relative w-full h-full max-h-screen bg-[#0a0a0a] flex flex-col",
+          "modal-overlay__surface relative w-full h-full max-h-screen bg-[var(--background)] flex flex-col",
           "animate-in fade-in-0 zoom-in-95 duration-200",
           "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
           className
         )}
         role="dialog"
+        tabIndex={-1}
         aria-modal="true"
-        aria-labelledby="modal-title"
+        aria-labelledby={showHeader ? titleId : undefined}
+        aria-label={showHeader ? undefined : title}
       >
         {/* Header */}
         {showHeader && (
           <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0">
             <div>
-              <h2 id="modal-title" className="text-lg font-semibold text-[var(--foreground)]">
+              <h2 id={titleId} className="text-lg font-semibold text-[var(--foreground)]">
                 {title}
               </h2>
               {subtitle && (

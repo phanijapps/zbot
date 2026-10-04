@@ -10,6 +10,8 @@ set -euo pipefail
 
 FIXTURE="${1:-}"
 FRESH_VAULT="${2:-}"
+SAME_ORIGIN_UI="${3:-}"
+LOCAL_ONLY="${4:-}"
 if [[ -z "$FIXTURE" ]]; then
   echo "usage: boot-full-mode.sh <fixture-name>" >&2
   exit 64
@@ -110,6 +112,11 @@ execution["setupComplete"] = True
 # Disable embeddings-backed features by pinning internal bge-small.
 settings.setdefault("embeddings", {})["backend"] = "internal"
 settings["embeddings"]["dimensions"] = 384
+# Explicitly selected test configuration, not proof of startup defaults.
+if "$LOCAL_ONLY" == "--local-only":
+    network = settings.setdefault("network", {})
+    network["exposeToLan"] = False
+    network.setdefault("advanced", {})["bindHost"] = "127.0.0.1"
 settings_path.write_text(json.dumps(settings, indent=2))
 
 # Clear MCPs so no external processes spawn during e2e.
@@ -138,6 +145,16 @@ if ! curl -sf "http://127.0.0.1:$LLM_PORT/health" >/dev/null; then
 fi
 
 # Start zerod against the seeded data-dir + replay-backed tools.
+DASHBOARD_ARGS=(--no-dashboard)
+if [[ "$SAME_ORIGIN_UI" == "--same-origin" ]]; then
+  # Verify the current sources, never an old dist left by another run.
+  if ! (cd "$REPO/apps/ui" && npm run build > "$RUN_DIR/ui-build.log" 2>&1); then
+    cat "$RUN_DIR/ui-build.log" >&2
+    bash "$(dirname "$0")/teardown.sh" "$RUN_DIR" || true
+    exit 71
+  fi
+  DASHBOARD_ARGS=(--static-dir "$REPO/dist")
+fi
 DAEMON_BIN="$REPO/target/debug/zerod"
 if [[ ! -x "$DAEMON_BIN" ]]; then
   DAEMON_BIN="$REPO/target/debug/zbotd"
@@ -157,7 +174,7 @@ fi
       --host 127.0.0.1 \
       --http-port "$GATEWAY_HTTP_PORT" \
       --log-level info \
-      --no-dashboard \
+      "${DASHBOARD_ARGS[@]}" \
       > "$RUN_DIR/zerod.log" 2>&1
 ) &
 echo $! > "$RUN_DIR/zerod.pid"
@@ -171,6 +188,11 @@ if ! curl -sf "http://127.0.0.1:$GATEWAY_HTTP_PORT/api/health" >/dev/null; then
   tail -60 "$RUN_DIR/zerod.log" >&2
   bash "$(dirname "$0")/teardown.sh" "$RUN_DIR" || true
   exit 72
+fi
+
+if [[ "$SAME_ORIGIN_UI" == "--same-origin" ]]; then
+  echo "{\"run_dir\":\"$RUN_DIR\",\"mock_llm_url\":\"http://127.0.0.1:$LLM_PORT\",\"gateway_http_url\":\"http://127.0.0.1:$GATEWAY_HTTP_PORT\",\"gateway_ws_url\":\"ws://127.0.0.1:$GATEWAY_WS_PORT/ws\",\"ui_url\":\"http://127.0.0.1:$GATEWAY_HTTP_PORT\",\"data_dir\":\"$DATA_DIR\",\"fixture\":\"$FIXTURE\"}"
+  exit 0
 fi
 
 if [[ ! -f "$REPO/dist/index.html" ]]; then

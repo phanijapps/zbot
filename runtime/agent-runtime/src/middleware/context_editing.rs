@@ -128,13 +128,60 @@ fn build_tool_call_index(messages: &[ChatMessage]) -> std::collections::HashMap<
 pub struct ContextEditingMiddleware {
     /// Configuration
     config: ContextEditingConfig,
+    provenance_aware: bool,
+}
+
+/// The default context editor. It shares legacy selection and cascade rules but
+/// renders cleared tool results as bounded, content-free provenance records.
+pub struct ProvenanceAwareContextEditingMiddleware {
+    inner: ContextEditingMiddleware,
+}
+
+impl ProvenanceAwareContextEditingMiddleware {
+    #[must_use]
+    pub fn new(config: ContextEditingConfig) -> Self {
+        Self {
+            inner: ContextEditingMiddleware {
+                config,
+                provenance_aware: true,
+            },
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl PreProcessMiddleware for ProvenanceAwareContextEditingMiddleware {
+    fn name(&self) -> &'static str {
+        "provenance_aware_context_editing"
+    }
+    fn clone_box(&self) -> Box<dyn PreProcessMiddleware> {
+        Box::new(Self {
+            inner: ContextEditingMiddleware {
+                config: self.inner.config.clone(),
+                provenance_aware: true,
+            },
+        })
+    }
+    fn enabled(&self) -> bool {
+        self.inner.enabled()
+    }
+    async fn process(
+        &self,
+        messages: Vec<ChatMessage>,
+        context: &MiddlewareContext,
+    ) -> Result<MiddlewareEffect, String> {
+        self.inner.process(messages, context).await
+    }
 }
 
 impl ContextEditingMiddleware {
     /// Create a new context editing middleware
     #[must_use]
     pub fn new(config: ContextEditingConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            provenance_aware: false,
+        }
     }
 
     /// Find tool result messages that should be cleared, with cascade unloading for skills.
@@ -242,6 +289,7 @@ impl ContextEditingMiddleware {
         execution_state: &ExecutionState,
     ) -> Vec<String> {
         let mut unloaded_skills = Vec::new();
+        let tool_call_index = build_tool_call_index(messages);
 
         for idx in indices_to_clear {
             if let Some(message) = messages.get_mut(*idx) {
@@ -249,7 +297,7 @@ impl ContextEditingMiddleware {
                     let tool_call_id = message.tool_call_id.as_deref().unwrap_or("");
 
                     // Check if this is a skill-related tool call (only if skill_aware_placeholders is enabled)
-                    if self.config.skill_aware_placeholders {
+                    if self.config.skill_aware_placeholders && !self.provenance_aware {
                         if let Some((skill_name, is_main_skill)) =
                             self.find_skill_for_tool_call(tool_call_id, execution_state)
                         {
@@ -273,10 +321,28 @@ impl ContextEditingMiddleware {
                         }
                     }
 
-                    // Regular tool result or skill_aware_placeholders is disabled - use generic placeholder
-                    message.content = vec![Part::Text {
-                        text: self.config.placeholder.clone(),
-                    }];
+                    // Regular tool result or skill_aware_placeholders is disabled.
+                    let replacement = if self.provenance_aware {
+                        let tool_name = message
+                            .tool_call_id
+                            .as_deref()
+                            .and_then(|id| tool_call_index.get(id))
+                            .map(String::as_str)
+                            .unwrap_or("unknown");
+                        let call_id = message.tool_call_id.as_deref().unwrap_or("unknown");
+                        let reference_state = "unidentified";
+                        tracing::info!(
+                            policy = "provenance-aware",
+                            tool = tool_name,
+                            tool_call_id = call_id,
+                            reference_state,
+                            "Context editing: compacted tool result"
+                        );
+                        format!("[Compacted tool result: tool={tool_name}; call_id={call_id}; reference_state={reference_state}]")
+                    } else {
+                        self.config.placeholder.clone()
+                    };
+                    message.content = vec![Part::Text { text: replacement }];
 
                     // Optionally clear tool call inputs from the assistant message
                     if self.config.clear_tool_inputs {
@@ -386,6 +452,7 @@ impl PreProcessMiddleware for ContextEditingMiddleware {
     fn clone_box(&self) -> Box<dyn PreProcessMiddleware> {
         Box::new(Self {
             config: self.config.clone(),
+            provenance_aware: self.provenance_aware,
         })
     }
 
@@ -410,6 +477,12 @@ impl PreProcessMiddleware for ContextEditingMiddleware {
             self.find_tool_results_to_clear_with_cascade(&messages, &context.execution_state);
 
         if indices_to_clear.is_empty() {
+            if self.provenance_aware {
+                tracing::debug!(
+                    policy = "provenance-aware",
+                    "Context editing: no eligible tool result to compact"
+                );
+            }
             return Ok(MiddlewareEffect::Proceed);
         }
 
@@ -417,6 +490,14 @@ impl PreProcessMiddleware for ContextEditingMiddleware {
         let tokens_to_reclaim =
             self.calculate_tokens_to_reclaim(&messages, &indices_to_clear, &context.model);
         if tokens_to_reclaim < self.config.min_reclaim {
+            if self.provenance_aware {
+                tracing::debug!(
+                    policy = "provenance-aware",
+                    tokens_to_reclaim,
+                    min_reclaim = self.config.min_reclaim,
+                    "Context editing: insufficient eligible tool result tokens to compact"
+                );
+            }
             return Ok(MiddlewareEffect::Proceed);
         }
 
@@ -434,6 +515,7 @@ impl PreProcessMiddleware for ContextEditingMiddleware {
         if unloaded_skills.is_empty() {
             tracing::info!(
                 agent_id = %context.agent_id,
+                policy = if self.provenance_aware { "provenance-aware" } else { "legacy" },
                 cleared_count = indices_to_clear.len(),
                 tokens_reclaimed = tokens_to_reclaim,
                 "Context editing: cleared tool results"
@@ -658,6 +740,35 @@ mod tests {
         // Check that the first tool result was cleared
         assert_eq!(messages[2].text_content(), "[cleared]");
         // Check that the second tool result was NOT cleared
+        assert_eq!(messages[3].text_content(), "2");
+    }
+
+    #[test]
+    fn provenance_editor_replaces_payload_with_content_free_reference() {
+        let config = ContextEditingConfig {
+            enabled: true,
+            trigger_tokens: 1,
+            keep_tool_results: 1,
+            min_reclaim: 0,
+            clear_tool_inputs: false,
+            exclude_tools: vec![],
+            ..Default::default()
+        };
+        let middleware = ProvenanceAwareContextEditingMiddleware::new(config);
+        let mut messages = create_test_messages_with_tool_calls();
+        let indices = middleware
+            .inner
+            .find_tool_results_to_clear_with_cascade(&messages, &ExecutionState::default());
+
+        middleware
+            .inner
+            .clear_tool_results(&mut messages, &indices, &ExecutionState::default());
+
+        assert_eq!(
+            messages[2].text_content(),
+            "[Compacted tool result: tool=search; call_id=call_1; reference_state=unidentified]"
+        );
+        assert!(!messages[2].text_content().contains("Search result"));
         assert_eq!(messages[3].text_content(), "2");
     }
 

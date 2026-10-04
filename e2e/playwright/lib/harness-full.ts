@@ -23,14 +23,19 @@ export interface FullHarnessHandle {
 export function bootFullMode(opts: {
   fixture: string;
   freshVault?: boolean;
+  sameOrigin?: boolean;
+  localOnly?: boolean;
 }): { handle: FullHarnessHandle; test: typeof baseTest } {
   let summary: BootFullSummary;
   let teardownCalled = false;
   const test = baseTest.extend<{}>({});
 
   test.beforeAll(async () => {
-    const args = ["../scripts/boot-full-mode.sh", opts.fixture];
-    if (opts.freshVault) args.push("--fresh-vault");
+    test.setTimeout(120_000);
+    const args = ["../scripts/boot-full-mode.sh", opts.fixture,
+      opts.freshVault ? "--fresh-vault" : "",
+      opts.sameOrigin ? "--same-origin" : "",
+      opts.localOnly ? "--local-only" : ""];
     const result = spawnSync(
       "bash",
       args,

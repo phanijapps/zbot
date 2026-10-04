@@ -69,6 +69,13 @@ afterEach(() => {
 });
 
 describe("ProviderSlideover — view mode", () => {
+  it("does not expose a close backdrop or dialog when closed", () => {
+    render(<ProviderSlideover provider={makeProvider()} modelRegistry={{}} isActive={false} isOpen={false} mode="view"
+      onClose={() => {}} onSaved={() => {}} onDeleted={() => {}} onSetActive={() => {}} />);
+    expect(screen.queryByRole("button", { name: "Close panel" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("renders the provider name in the header", () => {
     render(
       <ProviderSlideover

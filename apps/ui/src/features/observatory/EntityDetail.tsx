@@ -61,7 +61,7 @@ export function EntityDetail({ entity, onClose }: EntityDetailProps) {
             </span>
           </div>
         </div>
-        <button className="slideover__close" onClick={onClose}>
+        <button className="slideover__close" aria-label="Close entity details" onClick={onClose}>
           <X style={{ width: 14, height: 14 }} />
         </button>
       </div>

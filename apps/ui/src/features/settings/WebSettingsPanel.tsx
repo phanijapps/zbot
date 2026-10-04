@@ -67,12 +67,17 @@ function stripLegacyMaxTokens<T>(value: T): T {
 
 export function WebSettingsPanel() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = searchParams.get("tab") || "providers";
+  const requestedTab = searchParams.get("tab") || "providers";
+  const activeTab = ["providers", "general", "logging", "advanced", "customization"].includes(requestedTab) ? requestedTab : "providers";
   const paths = usePaths();
 
   const setActiveTab = useCallback(
     (tab: string) => {
-      setSearchParams(tab === "providers" ? {} : { tab });
+      setSearchParams(previous => {
+        const next = new URLSearchParams(previous);
+        if (tab === "providers") next.delete("tab"); else next.set("tab", tab);
+        return next;
+      });
     },
     [setSearchParams],
   );

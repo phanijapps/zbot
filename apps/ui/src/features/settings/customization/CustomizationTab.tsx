@@ -69,7 +69,7 @@ export function CustomizationTab() {
         Edit the markdown files that shape your agent's behavior. Changes save back to{" "}
         <code>{paths?.configDirDisplay ?? "~/Documents/zbot/config"}</code>.
       </p>
-      <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: "var(--spacing-4)" }}>
+      <div className="customization-layout">
         <FileList files={files} selectedPath={selectedPath} onSelect={setSelectedPath} />
         {selectedPath ? (
           <FileEditor key={selectedPath} path={selectedPath} />

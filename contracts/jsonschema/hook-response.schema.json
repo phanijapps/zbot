@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Zbot hook stdout response v1",
+  "x-spec": [
+    "docs/specs/external-hooks/"
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "action"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "action": {
+      "enum": [
+        "continue",
+        "block"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 160
+    },
+    "context": {
+      "type": "string",
+      "maxLength": 8192
+    }
+  },
+  "$comment": "Exit zero + empty stdout also means continue. Otherwise stdout contains exactly one object <=32 KiB UTF-8. Runtime permits block only on session_start,user_prompt,run_start,before_model,before_tool,invalid_tool_call; context only on session_start,user_prompt,run_start,before_model. Accumulated context is <=8 KiB UTF-8 per invocation, supplied as attributed data via existing context assembly, never system instructions or persisted memory. reason is not projected into Activity; fixed server labels are used. Illegal action/context is invocation failure under on_failure.",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "block"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "not": {
+          "required": [
+            "context"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -44,6 +44,7 @@ pub mod recall;
 pub mod resource_provider;
 pub mod runner;
 pub mod session_ctx;
+pub mod session_details;
 pub mod session_state;
 pub mod session_title;
 pub mod sleep;

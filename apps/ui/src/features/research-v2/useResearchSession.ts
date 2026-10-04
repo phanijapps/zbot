@@ -388,8 +388,10 @@ function makeDebouncedReconcile(
 
 // --- Hook -----------------------------------------------------------------
 
-export function useResearchSession() {
-  const { sessionId: urlSessionId } = useParams<{ sessionId: string }>();
+export function useResearchSession(options?: { sessionId?: string | null; baseRoute?: string }) {
+  const { sessionId: routeSessionId } = useParams<{ sessionId: string }>();
+  const urlSessionId = options ? options.sessionId ?? undefined : routeSessionId;
+  const baseRoute = options?.baseRoute ?? "/research";
   const navigate = useNavigate();
   const [state, dispatch] = useReducer(reduceResearch, EMPTY_RESEARCH_STATE);
   const [wardVaultRevision, setWardVaultRevision] = useState(0);
@@ -554,9 +556,9 @@ export function useResearchSession() {
     // previous session in state can immediately navigate back over the new
     // selection. Only a new, unscoped Research route needs state → URL sync.
     if (state.sessionId && !urlSessionId) {
-      navigate(`/research/${state.sessionId}`, { replace: true });
+      navigate(`${baseRoute}/${state.sessionId}`, { replace: true });
     }
-  }, [state.sessionId, urlSessionId, navigate]);
+  }, [state.sessionId, urlSessionId, navigate, baseRoute]);
 
   // --- R14h: reconnect recovery. ----------------------------------------
   // Scenario: ping-timeout WS reconnect during an active send. invoke_accepted
@@ -679,9 +681,9 @@ export function useResearchSession() {
     hydratedForSessionRef.current = null;
     resnapshotForRootRef.current = null;
     activeSessionIdRef.current = null;
-    navigate("/research", { replace: true });
+    navigate(baseRoute, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pillSink stable, see module-level note above.
-  }, [navigate]);
+  }, [navigate, baseRoute]);
 
   const toggleThinking = useCallback((turnId: string) => {
     dispatch({ type: "TOGGLE_THINKING", turnId });

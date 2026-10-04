@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>z-Bot — Mission Control / Attention Radar</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: #090b10;
+      --panel: #10141d;
+      --panel-raised: #151b26;
+      --line: #273043;
+      --line-soft: #1d2635;
+      --text: #eef3ff;
+      --muted: #92a0b7;
+      --soft: #c5d0e4;
+      --violet: #ae7bff;
+      --violet-soft: #38285c;
+      --cyan: #54d9ec;
+      --green: #5de3a7;
+      --amber: #ffc36a;
+      --red: #ff788d;
+      --blue: #78a6ff;
+      --radius: 16px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      min-width: 320px;
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 54% -15%, rgba(111, 75, 183, .20), transparent 31rem),
+        radial-gradient(circle at 100% 0%, rgba(50, 171, 197, .09), transparent 25rem),
+        var(--canvas);
+    }
+
+    button { font: inherit; }
+    .app { max-width: 1840px; margin: 0 auto; padding: 22px clamp(14px, 2.5vw, 42px) 38px; }
+    .topbar {
+      min-height: 66px;
+      display: flex; align-items: center; gap: 16px; justify-content: space-between;
+      border-bottom: 1px solid var(--line-soft); padding-bottom: 18px; margin-bottom: 22px;
+    }
+    .brand { display: flex; align-items: center; gap: 13px; min-width: 0; }
+    .mark {
+      display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px;
+      color: white; font-weight: 800; background: linear-gradient(145deg, #c38cff, #7257d9);
+      box-shadow: 0 0 28px rgba(174, 123, 255, .32);
+    }
+    .crumb { color: var(--muted); font-size: 13px; margin-bottom: 2px; }
+    h1 { margin: 0; letter-spacing: -.035em; font-size: clamp(20px, 2.2vw, 28px); }
+    .top-actions, .tabs, .header-actions, .chips { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .pill, .tab, .outline, .primary, .icon-button {
+      border: 1px solid var(--line); background: var(--panel); color: var(--soft);
+      border-radius: 9px; padding: 8px 11px; cursor: pointer; transition: .18s ease;
+    }
+    .pill { cursor: default; font-size: 12px; }
+    .pill.live { border-color: rgba(93, 227, 167, .36); color: var(--green); background: rgba(42, 131, 91, .13); }
+    .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; margin-right: 6px; box-shadow: 0 0 10px currentColor; }
+    .tab { font-size: 13px; }
+    .tab.active, .tab:hover { background: var(--violet-soft); border-color: #7654b7; color: #f5efff; }
+    .outline:hover, .icon-button:hover { border-color: #65728a; background: #1b2331; }
+    .primary { border-color: transparent; color: white; background: linear-gradient(135deg, #8d62e5, #6f9df4); box-shadow: 0 8px 24px rgba(87, 73, 170, .22); }
+    .primary:hover { filter: brightness(1.1); transform: translateY(-1px); }
+
+    .summary-strip {
+      display: grid; grid-template-columns: 1.4fr repeat(4, minmax(105px, .65fr)); gap: 10px; margin-bottom: 15px;
+    }
+    .metric {
+      min-height: 86px; padding: 15px; border: 1px solid var(--line-soft); background: rgba(16,20,29,.76);
+      border-radius: 13px; position: relative; overflow: hidden;
+    }
+    .metric:first-child { background: linear-gradient(110deg, rgba(55,38,94,.72), rgba(16,20,29,.88)); }
+    .metric .label { font-size: 12px; color: var(--muted); }
+    .metric strong { display: block; margin-top: 8px; font-size: 23px; letter-spacing: -.04em; }
+    .metric .sub { margin-top: 3px; color: var(--soft); font-size: 12px; }
+    .metric .spark { position: absolute; right: 12px; bottom: 13px; width: 72px; height: 24px; opacity: .74; }
+    .green { color: var(--green); } .amber { color: var(--amber); } .red { color: var(--red); } .cyan { color: var(--cyan); }
+
+    .layout { display: grid; grid-template-columns: minmax(250px, .88fr) minmax(440px, 1.7fr) minmax(250px, .9fr); gap: 15px; }
+    .panel { min-width: 0; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(160deg, rgba(20,25,35,.96), rgba(13,17,25,.97)); }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 15px 15px 13px; border-bottom: 1px solid var(--line-soft); }
+    h2 { font-size: 14px; margin: 0; letter-spacing: -.015em; }
+    .caption { color: var(--muted); font-size: 11px; }
+    .mission-list { padding: 8px; display: grid; gap: 5px; }
+    .mission {
+      width: 100%; border: 1px solid transparent; background: transparent; color: var(--text); text-align: left; padding: 12px;
+      border-radius: 11px; cursor: pointer; display: grid; grid-template-columns: 27px 1fr auto; gap: 9px; align-items: start;
+    }
+    .mission:hover { background: #171e2a; }
+    .mission.selected { background: linear-gradient(100deg, rgba(92,63,159,.34), rgba(28,34,48,.9)); border-color: rgba(174,123,255,.48); }
+    .signal { width: 10px; height: 10px; margin: 4px 0 0 5px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 5px rgba(93,227,167,.08), 0 0 13px rgba(93,227,167,.5); }
+    .signal.watch { background: var(--amber); box-shadow: 0 0 0 5px rgba(255,195,106,.08), 0 0 13px rgba(255,195,106,.5); }
+    .signal.alert { background: var(--red); box-shadow: 0 0 0 5px rgba(255,120,141,.08), 0 0 13px rgba(255,120,141,.5); }
+    .mission-title { font-size: 13px; font-weight: 670; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mission-meta { color: var(--muted); font-size: 11px; margin-top: 5px; }
+    .score { color: var(--amber); font-size: 11px; border: 1px solid rgba(255,195,106,.24); padding: 3px 5px; border-radius: 7px; }
+    .score.quiet { color: var(--muted); border-color: var(--line); }
+    .list-footer { padding: 12px 15px 15px; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: 12px; }
+
+    .focus { overflow: hidden; }
+    .focus-hero { padding: 19px 19px 16px; background: linear-gradient(128deg, rgba(69,47,116,.56), rgba(18,24,35,.34) 62%, rgba(29,91,104,.20)); }
+    .eyebrow { color: var(--violet); text-transform: uppercase; letter-spacing: .13em; font-weight: 700; font-size: 10px; }
+    .focus-title { display: flex; gap: 9px; align-items: flex-start; margin: 7px 0; }
+    .focus-title h2 { font-size: clamp(18px, 2vw, 23px); letter-spacing: -.035em; }
+    .status { font-size: 11px; padding: 4px 7px; border-radius: 999px; color: var(--green); background: rgba(56,169,115,.14); border: 1px solid rgba(93,227,167,.3); white-space: nowrap; }
+    .description { margin: 0; color: var(--soft); font-size: 13px; line-height: 1.5; max-width: 68ch; }
+    .hero-bottom { display: flex; align-items: center; justify-content: space-between; gap: 11px; margin-top: 16px; }
+    .hero-stats { display: flex; gap: 16px; color: var(--muted); font-size: 11px; }
+    .hero-stats strong { color: var(--text); font-weight: 650; }
+    .graph-wrap { padding: 16px 19px 20px; border-top: 1px solid var(--line-soft); }
+    .section-label { display: flex; align-items: center; justify-content: space-between; gap: 9px; font-size: 12px; color: var(--soft); margin-bottom: 13px; }
+    .section-label small { color: var(--muted); }
+    .agent-graph { position: relative; display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
+    .agent-graph::before { content: ""; position: absolute; top: 34px; left: 11%; right: 11%; height: 1px; background: linear-gradient(90deg, var(--violet), var(--cyan), var(--green)); opacity: .7; }
+    .agent {
+      position: relative; z-index: 1; padding: 11px 9px; border-radius: 12px; border: 1px solid var(--line);
+      background: #131925; min-height: 100px;
+    }
+    .agent.active { border-color: rgba(84,217,236,.64); box-shadow: 0 0 22px rgba(84,217,236,.11); }
+    .agent.done { border-color: rgba(93,227,167,.30); }
+    .agent .agent-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--violet); border: 2px solid #131925; margin: 16px 0 7px; box-shadow: 0 0 11px var(--violet); }
+    .agent.active .agent-dot { background: var(--cyan); box-shadow: 0 0 11px var(--cyan); }
+    .agent.done .agent-dot { background: var(--green); box-shadow: 0 0 11px var(--green); }
+    .agent-name { font-size: 12px; font-weight: 700; }
+    .agent-role, .agent-state { margin-top: 3px; color: var(--muted); font-size: 10px; }
+    .agent-state { color: var(--soft); }
+    .working { color: var(--cyan); }
+    .progress-card { margin: 0 19px 19px; padding: 14px; border-radius: 12px; border: 1px solid rgba(84,217,236,.18); background: rgba(24,37,48,.72); }
+    .progress-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; font-size: 12px; }
+    .progress-top span:first-child { color: var(--cyan); }
+    .meter { height: 6px; margin: 11px 0 8px; border-radius: 999px; overflow: hidden; background: #263144; }
+    .meter > i { display: block; height: 100%; width: 64%; background: linear-gradient(90deg, var(--violet), var(--cyan)); border-radius: inherit; box-shadow: 0 0 14px rgba(84,217,236,.66); }
+    .progress-note { color: var(--muted); font-size: 11px; }
+    .timeline { padding: 0 19px 18px; }
+    .timeline-row { display: grid; grid-template-columns: 62px 14px 1fr; gap: 8px; padding: 7px 0; color: var(--soft); font-size: 11px; }
+    .timeline-row time { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .timeline-row i { width: 7px; height: 7px; margin-top: 4px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 4px rgba(120,166,255,.1); }
+    .timeline-row.latest i { background: var(--cyan); box-shadow: 0 0 0 4px rgba(84,217,236,.12), 0 0 11px var(--cyan); }
+
+    .attention { display: grid; gap: 15px; align-content: start; }
+    .attention-card { padding: 13px 14px; border-bottom: 1px solid var(--line-soft); }
+    .attention-card:last-child { border: 0; }
+    .attention-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 670; }
+    .badge { font-size: 10px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); }
+    .badge.alert { color: var(--red); border-color: rgba(255,120,141,.35); background: rgba(164,49,69,.12); }
+    .badge.watch { color: var(--amber); border-color: rgba(255,195,106,.3); background: rgba(153,104,31,.12); }
+    .attention-card p { margin: 7px 0 10px; line-height: 1.45; color: var(--muted); font-size: 11px; }
+    .attention-card button { font-size: 11px; padding: 6px 8px; }
+    .decision { padding: 14px; }
+    .decision h3 { font-size: 12px; margin: 0 0 6px; }
+    .decision p { font-size: 11px; line-height: 1.45; color: var(--muted); margin: 0 0 11px; }
+    .decision .actions { display: flex; gap: 7px; }
+    .decision .approve { background: rgba(55,154,105,.16); color: var(--green); border-color: rgba(93,227,167,.34); }
+
+    .bottom { display: grid; grid-template-columns: 1.65fr .95fr; gap: 15px; margin-top: 15px; }
+    .activity { padding: 15px; }
+    .activity-feed { display: grid; gap: 2px; margin-top: 11px; }
+    .feed-row { display: grid; grid-template-columns: 66px 12px 1fr auto; gap: 8px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line-soft); color: var(--soft); font-size: 12px; }
+    .feed-row:last-child { border-bottom: none; }
+    .feed-row time, .feed-row small { color: var(--muted); font-size: 11px; }
+    .feed-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); }
+    .feed-dot.green { background: var(--green); } .feed-dot.amber { background: var(--amber); }
+    .health { padding: 15px; }
+    .health-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; font-size: 12px; padding: 11px 0; border-bottom: 1px solid var(--line-soft); }
+    .health-row span { color: var(--muted); } .health-row strong { color: var(--green); font-weight: 650; }
+    .health-note { color: var(--muted); font-size: 11px; line-height: 1.48; margin: 13px 0 0; }
+
+    @media (max-width: 1180px) {
+      .layout { grid-template-columns: minmax(235px, .78fr) minmax(460px, 1.55fr); }
+      .attention { grid-column: 1 / -1; grid-template-columns: repeat(3, 1fr); }
+      .attention .panel-head { grid-column: 1 / -1; }
+      .attention .decision { border-left: 1px solid var(--line-soft); }
+      .attention .panel { display: contents; }
+      .attention-card, .decision { background: var(--panel); border: 1px solid var(--line); border-radius: 13px; }
+    }
+    @media (max-width: 820px) {
+      .app { padding: 15px 12px 26px; }
+      .topbar { align-items: flex-start; flex-direction: column; }
+      .top-actions { width: 100%; justify-content: space-between; }
+      .summary-strip { grid-template-columns: repeat(2, 1fr); }
+      .summary-strip .metric:first-child { grid-column: 1 / -1; }
+      .layout, .bottom { grid-template-columns: 1fr; }
+      .attention { grid-column: auto; grid-template-columns: 1fr; }
+      .attention .panel { display: block; }
+      .attention-card, .decision { border-left: 0; border-right: 0; border-radius: 0; }
+      .agent-graph { grid-template-columns: repeat(2, 1fr); }
+      .agent-graph::before { display: none; }
+      .hero-bottom { align-items: flex-start; flex-direction: column; }
+      .feed-row { grid-template-columns: 53px 10px 1fr; }
+      .feed-row small { display: none; }
+    }
+    @media (max-width: 460px) {
+      .top-actions .tabs { width: 100%; }
+      .tab { flex: 1; text-align: center; padding-inline: 6px; }
+      .top-actions .primary { display: none; }
+      .summary-strip { gap: 7px; }
+      .metric { min-height: 76px; padding: 12px; }
+      .metric strong { font-size: 19px; }
+      .agent { min-height: 92px; }
+      .header-actions .outline { padding: 7px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark">z</div>
+        <div>
+          <div class="crumb">z-Bot / Operations</div>
+          <h1>Mission Control <span class="cyan">/ Attention Radar</span></h1>
+        </div>
+      </div>
+      <div class="top-actions">
+        <nav class="tabs" aria-label="Mission Control views">
+          <button class="tab active">Radar</button>
+          <button class="tab">All sessions</button>
+          <button class="tab">Flight recorder</button>
+        </nav>
+        <div class="header-actions">
+          <span class="pill live"><span class="dot"></span>Live event stream</span>
+          <button class="primary" id="simulate">Simulate event</button>
+        </div>
+      </div>
+    </header>
+
+    <section class="summary-strip" aria-label="Mission overview">
+      <div class="metric">
+        <span class="label">Your attention</span>
+        <strong><span class="amber">2</span> missions need a look</strong>
+        <div class="sub">1 stalled · 1 waiting for a decision</div>
+      </div>
+      <div class="metric"><span class="label">Active</span><strong>4</strong><div class="sub green">all streaming</div></div>
+      <div class="metric"><span class="label">Completed today</span><strong>18</strong><div class="sub">94% healthy</div></div>
+      <div class="metric"><span class="label">Token burn</span><strong>1.82M</strong><div class="sub amber">+14% vs usual</div></div>
+      <div class="metric"><span class="label">Event stream</span><strong>42ms</strong><div class="sub cyan">connected</div></div>
+    </section>
+
+    <section class="layout">
+      <aside class="panel">
+        <div class="panel-head">
+          <div><h2>Mission radar</h2><div class="caption">Ranked by attention, not recency</div></div>
+          <button class="icon-button" title="Filter missions">⌘</button>
+        </div>
+        <div class="mission-list">
+          <button class="mission selected">
+            <i class="signal"></i>
+            <span><span class="mission-title">Niagara trip planner</span><span class="mission-meta">4 agents · current plan step 5/7</span></span>
+            <span class="score quiet">steady</span>
+          </button>
+          <button class="mission">
+            <i class="signal alert"></i>
+            <span><span class="mission-title">Engram integration cleanup</span><span class="mission-meta">builder idle for 8m · needs routing</span></span>
+            <span class="score">92</span>
+          </button>
+          <button class="mission">
+            <i class="signal watch"></i>
+            <span><span class="mission-title">Provider setup guide</span><span class="mission-meta">awaiting your model selection</span></span>
+            <span class="score">74</span>
+          </button>
+          <button class="mission">
+            <i class="signal"></i>
+            <span><span class="mission-title">Morning knowledge review</span><span class="mission-meta">sleep cycle · 12/42 candidates</span></span>
+            <span class="score quiet">steady</span>
+          </button>
+          <button class="mission">
+            <i class="signal"></i>
+            <span><span class="mission-title">Autonomy ledger review</span><span class="mission-meta">distillation in progress</span></span>
+            <span class="score quiet">steady</span>
+          </button>
+        </div>
+        <div class="list-footer">4 active · 18 completed today · <strong>Browse all 842 sessions</strong></div>
+      </aside>
+
+      <section class="panel focus">
+        <div class="focus-hero">
+          <div class="eyebrow">Focused mission · healthy</div>
+          <div class="focus-title"><h2>Niagara trip planner</h2><span class="status">● progressing</span></div>
+          <p class="description">A family weekend itinerary is being assembled. The work is following its plan, has no unresolved failures, and is producing a browser-ready artifact.</p>
+          <div class="hero-bottom">
+            <div class="hero-stats"><span><strong>06:43</strong> elapsed</span><span><strong>83k / 4.2k</strong> tokens</span><span><strong>3</strong> tool actions</span></div>
+            <div class="chips"><button class="outline">Open trace</button><button class="outline">Open artifact</button></div>
+          </div>
+        </div>
+        <div class="graph-wrap">
+          <div class="section-label"><span>Live delegation graph</span><small>updates only when state changes</small></div>
+          <div class="agent-graph" aria-label="Delegation graph">
+            <article class="agent done"><div class="agent-dot"></div><div class="agent-name">root</div><div class="agent-role">orchestrator</div><div class="agent-state">delegated</div></article>
+            <article class="agent done"><div class="agent-dot"></div><div class="agent-name">travel ward</div><div class="agent-role">planner</div><div class="agent-state">dossier ready</div></article>
+            <article class="agent active"><div class="agent-dot"></div><div class="agent-name">builder</div><div class="agent-role">research synthesis</div><div class="agent-state working">writing dossier…</div></article>
+            <article class="agent"><div class="agent-dot"></div><div class="agent-name">writer</div><div class="agent-role">artifact maker</div><div class="agent-state">queued</div></article>
+          </div>
+        </div>
+        <div class="progress-card">
+          <div class="progress-top"><span>Current plan · build source dossier</span><strong>5 / 7</strong></div>
+          <div class="meter"><i></i></div>
+          <div class="progress-note">Next expected event: builder publishes dossier, then writer receives a compact artifact brief.</div>
+        </div>
+        <div class="timeline">
+          <div class="section-label"><span>What changed</span><small>event sequence #18,442</small></div>
+          <div class="timeline-row latest"><time>just now</time><i></i><span>builder started composing the travel dossier</span></div>
+          <div class="timeline-row"><time>00:18 ago</time><i></i><span>travel ward completed plan and delegated research</span></div>
+          <div class="timeline-row"><time>01:42 ago</time><i></i><span>root accepted intent and activated personal-travel ward</span></div>
+        </div>
+      </section>
+
+      <aside class="panel attention">
+        <div class="panel-head"><div><h2>Attention queue</h2><div class="caption">Only intervene when it improves the outcome</div></div><span class="badge alert">2</span></div>
+        <article class="attention-card">
+          <div class="attention-title"><span>Engram integration cleanup</span><span class="badge alert">stalled 8m</span></div>
+          <p>Builder has not emitted an event after a repository scan. The work may be waiting on a missing dependency or an unreported tool result.</p>
+          <button class="outline">Inspect mission</button>
+        </article>
+        <article class="attention-card">
+          <div class="attention-title"><span>Provider setup guide</span><span class="badge watch">your choice</span></div>
+          <p>z-Bot has two compatible model routes. It will not choose a provider or save credentials without you.</p>
+          <button class="outline">Review decision</button>
+        </article>
+        <article class="decision">
+          <h3>Decision thread · autonomous action</h3>
+          <p>“Resume documentation migration after integration branch validates.” Evidence and intended tool scope are attached.</p>
+          <div class="actions"><button class="outline approve">Approve &amp; resume</button><button class="outline">Inspect</button></div>
+        </article>
+      </aside>
+    </section>
+
+    <section class="bottom">
+      <article class="panel activity">
+        <div class="panel-head"><div><h2>Live operations feed</h2><div class="caption">Lossless event stream; verbose trace remains on demand</div></div><span class="pill live"><span class="dot"></span>42 ms</span></div>
+        <div class="activity-feed" id="feed">
+          <div class="feed-row"><time>10:42:18</time><i class="feed-dot"></i><span><strong>builder</strong> updated plan progress · source dossier</span><small>Niagara trip planner</small></div>
+          <div class="feed-row"><time>10:42:00</time><i class="feed-dot green"></i><span><strong>travel ward</strong> delegated to builder</span><small>Niagara trip planner</small></div>
+          <div class="feed-row"><time>10:41:43</time><i class="feed-dot amber"></i><span><strong>root</strong> raised a decision thread</span><small>Provider setup guide</small></div>
+          <div class="feed-row"><time>10:41:31</time><i class="feed-dot"></i><span><strong>memory worker</strong> completed consolidation cycle</span><small>Morning knowledge review</small></div>
+        </div>
+      </article>
+      <article class="panel health">
+        <div class="panel-head"><div><h2>System posture</h2><div class="caption">The dashboard tells you when observation is trustworthy</div></div></div>
+        <div class="health-row"><span>Gateway event buffer</span><strong>healthy · 0 gaps</strong></div>
+        <div class="health-row"><span>Mission projection</span><strong>up to sequence #18,442</strong></div>
+        <div class="health-row"><span>Reconnect recovery</span><strong>cursor ready</strong></div>
+        <div class="health-row"><span>Attention rules</span><strong>6 enabled</strong></div>
+        <p class="health-note">No background list polling. A reconnect requests only missed deltas; a full snapshot is used only when the cursor has expired.</p>
+      </article>
+    </section>
+  </main>
+  <script>
+    const feed = document.getElementById("feed");
+    const button = document.getElementById("simulate");
+    let count = 0;
+    button.addEventListener("click", () => {
+      count += 1;
+      const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      const row = document.createElement("div");
+      row.className = "feed-row";
+      row.innerHTML = '<time>' + now + '</time><i class="feed-dot green"></i><span><strong>mission stream</strong> received compact state delta #' + count + '</span><small>demo event</small>';
+      feed.prepend(row);
+      button.textContent = "Event received";
+      setTimeout(() => { button.textContent = "Simulate event"; }, 850);
+    });
+  </script>
+</body>
+</html>

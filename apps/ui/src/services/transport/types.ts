@@ -137,6 +137,11 @@ export interface ChatSessionInit {
   created: boolean;
 }
 
+/** Independent shell Chat identity, validated against stored mode by the server. */
+export interface ShellChatSession extends ChatSessionInit {
+  isLive: boolean;
+}
+
 /**
  * Scope for session messages query.
  */
@@ -492,6 +497,29 @@ export interface IntentAnalysisConfig {
 // ============================================================================
 // Session State (snapshot API for reconnection)
 // ============================================================================
+
+/** Safe, redacted server projection for the conversation-shell inspector. */
+export interface SessionDetails {
+  sessionId: string;
+  mode: "chat" | "research" | "unknown";
+  activity: Array<{
+    id: string;
+    sequence: number;
+    turnId?: string | null;
+    kind: "plan" | "tool" | "delegation" | "error" | "memory_recall" | "memory_write";
+    label: string;
+    occurredAt: string;
+    memoryRecordId?: string | null;
+  }>;
+  activityTruncated: boolean;
+  sources: Array<{
+    id: string;
+    title: string;
+    url: string;
+    evidence: "answer_citation" | "structured_source_use";
+  }>;
+  sourcesTruncated: boolean;
+}
 
 export type SessionPhase = "intent" | "planning" | "executing" | "responding" | "completed" | "error";
 
@@ -849,6 +877,8 @@ export interface SessionWithExecutions {
   total_tokens_in: number;
   total_tokens_out: number;
   metadata?: Record<string, unknown>;
+  mode?: string | null;
+  parent_session_id?: string | null;
   executions: AgentExecution[];
   subagent_count: number;
 }

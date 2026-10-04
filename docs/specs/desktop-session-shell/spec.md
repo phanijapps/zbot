@@ -1,0 +1,84 @@
+# Spec: Desktop Session Shell
+
+- **Status:** Implementing
+- **Owner:** @videogamer
+- **Plan:** [`plan.md`](plan.md)
+- **Constrained by:** [RFC-0021](../../rfc/0021-conversation-first-desktop-agent.md), including its 2026-09-27 errata
+- **Brief:** none
+- **Discovery:** none
+- **Contract:** [session-details.yaml](../../../contracts/openapi/session-details.yaml); existing [goal-artifacts.yaml](../../../contracts/openapi/goal-artifacts.yaml)
+- **Shape:** mixed
+
+> **Spec contract:** this document defines what "done" means. The implementing PR must match this spec, or update it. Verification must be derivable from it.
+
+## Objective
+
+A person starts or resumes Chat and Research in one quiet conversation shell, sees the active mode at the top center, follows the answer in the main column, and inspects recorded activity, sources, and files in a contextual panel. Memory and Observatory remain one-step destinations. The shell preserves both execution paths and makes the current session's status, provenance, and artifacts truthful during live work and after reload.
+
+## Boundaries
+
+### Always do
+
+- Keep Chat and Research on their existing execution paths, with mode pinned to each session.
+- Default Session's Chat view and Chat-tab navigation to the existing reserved Quick Chat, preserving its history and existing behavior. Explicit New chat creates an independent Chat without deleting earlier conversations; legacy `/chat` initialization and reset remain unchanged.
+- Derive Activity and Sources from server-backed session records; distinguish a cited or explicitly used source from a merely visited resource.
+- Keep Memory and Observatory as direct shell destinations; preserve the existing ward explorer implementation and its legacy direct-route access while hiding its affordance in the new shell.
+- Render the existing Agents, Settings and Integrations pages, tabs and editors within the desktop navigation and palette, preserving their current actions and data contracts.
+- Resolve file opens by server artifact ID under existing confinement rules; show redacted memory activity by default.
+- Default `zbotd` to a loopback bind for the desktop experience; retain an explicit LAN bind option for existing remote clients.
+
+### Ask first
+
+- Any change to the existing Chat or Research execution semantics, permissions, or cancellation protocol.
+- Any persistent-schema migration, new provenance retention policy, or exposure of raw memory content in a session view or export.
+- Any new top-level dependency, desktop host, or hook-execution facility.
+
+### Never do
+
+- Add a second agent engine or combine Chat and Research runtime paths into one monolithic executor.
+- Render a source, memory-use claim, or openable file from model prose or an unverified path alone.
+- Remove the ward explorer implementation or its legacy direct route in this slice.
+- Add a new agent builder, settings/customization editor, lifecycle-hook editor, or desktop packager inside this spec. Restyling existing administration pages and editors is permitted; new capabilities are not.
+
+## Testing Strategy
+
+- Mode, server-backed recent-session selection, restoration, Stop, and navigation: TDD for state transitions and transport selection, then an end-to-end journey for both live/reload parity and comparison with the existing Chat and Research routes because the behavior crosses UI and daemon boundaries.
+- Activity, Sources, and memory provenance: TDD for projection/deduplication/redaction rules and gateway integration tests against persisted records; this proves empty states and reload truth rather than visual placeholders.
+- Files and source links: TDD plus negative HTTP integration tests for ID ownership, path confinement, symlink escape, and unsafe schemes.
+- Visual hierarchy and accessibility: visual/manual QA at desktop and narrow widths, plus automated keyboard/focus and accessible-name checks, because layout and discoverability need a rendered surface.
+- Memory and Observatory preservation: goal-based route/component checks plus manual smoke journeys for inspect/edit and graph exploration.
+- Administration preservation: route/navigation tests, existing page/editor action tests and isolated browser journeys for every existing tab, editor scrolling, reload-safe return, query preservation and negative return targets; no verification writes to real user settings or external providers. See [administration-amendment.md](administration-amendment.md) for the state and capture matrix.
+
+## Acceptance Criteria
+
+- [ ] **AC1 — Shared entry:** Given the shell opens with no selected session, the user sees New chat, server-backed recent sessions, Memory, Observatory, and the Chat/Research switch in the top-center header; the conversation and composer remain the dominant surface. Selecting a recent session restores its recorded mode and conversation, including after reload. The right panel has exactly Activity, Sources, and Files as primary tabs.
+- [ ] **AC2 — Pinned mode:** Opening `/session` or selecting Chat while idle reopens the existing reserved Quick Chat without independent creation or reset, including from a selected independent Chat. Selecting Research from Chat starts a new Research draft without mutating the old session; given an active turn, the switch and New chat are unavailable until completion or Stop. Reopening a selected session restores its recorded mode, including after page reload. Stored `fast`/`chat` maps to Chat, `deep`/`research` maps to Research, and absent or unrecognized mode is shown as unknown rather than guessed. Explicit New chat remains independent (AC14).
+- [ ] **AC3 — Runtime parity:** A Chat turn uses the existing quick path and a Research turn uses the existing planning/delegation path. In both modes, streaming answer, Stop acknowledgement/error, completed answer, and artifacts match the corresponding existing route before and after reload.
+- [ ] **AC4 — Truthful Activity:** For a persisted session, Activity shows only recorded plan, tool, delegation, error, and memory-recall/write events that the server can attribute to that session and turn. Live updates and a reload produce the same final ordered window without duplicates; the bounded activity window defined in `session-details.yaml` is returned in ascending order with truncation indicated. Unavailable event classes show an explicit no-recorded-activity state.
+- [ ] **AC5 — Truthful Sources:** Sources contains only server-resolved records cited by the answer or emitted by a structured source-use record, with a title and safe HTTP(S) destination. A browsed-but-unused page, model-written URL, or source lacking a safe destination is not promoted into an openable source; no backed sources yields an honest empty state. The bounded source window defined in `session-details.yaml` preserves citation/use order and indicates truncation.
+- [ ] **AC6 — Truthful memory activity:** A recorded recall or write displays a redacted label and type in Activity, without raw fact content by default. A stable authorized record ID may open the existing Memory detail; absent ID or denied access never fabricates a link or implies the memory influenced the answer.
+- [ ] **AC7 — Safe Files:** Files lists server-resolved session artifacts only. An artifact opens through the existing ID-based content endpoint and is rejected if it belongs to another session, resolves outside approved roots, or escapes through a symlink; no artifacts yields an empty state.
+- [ ] **AC8 — Knowledge destinations:** Memory and Observatory render within the same desktop navigation, typography, spacing and token palette as the conversation shell, without the old top navigation or duplicate chrome. Preserve Memory search/inspect/correct and Observatory's full graph workspace. Returning to the session preserves its selected ID, recorded mode and conversation state, including after reloading the knowledge destination. Navigation does not delete or reset sessions.
+- [ ] **AC9 — Ward compatibility:** The new shell shows no ward-explorer link or panel. The existing explorer component and legacy direct-route access remain functional for rollback and bookmarked access.
+- [ ] **AC10 — Usability and visual direction:** At 1280×800 the top-center switch, current mode, conversation, composer, and panel tabs are simultaneously visible without horizontal scrolling; at 720px width the conversation and composer remain usable and Activity/Sources/Files remain reachable. In a side-by-side screenshot review against the approved [mockup](../../product/zbot-desktop-ui-preview.html), the conversation is the largest content region, the switch is centered above it, and the detail panel is visually secondary; any mismatch is recorded in the QA artifact. Keyboard-only users can operate the switch, tabs, Stop, and primary navigation with visible focus and accessible names.
+- [ ] **AC11 — Administration presentation:** `/agents`, `/settings` and `/integrations` render their existing full pages, tabs and create/edit/detail panels in the desktop navigation, typography, spacing and token palette, without legacy top navigation or duplicate page headings. Preserve Agents' My Agents/Skills Library/Schedules, Settings' Providers/General/Logging/Advanced/Customization, Integrations' Tool Servers/Plugins & Workers, existing actions, validation, credential masking and save/delete confirmations. Page and editor content remains readable and controls reachable without horizontal page overflow at supported widths, including long content; keyboard navigation and visible focus remain operable. The existing commissioning guard and server authorization/mutation contracts remain unchanged. Returning to a conversation preserves its validated local selected ID and mode, including after administration-page reload and tab changes; invalid/external return targets fall back to `/session` without navigation or effects on those targets. Navigating to a page, changing its tab or returning never creates, clears, resets or deletes a conversation. No new agent builder, customization editor, hook-management control or hook execution action is introduced. Verify with isolated seeded data, not real credentials or configuration writes.
+- [ ] **AC12 — Sanitized failures:** Invalid session IDs, denied callers, missing sessions, and projection failures return the bounded error body defined in `session-details.yaml`; responses and failure logs expose no raw recall content, tool arguments/results, local paths, credential-bearing URLs, or secrets. Persisted activity and source records with IDs outside the contract's bounded safe-ID grammar are omitted; optional turn and memory IDs outside it are omitted before a response is built.
+- [ ] **AC13 — Local details boundary:** A default `zbotd` launch binds to `127.0.0.1`; an explicit `--host` or config can still select a LAN bind. The session-details handler runs the existing `SameOrigin` browser guard before reading persisted records and serves details only while the gateway is bound to a loopback address. An Origin-less native caller is accepted only through that loopback-bound gateway; a LAN-bound gateway, mismatched browser Origin, or unavailable binding proof receives a sanitized 403 before any session read. On a LAN-bound gateway the shell shows an explicit details-unavailable state for Activity and Sources while Files remains available through its existing endpoint. Other existing routes keep their current reachability policy.
+- [ ] **AC14 — Independent Chat lifecycle:** New chat in the shell creates a distinct root Web session with persisted `fast` mode through existing session storage, without altering the reserved legacy Chat slot or any previous session, messages, or artifacts. Selecting an existing Chat is read-only and validates its stored mode before hydration; Research, unknown-mode, and child sessions cannot be opened through the Chat adapter. New shell Chat creation/opening uses `SameOrigin` and proven loopback binding before storage access, with fixed bounded error bodies; unavailable runtime or storage never falls back to deleting or resetting the singleton. A reopened active Chat stays active with mode switching disabled and uses its proven conversation key for streaming and Stop; where a legacy active key cannot be recovered, show an explicit unavailable state rather than assuming an idle session or guessing a Stop target. Idle historical Chats may continue on a new live routing key while retaining their canonical session/history. Legacy `/chat` initialization and reset remain unchanged.
+- [ ] **AC15 — Visible subagents:** Research subagent cards have a distinct surface and visible boundary against the conversation background, in collapsed and expanded views. Card text and status labels meet a measured 4.5:1 contrast floor; necessary control boundaries and focus indicators meet 3:1. Running/completed/stopped/error states retain text or icons rather than relying on color alone. Long agent names, nested cards, errors and controls remain readable at desktop and narrow widths.
+
+## Assumptions
+
+- Technical: the React/TypeScript UI currently exposes separate Chat and Research routes and transport hooks, while the Rust gateway owns sessions and artifacts (source: `apps/ui/src/App.tsx`, `apps/ui/src/features/chat-v2/useQuickChat.ts`, `apps/ui/src/features/research-v2/useResearchSession.ts`).
+- Technical: Research snapshot hydration rebuilds turns from persisted logs/messages/artifacts; per-turn activity timeline is not fully reconstructed by that path (source: `apps/ui/src/features/research-v2/session-snapshot.ts`, `apps/ui/src/features/research-v2/types.ts`).
+- Technical: recall output includes source identifiers, but existing session-state recalled facts are unstructured content strings, not authorized stable record references (source: `runtime/agent-tools/src/tools/recall.rs`, `gateway/gateway-execution/src/session_state.rs`).
+- Product: the accepted UI direction is a restrained conversation-first shell with a top-center Chat/Research switch, three contextual tabs, and direct Memory/Observatory destinations (source: user confirmation 2026-09-27; `docs/product/zbot-desktop-ui-preview.html`).
+- Product: hide the ward explorer in the new shell but retain its implementation and legacy access; reserve new agent/settings/customization/hook capabilities for later specs. Existing Agents/Settings/Integrations presentation is included under the subsequent user-approved amendment (source: user confirmations; RFC-0021 errata).
+- Process: this is the UI plus minimal provenance-data slice; desktop host and lifecycle hooks are separate specs (source: user confirmation 2026-09-27; RFC-0021).
+- Process: experience-design pack not installed; design intent for this surface is ungrounded. The approved HTML mockup supplies visual direction but no formal design-system review (source: available skill roster and `docs/product/zbot-desktop-ui-preview.html`).
+- Technical: a read-only HTTP session-details projection is the approved contract for reloadable provenance; existing WebSocket events remain live deltas and no new event interface is introduced (source: user confirmation 2026-09-27; `apps/ui/src/features/research-v2/session-snapshot.ts`).
+- Product/security: the user approved changing the daemon's current default `0.0.0.0` bind to `127.0.0.1`, with explicit LAN opt-in, so the local details endpoint works in a normal desktop launch (source: user confirmation 2026-09-27; `apps/daemon/src/main.rs`).
+- Product: the user approved independent shell Chat sessions and a replacement implementation plan after discovering that the legacy singleton/reset cannot satisfy AC2 (source: user approval 2026-09-27; `disposition.md`). No persistent schema migration or runtime change is authorized.
+- Product: the user approved full Memory/Observatory integration and contrasting subagent surfaces, then authorized resetting only workflow tracking to amend this plan (source: current user confirmations; `ui-integration-amendment.md`). Frontend retrofit direction and state coverage are recorded in `frontend-plan.md`.
+- Product: the user clarified and approved Session's default Chat reusing the existing static Quick Chat, while keeping explicit New chat independent; authorized a tracking-only reset to reseal this correction (source: current user approvals; `disposition.md`). This supersedes the earlier idle-switch independent-creation behavior, not AC14's New chat contract.
+- Product: the user approved migrating the existing Agents, Settings and Integrations pages and their editors to the same desktop style, with a tracking-only reset preserving implementation and evidence (source: current user approval; `administration-amendment.md`). Mission Control, Vault, experimental Graph and commissioning are not part of this presentation expansion.

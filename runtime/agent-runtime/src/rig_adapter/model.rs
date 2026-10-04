@@ -189,7 +189,7 @@ impl CompletionModel for LlmCompletionModel {
             .client
             .chat_with_schema(messages, tools, output_schema)
             .await
-            .map_err(llm_error_to_completion)?;
+            .map_err(|error| CompletionError::RequestError(Box::new(error)))?;
         for ack in acks {
             let _ = ack.send(());
         }

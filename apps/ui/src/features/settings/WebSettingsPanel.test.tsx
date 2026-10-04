@@ -82,6 +82,16 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("WebSettingsPanel — page chrome", () => {
+  it("falls back to a keyboard-reachable Providers panel for an unknown tab", async () => {
+    window.history.replaceState({}, "", "/settings?tab=bogus&returnTo=%2Fsession%2Fsess-kept");
+    render(<WebSettingsPanel />);
+    const tab = await screen.findByRole("tab", { name: /Providers/ });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(tab).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("id", "tabpanel-providers");
+    expect(new URLSearchParams(window.location.search).get("returnTo")).toBe("/session/sess-kept");
+  });
+
   it("renders the Settings page title + subtitle", async () => {
     render(<WebSettingsPanel />);
     await waitFor(() => expect(screen.getByText("Settings")).toBeInTheDocument());
@@ -208,6 +218,18 @@ describe("WebSettingsPanel — providers tab empty state", () => {
 });
 
 describe("WebSettingsPanel — tab switching", () => {
+  // STUB: AC11 — preserve desktop return state without changing existing tabs.
+  it("preserves the selected conversation on General and Providers", async () => {
+    window.history.replaceState({}, "", "/settings?returnTo=%2Fsession%2Fsess-kept");
+    render(<WebSettingsPanel />);
+    fireEvent.click(await screen.findByRole("tab", {name:"General"}));
+    expect(new URLSearchParams(window.location.search).get("tab")).toBe("general");
+    expect(new URLSearchParams(window.location.search).get("returnTo")).toBe("/session/sess-kept");
+    fireEvent.click(screen.getByRole("tab", {name:/Providers/}));
+    expect(new URLSearchParams(window.location.search).get("tab")).toBeNull();
+    expect(new URLSearchParams(window.location.search).get("returnTo")).toBe("/session/sess-kept");
+  });
+
   it("switches to General when the General tab is clicked", async () => {
     render(<WebSettingsPanel />);
     await waitFor(() => expect(screen.getByText("Settings")).toBeInTheDocument());

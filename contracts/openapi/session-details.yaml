@@ -1,0 +1,389 @@
+openapi: 3.1.0
+info:
+  title: zbot Session Shell
+  version: 0.3.0
+  description: Independent Chat lifecycle and read-only session provenance. Legacy
+    singleton Chat is unchanged; missing evidence is never invented.
+x-spec:
+- docs/specs/desktop-session-shell/
+- docs/specs/external-hooks/
+- docs/specs/desktop-session-completion/
+paths:
+  /api/sessions/chat:
+    post:
+      operationId: createChatSession
+      summary: Create a distinct Chat without changing prior sessions or the legacy
+        singleton
+      description: SameOrigin and proven loopback binding precede persistence. No
+        client-selected ID, agent, mode or metadata is accepted. One insert creates
+        a root Web session in queued status with stored fast mode, canonical routing
+        metadata, no execution, created true and isLive false. Execution uses the
+        existing fast path.
+      responses:
+        '201':
+          description: Independent Chat created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShellChatSession'
+        '403':
+          $ref: '#/components/responses/ShellChatDenied'
+        '500':
+          $ref: '#/components/responses/ShellChatUnavailable'
+  /api/sessions/{sessionId}/chat:
+    get:
+      operationId: openChatSession
+      summary: Read the selected root Chat identity and active state without mutation
+      description: SameOrigin and proven loopback binding precede reads. Stored fast/chat
+        mode and root session/agent are required. isLive reflects nonterminal executions,
+        not initial session status. Resolve server-recorded canonical routing or the
+        current reserved Chat settings key. Idle historical Chat may use canonical
+        session ID for its next invocation; an active legacy Chat without a proven
+        key returns 409. No creation, mode coercion or reset occurs.
+      parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$
+      responses:
+        '200':
+          description: Selected Chat identity, with created false.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShellChatSession'
+        '400':
+          description: Invalid session identifier.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetailsError'
+        '403':
+          $ref: '#/components/responses/ShellChatDenied'
+        '404':
+          description: Session does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetailsError'
+        '409':
+          description: Incompatible mode/root or unrecoverable active conversation
+            key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetailsError'
+        '500':
+          $ref: '#/components/responses/ShellChatUnavailable'
+  /api/sessions/{sessionId}/details:
+    get:
+      operationId: getSessionDetails
+      summary: Read the persisted mode, activity, and cited or explicitly used sources
+        for one session
+      description: Browser Origin must match Host. The session ID is a correlation
+        key, not an authentication credential. This endpoint is available only while
+        the gateway is bound to loopback, including for Origin-less native callers;
+        a LAN bind or unavailable bind proof receives 403 before a session read. This
+        endpoint returns no raw tool inputs/outputs, memory content, local paths,
+        credentials, or model-inferred citations. Activity is the most recent 500
+        records in ascending sequence; Sources is the first 100 stable source IDs
+        in citation/use order. Truncation is explicit.
+      parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$
+      responses:
+        '200':
+          description: Persisted session detail projection; event and source arrays
+            may be empty.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetails'
+        '400':
+          description: Invalid session identifier.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetailsError'
+        '403':
+          description: Origin or native-caller reachability rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetailsError'
+        '404':
+          description: Session does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetailsError'
+        '500':
+          description: Sanitized server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetailsError'
+components:
+  responses:
+    ShellChatDenied:
+      description: Mismatched Origin, non-loopback binding or missing proof; no persistence
+        access.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/SessionDetailsError'
+    ShellChatUnavailable:
+      description: Sanitized storage/settings failure; no destructive fallback.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/SessionDetailsError'
+  schemas:
+    ShellChatSession:
+      type: object
+      additionalProperties: false
+      required:
+      - sessionId
+      - conversationId
+      - created
+      - isLive
+      properties:
+        sessionId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$
+        conversationId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$
+        created:
+          type: boolean
+        isLive:
+          type: boolean
+    SessionDetailsError:
+      type: object
+      additionalProperties: false
+      required:
+      - error
+      properties:
+        error:
+          type: string
+          maxLength: 160
+          description: Fixed, sanitized error class or message; no raw persisted content
+            or internal path.
+    SessionDetails:
+      type: object
+      additionalProperties: false
+      required:
+      - sessionId
+      - mode
+      - activity
+      - activityTruncated
+      - sources
+      - sourcesTruncated
+      properties:
+        sessionId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$
+        mode:
+          type: string
+          enum:
+          - chat
+          - research
+          - unknown
+          description: Persisted fast/chat maps to chat; deep/research maps to research.
+            Missing, empty, or unrecognized stored values map to unknown. The client
+            never infers mode from route or prose.
+        activity:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/ActivityRecord'
+        activityTruncated:
+          type: boolean
+        sources:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/SourceRecord'
+        sourcesTruncated:
+          type: boolean
+    ActivityRecord:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - sequence
+      - kind
+      - label
+      - occurredAt
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$
+          description: Stable within the session for live/reload deduplication; invalid
+            persisted IDs cause the record to be omitted.
+        sequence:
+          type: integer
+          minimum: 0
+        turnId:
+          type:
+          - string
+          - 'null'
+          maxLength: 128
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$
+          description: Stable turn identifier when known; malformed persisted values
+            are omitted.
+        kind:
+          type: string
+          enum:
+          - plan
+          - tool
+          - delegation
+          - error
+          - memory_recall
+          - memory_write
+          - hook
+        label:
+          type: string
+          maxLength: 160
+          description: Server-supplied redacted display label, never raw memory or
+            tool payload.
+        occurredAt:
+          type: string
+          format: date-time
+        memoryRecordId:
+          type:
+          - string
+          - 'null'
+          maxLength: 128
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$
+          description: Included only when a stable reference is recorded and the caller
+            is authorized to inspect it; never treated as proof that the record influenced
+            an answer.
+        hook:
+          $ref: '#/components/schemas/HookActivity'
+      allOf:
+      - if:
+          properties:
+            kind:
+              const: hook
+          required:
+          - kind
+        then:
+          required:
+          - hook
+        else:
+          not:
+            required:
+            - hook
+    SourceRecord:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - title
+      - url
+      - evidence
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$
+          description: Invalid persisted IDs cause the source to be omitted.
+        title:
+          type: string
+          maxLength: 200
+        url:
+          type: string
+          format: uri
+          maxLength: 2048
+          pattern: ^https?://[^/?#@]+(?:[/?#]|$)
+          description: Server-validated http or https destination only; parsed URL
+            must have empty username and password, and no local path or unsafe scheme
+            is returned.
+        evidence:
+          type: string
+          enum:
+          - answer_citation
+          - structured_source_use
+          description: Browsing or model-prose mention alone is insufficient.
+    HookActivity:
+      type: object
+      additionalProperties: false
+      required:
+      - hookId
+      - event
+      - eventId
+      - invocationId
+      - agentId
+      - runId
+      - status
+      - durationMs
+      - exitCode
+      properties:
+        hookId:
+          type: string
+          pattern: ^[a-z][a-z0-9-]{0,63}$
+        event:
+          enum:
+          - session_start
+          - user_prompt
+          - run_start
+          - run_end
+          - before_model
+          - after_model
+          - before_tool
+          - after_tool
+          - invalid_tool_call
+        eventId: &id001
+          type: string
+          minLength: 1
+          maxLength: 128
+        invocationId: *id001
+        agentId: *id001
+        runId:
+          type:
+          - string
+          - 'null'
+          minLength: 1
+          maxLength: 128
+        status:
+          enum:
+          - running
+          - completed
+          - blocked
+          - failed
+          - timeout
+          - cancelled
+          - skipped
+        durationMs:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+        exitCode:
+          type:
+          - integer
+          - 'null'
+      description: Bounded persisted metadata only. Activity id identifies one command
+        invocation, updated from running to settled with the same id/sequence. runId
+        is null at ingress. Labels use fixed server strings; no response reason, arguments,
+        payloads, diagnostics or paths.

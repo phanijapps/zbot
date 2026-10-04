@@ -12,6 +12,37 @@ active = [
 ]
 shipped = []
 
+[ini-001.brief_queue]
+draft = [
+  { path = "docs/product/briefs/provenance-aware-context-compaction.md", kind = "brief", source = { mode = "user-request", ref = "conversation/2026-09-14" }, summary = "Make provenance-aware context compaction the default while retaining the current middleware as a feature-flag control.", needs = [] },
+]
+
+[ini-002]
+name = "First Desktop Agent"
+status = "active"
+milestone = "Conversation-first Chat and Research shell"
+
+[ini-002.work]
+# Draft specs remain non-executable until their spec/plan approvals.
+queue = [
+  { path = "docs/specs/rig-043-migration/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/rig-043-migration/spec.md", revision = "ee35d6720922174f95a9ffc59d11b2482eecf675", parent = "docs/product/briefs/rig-hooks-session-graph.md" }, summary = "Upgrade Rig to exactly 0.43.0 with execution/provider parity", needs = [] },
+  { path = "docs/specs/external-hooks/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/external-hooks/spec.md", revision = "ee35d6720922174f95a9ffc59d11b2482eecf675", parent = "docs/product/briefs/rig-hooks-session-graph.md" }, summary = "Execute vault-file external hooks using bounded versioned JSON", needs = [{ type = "local", kind = "spec", path = "docs/specs/rig-043-migration/spec.md" }] },
+  { path = "docs/specs/desktop-session-completion/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/desktop-session-completion/spec.md", revision = "ee35d6720922174f95a9ffc59d11b2482eecf675", parent = "docs/product/briefs/rig-hooks-session-graph.md" }, summary = "Close audited gaps in the accepted desktop session shell", needs = [] },
+  { path = "docs/specs/observatory-graph-completeness/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/observatory-graph-completeness/spec.md", revision = "ee35d6720922174f95a9ffc59d11b2482eecf675", parent = "docs/product/briefs/rig-hooks-session-graph.md" }, summary = "Explore and search beyond one graph page with measured styled UX", needs = [] },
+]
+active = [
+  { path = "docs/specs/desktop-session-shell/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/desktop-session-shell/spec.md" }, summary = "Shared Chat and Research conversation shell with truthful session details and direct Memory and Observatory access", needs = [] },
+]
+shipped = []
+
+[ini-002.brief_queue]
+draft = [
+  { path = "docs/product/briefs/agent-ready-bootstrap.md", kind = "brief", source = { mode = "repo-origin", ref = "docs/product/briefs/agent-ready-bootstrap.md", revision = "ee35d6720922174f95a9ffc59d11b2482eecf675" }, summary = "Prime each new zbot instance with all supported agent-ready-repo skills and subagents; report missing prerequisites and preserve user customizations.", needs = [] },
+]
+ready = [
+  { path = "docs/product/briefs/rig-hooks-session-graph.md", kind = "brief", source = { mode = "repo-origin", ref = "docs/product/briefs/rig-hooks-session-graph.md", revision = "ee35d6720922174f95a9ffc59d11b2482eecf675" }, summary = "Upgrade Rig to 0.43.0, run file-configured external hooks, finish the session UI, and deliver a styled graph explorer beyond the 500-relationship cap.", needs = [] },
+]
+
 [backlog]
 open = [
   # pre-existing: ResearchPage.test.tsx:570 expects stopAgent on click, but the
@@ -31,6 +62,9 @@ open = [
   # delegating nested builders, but policy #206 (2026-06-03) removed AgentDelegate from
   # DelegatedExecutor. Re-record the fixture under the current contract (root delegates).
   { slug = "pre-existing-aapl-fixture-rerecord", source = "spec/rig-only-execution AC12" },
+  # pre-existing: docs/specs/exec-consolidation-waves/spec.md uses invalid Status Drafting.
+  # Resolve its lifecycle through that spec's workflow; desktop work must not relabel unrelated work.
+  { slug = "pre-existing-exec-consolidation-spec-status", source = "pre-flight/2026-09-27" },
   # pre-existing (QE review): settings API exposes subagent_non_streaming but no production
   # path reads it (dead before the cutover too — legacy had only a NOTE comment). Wire it
   # into Rig construction or delete the setting; product-surface call, not cutover scope.
@@ -71,3 +105,13 @@ open = [
   # Ward slim P4 audience split shipped (#255) — slug removed on ship.
   # Ward slim P5 gate vocabulary shipped (#258) — slug removed on ship.
 ]
+
+[ini-003]
+name = "Intent analysis reliability"
+status = "active"
+milestone = "Validated provider-aware intent decisions"
+
+[ini-003.work]
+shipped = [{ path = "docs/specs/intent-output-fallback/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/intent-output-fallback/spec.md" }, summary = "Provider-aware validated intent output and safe degraded routing", needs = [] }, { path = "docs/specs/ollama-intent-json-fallback/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/ollama-intent-json-fallback/spec.md" }, summary = "Bounded Ollama JSON code block fallback", needs = [] }, { path = "docs/specs/intent-rig-preflight/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/intent-rig-preflight/spec.md" }, summary = "Restore Rig intent preflight and bounded z.ai/Ollama GLM reasoning", needs = [] }]
+queue = []
+active = []

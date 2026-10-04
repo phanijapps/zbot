@@ -32,6 +32,8 @@ mod openapi;
 mod paths;
 mod plugins;
 mod providers;
+#[cfg(test)]
+mod session_details_tests;
 mod sessions;
 mod settings;
 mod skills;
@@ -456,6 +458,8 @@ pub fn create_http_router(
         )
         // Chat session endpoints
         .route("/api/chat/init", post(chat::init_chat_session))
+        .route("/api/sessions/chat", post(chat::create_chat_session))
+        .route("/api/sessions/:id/chat", get(chat::open_chat_session))
         .route("/api/chat/session", delete(chat::clear_chat_session))
         .route(
             "/api/sessions/:session_id/messages",
@@ -464,6 +468,10 @@ pub fn create_http_router(
         // Session archive endpoints
         .route("/api/sessions/archive", post(sessions::archive_sessions))
         .route("/api/sessions/restore/:id", post(sessions::restore_session))
+        .route(
+            "/api/sessions/:id/details",
+            get(sessions::get_session_details),
+        )
         .route("/api/sessions/:id/state", get(sessions::get_session_state))
         .route("/api/traces/query", post(traces::query_traces))
         // Hard-delete a session with memory-preserving cascade (R18)

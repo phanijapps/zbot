@@ -272,6 +272,18 @@ describe('HttpTransport — path-id encoding', () => {
     expect(url).toBe(`${HTTP}/api/sessions/sess-abc%2F123/state`);
   });
 
+  // STUB: AC4 AC12 — the details transport uses the server projection by ID.
+  it('requests redacted session details by encoded session id', async () => {
+    fetchMock.mockResolvedValue(mockResponse({ body: {
+      sessionId: 'sess-abc', mode: 'unknown', activity: [], activityTruncated: false,
+      sources: [], sourcesTruncated: false,
+    } }));
+    const t = newTransport();
+    const response = await t.getSessionDetails('sess-abc/123');
+    expect(fetchMock.mock.calls[0][0]).toBe(`${HTTP}/api/sessions/sess-abc%2F123/details`);
+    expect(response.data?.mode).toBe('unknown');
+  });
+
   it('encodes session ids in deleteSession', async () => {
     fetchMock.mockResolvedValue(mockResponse({ status: 200 }));
     const t = newTransport();
@@ -651,6 +663,31 @@ describe('HttpTransport — initChatSession', () => {
     expect(url).toBe(`${HTTP}/api/chat/init`);
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body)).toEqual({});
+  });
+});
+
+describe('HttpTransport — independent Chat lifecycle', () => {
+  it('creates a Chat without client-selected identity or mode', async () => {
+    fetchMock.mockResolvedValue(mockResponse({ body: {
+      sessionId: 'sess-new', conversationId: 'sess-new', created: true, isLive: false,
+    } }));
+    const result = await newTransport().createChatSession();
+    expect(result.data?.sessionId).toBe('sess-new');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`${HTTP}/api/sessions/chat`);
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({});
+  });
+
+  it('opens an encoded selected ID through a read-only request', async () => {
+    fetchMock.mockResolvedValue(mockResponse({ body: {
+      sessionId: 'sess-a', conversationId: 'sess-a', created: false, isLive: true,
+    } }));
+    const result = await newTransport().openChatSession('sess/a');
+    expect(result.data?.isLive).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`${HTTP}/api/sessions/sess%2Fa/chat`);
+    expect(init.method).toBe('GET');
   });
 });
 

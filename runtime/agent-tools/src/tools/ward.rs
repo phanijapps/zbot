@@ -1353,7 +1353,15 @@ impl Tool for WardTool {
                     actions.delegate = Some(DelegateAction {
                         agent_id: "planner-agent".to_string(),
                         task: task.clone(),
-                        context: None,
+                        // The ward we JUST entered — bound at the source.
+                        // This auto-spawn fired context:None for its entire
+                        // life, making the planner depend on async
+                        // sessions.ward_id / messages writes that lose
+                        // sub-second races (sess-70d057a3, sess-5b433b24,
+                        // sess-7f908385, sess-9015be06 — four failures,
+                        // none via the delegate tool; the traces show zero
+                        // model-issued delegate calls).
+                        context: Some(serde_json::json!({"ward_id": name})),
                         wait_for_result: true,
                         max_iterations: None,
                         output_schema: None,
@@ -2274,6 +2282,19 @@ mod tests {
         assert_eq!(action.agent_id, "planner-agent");
         assert!(action.wait_for_result);
         assert!(!action.parallel);
+        // Root-cause pin (sess-9015be06 et al): the auto-spawn carried
+        // context:None for its entire life — the planner then depended on
+        // async ward writes that lose sub-second races. The ward id must
+        // travel IN the delegation request.
+        assert_eq!(
+            action
+                .context
+                .as_ref()
+                .and_then(|c| c.get("ward_id"))
+                .and_then(|v| v.as_str()),
+            Some("creative-design"),
+            "auto-spawned planner delegation must carry the ward it was spawned for"
+        );
         assert!(action.task.contains("Active ward:"));
         assert!(action.task.contains("creative-design"));
         assert_eq!(

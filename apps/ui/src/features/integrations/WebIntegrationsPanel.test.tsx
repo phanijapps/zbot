@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WebIntegrationsPanel } from "./WebIntegrationsPanel";
@@ -36,6 +36,10 @@ function renderPanel() {
   );
 }
 
+function LocationSnapshot() {
+  return <output aria-label="Current route query">{useLocation().search}</output>;
+}
+
 describe("WebIntegrationsPanel OAuth MCP flow", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -69,6 +73,28 @@ describe("WebIntegrationsPanel OAuth MCP flow", () => {
       location: { href: "" },
       opener: null,
     } as Window);
+  });
+
+  it("falls back to a keyboard-reachable Tool Servers panel for an unknown tab", async () => {
+    render(<MemoryRouter initialEntries={["/integrations?tab=bogus&returnTo=%2Fsession%2Fsess-kept"]}><WebIntegrationsPanel /><LocationSnapshot /></MemoryRouter>);
+    const tab = await screen.findByRole("tab", { name: /Tool Servers/ });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(tab).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("id", "tabpanel-tools");
+    expect(new URLSearchParams(screen.getByLabelText("Current route query").textContent!).get("returnTo")).toBe("/session/sess-kept");
+  });
+
+  // STUB: AC11 — keep return state during existing tab navigation.
+  it("preserves the conversation return target on Plugins and Tool Servers", async () => {
+    render(<MemoryRouter initialEntries={["/integrations?returnTo=%2Fsession%2Fsess-kept"]}><WebIntegrationsPanel /><LocationSnapshot /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("tab", {name:/Plugins & Workers/}));
+    let query = new URLSearchParams(screen.getByLabelText("Current route query").textContent!);
+    expect(query.get("tab")).toBe("plugins");
+    expect(query.get("returnTo")).toBe("/session/sess-kept");
+    fireEvent.click(screen.getByRole("tab", {name:/Tool Servers/}));
+    query = new URLSearchParams(screen.getByLabelText("Current route query").textContent!);
+    expect(query.get("tab")).toBeNull();
+    expect(query.get("returnTo")).toBe("/session/sess-kept");
   });
 
   it("offers authorization after adding an OAuth MCP server", async () => {

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "run_id": "147871c4-2894-4cc2-9795-8bcfc168867e",
+  "feature": "desktop-session-shell",
+  "mode": "code",
+  "state": "CODE-IMPLEMENTATION",
+  "last_event": "wave-passed",
+  "last_event_context": {
+    "completed_wave_index": 1
+  },
+  "transition_sequence": 13,
+  "last_transition_at": "2026-09-28T20:21:45Z",
+  "gate_question": null
+}

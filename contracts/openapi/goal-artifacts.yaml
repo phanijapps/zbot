@@ -3,7 +3,7 @@ info:
   title: z-Bot Goal Artifact API
   version: 1.0.0
   description: Existing artifact manifest and content routes with explicit goal-deliverable metadata.
-x-spec: docs/specs/goal-artifacts/spec.md
+x-spec: [docs/specs/goal-artifacts/spec.md, docs/specs/desktop-session-shell/, docs/specs/desktop-session-completion/]
 paths:
   /api/sessions/{sessionId}/artifacts:
     get:

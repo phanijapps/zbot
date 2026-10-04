@@ -59,6 +59,99 @@ tags:
     description: Bounded admin operations that clear vault-owned ephemeral storage
 
 paths:
+  /api/sessions/chat:
+    post:
+      operationId: createChatSession
+      summary: Create a distinct Chat without changing prior sessions or the legacy singleton
+      description: SameOrigin and proven loopback binding precede persistence. No client-selected ID, agent, mode or metadata is accepted. One insert creates a root Web session in queued status with stored fast mode, canonical routing metadata, no execution, created true and isLive false. Execution uses the existing fast path.
+      responses:
+        "201":
+          description: Independent Chat created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ShellChatSession" }
+        "403": { $ref: "#/components/responses/ShellChatDenied" }
+        "500": { $ref: "#/components/responses/ShellChatUnavailable" }
+  /api/sessions/{sessionId}/chat:
+    get:
+      operationId: openChatSession
+      summary: Read the selected root Chat identity and active state without mutation
+      description: SameOrigin and proven loopback binding precede reads. Stored fast/chat mode and root session/agent are required. isLive reflects nonterminal executions, not initial session status. Resolve server-recorded canonical routing or the current reserved Chat settings key. Idle historical Chat may use canonical session ID for its next invocation; an active legacy Chat without a proven key returns 409. No creation, mode coercion or reset occurs.
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' }
+      responses:
+        "200":
+          description: Selected Chat identity, with created false.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ShellChatSession" }
+        "400":
+          description: Invalid session identifier.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionDetailsError" }
+        "403": { $ref: "#/components/responses/ShellChatDenied" }
+        "404":
+          description: Session does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionDetailsError" }
+        "409":
+          description: Incompatible mode/root or unrecoverable active conversation key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionDetailsError" }
+        "500": { $ref: "#/components/responses/ShellChatUnavailable" }
+  /api/sessions/{sessionId}/details:
+    get:
+      tags: [Sessions]
+      operationId: getSessionDetails
+      summary: Read redacted, persisted session details
+      description: Available only when the gateway is bound to loopback; browser Origin must match Host. No raw tool or memory content is returned.
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      responses:
+        '200':
+          description: Persisted mode and attributable detail projection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetails'
+        '400':
+          description: Invalid session identifier
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetailsError'
+        '403':
+          description: Origin or bind boundary denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetailsError'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetailsError'
+        '500':
+          description: Sanitized projection failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetailsError'
+
   # ============================================================================
   # Health Endpoints
   # ============================================================================
@@ -1526,7 +1619,102 @@ paths:
                 $ref: '#/components/schemas/WebhookResponse'
 
 components:
+  responses:
+    ShellChatDenied:
+      description: Mismatched Origin, non-loopback binding or missing proof; no persistence access.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/SessionDetailsError" }
+    ShellChatUnavailable:
+      description: Sanitized storage/settings failure; no destructive fallback.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/SessionDetailsError" }
   schemas:
+    ShellChatSession:
+      type: object
+      additionalProperties: false
+      required: [sessionId, conversationId, created, isLive]
+      properties:
+        sessionId: { type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' }
+        conversationId: { type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' }
+        created: { type: boolean }
+        isLive: { type: boolean }
+    SessionDetailsError:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string
+          maxLength: 160
+
+    SessionDetails:
+      type: object
+      additionalProperties: false
+      required: [sessionId, mode, activity, activityTruncated, sources, sourcesTruncated]
+      properties:
+        sessionId:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        mode:
+          type: string
+          enum: [chat, research, unknown]
+        activity:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/SessionActivityRecord'
+        activityTruncated:
+          type: boolean
+        sources:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/SessionSourceRecord'
+        sourcesTruncated:
+          type: boolean
+
+    SessionActivityRecord:
+      type: object
+      additionalProperties: false
+      required: [id, sequence, kind, label, occurredAt]
+      properties:
+        id:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        sequence:
+          type: integer
+          minimum: 0
+        kind:
+          type: string
+          enum: [plan, tool, delegation, error, memory_recall, memory_write]
+        label:
+          type: string
+          maxLength: 160
+        occurredAt:
+          type: string
+          format: date-time
+
+    SessionSourceRecord:
+      type: object
+      additionalProperties: false
+      required: [id, title, url, evidence]
+      properties:
+        id:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        title:
+          type: string
+          maxLength: 200
+        url:
+          type: string
+          format: uri
+          maxLength: 2048
+        evidence:
+          type: string
+          enum: [answer_citation, structured_source_use]
+
     # ============================================================================
     # Health Schemas
     # ============================================================================

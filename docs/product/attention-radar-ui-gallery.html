@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>z-Bot — Attention Radar UI gallery</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #090b10;
+      --panel: #10141d;
+      --panel-raised: #151b26;
+      --line: #273043;
+      --line-soft: #1d2635;
+      --text: #eef3ff;
+      --muted: #92a0b7;
+      --soft: #c5d0e4;
+      --violet: #ae7bff;
+      --violet-soft: #38285c;
+      --cyan: #54d9ec;
+      --green: #5de3a7;
+      --amber: #ffc36a;
+      --red: #ff788d;
+      --blue: #78a6ff;
+      --radius: 15px;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+      font-family: Inter, "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      min-width: 320px; margin: 0; color: var(--text);
+      background:
+        radial-gradient(circle at 57% -12%, rgba(111, 75, 183, .18), transparent 35rem),
+        radial-gradient(circle at 100% 0%, rgba(50, 171, 197, .075), transparent 27rem),
+        var(--ink);
+    }
+    button, input, select { font: inherit; }
+    a { color: inherit; text-decoration: none; }
+    code, .mono, time { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; }
+
+    .gallery-nav {
+      position: fixed; z-index: 5; inset: 0 auto 0 0; width: 244px; overflow-y: auto;
+      padding: 22px 14px; border-right: 1px solid var(--line-soft); background: rgba(9, 11, 16, .91);
+      backdrop-filter: blur(18px);
+    }
+    .gallery-brand { display: flex; gap: 11px; align-items: center; padding: 0 8px 18px; border-bottom: 1px solid var(--line-soft); }
+    .gallery-mark, .brand-mark { display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 auto; border-radius: 10px; color: white; font-weight: 800; background: linear-gradient(145deg, #c38cff, #7257d9); box-shadow: 0 0 22px rgba(174, 123, 255, .26); }
+    .gallery-brand strong { display: block; letter-spacing: -.02em; font-size: 14px; }
+    .gallery-brand span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .gallery-nav h2 { margin: 19px 9px 7px; color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; }
+    .gallery-nav a { display: flex; align-items: center; gap: 9px; margin: 2px 0; padding: 9px 10px; border: 1px solid transparent; border-radius: 9px; color: var(--soft); font-size: 12px; }
+    .gallery-nav a:hover { border-color: rgba(174, 123, 255, .4); background: rgba(56, 40, 92, .56); color: white; }
+    .gallery-nav i { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 9px rgba(84, 217, 236, .62); }
+    .gallery-nav .commission i, .gallery-nav .settings i { background: var(--violet); box-shadow: 0 0 9px rgba(174, 123, 255, .62); }
+    .gallery-nav .memory i, .gallery-nav .graph i { background: var(--green); box-shadow: 0 0 9px rgba(93, 227, 167, .62); }
+    .gallery-nav .vault i { background: var(--amber); box-shadow: 0 0 9px rgba(255, 195, 106, .62); }
+    .gallery-nav .note { margin: 18px 8px 0; padding: 11px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: rgba(16, 20, 29, .72); font-size: 10px; line-height: 1.5; }
+
+    .gallery { max-width: 1940px; margin-left: 244px; padding: 30px clamp(18px, 3.5vw, 58px) 70px; }
+    .gallery-header { display: flex; justify-content: space-between; align-items: end; gap: 22px; padding: 2px 0 29px; border-bottom: 1px solid var(--line-soft); }
+    .overline { color: var(--violet); font-family: "JetBrains Mono", monospace; font-size: 10px; font-weight: 750; letter-spacing: .14em; text-transform: uppercase; }
+    h1, h2, h3, p { margin-top: 0; }
+    .gallery-header h1 { margin: 6px 0 8px; font-size: clamp(27px, 3vw, 40px); letter-spacing: -.045em; }
+    .gallery-header p { max-width: 700px; margin-bottom: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+    .gallery-header aside { min-width: 250px; padding: 12px 14px; border: 1px solid rgba(84, 217, 236, .24); border-radius: 11px; color: var(--soft); background: rgba(20, 38, 49, .42); font-size: 11px; line-height: 1.5; }
+    .gallery-header aside b { color: var(--cyan); }
+
+    .rules { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; margin: 20px 0 46px; }
+    .rule { min-height: 112px; padding: 14px; border: 1px solid var(--line-soft); border-radius: 12px; background: rgba(16, 20, 29, .76); }
+    .rule strong { display: block; margin-bottom: 6px; font-size: 12px; }
+    .rule p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+
+    .screen { scroll-margin-top: 22px; margin: 0 0 54px; }
+    .screen-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin: 0 0 12px; }
+    .screen-heading h2 { margin: 4px 0 0; font-size: 22px; letter-spacing: -.035em; }
+    .screen-heading p { max-width: 600px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; text-align: right; }
+    .screen-heading .route { color: var(--cyan); font-family: "JetBrains Mono", monospace; font-size: 11px; }
+
+    .mock-window { overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(160deg, rgba(20, 25, 35, .97), rgba(10, 14, 21, .98)); box-shadow: var(--shadow); }
+    .mock-bar { min-height: 49px; display: flex; align-items: center; gap: 13px; padding: 8px 13px; border-bottom: 1px solid var(--line-soft); background: rgba(12, 16, 24, .78); }
+    .mock-brand { display: flex; align-items: center; gap: 7px; margin-right: 5px; font-size: 12px; font-weight: 700; }
+    .mock-brand .brand-mark { width: 25px; height: 25px; border-radius: 8px; font-size: 12px; }
+    .mock-nav { display: flex; flex: 1; gap: 2px; overflow: hidden; }
+    .mock-nav span { padding: 6px 8px; border-radius: 7px; color: var(--muted); white-space: nowrap; font-size: 10px; }
+    .mock-nav span.active { color: white; background: rgba(174, 123, 255, .16); }
+    .connection { display: flex; gap: 5px; align-items: center; color: var(--green); font-size: 10px; white-space: nowrap; }
+    .connection i, .live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
+    .mock-body { min-height: 575px; padding: 14px; }
+
+    .masthead { display: flex; align-items: start; justify-content: space-between; gap: 13px; padding: 2px 3px 13px; }
+    .masthead h3 { margin: 3px 0 0; font-size: 18px; letter-spacing: -.03em; }
+    .sub { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
+    .actions, .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
+    .tag, .btn, .status, .chip { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--soft); font-size: 10px; }
+    .tag, .status, .chip { padding: 4px 6px; }
+    .tag { color: var(--muted); }
+    .status { border-radius: 99px; }
+    .status.ok { color: var(--green); border-color: rgba(93, 227, 167, .32); background: rgba(42, 131, 91, .13); }
+    .status.watch { color: var(--amber); border-color: rgba(255, 195, 106, .3); background: rgba(153, 104, 31, .12); }
+    .status.bad { color: var(--red); border-color: rgba(255, 120, 141, .32); background: rgba(164, 49, 69, .12); }
+    .btn { padding: 7px 9px; cursor: pointer; }
+    .btn.primary { border-color: transparent; color: white; background: linear-gradient(135deg, #8d62e5, #6f9df4); box-shadow: 0 7px 19px rgba(87, 73, 170, .2); }
+    .btn.danger { color: var(--red); border-color: rgba(255, 120, 141, .32); }
+    .btn:hover { border-color: #65728a; }
+
+    .signal-strip { display: grid; grid-template-columns: 1.4fr repeat(3, minmax(85px, .65fr)); gap: 8px; margin-bottom: 10px; }
+    .metric { min-height: 62px; padding: 10px; border: 1px solid var(--line-soft); border-radius: 10px; background: rgba(16, 20, 29, .72); }
+    .metric:first-child { background: linear-gradient(110deg, rgba(55, 38, 94, .62), rgba(16, 20, 29, .86)); }
+    .metric small { display: block; color: var(--muted); font-size: 9px; }
+    .metric strong { display: block; margin-top: 6px; font-size: 16px; letter-spacing: -.035em; }
+    .metric em { color: var(--soft); font-size: 9px; font-style: normal; }
+    .cyan { color: var(--cyan); } .green { color: var(--green); } .amber { color: var(--amber); } .red { color: var(--red); } .violet { color: var(--violet); }
+
+    .workbench { display: grid; min-height: 454px; gap: 10px; }
+    .workbench.three { grid-template-columns: minmax(172px, .78fr) minmax(360px, 1.65fr) minmax(190px, .9fr); }
+    .workbench.two { grid-template-columns: minmax(210px, .78fr) minmax(430px, 1.65fr); }
+    .workbench.file { grid-template-columns: minmax(205px, .63fr) minmax(450px, 1.9fr) minmax(190px, .72fr); }
+    .workbench.graph { grid-template-columns: minmax(190px, .76fr) minmax(430px, 1.75fr) minmax(190px, .78fr); }
+    .panel { min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(160deg, rgba(20, 25, 35, .95), rgba(13, 17, 25, .97)); }
+    .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 44px; padding: 10px 11px; border-bottom: 1px solid var(--line-soft); }
+    .panel-head h4 { margin: 0; font-size: 11px; letter-spacing: -.01em; }
+    .panel-head small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
+    .panel-head .quiet { color: var(--muted); font-size: 9px; }
+    .pane-scroll { height: 408px; overflow-y: scroll; scrollbar-gutter: stable; }
+    .pane-scroll::-webkit-scrollbar { width: 9px; }
+    .pane-scroll::-webkit-scrollbar-thumb { border: 3px solid #111722; border-radius: 9px; background: #41506a; }
+    .pane-scroll::-webkit-scrollbar-track { background: #111722; }
+    .list { padding: 6px; }
+    .list-row { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 10px 8px; border: 1px solid transparent; border-radius: 9px; }
+    .list-row + .list-row { margin-top: 2px; }
+    .list-row.selected { border-color: rgba(174, 123, 255, .44); background: linear-gradient(100deg, rgba(92, 63, 159, .33), rgba(28, 34, 48, .86)); }
+    .list-row:hover { background: rgba(31, 39, 55, .7); }
+    .signal { width: 7px; height: 7px; margin-top: 4px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 10px rgba(84, 217, 236, .5); }
+    .signal.good { background: var(--green); box-shadow: 0 0 10px rgba(93, 227, 167, .5); }
+    .signal.warn { background: var(--amber); box-shadow: 0 0 10px rgba(255, 195, 106, .5); }
+    .signal.bad { background: var(--red); box-shadow: 0 0 10px rgba(255, 120, 141, .5); }
+    .row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 700; }
+    .row-meta { margin-top: 3px; color: var(--muted); font-size: 9px; line-height: 1.38; }
+    .count { color: var(--muted); font: 9px "JetBrains Mono", monospace; }
+    .panel-foot { padding: 10px 11px; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: 9px; }
+
+    .focus-hero { padding: 15px; background: linear-gradient(128deg, rgba(69, 47, 116, .55), rgba(18, 24, 35, .35) 62%, rgba(29, 91, 104, .17)); }
+    .focus-hero h4 { margin: 5px 0 7px; font-size: 18px; letter-spacing: -.04em; }
+    .focus-hero p { max-width: 70ch; margin: 0; color: var(--soft); font-size: 11px; line-height: 1.5; }
+    .focus-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; color: var(--muted); font-size: 9px; }
+    .focus-meta b { color: var(--text); font-weight: 650; }
+    .timeline { padding: 11px 14px; }
+    .timeline-label { display: flex; justify-content: space-between; color: var(--soft); font-size: 10px; }
+    .timeline-label small { color: var(--muted); }
+    .event { display: grid; grid-template-columns: 44px 10px 1fr; gap: 7px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); color: var(--soft); font-size: 10px; line-height: 1.35; }
+    .event time { color: var(--muted); font-size: 8px; }
+    .event i { width: 6px; height: 6px; margin-top: 4px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 4px rgba(120, 166, 255, .1); }
+    .event.latest i { background: var(--cyan); box-shadow: 0 0 0 4px rgba(84, 217, 236, .12), 0 0 10px var(--cyan); }
+    .progress-card { margin: 0 14px 13px; padding: 10px; border: 1px solid rgba(84, 217, 236, .2); border-radius: 10px; background: rgba(24, 37, 48, .7); }
+    .progress-top { display: flex; justify-content: space-between; color: var(--soft); font-size: 9px; }
+    .progress-top b { color: var(--cyan); }
+    .meter { height: 5px; margin: 8px 0 5px; overflow: hidden; border-radius: 999px; background: #263144; }
+    .meter i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--violet), var(--cyan)); box-shadow: 0 0 11px rgba(84, 217, 236, .54); }
+
+    .stack { display: grid; gap: 10px; }
+    .attention-card { padding: 11px; border-bottom: 1px solid var(--line-soft); }
+    .attention-card:last-child { border-bottom: 0; }
+    .attention-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; font-weight: 700; }
+    .attention-card p { margin: 6px 0 9px; color: var(--muted); font-size: 9px; line-height: 1.48; }
+    .posture { padding: 0 11px; }
+    .posture-row { display: flex; justify-content: space-between; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); color: var(--muted); font-size: 10px; }
+    .posture-row b { color: var(--green); font-weight: 650; }
+    .posture-row b.warn { color: var(--amber); }
+
+    .chat-thread { height: 337px; padding: 15px; overflow-y: scroll; scrollbar-gutter: stable; }
+    .bubble { max-width: 82%; padding: 10px; margin: 0 0 10px; border: 1px solid var(--line); border-radius: 11px 11px 11px 3px; color: var(--soft); background: #151b26; font-size: 11px; line-height: 1.5; }
+    .bubble.user { margin-left: auto; border-color: rgba(174, 123, 255, .38); border-radius: 11px 11px 3px 11px; background: rgba(72, 48, 115, .48); color: white; }
+    .composer { display: flex; gap: 8px; align-items: center; padding: 10px; border-top: 1px solid var(--line-soft); }
+    .composer input { flex: 1; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; outline: none; color: var(--soft); background: rgba(8, 11, 16, .65); font-size: 10px; }
+    .deliverable { display: flex; align-items: center; gap: 8px; margin: 9px 11px; padding: 9px; border: 1px solid rgba(84, 217, 236, .2); border-radius: 9px; background: rgba(24, 37, 48, .52); }
+    .deliverable i { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; color: var(--cyan); background: rgba(84, 217, 236, .12); font-style: normal; }
+    .deliverable b { display: block; font-size: 10px; } .deliverable small { color: var(--muted); font-size: 9px; }
+
+    .search-deck { display: flex; gap: 7px; padding: 11px; border-bottom: 1px solid var(--line-soft); }
+    .search-deck input { flex: 1; min-width: 0; padding: 9px; border: 1px solid rgba(84, 217, 236, .36); border-radius: 8px; color: var(--soft); background: rgba(9, 15, 22, .74); font-size: 10px; }
+    .result { padding: 12px; border-bottom: 1px solid var(--line-soft); }
+    .result h5 { margin: 0 0 5px; font-size: 11px; }
+    .result p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .result-footer { display: flex; gap: 6px; margin-top: 8px; color: var(--soft); font-size: 9px; }
+    .taxonomy { padding: 11px; }
+    .taxonomy .branch { margin: 6px 0; padding-left: 9px; border-left: 1px solid var(--line); color: var(--muted); font-size: 9px; line-height: 1.65; }
+    .taxonomy .branch b { color: var(--soft); font-weight: 600; }
+
+    .file-tree { padding: 7px; }
+    .file-node { display: flex; gap: 7px; align-items: center; padding: 7px 6px; border-radius: 6px; color: var(--soft); font: 9px "JetBrains Mono", monospace; }
+    .file-node.dim { color: var(--muted); } .file-node.selected { color: white; background: rgba(174, 123, 255, .18); }
+    .file-node .folder { color: var(--amber); } .file-node .file { color: var(--cyan); }
+    .preview-top { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); color: var(--muted); font: 9px "JetBrains Mono", monospace; }
+    .document { height: 368px; padding: 19px 24px; overflow-y: scroll; scrollbar-gutter: stable; color: var(--soft); background: rgba(10, 13, 19, .45); }
+    .document h2 { margin: 0 0 8px; color: var(--text); font-size: 21px; letter-spacing: -.04em; }
+    .document h3 { margin: 17px 0 7px; color: var(--cyan); font-size: 12px; }
+    .document p, .document li { color: var(--soft); font-size: 11px; line-height: 1.62; }
+    .document code { display: block; padding: 9px; border: 1px solid var(--line); border-radius: 7px; color: #b9c9ef; background: #0d1118; font-size: 9px; }
+
+    .constellation { position: relative; height: 408px; overflow: hidden; background: radial-gradient(circle at 51% 43%, rgba(84, 217, 236, .11), transparent 16rem), #10151e; }
+    .constellation svg { width: 100%; height: 100%; opacity: .78; }
+    .node { position: absolute; display: grid; place-items: center; min-width: 64px; min-height: 28px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--soft); background: #151b26; font-size: 9px; }
+    .node.hot { border-color: rgba(84, 217, 236, .7); color: white; background: rgba(23, 60, 70, .82); box-shadow: 0 0 22px rgba(84, 217, 236, .17); }
+    .node.purple { border-color: rgba(174, 123, 255, .56); background: rgba(57, 40, 92, .82); }
+    .node.green { border-color: rgba(93, 227, 167, .48); background: rgba(30, 74, 59, .78); }
+    .n1 { left: 42%; top: 39%; } .n2 { left: 15%; top: 19%; } .n3 { right: 12%; top: 21%; } .n4 { left: 19%; bottom: 18%; } .n5 { right: 19%; bottom: 18%; } .n6 { left: 43%; bottom: 9%; }
+    .legend { position: absolute; bottom: 12px; left: 12px; display: flex; gap: 10px; color: var(--muted); font-size: 9px; }
+    .legend i { display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: var(--cyan); } .legend i.p { background: var(--violet); } .legend i.g { background: var(--green); }
+
+    .roster { padding: 9px; }
+    .roster-card { display: grid; grid-template-columns: 29px minmax(0, 1fr) auto; gap: 9px; align-items: center; padding: 10px; border: 1px solid var(--line-soft); border-radius: 10px; background: rgba(17, 22, 31, .55); }
+    .roster-card + .roster-card { margin-top: 7px; }
+    .avatar { display: grid; place-items: center; width: 29px; height: 29px; border-radius: 9px; color: white; background: rgba(174, 123, 255, .38); font-size: 11px; }
+    .roster-card h5 { margin: 0; font-size: 11px; }.roster-card p { margin: 3px 0 0; color: var(--muted); font-size: 9px; }
+    .table { width: 100%; border-collapse: collapse; font-size: 9px; }
+    .table th { padding: 8px 10px; border-bottom: 1px solid var(--line); color: var(--muted); text-align: left; font-weight: 500; }
+    .table td { padding: 10px; border-bottom: 1px solid var(--line-soft); color: var(--soft); }
+    .table td:last-child { text-align: right; }
+
+    .form-section { padding: 12px; border-bottom: 1px solid var(--line-soft); }
+    .form-section h5 { margin: 0 0 4px; font-size: 11px; }.form-section p { margin: 0 0 10px; color: var(--muted); font-size: 9px; }
+    .field { display: grid; grid-template-columns: 1fr 1.35fr; gap: 10px; align-items: center; margin-top: 8px; color: var(--muted); font-size: 9px; }
+    .field input, .field select { width: 100%; padding: 7px; border: 1px solid var(--line); border-radius: 6px; color: var(--soft); background: #0d121a; font-size: 9px; }
+    .toggle { width: 26px; height: 14px; padding: 2px; border-radius: 99px; background: rgba(93, 227, 167, .34); }.toggle i { display: block; width: 10px; height: 10px; margin-left: auto; border-radius: 50%; background: var(--green); }
+
+    .commission { max-width: 1150px; margin: 0 auto; padding: 0; }
+    .commission .mock-body { min-height: 590px; padding: 0; }
+    .commission-grid { display: grid; grid-template-columns: 218px minmax(380px, 1.55fr) minmax(205px, .76fr); min-height: 541px; }
+    .commission-steps { padding: 23px 16px; border-right: 1px solid var(--line-soft); background: rgba(12, 16, 24, .52); }
+    .commission-steps h4 { margin: 0 0 17px; font-size: 13px; }.step { display: grid; grid-template-columns: 23px 1fr; gap: 8px; align-items: start; padding: 10px 6px; color: var(--muted); font-size: 10px; }.step i { display: grid; place-items: center; width: 21px; height: 21px; border: 1px solid var(--line); border-radius: 50%; font-style: normal; }.step.active { color: white; }.step.active i { color: white; border-color: var(--violet); background: var(--violet-soft); }.step p { grid-column: 2; margin: -3px 0 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
+    .commission-focus { padding: 29px; }.commission-focus h2 { margin: 5px 0 8px; font-size: 28px; letter-spacing: -.05em; }.commission-focus > p { max-width: 48ch; color: var(--muted); font-size: 12px; line-height: 1.55; }.choice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin: 20px 0; }.choice { padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: rgba(17, 22, 31, .58); }.choice.selected { border-color: rgba(174, 123, 255, .62); background: linear-gradient(130deg, rgba(65, 44, 106, .69), rgba(17, 22, 31, .82)); }.choice b { display: block; font-size: 11px; }.choice span { display: block; margin-top: 5px; color: var(--muted); font-size: 9px; line-height: 1.42; }.commission-info { padding: 22px 16px; border-left: 1px solid var(--line-soft); background: rgba(12, 16, 24, .38); }.comfort { padding: 12px; border: 1px solid rgba(84, 217, 236, .26); border-radius: 11px; background: rgba(24, 37, 48, .54); }.comfort h4 { margin: 0 0 6px; color: var(--cyan); font-size: 11px; }.comfort p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; }.privacy { margin-top: 12px; padding: 11px; border: 1px solid var(--line); border-radius: 10px; }.privacy b { font-size: 10px; }.privacy p { margin: 5px 0 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
+
+    @media (max-width: 1160px) {
+      .gallery-nav { position: sticky; top: 0; width: 100%; height: auto; padding: 10px 16px; border-right: 0; border-bottom: 1px solid var(--line-soft); }
+      .gallery-brand { display: inline-flex; padding: 0 14px 0 0; border: 0; }.gallery-nav h2, .gallery-nav .note { display: none; }.gallery-nav nav { display: inline-flex; gap: 2px; max-width: calc(100% - 190px); overflow-x: auto; vertical-align: middle; }.gallery-nav a { flex: 0 0 auto; padding: 7px 8px; }
+      .gallery { margin-left: 0; padding-top: 24px; }.rules { grid-template-columns: repeat(2, 1fr); }.workbench.three, .workbench.file, .workbench.graph { grid-template-columns: minmax(190px, .72fr) minmax(410px, 1.55fr); }.workbench.three > :last-child, .workbench.file > :last-child, .workbench.graph > :last-child { grid-column: 1 / -1; }.stack { grid-template-columns: 1fr 1fr; }.commission-grid { grid-template-columns: 190px minmax(370px, 1.55fr); }.commission-info { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; border-top: 1px solid var(--line-soft); border-left: 0; }.privacy { margin-top: 0; }
+    }
+    @media (max-width: 780px) {
+      .gallery { padding: 20px 12px 42px; }.gallery-header { display: block; }.gallery-header aside { margin-top: 14px; }.screen-heading { display: block; }.screen-heading p { margin-top: 7px; text-align: left; }.mock-nav { display: none; }.signal-strip { grid-template-columns: repeat(2, 1fr); }.signal-strip .metric:first-child { grid-column: 1 / -1; }.workbench.three, .workbench.two, .workbench.file, .workbench.graph { grid-template-columns: 1fr; }.workbench.three > :last-child, .workbench.file > :last-child, .workbench.graph > :last-child { grid-column: auto; }.pane-scroll, .chat-thread, .document, .constellation { height: auto; min-height: 260px; max-height: 350px; }.stack { grid-template-columns: 1fr; }.commission-grid { grid-template-columns: 1fr; }.commission-steps { border-right: 0; border-bottom: 1px solid var(--line-soft); }.commission-steps h4, .step p { display: none; }.commission-steps { display: flex; gap: 2px; padding: 11px; }.step { display: flex; align-items: center; padding: 6px; }.commission-info { grid-column: auto; grid-template-columns: 1fr; }.choice-grid { grid-template-columns: 1fr; }.commission-focus { padding: 21px; }.commission-focus h2 { font-size: 24px; }
+    }
+    @media (max-width: 470px) { .gallery-nav nav { max-width: calc(100% - 125px); }.gallery-brand strong, .gallery-brand span { display: none; }.gallery-header h1 { font-size: 28px; }.rules { grid-template-columns: 1fr; }.mock-body { padding: 9px; }.masthead { display: block; }.masthead .actions { margin-top: 9px; justify-content: flex-start; }.connection { font-size: 0; }.focus-hero h4 { font-size: 16px; }.field { grid-template-columns: 1fr; gap: 4px; }.commission .mock-body { min-height: 0; } }
+  </style>
+</head>
+<body>
+  <aside class="gallery-nav" aria-label="Mock gallery navigation">
+    <div class="gallery-brand"><span class="gallery-mark">z</span><div><strong>Attention Radar</strong><span>UI visual contract</span></div></div>
+    <h2>All surfaces</h2>
+    <nav>
+      <a class="commission" href="#commission"><i></i>Commissioning</a>
+      <a href="#research"><i></i>Research</a>
+      <a href="#chat"><i></i>Quick Chat</a>
+      <a href="#mission-control"><i></i>Mission Control</a>
+      <a href="#agents"><i></i>Agents</a>
+      <a class="memory" href="#memory"><i></i>Memory</a>
+      <a class="vault" href="#vault"><i></i>Vault</a>
+      <a class="graph" href="#observatory"><i></i>Observatory</a>
+      <a class="graph" href="#graph"><i></i>Graph</a>
+      <a href="#integrations"><i></i>Integrations</a>
+      <a class="settings" href="#settings"><i></i>Settings</a>
+    </nav>
+    <p class="note">Static visual directions only. Data, actions, and status labels are illustrative; implementation keeps the live contracts already in z-Bot.</p>
+  </aside>
+
+  <main class="gallery">
+    <header class="gallery-header">
+      <div>
+        <div class="overline">z-Bot / design system proposal</div>
+        <h1>Attention Radar, across the board.</h1>
+        <p>Mission Control's dark operational calm becomes a shared workbench language—without making every route look or behave like a dashboard.</p>
+      </div>
+      <aside><b>How to read this</b><br>Each frame is a canonical route, not a new feature. Colored signals describe state, panels own their own scroll, and the central canvas always serves the page's primary job.</aside>
+    </header>
+
+    <section class="rules" aria-label="Shared visual rules">
+      <div class="rule"><strong>One focus, not more noise</strong><p>The dominant center panel is where work happens. Supporting context stays in rails and inspectors.</p></div>
+      <div class="rule"><strong>Signal has meaning</strong><p>Cyan = current/live; green = healthy; amber = attention; red = failed. Every status is named.</p></div>
+      <div class="rule"><strong>Dense, never cramped</strong><p>Hairline borders, compact operational type, and one limited focus wash replace generic card grids.</p></div>
+      <div class="rule"><strong>Each pane owns its scroll</strong><p>Desktop workbenches have bounded scroll areas. Tablet and phone collapse to a deliberate single column.</p></div>
+    </section>
+
+    <section class="screen" id="commission">
+      <header class="screen-heading"><div><span class="route">/commission</span><h2>Commissioning</h2></div><p>First run is a guided personal decision flow, not a dense settings form. It carries the safety warning and a friendly local-data assurance at the moment they matter.</p></header>
+      <div class="mock-window commission">
+        <div class="mock-bar"><div class="mock-brand"><span class="brand-mark">z</span>z-Bot</div><div class="mock-nav"><span class="active">Commissioning</span></div><span class="status ok">Local profile</span></div>
+        <div class="mock-body"><div class="commission-grid">
+          <aside class="commission-steps"><h4>Set up your agent</h4><div class="step active"><i>1</i><b>Your focus</b><p>Choose what you want help with.</p></div><div class="step"><i>2</i><b>Your intelligence</b><p>Connect a model you trust.</p></div><div class="step"><i>3</i><b>About you</b><p>Personalize only what helps.</p></div></aside>
+          <section class="commission-focus"><div class="overline">Step 01 / your focus</div><h2>What should z-Bot help you move forward?</h2><p>Pick a starting focus. This shapes the first taxonomy, suggested skills, and the way your agent organizes local work.</p><div class="choice-grid"><div class="choice selected"><b>✦ Think &amp; organize</b><span>Ideas, plans, personal knowledge.</span></div><div class="choice"><b>⌘ Build &amp; code</b><span>Projects, wards, technical work.</span></div><div class="choice"><b>◌ Research &amp; learn</b><span>Investigations and useful context.</span></div><div class="choice"><b>↗ Run my work</b><span>Recurring projects and decisions.</span></div></div><div class="actions"><button class="btn">Back</button><button class="btn primary">Continue to intelligence →</button></div></section>
+          <aside class="commission-info"><div class="comfort"><h4>Autonomous agent, with guardrails</h4><p>z-Bot can plan and use tools you enable. Execution is not sandboxed yet, so commands and trusted integrations may affect this device or connected services.</p></div><div class="privacy"><b>⌂ Your profile stays local</b><p>Your name, interests, hobbies, and optional birthday are stored in your local database only. Share only what makes the agent more useful to you.</p></div></aside>
+        </div></div>
+      </div>
+    </section>
+
+    <section class="screen" id="research">
+      <header class="screen-heading"><div><span class="route">/research</span><h2>Research</h2></div><p>A goal-centered workbench: the bound ward filesystem stays on the left, the focus pane carries the live research thread and AG-UI activity, and the right inspector shows only real intent and delegated-agent context.</p></header>
+      <div class="mock-window"><div class="mock-bar"><div class="mock-brand"><span class="brand-mark">z</span>z-Bot</div><nav class="mock-nav"><span class="active">Research</span><span>Quick chat</span><span>Mission Control</span><span>Agents</span><span>Memory</span><span>Vault</span></nav><span class="connection"><i></i>Connected · zbotd</span></div><div class="mock-body">
+        <header class="masthead"><div><div class="overline">Research / active goal</div><h3>Engram integration cleanup</h3><p class="sub">Ward: software-architecture · Session sess-a82…</p></div><div class="actions"><span class="status ok"><i class="live-dot"></i> Streaming</span><button class="btn primary">New research</button></div></header>
+        <div class="workbench three"><aside class="panel"><header class="panel-head"><div><h4>Ward filesystem</h4><small>software-architecture · local files</small></div><span class="quiet">⌕</span></header><div class="pane-scroll file-tree"><div class="file-node"><span class="folder">▾</span>software-architecture</div><div class="file-node dim"><span class="folder">▾</span>&nbsp;&nbsp;docs</div><div class="file-node selected"><span class="file">◫</span>&nbsp;&nbsp;&nbsp;&nbsp;integrate-engram-as-library.md</div><div class="file-node"><span class="file">◫</span>&nbsp;&nbsp;&nbsp;&nbsp;adapter-audit.md</div><div class="file-node"><span class="file">◫</span>&nbsp;&nbsp;&nbsp;&nbsp;memory-boundary.html</div><div class="file-node dim"><span class="folder">▸</span>&nbsp;&nbsp;core</div><div class="file-node"><span class="file">◫</span>&nbsp;&nbsp;README.md</div></div><footer class="panel-foot">Read-only ward context · updates as files change</footer></aside>
+          <section class="panel"><div class="focus-hero"><div class="overline">Live research thread / AG-UI focus</div><h4>Make the memory boundary plug-and-play</h4><p>Compare the adapter contract with z-Bot's remaining SQLite ownership, then produce the smallest migration plan that keeps `conversation.db` intact.</p></div><div class="progress-card"><div class="progress-top"><b>Plan · 2 of 3</b><span>Adapter audit in progress</span></div><div class="meter"><i style="width:66%"></i></div><small class="sub">The visible AG-UI plan remains in the thread, not hidden after delegation.</small></div><div class="timeline"><div class="timeline-label"><span>Live research thread</span><small>AG-UI surfaces</small></div><div class="event"><time>10:43</time><i></i><span><b>Plan updated</b> · adapter contract comparison</span></div><div class="event latest"><time>10:44</time><i></i><span><b>Builder working</b> · mapping legacy store calls</span></div></div><div class="progress-card"><div class="progress-top"><b>Goal artifacts</b><span>shown only when generated</span></div><div class="chips"><button class="chip" type="button">↗ adapter-audit.md</button><button class="chip" type="button">↗ memory-boundary.html</button></div></div><div class="composer"><input value="Steer this research…" readonly><button class="btn primary">Send</button></div></section>
+          <aside class="stack"><section class="panel"><header class="panel-head"><div><h4>Research context</h4><small>Intent and agent activity</small></div></header><div class="pane-scroll posture"><div class="overline">Intent</div><div class="branch"><b>Architecture review</b><br>Parallel adapter audit<br>Ward: software-architecture</div><div class="overline" style="margin-top:14px">Root agent · working</div><div class="attention-card"><div class="attention-title">Planner <span class="status ok">complete</span></div><p>Defined the smallest migration sequence.</p></div><div class="attention-card"><div class="attention-title">Builder <span class="status ok">working</span></div><p>Mapping remaining legacy store calls.</p></div></div></section></aside>
+        </div></div></div>
+    </section>
+
+    <section class="screen" id="chat">
+      <header class="screen-heading"><div><span class="route">/chat</span><h2>Quick Chat</h2></div><p>A calm direct conversation is not forced into a dashboard. The workbench adds only the session context and goal deliverables worth keeping visible.</p></header>
+      <div class="mock-window"><div class="mock-bar"><div class="mock-brand"><span class="brand-mark">z</span>z-Bot</div><nav class="mock-nav"><span>Research</span><span class="active">Quick chat</span><span>Mission Control</span><span>Agents</span><span>Memory</span></nav><span class="connection"><i></i>Connected · zbotd</span></div><div class="mock-body">
+        <header class="masthead"><div><div class="overline">Conversation / ready</div><h3>Quick Chat</h3><p class="sub">A direct conversation with your agent</p></div><div class="actions"><span class="tag">Ward · personal</span><button class="btn">Clear</button><button class="btn primary">New chat</button></div></header>
+        <div class="workbench three"><aside class="panel"><header class="panel-head"><div><h4>Conversation radar</h4><small>Recent, local sessions</small></div><span class="quiet">⌕</span></header><div class="pane-scroll list"><div class="list-row selected"><i class="signal good"></i><div><div class="row-title">SQLite vs Postgres</div><div class="row-meta">2 messages · just now</div></div></div><div class="list-row"><i class="signal"></i><div><div class="row-title">Plan my weekend</div><div class="row-meta">6 messages · yesterday</div></div></div><div class="list-row"><i class="signal good"></i><div><div class="row-title">Review provider setup</div><div class="row-meta">Delivered a checklist</div></div></div></div><footer class="panel-foot">Search conversations</footer></aside>
+          <section class="panel"><div class="focus-hero"><div class="overline">Direct conversation</div><h4>What would you like to work through?</h4><p>z-Bot retains relevant local context and shows an activity chip only while something useful is happening.</p></div><div class="chat-thread"><div class="bubble user">Compare SQLite and Postgres for a local-first z-Bot deployment.</div><div class="bubble"><b>Recommendation: SQLite.</b><br>For a local-first deployment it removes operational overhead while preserving the durability and single-user concurrency z-Bot needs.</div><div class="bubble">If you expect many simultaneous users or a remote shared service later, PostgreSQL becomes the better operational choice.</div></div><div class="composer"><input value="Ask z-Bot anything…" readonly><button class="btn primary">Send</button></div></section>
+          <aside class="stack"><section class="panel"><header class="panel-head"><div><h4>Conversation context</h4><small>What the agent can see</small></div></header><div class="pane-scroll posture"><div class="posture-row"><span>Memory recall</span><b>Ready</b></div><div class="posture-row"><span>Ward context</span><b>personal</b></div><div class="posture-row"><span>Tools enabled</span><b class="warn">4</b></div><div class="posture-row"><span>Model</span><b>GLM-5.1</b></div></div></section><section class="panel"><header class="panel-head"><h4>Goal deliverables</h4><span class="quiet">Only useful outputs</span></header><div class="deliverable"><i>↗</i><span><b>local-db-decision.md</b><small>generated 2 min ago</small></span></div></section></aside>
+        </div></div></div>
+    </section>
+
+    <section class="screen" id="mission-control">
+      <header class="screen-heading"><div><span class="route">/mission-control</span><h2>Mission Control</h2></div><p>The reference page: rank missions by attention, keep the chosen mission inspectable, and place Live Operations and System Posture in one non-duplicated rail.</p></header>
+      <div class="mock-window"><div class="mock-bar"><div class="mock-brand"><span class="brand-mark">z</span>z-Bot</div><nav class="mock-nav"><span>Research</span><span>Quick chat</span><span class="active">Mission Control</span><span>Agents</span><span>Memory</span></nav><span class="connection"><i></i>Connected · zbotd</span></div><div class="mock-body">
+        <header class="masthead"><div><div class="overline">z-Bot / operations</div><h3>Mission Control <span class="cyan">/ Attention Radar</span></h3><p class="sub">Ranked by attention, not recency</p></div><div class="actions"><span class="status ok"><i class="live-dot"></i> Live stream</span><button class="btn primary">All sessions</button></div></header>
+        <div class="signal-strip"><div class="metric"><small>Your attention</small><strong><span class="amber">2</span> missions need a look</strong><em>1 stalled · 1 waiting</em></div><div class="metric"><small>Active</small><strong>4</strong><em class="green">all streaming</em></div><div class="metric"><small>Completed</small><strong>18</strong><em>today</em></div><div class="metric"><small>Stream</small><strong>42ms</strong><em class="cyan">connected</em></div></div>
+        <div class="workbench three"><aside class="panel"><header class="panel-head"><div><h4>Mission radar</h4><small>Attention before recency</small></div><span class="quiet">⌘</span></header><div class="pane-scroll list"><div class="list-row selected"><i class="signal good"></i><div><div class="row-title">Niagara trip planner</div><div class="row-meta">4 agents · plan step 5/7</div></div><span class="count">steady</span></div><div class="list-row"><i class="signal bad"></i><div><div class="row-title">Engram integration cleanup</div><div class="row-meta">Builder idle · needs routing</div></div><span class="count amber">92</span></div><div class="list-row"><i class="signal warn"></i><div><div class="row-title">Provider setup guide</div><div class="row-meta">Awaiting model selection</div></div><span class="count">74</span></div><div class="list-row"><i class="signal good"></i><div><div class="row-title">Knowledge review</div><div class="row-meta">sleep cycle · 12/42</div></div><span class="count">steady</span></div></div><footer class="panel-foot">4 active · Browse all sessions</footer></aside>
+          <section class="panel"><div class="focus-hero"><div class="overline">Focused mission</div><h4>Niagara trip planner <span class="status ok">Running</span></h4><p>Coordinate research, itinerary constraints, and recommendations for a concise local trip plan.</p><div class="focus-meta"><span>Agents <b>4</b></span><span>Plan <b>5 / 7</b></span><span>Running <b>12m</b></span></div></div><div class="progress-card"><div class="progress-top"><b>Current plan</b><span>Compare routes and lodging</span></div><div class="meter"><i style="width:64%"></i></div><small class="sub">The inspector is open by default and scrolls independently.</small></div><div class="timeline"><div class="timeline-label"><span>Focused mission activity</span><small>last event 12s ago</small></div><div class="event"><time>10:38</time><i></i><span>Research agent found train and driving alternatives.</span></div><div class="event latest"><time>10:41</time><i></i><span>Planner is comparing accommodation constraints.</span></div></div></section>
+          <aside class="stack"><section class="panel"><header class="panel-head"><div><h4>Live operations</h4><small>Active agent work</small></div><span class="status ok">4 live</span></header><div class="pane-scroll"><div class="attention-card"><div class="attention-title">Planner <span class="status ok">working</span></div><p>Comparing itinerary constraints.</p></div><div class="attention-card"><div class="attention-title">Researcher <span class="status ok">working</span></div><p>Validating seasonal travel options.</p></div><div class="attention-card"><div class="attention-title">Engram cleanup <span class="status bad">blocked</span></div><p>Needs root routing decision.</p></div></div></section><section class="panel"><header class="panel-head"><h4>System posture</h4><span class="quiet">now</span></header><div class="posture"><div class="posture-row"><span>Gateway</span><b>Healthy</b></div><div class="posture-row"><span>Event transport</span><b>Connected</b></div><div class="posture-row"><span>Attention queue</span><b class="warn">2 items</b></div></div></section></aside>
+        </div></div></div>
+    </section>
+
+    <section class="screen" id="agents">
+      <header class="screen-heading"><div><span class="route">/agents</span><h2>Agents</h2></div><p>People configure capability with confidence when agent roster, skills, schedules, and the selected agent's posture share one operational vocabulary.</p></header>
+      <div class="mock-window"><div class="mock-bar"><div class="mock-brand"><span class="brand-mark">z</span>z-Bot</div><nav class="mock-nav"><span>Research</span><span>Quick chat</span><span>Mission Control</span><span class="active">Agents</span><span>Memory</span></nav><span class="connection"><i></i>Connected · zbotd</span></div><div class="mock-body">
+        <header class="masthead"><div><div class="overline">Agent capability</div><h3>Agents</h3><p class="sub">Configure roles, skills, and scheduled work without losing operational context.</p></div><div class="actions"><span class="tag">6 agents</span><button class="btn primary">Add agent</button></div></header>
+        <div class="workbench three"><aside class="panel"><header class="panel-head"><div><h4>Capability catalog</h4><small>Local configuration</small></div></header><div class="pane-scroll list"><div class="list-row selected"><i class="signal good"></i><div><div class="row-title">My agents</div><div class="row-meta">Roles and permissions</div></div><span class="count">6</span></div><div class="list-row"><i class="signal"></i><div><div class="row-title">Skills library</div><div class="row-meta">Available instructions</div></div><span class="count">24</span></div><div class="list-row"><i class="signal warn"></i><div><div class="row-title">Schedules</div><div class="row-meta">Recurring execution</div></div><span class="count">3</span></div></div><footer class="panel-foot">Search capability</footer></aside>
+          <section class="panel"><header class="panel-head"><div><h4>Agent roster</h4><small>Choose an agent to inspect its role</small></div><div class="chips"><span class="chip">All</span><span class="chip">Enabled</span></div></header><div class="pane-scroll roster"><div class="roster-card"><i class="avatar">R</i><div><h5>Root</h5><p>Orchestrates goals and routes subagents.</p></div><span class="status ok">enabled</span></div><div class="roster-card"><i class="avatar">B</i><div><h5>Builder</h5><p>Creates scoped artifacts and code changes.</p></div><span class="status ok">enabled</span></div><div class="roster-card"><i class="avatar">V</i><div><h5>Reviewer</h5><p>Checks evidence and implementation safety.</p></div><span class="status ok">enabled</span></div><div class="roster-card"><i class="avatar">C</i><div><h5>Curator</h5><p>Consolidates ward knowledge.</p></div><span class="status watch">limited</span></div></div></section>
+          <aside class="stack"><section class="panel"><header class="panel-head"><div><h4>Root inspector</h4><small>Selected agent</small></div><button class="btn">Edit</button></header><div class="pane-scroll posture"><div class="posture-row"><span>Model</span><b>GLM-5.1</b></div><div class="posture-row"><span>Skills</span><b>12 enabled</b></div><div class="posture-row"><span>Tool policy</span><b class="warn">guarded</b></div><div class="posture-row"><span>Last active</span><b>now</b></div></div></section><section class="panel"><header class="panel-head"><h4>Schedule signal</h4><span class="status ok">3 healthy</span></header><div class="attention-card"><div class="attention-title">Daily knowledge review</div><p>Tomorrow · 08:00 local</p></div></section></aside>
+        </div></div></div>
+    </section>
+
+    <section class="screen" id="memory">
+      <header class="screen-heading"><div><span class="route">/memory</span><h2>Memory</h2></div><p>Memory becomes a recall command deck: evidence stays central, and scope, taxonomy, ontology, and write controls are visible without leaking storage implementation into the experience.</p></header>
+      <div class="mock-window"><div class="mock-bar"><div class="mock-brand"><span class="brand-mark">z</span>z-Bot</div><nav class="mock-nav"><span>Research</span><span>Quick chat</span><span>Mission Control</span><span>Agents</span><span class="active">Memory</span></nav><span class="connection"><i></i>Connected · zbotd</span></div><div class="mock-body">
+        <header class="masthead"><div><div class="overline">Durable knowledge / unified recall</div><h3>Memory</h3><p class="sub">Find useful evidence, understand how it is classified, and curate only when needed.</p></div><div class="actions"><span class="status ok">Engram ready</span><button class="btn primary">Add memory</button></div></header>
+        <div class="workbench three"><aside class="panel"><header class="panel-head"><div><h4>Scope radar</h4><small>Where to recall from</small></div></header><div class="pane-scroll list"><div class="list-row selected"><i class="signal good"></i><div><div class="row-title">All durable memory</div><div class="row-meta">Unified semantic recall</div></div><span class="count">142</span></div><div class="list-row"><i class="signal"></i><div><div class="row-title">software-architecture</div><div class="row-meta">Current ward</div></div><span class="count">61</span></div><div class="list-row"><i class="signal good"></i><div><div class="row-title">Personal</div><div class="row-meta">Profile and preferences</div></div><span class="count">19</span></div><div class="list-row"><i class="signal warn"></i><div><div class="row-title">Contradictions</div><div class="row-meta">Needs review</div></div><span class="count">2</span></div></div><footer class="panel-foot">Facts · beliefs · contradictions</footer></aside>
+          <section class="panel"><div class="search-deck"><input value="What did we decide about the semantic layer?" readonly><button class="btn primary">Recall</button></div><div class="pane-scroll"><div class="result"><h5>Engram owns semantic memory; z-Bot owns conversation runtime state.</h5><p>Keep `conversation.db` for messages and checkpoints. The sidecar talks through the adapter contract so a backend change stays outside z-Bot.</p><div class="result-footer"><span class="tag">decision</span><span>0.94 confidence</span><span>2 sources</span></div></div><div class="result"><h5>Adapter must expose provenance and bounded recall.</h5><p>Context packets should cite memory source, taxonomy expansion, and ontology relevance while remaining storage-agnostic.</p><div class="result-footer"><span class="tag">architecture</span><span>0.89 confidence</span><span>3 sources</span></div></div><div class="result"><h5>Legacy SQLite semantic stores can retire after parity verification.</h5><p>The application should not carry a graph-memory implementation beside Engram.</p><div class="result-footer"><span class="tag">migration</span><span>0.82 confidence</span></div></div></div></section>
+          <aside class="stack"><section class="panel"><header class="panel-head"><div><h4>Recall lens</h4><small>Why these results</small></div></header><div class="pane-scroll taxonomy"><div class="overline">Taxonomy</div><div class="branch"><b>Software architecture</b><br>memory systems<br>integration boundary</div><div class="overline" style="margin-top:14px">Ontology</div><div class="branch"><b>Decision</b><br>has evidence → source note<br>affects → adapter contract</div><div class="overline" style="margin-top:14px">Provenance</div><div class="branch">3 durable sources<br>last consolidated today</div></div></section><section class="panel"><header class="panel-head"><h4>Curate</h4><span class="quiet">guarded write</span></header><div class="attention-card"><div class="attention-title">Write a fact</div><p>Attach ward, category, and evidence before saving.</p><button class="btn">Open composer</button></div></section></aside>
+        </div></div></div>
+    </section>
+
+    <section class="screen" id="vault">
+      <header class="screen-heading"><div><span class="route">/vault</span><h2>Vault</h2></div><p>File work is naturally a three-pane workbench. The visual system clarifies browsing, preview, and metadata without turning a read-only file explorer into an agent dashboard.</p></header>
+      <div class="mock-window"><div class="mock-bar"><div class="mock-brand"><span class="brand-mark">z</span>z-Bot</div><nav class="mock-nav"><span>Research</span><span>Quick chat</span><span>Mission Control</span><span>Agents</span><span>Memory</span><span class="active">Vault</span></nav><span class="connection"><i></i>Connected · zbotd</span></div><div class="mock-body">
+        <header class="masthead"><div><div class="overline">Ward filesystem / read only</div><h3>software-architecture</h3><p class="sub mono">Vault / wards / software-architecture / docs / design.md</p></div><div class="actions"><span class="status ok">Local files</span><button class="btn">Search</button></div></header>
+        <div class="workbench file"><aside class="panel"><header class="panel-head"><div><h4>Vault explorer</h4><small>1 ward · 24 files</small></div><span class="quiet">⌕</span></header><div class="pane-scroll file-tree"><div class="file-node"><span class="folder">▾</span>wards</div><div class="file-node dim"><span class="folder">▾</span>⌙ software-architecture</div><div class="file-node dim"><span class="folder">▾</span>&nbsp;&nbsp;docs</div><div class="file-node selected"><span class="file">◫</span>&nbsp;&nbsp;&nbsp;&nbsp;design.md</div><div class="file-node"><span class="file">◫</span>&nbsp;&nbsp;&nbsp;&nbsp;plan.md</div><div class="file-node"><span class="file">◫</span>&nbsp;&nbsp;&nbsp;&nbsp;adapter-audit.md</div><div class="file-node dim"><span class="folder">▸</span>&nbsp;&nbsp;src</div><div class="file-node"><span class="file">◫</span>&nbsp;&nbsp;README.md</div></div></aside>
+          <section class="panel"><div class="preview-top"><span>design.md</span><span>Markdown · 4.2 KB</span></div><article class="document"><h2>Plug-and-play semantic memory</h2><p>The z-Bot sidecar must depend on a narrow semantic capability contract, not a storage implementation. Engram owns persistence, retrieval, graph, taxonomy, and ontology.</p><h3>Boundary</h3><p>Conversation messages and execution checkpoints remain local runtime data. Recall returns evidence with provenance, ranking rationale, and bounded content.</p><code>recall(query, scope, policy) → EvidencePacket[]</code><h3>Operational consequence</h3><p>Changing Engram from SQLite to Postgres or Surreal does not change the z-Bot sidecar.</p></article></section>
+          <aside class="stack"><section class="panel"><header class="panel-head"><div><h4>File inspector</h4><small>Read-only metadata</small></div></header><div class="pane-scroll posture"><div class="posture-row"><span>Type</span><b>Markdown</b></div><div class="posture-row"><span>Modified</span><b>Today</b></div><div class="posture-row"><span>Goal artifact</span><b class="warn">Yes</b></div><div class="posture-row"><span>Session</span><b>sess-a82…</b></div></div></section><section class="panel"><header class="panel-head"><h4>Related goal</h4><span class="status ok">active</span></header><div class="attention-card"><div class="attention-title">Engram integration cleanup</div><p>Open this ward in Research to see the live work.</p><button class="btn">Open research</button></div></section></aside>
+        </div></div></div>
+    </section>
+
+    <section class="screen" id="observatory">
+      <header class="screen-heading"><div><span class="route">/observatory</span><h2>Observatory</h2></div><p>Observatory retains its live relationship canvas, but receives a clearer context rail, graph controls, and a selected-entity inspector that matches other focused workbenches.</p></header>
+      <div class="mock-window"><div class="mock-bar"><div class="mock-brand"><span class="brand-mark">z</span>z-Bot</div><nav class="mock-nav"><span>Research</span><span>Quick chat</span><span>Mission Control</span><span>Agents</span><span>Memory</span><span>Vault</span><span class="active">Observatory</span></nav><span class="connection"><i></i>Connected · zbotd</span></div><div class="mock-body">
+        <header class="masthead"><div><div class="overline">Learning system / relationship view</div><h3>Observatory</h3><p class="sub">Inspect learned entities, confidence, contradictions, and their relationships.</p></div><div class="actions"><span class="status ok">Learning healthy</span><button class="btn">Fit graph</button><button class="btn primary">Focus entity</button></div></header>
+        <div class="workbench graph"><aside class="panel"><header class="panel-head"><div><h4>Graph context</h4><small>Filters and health</small></div></header><div class="pane-scroll"><div class="posture"><div class="posture-row"><span>Entities</span><b>128</b></div><div class="posture-row"><span>Relationships</span><b>346</b></div><div class="posture-row"><span>Contradictions</span><b class="warn">2 open</b></div></div><div class="taxonomy"><div class="overline">Show</div><div class="branch"><b>✓ Concepts</b><br>✓ Decisions<br>✓ Beliefs<br>◌ Archived</div><div class="overline" style="margin-top:15px">Learning health</div><div class="branch"><b class="green">Stable</b><br>Last synthesis 8m ago</div></div></div></aside>
+          <section class="panel"><header class="panel-head"><div><h4>Relationship canvas</h4><small>Drag, zoom, select</small></div><div class="chips"><span class="chip">−</span><span class="chip">100%</span><span class="chip">+</span></div></header><div class="constellation"><svg viewBox="0 0 600 408" preserveAspectRatio="none"><path d="M300 180 L130 85 M300 180 L470 95 M300 180 L150 330 M300 180 L455 330 M300 180 L315 370" stroke="#46617a" stroke-width="1.2" fill="none"/><path d="M130 85 L150 330 M470 95 L455 330" stroke="#354961" stroke-width="1" fill="none" stroke-dasharray="4 5"/></svg><span class="node hot n1">Memory boundary</span><span class="node purple n2">Engram</span><span class="node n3">conversation.db</span><span class="node green n4">Unified recall</span><span class="node n5">Adapter contract</span><span class="node n6">Decision record</span><div class="legend"><span><i></i>selected</span><span><i class="p"></i>concept</span><span><i class="g"></i>decision</span></div></div></section>
+          <aside class="stack"><section class="panel"><header class="panel-head"><div><h4>Entity inspector</h4><small>Selected node</small></div><button class="btn">Open</button></header><div class="pane-scroll"><div class="focus-hero"><div class="overline">Concept</div><h4>Memory boundary</h4><p>The division between runtime conversation state and durable semantic memory.</p></div><div class="posture"><div class="posture-row"><span>Confidence</span><b>0.94</b></div><div class="posture-row"><span>Sources</span><b>3 evidence</b></div><div class="posture-row"><span>Updated</span><b>Today</b></div></div></div></section><section class="panel"><header class="panel-head"><h4>Attention</h4><span class="status watch">2</span></header><div class="attention-card"><div class="attention-title">Potential contradiction</div><p>Two claims disagree on adapter ownership.</p></div></section></aside>
+        </div></div></div>
+    </section>
+
+    <section class="screen" id="graph">
+      <header class="screen-heading"><div><span class="route">/observatory-v2</span><h2>Graph</h2></div><p>Graph has a separate semantic-navigation job. It foregrounds hierarchy and classification while using the same rails and inspectors as Observatory—not a duplicate visualization skin.</p></header>
+      <div class="mock-window"><div class="mock-bar"><div class="mock-brand"><span class="brand-mark">z</span>z-Bot</div><nav class="mock-nav"><span>Research</span><span>Quick chat</span><span>Mission Control</span><span>Memory</span><span>Vault</span><span>Observatory</span><span class="active">Graph</span></nav><span class="connection"><i></i>Connected · zbotd</span></div><div class="mock-body">
+        <header class="masthead"><div><div class="overline">Semantic navigation / taxonomy + ontology</div><h3>Graph</h3><p class="sub">Browse classification and relationship structure without coupling the UI to a storage backend.</p></div><div class="actions"><span class="tag">Ontology lens</span><button class="btn primary">Trace recall</button></div></header>
+        <div class="workbench graph"><aside class="panel"><header class="panel-head"><div><h4>Hierarchy radar</h4><small>Taxonomy branches</small></div></header><div class="pane-scroll taxonomy"><div class="overline">Knowledge</div><div class="branch"><b>▾ Software architecture</b><br>&nbsp;&nbsp;▾ Memory systems<br>&nbsp;&nbsp;&nbsp;&nbsp;• Integration boundary<br>&nbsp;&nbsp;&nbsp;&nbsp;• Context packet<br>&nbsp;&nbsp;▸ Runtime systems</div><div class="overline" style="margin-top:15px">Personal</div><div class="branch"><b>▾ Planning</b><br>&nbsp;&nbsp;• Goals<br>&nbsp;&nbsp;• Decisions</div></div><footer class="panel-foot">Taxonomy is dynamic policy, not UI-owned data.</footer></aside>
+          <section class="panel"><header class="panel-head"><div><h4>Semantic map</h4><small>Current path: Knowledge / Software architecture</small></div><div class="chips"><span class="chip">Hierarchy</span><span class="chip">Relations</span></div></header><div class="constellation"><svg viewBox="0 0 600 408" preserveAspectRatio="none"><path d="M300 180 L135 80 M300 180 L465 80 M300 180 L155 325 M300 180 L450 325 M300 180 L300 364" stroke="#52627f" stroke-width="1.3" fill="none"/></svg><span class="node hot n1">Memory systems</span><span class="node purple n2">Taxonomy</span><span class="node n3">Ontology</span><span class="node green n4">Unified recall</span><span class="node n5">Context packet</span><span class="node n6">Evidence packet</span><div class="legend"><span><i></i>selected class</span><span><i class="p"></i>taxonomy</span><span><i class="g"></i>runtime use</span></div></div></section>
+          <aside class="stack"><section class="panel"><header class="panel-head"><div><h4>Classification inspector</h4><small>Memory systems</small></div></header><div class="pane-scroll taxonomy"><div class="overline">Definition</div><p class="sub" style="font-size:10px;line-height:1.55">Durable semantic systems that support retrieval, provenance, and bounded context assembly.</p><div class="overline" style="margin-top:15px">Ontology classes</div><div class="branch"><b>Information system</b><br>supports → Recall<br>governs → Context packet</div><div class="overline" style="margin-top:15px">Used by</div><div class="branch">Unified recall<br>Memory curation<br>Research context</div></div></section><section class="panel"><header class="panel-head"><h4>Recall trace</h4><span class="status ok">available</span></header><div class="attention-card"><div class="attention-title">Why a result appeared</div><p>Inspect expansion, ranking, and evidence before trusting a recall.</p></div></section></aside>
+        </div></div></div>
+    </section>
+
+    <section class="screen" id="integrations">
+      <header class="screen-heading"><div><span class="route">/integrations</span><h2>Integrations</h2></div><p>External capability management should feel like a trust console: what is connected, what it can do, and what needs a human decision are legible at a glance.</p></header>
+      <div class="mock-window"><div class="mock-bar"><div class="mock-brand"><span class="brand-mark">z</span>z-Bot</div><nav class="mock-nav"><span>Research</span><span>Quick chat</span><span>Mission Control</span><span>Agents</span><span>Memory</span><span>Vault</span><span class="active">Integrations</span></nav><span class="connection"><i></i>Connected · zbotd</span></div><div class="mock-body">
+        <header class="masthead"><div><div class="overline">External capability / trust posture</div><h3>Integrations</h3><p class="sub">Manage tool servers, connectors, plugins, and workers from one reviewable surface.</p></div><div class="actions"><span class="status watch">1 needs review</span><button class="btn primary">Add integration</button></div></header>
+        <div class="workbench three"><aside class="panel"><header class="panel-head"><div><h4>Integration catalog</h4><small>Capability type</small></div></header><div class="pane-scroll list"><div class="list-row selected"><i class="signal good"></i><div><div class="row-title">Tool servers</div><div class="row-meta">MCP connections</div></div><span class="count">4</span></div><div class="list-row"><i class="signal"></i><div><div class="row-title">Plugins &amp; workers</div><div class="row-meta">Installed runtime work</div></div><span class="count">2</span></div><div class="list-row"><i class="signal warn"></i><div><div class="row-title">Connectors</div><div class="row-meta">External services</div></div><span class="count">1</span></div></div><footer class="panel-foot">Filter by status or permission</footer></aside>
+          <section class="panel"><header class="panel-head"><div><h4>Tool servers</h4><small>Connections z-Bot may invoke</small></div><div class="chips"><span class="chip">All</span><span class="chip">Healthy</span></div></header><div class="pane-scroll"><table class="table"><thead><tr><th>Integration</th><th>Transport</th><th>Tools</th><th>Status</th></tr></thead><tbody><tr><td><b>filesystem</b><br><small class="sub">Local project access</small></td><td>stdio</td><td>12</td><td><span class="status ok">connected</span></td></tr><tr><td><b>weather</b><br><small class="sub">Forecast lookup</small></td><td>HTTP</td><td>2</td><td><span class="status ok">connected</span></td></tr><tr><td><b>finance</b><br><small class="sub">Market data</small></td><td>HTTP</td><td>4</td><td><span class="status watch">review</span></td></tr><tr><td><b>github</b><br><small class="sub">Repository assistance</small></td><td>OAuth</td><td>8</td><td><span class="status ok">connected</span></td></tr></tbody></table></div></section>
+          <aside class="stack"><section class="panel"><header class="panel-head"><div><h4>Permission posture</h4><small>Selected: filesystem</small></div><button class="btn">Inspect</button></header><div class="pane-scroll posture"><div class="posture-row"><span>Reads local files</span><b>Allowed</b></div><div class="posture-row"><span>Writes local files</span><b class="warn">Guarded</b></div><div class="posture-row"><span>Network access</span><b>None</b></div><div class="posture-row"><span>Last test</span><b>12m ago</b></div></div></section><section class="panel"><header class="panel-head"><h4>Attention queue</h4><span class="status watch">1</span></header><div class="attention-card"><div class="attention-title">Finance provider credentials</div><p>Configuration is incomplete; no tools are available until reviewed.</p><button class="btn">Review setup</button></div></section></aside>
+        </div></div></div>
+    </section>
+
+    <section class="screen" id="settings">
+      <header class="screen-heading"><div><span class="route">/settings</span><h2>Settings</h2></div><p>Configuration becomes a control plane: a stable category rail, one focused settings deck, and immediate validation/posture make complex agent configuration less disorienting.</p></header>
+      <div class="mock-window"><div class="mock-bar"><div class="mock-brand"><span class="brand-mark">z</span>z-Bot</div><nav class="mock-nav"><span>Research</span><span>Quick chat</span><span>Mission Control</span><span>Agents</span><span>Memory</span><span>Vault</span><span>Integrations</span><span class="active">Settings</span></nav><span class="connection"><i></i>Connected · zbotd</span></div><div class="mock-body">
+        <header class="masthead"><div><div class="overline">Control plane / local configuration</div><h3>Settings</h3><p class="sub">Provider, agent, memory, execution, and observability configuration.</p></div><div class="actions"><span class="status ok">Configuration valid</span><button class="btn primary">Save changes</button></div></header>
+        <div class="workbench three"><aside class="panel"><header class="panel-head"><div><h4>Control plane</h4><small>Configuration areas</small></div></header><div class="pane-scroll list"><div class="list-row selected"><i class="signal good"></i><div><div class="row-title">Providers</div><div class="row-meta">Models and API keys</div></div></div><div class="list-row"><i class="signal"></i><div><div class="row-title">Agent behavior</div><div class="row-meta">Orchestrator and reasoning</div></div></div><div class="list-row"><i class="signal good"></i><div><div class="row-title">Memory &amp; context</div><div class="row-meta">Recall and protection</div></div></div><div class="list-row"><i class="signal"></i><div><div class="row-title">Execution</div><div class="row-meta">Parallelism and limits</div></div></div><div class="list-row"><i class="signal warn"></i><div><div class="row-title">Logging</div><div class="row-meta">Diagnostics and rotation</div></div></div></div><footer class="panel-foot">Changes save to local configuration</footer></aside>
+          <section class="panel"><header class="panel-head"><div><h4>Providers</h4><small>Give each agent role the model it needs</small></div><button class="btn">Add provider</button></header><div class="pane-scroll"><div class="form-section"><h5>Root orchestrator</h5><p>Primary model for planning, routing, and user conversation.</p><div class="field"><label>Provider</label><select><option>Z.AI</option></select></div><div class="field"><label>Model</label><select><option>GLM-5.1</option></select></div><div class="field"><label>Thinking mode</label><span class="toggle"><i></i></span></div></div><div class="form-section"><h5>Distillation</h5><p>Model used to consolidate durable memory.</p><div class="field"><label>Provider</label><select><option>Inherit root</option></select></div><div class="field"><label>Max output tokens</label><input value="8192" readonly></div></div><div class="form-section"><h5>Embeddings</h5><p>Vector backend for unified recall.</p><div class="field"><label>Backend</label><select><option>Ollama local</option></select></div></div></div></section>
+          <aside class="stack"><section class="panel"><header class="panel-head"><div><h4>Validation posture</h4><small>Before you save</small></div></header><div class="pane-scroll posture"><div class="posture-row"><span>Provider key</span><b>Verified</b></div><div class="posture-row"><span>Model reachability</span><b>Healthy</b></div><div class="posture-row"><span>Embedding backend</span><b>Ready</b></div><div class="posture-row"><span>Context protection</span><b>Enabled</b></div></div></section><section class="panel"><header class="panel-head"><h4>Change impact</h4><span class="quiet">local</span></header><div class="attention-card"><div class="attention-title">No restart needed</div><p>New provider choices apply to the next eligible agent request.</p></div></section></aside>
+        </div></div></div>
+    </section>
+  </main>
+</body>
+</html>

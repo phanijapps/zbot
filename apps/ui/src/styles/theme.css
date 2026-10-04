@@ -11,7 +11,107 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Conversation shell: the approved quiet, warm-neutral desktop surface. */
+.session-shell {
+  --background: #ffffff;
+  --background-surface: #f7f7f5;
+  --background-elevated: #f0efec;
+  --foreground: #222b3b;
+  --muted-foreground: #566171;
+  --subtle-foreground: var(--muted-foreground);
+  --dim-foreground: var(--muted-foreground);
+  --border: #e3e2de;
+  --card: var(--background);
+  --card-foreground: var(--foreground);
+  --popover: var(--background);
+  --popover-foreground: var(--foreground);
+  --muted: var(--background-elevated);
+  --secondary: var(--background-surface);
+  --secondary-foreground: var(--foreground);
+  --primary: #a75935;
+  --primary-foreground: #ffffff;
+  --primary-hover: #824226;
+  --primary-muted: #f1dfd3;
+  --primary-subtle: #faf3ee;
+  --fx-accent: var(--primary);
+  --border-hover: #52667e;
+  --success: #25613c;
+  --success-muted: #edf5ef;
+  --success-foreground: #ffffff;
+  --warning: #78500d;
+  --warning-muted: #fff4dc;
+  --warning-foreground: #ffffff;
+  --destructive: #a0322a;
+  --destructive-muted: #fff0ee;
+  --destructive-foreground: #ffffff;
+  --blue: #254f82;
+  --blue-muted: #edf3fa;
+  --purple: #614478;
+  --purple-muted: #f1eaf6;
+  --teal: #245e60;
+  --teal-muted: #e7f3f2;
+  --accent: var(--primary);
+  --accent-foreground: var(--primary-foreground);
+  --attention-panel: var(--background-surface);
+  --attention-panel-raised: var(--background-elevated);
+  --attention-line-soft: var(--border);
+  --attention-soft: var(--foreground);
+  --attention-violet: var(--purple);
+  --attention-violet-muted: var(--purple-muted);
+  --attention-cyan: var(--teal);
+  --subagent-surface: #eef3f8;
+  --subagent-foreground: #25344b;
+  --subagent-muted: #48576a;
+  --subagent-border: #52667e;
+  /* Rebind aliases here: root-computed aliases otherwise retain dark colors. */
+  --color-background: var(--background);
+  --color-background-surface: var(--background-surface);
+  --color-background-elevated: var(--background-elevated);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-dim-foreground: var(--dim-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-muted: var(--primary-muted);
+  --color-primary-subtle: var(--primary-subtle);
+  --color-border: var(--border);
+  --color-border-hover: var(--border-hover);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-destructive: var(--destructive);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-success-muted: var(--success-muted);
+  --color-warning-muted: var(--warning-muted);
+  --color-destructive-muted: var(--destructive-muted);
+  --color-blue: var(--blue);
+  --color-blue-muted: var(--blue-muted);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --input-background: var(--background);
+  --input: var(--border);
+  --ring: var(--primary);
+  --shell-navigation-width: 15rem;
+  --shell-details-width: 19rem;
+  --shell-header-height: 4.5rem;
+  --shell-tape-width: 47.5rem;
+  --shell-knowledge-rail-width: 11rem;
+  --shell-knowledge-write-width: 13rem;
+  --shell-graph-min-height: 18rem;
+  --shell-overlay-layer: 4;
+  --shell-administration-width: 72rem;
+  --shell-dialog-layer: 50;
+  --shell-dialog-content-layer: 51;
+}
+
 :root {
+  --customization-list-width: 16.25rem;
+  --customization-editor-min-height: 25rem;
   /* ========================================================================
      RUNTIME-TUNABLE EFFECTS
      ======================================================================== */

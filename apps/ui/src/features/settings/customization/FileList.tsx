@@ -24,7 +24,7 @@ export function FileList({ files, selectedPath, onSelect }: Props) {
         key={f.path}
         type="button"
         onClick={() => onSelect(f.path)}
-        aria-selected={isSelected}
+        aria-pressed={isSelected}
         className={`btn btn--outline btn--sm${isSelected ? " btn--primary" : ""}`}
         style={{ display: "block", width: "100%", textAlign: "left", margin: "2px 0" }}
       >

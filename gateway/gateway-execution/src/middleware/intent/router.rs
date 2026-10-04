@@ -1,6 +1,6 @@
 //! Intent routing: trivial bypass + procedure match + agent (which searches).
 
-use super::agent::{run_intent_agent, IntentAgentDeps};
+use super::agent::{run_intent_decision, IntentAgentDeps, INTENT_AGENT_BUDGET};
 use super::contract::{
     ExecutionApproach, ExecutionStrategy, IntentAnalysis, PinnedProcedure, WardAction,
     WardRecommendation,
@@ -87,34 +87,64 @@ async fn match_procedure(
         .map(|(name, ward_id)| PinnedProcedure { name, ward_id })
 }
 
-/// Labeled fallback for a failed/empty intent-agent result.
-///
-/// The previous fallback returned trivial_analysis() verbatim: an EMPTY
-/// primary_intent logged downstream as "Intent analysis succeeded", and a
-/// ward recommendation of "general" that bootstrap's filesystem ground
-/// truth could "correct" into CREATE — active misdirection for a path that
-/// knows nothing (observed: sess-66582eff). The labeled fallback seeds the
-/// intent from the message head and marks the explanation so logs and the
-/// injection surface can distinguish it from a real analysis.
-fn fallback(user_message: &str) -> IntentAnalysis {
+/// An explicitly degraded analysis never recommends creating a ward.
+pub fn fallback_analysis(user_message: &str, reason: &str) -> IntentAnalysis {
     let mut analysis = trivial_analysis();
-    let seed: String = user_message
-        .trim()
-        .chars()
-        .take(60)
-        .collect::<String>()
-        .lines()
-        .next()
-        .unwrap_or("user request")
-        .to_string();
-    analysis.primary_intent = seed;
-    analysis.execution_strategy.explanation =
-        "intent agent unavailable or returned empty — fallback analysis".to_string();
+    analysis.primary_intent = super::catalog::advisory_string(user_message.trim(), 60);
+    if analysis.primary_intent.is_empty() {
+        analysis.primary_intent = "user request".into();
+    }
+    analysis.ward_recommendation.ward_name = "scratch".into();
+    analysis.ward_recommendation.reason =
+        "Analysis unavailable; retain the current workspace".into();
+    let safe_code = match reason {
+        "deadline_exceeded"
+        | "missing_json_block"
+        | "invalid_json_block"
+        | "provider_request_failed"
+        | "client_configuration"
+        | "unsupported_output_mode"
+        | "request_budget_exhausted"
+        | "invalid_provider_response"
+        | "missing_submission"
+        | "invalid_submission"
+        | "invalid_tool_arguments"
+        | "unexpected_tool_calls"
+        | "invalid_json"
+        | "invalid_decision_shape"
+        | "invalid_primary_intent"
+        | "advisory_limit"
+        | "invalid_complexity"
+        | "unknown_resource"
+        | "unknown_capability"
+        | "unsafe_ward"
+        | "unknown_ward"
+        | "unsafe_subdirectory"
+        | "reserved_fallback_marker" => reason,
+        _ => "unavailable",
+    };
+    analysis.execution_strategy.explanation = format!("fallback analysis: {safe_code}");
     analysis
+}
+
+pub fn is_fallback_analysis(analysis: &IntentAnalysis) -> bool {
+    analysis
+        .execution_strategy
+        .explanation
+        .starts_with("fallback analysis:")
 }
 
 /// Classify a user request. The agent searches and decides simple vs graph.
 pub async fn analyze_intent(deps: &IntentAgentDeps, user_message: &str) -> IntentAnalysis {
+    tokio::time::timeout(
+        INTENT_AGENT_BUDGET,
+        analyze_with_bypasses(deps, user_message),
+    )
+    .await
+    .unwrap_or_else(|_| fallback_analysis(user_message, "deadline_exceeded"))
+}
+
+async fn analyze_with_bypasses(deps: &IntentAgentDeps, user_message: &str) -> IntentAnalysis {
     if is_trivial(user_message) {
         return trivial_analysis();
     }
@@ -127,9 +157,12 @@ pub async fn analyze_intent(deps: &IntentAgentDeps, user_message: &str) -> Inten
         return analysis;
     }
 
-    match run_intent_agent(deps, user_message).await {
-        Some(analysis) => analysis,
-        None => fallback(user_message),
+    match run_intent_decision(deps, user_message).await {
+        Ok(analysis) => analysis,
+        Err(error) => {
+            tracing::warn!(code = error.0, "intent analysis using fallback");
+            fallback_analysis(user_message, error.0)
+        }
     }
 }
 

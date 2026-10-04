@@ -44,6 +44,7 @@ describe("ContentDeck", () => {
     const tablist = screen.getByRole("tablist");
     expect(tablist.tagName).toBe("DIV");
     expect(tablist.getAttribute("aria-label")).toBe("Content tabs");
+    expect(tablist.querySelector("a")).toBeNull();
   });
 
   it("starts on the Facts tab and switches when another tab is clicked", () => {
