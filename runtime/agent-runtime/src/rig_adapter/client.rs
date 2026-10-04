@@ -1,21 +1,13 @@
-//! AgentZero `LlmClient` exposed as a Rig [`CompletionClient`].
-//!
-//! This is the structured-output companion to [`LlmCompletionModel`]: it lets
-//! Rig's higher-level primitives — extractors (`client.extractor::<T>()`),
-//! agents — run over the *same* OpenAI-compatible transport (Path A: Rig wraps
-//! AgentZero's `LlmClient`, it does not replace it). With this, a consumer that
-//! needs typed structured output (intent analysis, distillation, …) can use a
-//! Rig [`Extractor`](rig::extractor::Extractor) instead of raw `chat` + manual
-//! JSON parsing.
+//! Structured-output builders over the host's existing LlmClient transport.
 
 use std::sync::Arc;
 
-use rig::client::CompletionClient;
+use rig::AgentBuilder;
 
 use super::model::LlmCompletionModel;
 use crate::llm::LlmClient;
 
-/// A Rig [`CompletionClient`] backed by an AgentZero [`LlmClient`].
+/// Structured-output builders backed by an AgentZero LlmClient.
 #[derive(Clone)]
 pub struct LlmCompletionClient {
     pub(crate) client: Arc<dyn LlmClient>,
@@ -29,8 +21,21 @@ impl LlmCompletionClient {
     }
 }
 
-impl CompletionClient for LlmCompletionClient {
-    type CompletionModel = LlmCompletionModel;
+impl LlmCompletionClient {
+    pub fn agent(&self, _model: impl Into<String>) -> AgentBuilder {
+        AgentBuilder::new(LlmCompletionModel::new(self.client.clone()).erase())
+    }
+    pub fn extractor<T>(&self, _model: impl Into<String>) -> rig::extractor::ExtractorBuilder<T>
+    where
+        T: schemars::JsonSchema
+            + serde::de::DeserializeOwned
+            + serde::Serialize
+            + Send
+            + Sync
+            + 'static,
+    {
+        rig::extractor::ExtractorBuilder::new(LlmCompletionModel::new(self.client.clone()).erase())
+    }
 }
 
 #[cfg(test)]
@@ -39,7 +44,6 @@ mod tests {
     use crate::llm::{ChatResponse, LlmClient, LlmError, StreamCallback};
     use crate::types::{ChatMessage, ToolCall};
     use async_trait::async_trait;
-    use rig::client::CompletionClient;
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
@@ -107,7 +111,7 @@ mod tests {
             .extract("extract the person")
             .await
             .expect("extraction should yield the typed struct via the submit tool");
-        assert_eq!(person.name, "Ada");
-        assert_eq!(person.age, 36);
+        assert_eq!(person.output.name, "Ada");
+        assert_eq!(person.output.age, 36);
     }
 }

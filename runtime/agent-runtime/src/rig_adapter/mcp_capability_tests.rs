@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use rig::tool::{rmcp::McpTool, ToolDyn};
+use rig::tool::{rmcp::McpTool, DynamicTool};
 use rmcp::{transport::TokioChildProcess, ServiceExt};
 
 fn fixture_transport() -> TokioChildProcess {
@@ -27,11 +27,12 @@ async fn native_rig_mcp_calls_and_closes_owned_stdio_session() {
     assert_eq!(definitions.len(), 1);
     let tool = McpTool::from_mcp_server(definitions[0].clone(), session.peer().clone())
         .with_timeout(Duration::from_secs(1));
+    let tool: DynamicTool = tool.into();
     let output = tool
-        .call(r#"{"value":"native-rig-echo"}"#.into())
+        .execute(serde_json::json!({"value":"native-rig-echo"}))
         .await
         .unwrap();
-    assert!(output.contains("native-rig-echo"));
+    assert!(output.render().contains("native-rig-echo"));
     tokio::time::timeout(Duration::from_secs(5), session.close())
         .await
         .expect("bounded session cleanup")
@@ -43,7 +44,7 @@ async fn native_rig_mcp_calls_and_closes_owned_stdio_session() {
     #[cfg(not(target_os = "linux"))]
     let _ = pid;
     assert!(tool
-        .call(r#"{"value":"after-close"}"#.into())
+        .execute(serde_json::json!({"value":"after-close"}))
         .await
         .is_err());
 }

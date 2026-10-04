@@ -183,7 +183,7 @@ fn build(
     provider: Arc<Provider>,
     middleware: MiddlewarePipeline,
     schema_size: usize,
-) -> RigAgentEngine<LlmCompletionModel> {
+) -> RigAgentEngine {
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(Effect { schema_size }));
     let prepared = PreparedExecution::new(

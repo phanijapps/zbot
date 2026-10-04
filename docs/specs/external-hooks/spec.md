@@ -1,6 +1,6 @@
 # Spec: File-configured external hooks
 
-- **Status:** Draft
+- **Status:** Approved
 - **Owner:** @videogamer
 - **Plan:** [`plan.md`](plan.md)
 - **Constrained by:** [Engine hook contract](../engine-hook-framework/spec.md) for existing zbot semantics; [RFC-0021](../../rfc/0021-conversation-first-desktop-agent.md) for trusted definitions; Rig 0.43.0 migration

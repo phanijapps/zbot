@@ -6,10 +6,10 @@ Feature specs for AgentZero. Each spec is the canonical artifact for its scope, 
 
 | Spec | Status | Summary |
 | --- | --- | --- |
-| [Rig 0.43.0 Migration](rig-043-migration/spec.md) | Draft | Upgrade the sole Rig runtime while preserving provider, tool, streaming and reload behavior. |
-| [External Hooks](external-hooks/spec.md) | Draft | File-configured external commands with versioned bounded JSON and durable Activity outcomes. |
-| [Desktop Session Completion](desktop-session-completion/spec.md) | Draft | Close audited gaps against the existing accepted session-shell contract. |
-| [Graph Exploration Completeness](observatory-graph-completeness/spec.md) | Draft | Progressive scoped graph traversal, global search and measured styled rendering beyond one page. |
+| [Rig 0.43.0 Migration](rig-043-migration/spec.md) | Implementing | Upgrade the sole Rig runtime while preserving provider, tool, streaming and reload behavior. |
+| [External Hooks](external-hooks/spec.md) | Approved | File-configured external commands with versioned bounded JSON and durable Activity outcomes. |
+| [Desktop Session Completion](desktop-session-completion/spec.md) | Approved | Close audited gaps against the existing accepted session-shell contract. |
+| [Graph Exploration Completeness](observatory-graph-completeness/spec.md) | Approved | Progressive scoped graph traversal, global search and measured styled rendering beyond one page. |
 | [Desktop Session Shell](desktop-session-shell/spec.md) | Implementing | Shared Chat/Research conversation UI with truthful Activity, Sources, Files, and direct Memory/Observatory access. |
 | [Execution Consolidation Waves](exec-consolidation-waves/spec.md) | Drafting | Multi-wave execution-layer cleanup: ExecCtx, crate consolidation, ToolSpec table, turn-loop decomposition, typed errors. |
 | [Bootstrap Decomposition](bootstrap-decomposition/spec.md) | Implementing | Decomposes `invoke_bootstrap.rs` god-methods into phase functions. |

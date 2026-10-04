@@ -4,10 +4,24 @@ import contextlib
 import io
 import unittest
 
-from rig_boundary_check import check_direct_dependencies
+from rig_boundary_check import RIG_IMPORT_RE, check_direct_dependencies
 
 
 class DependencyBoundaryTests(unittest.TestCase):
+    def test_release_components_cannot_bypass_runtime_boundary(self):
+        for component in ["rig-agent", "rig-rmcp", "rig-cassette", "rig-http"]:
+            metadata = {"packages": [{"name": "gateway-execution", "dependencies": [
+                {"name": component, "req": "=0.43.0"},
+            ]}]}
+            with self.subTest(component=component), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    check_direct_dependencies(metadata)
+
+    def test_release_component_imports_are_detected(self):
+        for crate in ["rig_agent", "rig_rmcp", "rig_cassette", "rig_http"]:
+            with self.subTest(crate=crate):
+                self.assertIsNotNone(RIG_IMPORT_RE.search(f"use {crate}::Agent;"))
+
     def metadata(self, package, rename):
         return {"packages": [{"name": package, "dependencies": [{
             "name": "reqwest", "req": "^0.13", "rename": rename,

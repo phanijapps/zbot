@@ -431,15 +431,12 @@ async fn actual_rig_diagnostics_do_not_bypass_runtime_payload_filter() {
 #[tokio::test]
 async fn host_peer_outcome_plumbing_blocks_real_rig_effects_before_dispatch() {
     use super::super::{
-        tool_hook::RigExecutionHook,
-        tool_results::{SharedToolResults, ToolResults},
-        SharedToolContext,
+        tool::HostToolScope, tool_hook::RigExecutionHook, tool_results::ToolResults,
     };
     use futures::StreamExt;
     use rig::{
         agent::{AgentBuilder, MultiTurnStreamItem},
-        streaming::StreamingChat,
-        tool::ToolCallExtensions,
+        tool::ToolContext,
     };
     // Plumbing only: T6's post-policy model boundary supplies this host-owned
     // state. A fresh local user must not inherit historical peer taint.
@@ -449,8 +446,8 @@ async fn host_peer_outcome_plumbing_blocks_real_rig_effects_before_dispatch() {
     let context = Arc::new(crate::tools::ToolContext::new());
     let calls = Arc::new(AtomicUsize::new(0));
     let provider = Arc::new(Script::default());
-    let agent = AgentBuilder::new(LlmCompletionModel::new(provider.clone()))
-        .tools(vec![
+    let agent = AgentBuilder::new(LlmCompletionModel::new(provider.clone()).erase())
+        .dynamic_tools(vec![
             RigToolAdapter::boxed(Arc::new(Effect {
                 output: Ok("peer-result-canary".into()),
                 calls: calls.clone(),
@@ -462,22 +459,28 @@ async fn host_peer_outcome_plumbing_blocks_real_rig_effects_before_dispatch() {
             hooks: std::sync::Arc::new(crate::HookSet::new()),
             results: outcomes.clone(),
             context_config: Default::default(),
+            events: None,
+            stop: None,
         })
         .build();
-    let mut extensions = ToolCallExtensions::new();
-    extensions.insert::<SharedToolContext>(context);
-    extensions.insert::<SharedToolResults>(outcomes.clone());
+    let tool_context = ToolContext::new().with_scope(Arc::new(HostToolScope {
+        context,
+        results: outcomes.clone(),
+    }));
     let mut stream = agent
-        .stream_chat("execute", Vec::<rig::completion::Message>::new())
-        .tool_extensions(extensions)
-        .multi_turn(3)
+        .prompt("execute")
+        .tool_context(tool_context)
+        .max_turns(3)
         .tool_concurrency(1)
-        .await;
+        .stream();
     let mut result_count = 0;
     while let Some(item) = stream.next().await {
-        if matches!(item.unwrap(), MultiTurnStreamItem::StreamUserItem(_)) {
+        if let MultiTurnStreamItem::StreamUserItem(
+            rig::streaming::StreamedUserContent::ToolResult { tool_result, .. },
+        ) = item.unwrap()
+        {
             result_count += 1;
-            let outcome = outcomes.take();
+            let outcome = outcomes.take(&tool_result.call.to_string());
             if result_count == 1 {
                 assert_eq!(outcome.error.as_deref(), Some("blocked_by_hook"));
                 assert_eq!(outcome.duration_ms, 0);

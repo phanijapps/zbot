@@ -33,30 +33,20 @@ pub use structured::prompt_typed;
 pub use tool::{RigToolAdapter, SharedToolContext};
 
 /// SDK tracing roots that record raw payloads before host policy hooks.
-pub(crate) const PAYLOAD_DIAGNOSTIC_TARGETS: &[&str] = &["rig", "rig_core"];
-
-// Re-exported through the adapter boundary so gateway crates can use Rig
-// extractors (typed structured output) over LlmCompletionClient without
-// depending on Rig directly. Rig itself stays confined to this crate.
-pub use rig::client::CompletionClient;
+pub(crate) const PAYLOAD_DIAGNOSTIC_TARGETS: &[&str] = &["rig", "rig_core", "rig_agent"];
 
 /// Rig package source selected for the migration.
 pub const RIG_REPOSITORY: &str = "https://github.com/0xplaygrounds/rig";
 
-/// Rig Git revision selected for the migration.
-pub const RIG_REVISION: &str = "6b1991bfb246411dd75839c8611e801a2309d33c";
-
-/// Rig package version at the selected revision.
-pub const RIG_VERSION: &str = "0.39.0";
+/// Exact published Rig release.
+pub const RIG_VERSION: &str = "0.43.0";
 
 /// Reviewable Rig dependency pin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RigDependencyPin {
     /// Git repository URL.
     pub repository: &'static str,
-    /// Exact Git revision.
-    pub revision: &'static str,
-    /// Crate version at the exact revision.
+    /// Exact published crate version.
     pub version: &'static str,
 }
 
@@ -65,7 +55,6 @@ pub struct RigDependencyPin {
 pub const fn dependency_pin() -> RigDependencyPin {
     RigDependencyPin {
         repository: RIG_REPOSITORY,
-        revision: RIG_REVISION,
         version: RIG_VERSION,
     }
 }
@@ -83,17 +72,7 @@ mod tests {
         let manifest = fs::read_to_string(manifest_dir.join("Cargo.toml"))
             .expect("agent-runtime manifest should be readable");
         assert!(
-            manifest.contains(&format!("git = \"{}\"", pin.repository)),
-            "agent-runtime manifest should pin Rig repository {}",
-            pin.repository
-        );
-        assert!(
-            manifest.contains(&format!("rev = \"{}\"", pin.revision)),
-            "agent-runtime manifest should pin Rig revision {}",
-            pin.revision
-        );
-        assert!(
-            manifest.contains(&format!("version = \"{}\"", pin.version)),
+            manifest.contains(&format!("version = \"={}\"", pin.version)),
             "agent-runtime manifest should declare Rig version {}",
             pin.version
         );
@@ -113,17 +92,8 @@ mod tests {
             "Cargo.lock Rig package should use version {}",
             pin.version
         );
-        assert!(
-            rig_package.contains(pin.repository),
-            "Cargo.lock Rig package should use repository {}",
-            pin.repository
-        );
-        assert!(
-            rig_package.contains(&format!("rev={}#", pin.revision))
-                && rig_package.contains(&format!("#{}", pin.revision)),
-            "Cargo.lock Rig package should use exact revision {}",
-            pin.revision
-        );
+        assert!(rig_package.contains("registry+https://github.com/rust-lang/crates.io-index"));
+        assert!(rig_package.contains("checksum ="));
     }
 
     #[test]

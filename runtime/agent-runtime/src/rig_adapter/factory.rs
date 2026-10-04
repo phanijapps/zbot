@@ -35,10 +35,7 @@ mod snapshot_tests;
 
 /// Build the Rig loop with the actor-filtered inventory and effective prompt.
 /// The engine owns the configured MCP sessions for its execution lifetime.
-pub fn build_engine(
-    prepared: PreparedExecution,
-    mut rig_config: RigAgentConfig,
-) -> RigAgentEngine<LlmCompletionModel> {
+pub fn build_engine(prepared: PreparedExecution, mut rig_config: RigAgentConfig) -> RigAgentEngine {
     let tools = prepared
         .model_visible_tools()
         .into_iter()
@@ -85,7 +82,7 @@ pub fn build_engine(
     let model = LlmCompletionModel::new(prepared.llm_client)
         .with_single_action_mode(cfg.single_action_mode)
         .with_context_policy(policy.clone());
-    RigAgentEngine::with_hooks(rig_config, model, tools, shared, hooks_arc)
+    RigAgentEngine::with_hooks(rig_config, model.erase(), tools, shared, hooks_arc)
         .with_execution_turn_limit(cfg.max_turns)
         .with_context_policy(policy)
         .with_result_context(crate::ToolResultContextConfig {

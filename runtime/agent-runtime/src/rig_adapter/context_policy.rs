@@ -10,8 +10,9 @@ use crate::{
 };
 use agent_primitives::CallbackContext;
 use rig::{
-    agent::{AgentHook, Flow, StepEvent},
-    completion::{CompletionError, CompletionModel, CompletionRequest, Message},
+    agent::{AgentHook, CompletionCallAction, CompletionCallEvent, HookContext},
+    completion::{CompletionRequest, Message},
+    error::ProviderError,
 };
 use serde_json::Value;
 use std::{
@@ -166,9 +167,7 @@ impl ContextPolicy {
         if !history.starts_with(absorbed) {
             return;
         }
-        if let Ok(messages) = convert_rig_messages(history[absorbed.len()..].iter()) {
-            run.tail.messages = messages;
-        }
+        run.tail.messages = convert_rig_messages(history[absorbed.len()..].iter());
     }
     pub fn checkpoint(&self) -> Option<Value> {
         let mut state = self.context.export_state();
@@ -192,12 +191,12 @@ impl ContextPolicy {
         &self,
         request: &CompletionRequest,
         tools: &Option<Value>,
-    ) -> Result<PreparedRequest, CompletionError> {
+    ) -> Result<PreparedRequest, ProviderError> {
         match self.prepare_inner(request, tools).await {
             Ok(messages) => Ok(messages),
             Err(error) => {
                 *self.error.lock().unwrap() = Some(error);
-                Err(CompletionError::ProviderError(
+                Err(ProviderError::Response(
                     "Execution context policy rejected request".into(),
                 ))
             }
@@ -235,9 +234,9 @@ impl ContextPolicy {
             if !snapshot.starts_with(previous) {
                 return Err(mismatch());
             }
-            state.messages.extend(
-                convert_rig_messages(snapshot[previous.len()..].iter()).map_err(|_| mismatch())?,
-            );
+            state
+                .messages
+                .extend(convert_rig_messages(snapshot[previous.len()..].iter()));
         } else if snapshot.len() != state.initial_rig_len {
             return Err(mismatch());
         }
@@ -348,18 +347,15 @@ impl ContextPolicy {
 }
 
 pub(super) struct ContextCapture(pub Arc<ContextPolicy>);
-impl<M: CompletionModel> AgentHook<M> for ContextCapture {
-    async fn on_event(&self, event: StepEvent<'_, M>) -> Flow {
-        if let StepEvent::CompletionCall {
-            turn,
-            history,
-            prompt,
-        } = event
-        {
-            let mut messages = history.to_vec();
-            messages.push(prompt.clone());
-            *self.0.snapshot.lock().unwrap() = Some((turn, messages));
-        }
-        Flow::cont()
+impl AgentHook for ContextCapture {
+    async fn on_completion_call(
+        &self,
+        _: &HookContext,
+        event: CompletionCallEvent<'_>,
+    ) -> CompletionCallAction {
+        let mut messages = event.history.to_vec();
+        messages.push(event.prompt.clone());
+        *self.0.snapshot.lock().unwrap() = Some((event.turn, messages));
+        CompletionCallAction::Continue
     }
 }

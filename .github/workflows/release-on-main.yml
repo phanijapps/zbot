@@ -87,7 +87,7 @@ jobs:
 
       - name: Setup Rust
         if: steps.version.outputs.skip == '0'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.0
 
       - name: Bump version files
         if: steps.version.outputs.skip == '0'
