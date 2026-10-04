@@ -1,7 +1,7 @@
 # Plan: Complete and styled graph exploration
 
 - **Spec:** [`spec.md`](spec.md)
-- **Status:** Approved
+- **Status:** Drafting
 
 ## Approach
 
@@ -42,10 +42,12 @@ Scope/filter key each fetch. Merge entities/edges by qualified ID, reconcile end
 **Spec mapping:** AC1–2, AC8
 
 **Tests:**
-- Generated 1200/900 fixture enumerates per-agent and cross-agent pages; assert scoped totals, stable order, changed-total/no-progress refresh, endpoint ownership and negative limits.
+- Generated 1200/900 fixture enumerates per-agent and cross-agent pages; assert scoped totals, stable order (`mention_count DESC, agent_id, id` — unique tiebreaker, preserves the existing most-mentioned-first page), changed-total/no-progress refresh, endpoint ownership and negative limits.
+- The fixture includes a relationship whose endpoint entity is absent (missing-endpoint case) and an empty scope; neither may break traversal or counts.
+- `stores/zbot-engram-adapter/tests/graph_pagination.rs` (stub: draft (uncompiled — the paged/counted trait methods are T1's deliverable; the stub asserts exact scoped totals, disjoint deterministic pages, and negative-limit rejection against the new signature the moment it exists))
 
 **Approach:**
-Update services/knowledge-graph/src/kg_trait/store.rs and stores/zbot-engram-adapter/src/stores/knowledge_graph.rs/sidecar. Identify other actual trait implementations and preserve conformance. Use bounded queries/counts and live-view semantics defined by the contract.
+Update services/knowledge-graph/src/kg_trait/store.rs and stores/zbot-engram-adapter/src/stores/knowledge_graph.rs/sidecar: add offset to the cross-agent `list_all_*` queries, scoped counts sharing the same WHERE, and the deterministic tiebreaker ordering. The only real trait implementation is the engram adapter; test doubles and the conformance harness follow the signature. Use bounded queries/counts and live-view semantics defined by the contract.
 
 ### T2: Expose the existing scoped HTTP graph surface accurately
 
@@ -56,10 +58,11 @@ Update services/knowledge-graph/src/kg_trait/store.rs and stores/zbot-engram-ada
 **Spec mapping:** AC1, AC3–4, AC8
 
 **Tests:**
-- HTTP pages/search/entity/neighbors validate contract fields and actual totals; invalid/filter/changed-total and oversized/deep-property cases. Mismatched Origin, LAN bind and missing bind proof return 403 before any spy-store read, including Origin-less callers.
+- HTTP pages/search/entity/neighbors validate contract fields and actual totals; invalid/filter/changed-total and oversized/deep-property cases. Mismatched Origin, LAN bind and missing bind proof return 403 before any spy-store read, including Origin-less callers; a spy-store sweep proves **no** `/api/graph/*` route (including per-agent stats, aggregate stats, subgraph, reindex, ingest) reaches the store unguarded; subgraph `max_hops` is bounded 1–4; denials are logged (method, path, peer; no payload).
+- `gateway/src/http/graph_pagination_tests.rs` (stub: true — red today: the existing `/api/graph/all/*` routes report `total` = page length and carry no `nextOffset`/guard; the stub asserts exact scope totals, `nextOffset`/exhausted, and 403-before-read on the loopback boundary)
 
 **Approach:**
-Update gateway/src/http/graph.rs, existing routes and gateway-served OpenAPI. Add the contract’s aggregate search and direct per-agent entity read for endpoint resolution; the existing route table lacks both. Paginate existing neighbor reads for truthful selected neighborhoods. Reuse SameOrigin and sessions::LoopbackBind, not a new guard. Existing responses gain additive pagination/projection fields. Bound names/properties/rows and dynamically shorten pages to the 2 MiB budget without skipping rows.
+Update gateway/src/http/graph.rs, existing routes and gateway-served OpenAPI. Add the contract’s aggregate search and direct per-agent entity read for endpoint resolution; the existing route table lacks both. Paginate existing neighbor reads for truthful selected neighborhoods. Reuse SameOrigin and the hardened sessions::LoopbackBind on every `/api/graph/*` route, not a new guard. Existing responses gain pagination/projection fields, and two semantics changes are explicit (not additive): `total` becomes the exact scope count (was page length) and ordering gains the unique `(agent_id, id)` tiebreaker after the unchanged `mention_count DESC` ranking — first-page contents stay most-mentioned-first. Bound names/properties/rows and dynamically shorten pages to the 2 MiB budget without skipping rows.
 
 ### T3: Load and search beyond the first page
 
@@ -70,7 +73,8 @@ Update gateway/src/http/graph.rs, existing routes and gateway-served OpenAPI. Ad
 **Spec mapping:** AC2–4, AC8
 
 **Tests:**
-- UI delayed-page/scope change, failed-page resume, endpoint loading and late-page search-to-detail journeys; oversized projection labels and scene-admission cap retain truthful partial counts and server-backed inspection.
+- UI delayed-page/scope change, failed-page resume, endpoint loading and late-page search-to-detail journeys; changed-total and all-duplicate (no-progress, as defined in AC1) pages surface an incomplete state with a refresh offer and resume adds no duplicate edges; missing endpoints are queued/counted, never silently dropped (the current GraphCanvas link filter discards them); markup-bearing names/properties render as inert text in labels, detail panel, and the accessible list; oversized projection labels and scene-admission cap retain truthful partial counts and server-backed inspection; graph 403 renders the truthful loopback-only denial state.
+- `apps/ui/src/features/observatory/graph-hooks.test.ts` additions (stub: true — red today: progressive-load hook asserting two-page merge without duplicates, `nextOffset` follow, no-progress detection, and unresolved-endpoint accounting via mocked transport)
 
 **Approach:**
 Update observatory/graph-hooks.ts, ObservatoryPage.tsx and transport contracts. Do not turn an initial fetch limit into a completeness claim; surface progress and partial status.
@@ -87,7 +91,7 @@ Update observatory/graph-hooks.ts, ObservatoryPage.tsx and transport contracts. 
 - Benchmark D3 and cosmos.gl against the datasets, latency, heap and lifecycle thresholds in spec AC5. Retain measurements and accessible/GPU-error journeys.
 
 **Approach:**
-Record benchmark.md, pin a renderer only if the current implementation fails the criterion, and apply shared tokens/legend/focus labels/panel styling. Implement accessible scoped search/list/inspection and reduced motion, dispose simulation/GPU resources.
+Record benchmark.md, pin a renderer only if the current implementation fails the criterion, and apply shared tokens/legend/focus labels/panel styling. Implement accessible scoped search/list/inspection and reduced motion, dispose simulation/GPU resources. cosmos.gl is added as a **devDependency** with a dynamically-imported, benchmark-only harness kept in-repo regardless of the winner, so retained measurements stay re-runnable; it never enters the production bundle unless it wins on measurement.
 
 ## Gates
 
@@ -102,7 +106,7 @@ Cross-agent storage currently lacks correct aggregate offset/count semantics; av
 
 ## Rollout
 
-Keep the current renderer until paging/search correctness passes. Publish measured limits and explicit fallback behavior. No vault data migration is included; additive HTTP fields and existing routes preserve callers.
+Keep the current renderer until paging/search correctness passes. Publish measured limits and explicit fallback behavior. No vault data migration is included. Two explicit semantics changes ship on the existing routes (named, not additive): `total` becomes the exact scope count (was page length) and ordering gains the `(agent_id, id)` unique tiebreaker after the unchanged `mention_count DESC` ranking — existing consumers see the same first page and now truthful totals.
 
 ## Changelog
 

@@ -33,6 +33,8 @@ mod paths;
 mod plugins;
 mod providers;
 #[cfg(test)]
+mod graph_pagination_tests;
+#[cfg(test)]
 mod session_details_tests;
 mod sessions;
 mod settings;

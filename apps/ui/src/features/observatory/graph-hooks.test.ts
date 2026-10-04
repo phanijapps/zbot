@@ -310,3 +310,34 @@ describe("useBackfill", () => {
     expect(result.current.isRunning).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// STUB: AC1/AC2 — progressive paged loading beyond the first page.
+// Red today: useGraphData fetches one page (limit 200) and never follows
+// nextOffset. The stub serves two pages through the transport and asserts a
+// duplicate-free merged traversal with a truthful complete state.
+// ---------------------------------------------------------------------------
+describe("useGraphData progressive paging (stub)", () => {
+  it("follows nextOffset pages and merges entities without duplicates", async () => {
+    const page = (offset: number) => ({
+      success: true,
+      data: {
+        entities: [
+          { id: `entity-${offset + 1}`, agentId: "agent-a", name: `E${offset + 1}`, entityType: "Concept" },
+          { id: `entity-${offset + 2}`, agentId: "agent-a", name: `E${offset + 2}`, entityType: "Concept" },
+        ],
+        total: 4,
+        nextOffset: offset + 2 < 4 ? offset + 2 : null,
+      },
+    });
+    mockGetGraphEntities.mockImplementation(async (_id: string, options?: {offset?: number}) => page(options?.offset ?? 0));
+    mockGetGraphRelationships.mockResolvedValue({ success: true, data: { relationships: [], total: 0, nextOffset: null } });
+
+    const { result } = renderHook(() => useGraphData("agent-a"));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.entities.map(e => e.id).sort()).toEqual([
+      "entity-1", "entity-2", "entity-3", "entity-4",
+    ]);
+    expect(result.current.error).toBeNull();
+  });
+});
