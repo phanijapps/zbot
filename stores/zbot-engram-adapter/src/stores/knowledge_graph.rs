@@ -15,9 +15,10 @@ use knowledge_graph::kg_trait::kg_types::{
     EntityId, Neighbor, RelationshipId, ResolveOutcome, TraversalHit,
 };
 use knowledge_graph::kg_trait::{
-    ArchivableEntity, EntityNameEmbeddingHit, EntityWithEmbedding, ExtractedKnowledge,
+    ArchivableEntity, EntityNameEmbeddingHit, EntityPage, EntityWithEmbedding, ExtractedKnowledge,
     GraphStoreError, GraphStoreResult, GraphView, HierarchySummary, InterClusterRelationHit,
-    KgStats, KnowledgeGraphStore, LcaPath, ReindexReport, StoreOutcome, VecIndexHealth,
+    KgStats, KnowledgeGraphStore, LcaPath, RelationshipPage, ReindexReport, StoreOutcome,
+    VecIndexHealth,
 };
 use knowledge_graph::types::Direction;
 use knowledge_graph::types::{
@@ -849,6 +850,78 @@ impl KnowledgeGraphStore for EngramKnowledgeGraphStore {
             .into_iter()
             .map(|entry| entry.relationship)
             .collect())
+    }
+
+    async fn list_entities_paged(
+        &self,
+        agent_id: &str,
+        entity_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<EntityPage> {
+        let (entries, total) =
+            self.sidecar
+                .list_entity_entries_paged(Some(agent_id), entity_type, limit, offset)?;
+        Ok(EntityPage {
+            entities: entries.into_iter().map(|entry| entry.entity).collect(),
+            total,
+        })
+    }
+
+    async fn list_relationships_paged(
+        &self,
+        agent_id: &str,
+        relationship_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<RelationshipPage> {
+        let (entries, total) = self.sidecar.list_relationship_entries_paged(
+            Some(agent_id),
+            relationship_type,
+            limit,
+            offset,
+        )?;
+        Ok(RelationshipPage {
+            relationships: entries
+                .into_iter()
+                .map(|entry| entry.relationship)
+                .collect(),
+            total,
+        })
+    }
+
+    async fn list_all_entities_paged(
+        &self,
+        ward_id: Option<&str>,
+        entity_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<EntityPage> {
+        let (entries, total) =
+            self.sidecar
+                .list_all_entities_paged(ward_id, entity_type, limit, offset)?;
+        Ok(EntityPage {
+            entities: entries.into_iter().map(|entry| entry.entity).collect(),
+            total,
+        })
+    }
+
+    async fn list_all_relationships_paged(
+        &self,
+        relationship_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<RelationshipPage> {
+        let (entries, total) =
+            self.sidecar
+                .list_relationship_entries_paged(None, relationship_type, limit, offset)?;
+        Ok(RelationshipPage {
+            relationships: entries
+                .into_iter()
+                .map(|entry| entry.relationship)
+                .collect(),
+            total,
+        })
     }
 
     async fn vec_index_health(&self) -> GraphStoreResult<VecIndexHealth> {
@@ -1869,6 +1942,150 @@ impl KnowledgeGraphSidecar {
         Ok(rows.into_iter().skip(offset).take(limit.max(1)).collect())
     }
 
+    /// One consistent page of entity entries plus the exact scoped total.
+    ///
+    /// Single windowed statement (`COUNT(*) OVER ()`) so page and total come
+    /// from one snapshot; ordering gains the unique `(agent_id, id)`
+    /// tiebreaker after the unchanged `mention_count DESC` ranking so offset
+    /// paging is deterministic (exploration contract AC1).
+    fn list_entity_entries_paged(
+        &self,
+        agent_id: Option<&str>,
+        entity_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<(Vec<EntityEntry>, usize)> {
+        let connection = self.lock()?;
+        let mut conditions = vec!["pruned = 0".to_string()];
+        let mut param_values: Vec<Box<dyn ToSql>> = Vec::new();
+        if let Some(agent_id) = agent_id {
+            // Same per-agent scope rule as `list_entity_entries`: the agent's
+            // entities plus explicitly global (`__global__`) entities.
+            conditions.push(format!(
+                "(agent_id = ?{} OR agent_id = '__global__')",
+                param_values.len() + 1
+            ));
+            param_values.push(Box::new(agent_id.to_string()));
+        }
+        if let Some(entity_type) = entity_type {
+            conditions.push(format!("entity_type = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(entity_type.to_string()));
+        }
+        let sql = format!(
+            "SELECT entity_json, embedding_json, embedding_identity_json, COUNT(*) OVER ()
+             FROM kg_entities
+             WHERE {}
+             ORDER BY mention_count DESC, agent_id, id
+             LIMIT ?{} OFFSET ?{}",
+            conditions.join(" AND "),
+            param_values.len() + 1,
+            param_values.len() + 2
+        );
+        param_values.push(Box::new(limit.max(1) as i64));
+        param_values.push(Box::new(offset as i64));
+        let params_refs: Vec<&dyn ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let mut statement = connection.prepare(&sql).map_err(to_backend)?;
+        let rows = statement
+            .query_map(params_refs.as_slice(), |row| {
+                Ok((decode_entity_entry(row)?, row.get::<_, i64>(3)?))
+            })
+            .map_err(to_backend)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(to_backend)?;
+        // An over-offset page returns zero rows, so the windowed total is
+        // absent; fall back to a plain count under the same lock (still one
+        // serialized snapshot — the sidecar mutex excludes writers).
+        let total = match rows.last() {
+            Some((_, total)) => (*total).max(0) as usize,
+            None => Self::count_entity_entries_under(&connection, agent_id, entity_type)?,
+        };
+        Ok((rows.into_iter().map(|(entry, _)| entry).collect(), total))
+    }
+
+    /// Plain scoped entity count evaluated on an already-locked connection.
+    fn count_entity_entries_under(
+        connection: &rusqlite::Connection,
+        agent_id: Option<&str>,
+        entity_type: Option<&str>,
+    ) -> GraphStoreResult<usize> {
+        let mut conditions = vec!["pruned = 0".to_string()];
+        let mut param_values: Vec<Box<dyn ToSql>> = Vec::new();
+        if let Some(agent_id) = agent_id {
+            conditions.push(format!(
+                "(agent_id = ?{} OR agent_id = '__global__')",
+                param_values.len() + 1
+            ));
+            param_values.push(Box::new(agent_id.to_string()));
+        }
+        if let Some(entity_type) = entity_type {
+            conditions.push(format!("entity_type = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(entity_type.to_string()));
+        }
+        let sql = format!(
+            "SELECT COUNT(*) FROM kg_entities WHERE {}",
+            conditions.join(" AND ")
+        );
+        let params_refs: Vec<&dyn ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let count = connection
+            .query_row(&sql, params_refs.as_slice(), |row| row.get::<_, i64>(0))
+            .map_err(to_backend)?;
+        Ok(count.max(0) as usize)
+    }
+
+    /// One consistent page of relationship entries plus the exact
+    /// deduplicated total for the same scope/filter. Page and total are
+    /// computed under a single sidecar lock, so no writer can interleave
+    /// (exploration contract AC1: one consistent read per page/count).
+    fn list_relationship_entries_paged(
+        &self,
+        agent_id: Option<&str>,
+        relationship_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<(Vec<RelationshipEntry>, usize)> {
+        // Hold one sidecar lock across query + dedup + slice: the mutex
+        // serializes every writer, so page and count share one snapshot.
+        let connection = self.lock()?;
+        let mut conditions = vec!["archived = 0".to_string()];
+        let mut param_values: Vec<Box<dyn ToSql>> = Vec::new();
+        if let Some(agent_id) = agent_id {
+            conditions.push(format!("agent_id = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(agent_id.to_string()));
+        }
+        if let Some(relationship_type) = relationship_type {
+            conditions.push(format!("relationship_type = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(relationship_type.to_string()));
+        }
+        let sql = format!(
+            "SELECT relationship_json, confidence FROM kg_relationships
+             WHERE {}
+             ORDER BY mention_count DESC, id",
+            conditions.join(" AND ")
+        );
+        let params_refs: Vec<&dyn ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let mut statement = connection.prepare(&sql).map_err(to_backend)?;
+        let rows = statement
+            .query_map(params_refs.as_slice(), decode_relationship_entry)
+            .map_err(to_backend)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(to_backend)?;
+        let mut deduped = self.deduplicate_relationship_entries(rows)?;
+        deduped.sort_by(|left, right| {
+            right
+                .relationship
+                .mention_count
+                .cmp(&left.relationship.mention_count)
+                .then_with(|| left.relationship.id.cmp(&right.relationship.id))
+        });
+        let total = deduped.len();
+        let page = deduped
+            .into_iter()
+            .skip(offset)
+            .take(limit.max(1))
+            .collect();
+        Ok((page, total))
+    }
+
     fn load_all_entities(&self) -> GraphStoreResult<Vec<EntityEntry>> {
         let connection = self.lock()?;
         let mut statement = connection
@@ -2628,6 +2845,88 @@ impl KnowledgeGraphSidecar {
         rows.map(|row| row.map(|entry| entry.entity))
             .collect::<Result<Vec<_>, _>>()
             .map_err(to_backend)
+    }
+
+    /// Cross-agent entity page with the exact ward/type-filtered total, one
+    /// windowed statement, deterministic `(mention_count DESC, agent_id, id)`
+    /// order (exploration contract AC1).
+    fn list_all_entities_paged(
+        &self,
+        ward_id: Option<&str>,
+        entity_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<(Vec<EntityEntry>, usize)> {
+        let connection = self.lock()?;
+        let mut conditions = vec!["pruned = 0".to_string()];
+        let mut param_values: Vec<Box<dyn ToSql>> = Vec::new();
+        if let Some(ward_id) = ward_id {
+            conditions.push(format!(
+                "json_extract(properties_json, '$.ward_id') = ?{}",
+                param_values.len() + 1
+            ));
+            param_values.push(Box::new(ward_id.to_string()));
+        }
+        if let Some(entity_type) = entity_type {
+            conditions.push(format!("entity_type = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(entity_type.to_string()));
+        }
+        let sql = format!(
+            "SELECT entity_json, NULL, NULL, COUNT(*) OVER ()
+             FROM kg_entities
+             WHERE {}
+             ORDER BY mention_count DESC, agent_id, id
+             LIMIT ?{} OFFSET ?{}",
+            conditions.join(" AND "),
+            param_values.len() + 1,
+            param_values.len() + 2
+        );
+        param_values.push(Box::new(limit.max(1) as i64));
+        param_values.push(Box::new(offset as i64));
+        let params_refs: Vec<&dyn ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let mut statement = connection.prepare(&sql).map_err(to_backend)?;
+        let rows = statement
+            .query_map(params_refs.as_slice(), |row| {
+                Ok((decode_entity_entry(row)?, row.get::<_, i64>(3)?))
+            })
+            .map_err(to_backend)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(to_backend)?;
+        let total = match rows.last() {
+            Some((_, total)) => (*total).max(0) as usize,
+            None => Self::count_all_entities_under(&connection, ward_id, entity_type)?,
+        };
+        Ok((rows.into_iter().map(|(entry, _)| entry).collect(), total))
+    }
+
+    /// Plain ward/type-filtered cross-agent count on a locked connection.
+    fn count_all_entities_under(
+        connection: &rusqlite::Connection,
+        ward_id: Option<&str>,
+        entity_type: Option<&str>,
+    ) -> GraphStoreResult<usize> {
+        let mut conditions = vec!["pruned = 0".to_string()];
+        let mut param_values: Vec<Box<dyn ToSql>> = Vec::new();
+        if let Some(ward_id) = ward_id {
+            conditions.push(format!(
+                "json_extract(properties_json, '$.ward_id') = ?{}",
+                param_values.len() + 1
+            ));
+            param_values.push(Box::new(ward_id.to_string()));
+        }
+        if let Some(entity_type) = entity_type {
+            conditions.push(format!("entity_type = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(entity_type.to_string()));
+        }
+        let sql = format!(
+            "SELECT COUNT(*) FROM kg_entities WHERE {}",
+            conditions.join(" AND ")
+        );
+        let params_refs: Vec<&dyn ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let count = connection
+            .query_row(&sql, params_refs.as_slice(), |row| row.get::<_, i64>(0))
+            .map_err(to_backend)?;
+        Ok(count.max(0) as usize)
     }
 
     fn connectivity_strength(

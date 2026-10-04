@@ -289,6 +289,49 @@ pub trait KnowledgeGraphStore: Send + Sync {
     /// Used by `GET /api/graph/all/relationships`.
     async fn list_all_relationships(&self, limit: usize) -> GraphStoreResult<Vec<Relationship>>;
 
+    // ---- Paged exploration reads (AC1: exact totals, deterministic order) --
+
+    /// Per-agent entity page with the exact total for the same agent/type
+    /// scope. Ordering is deterministic: `mention_count DESC, agent_id, id`.
+    async fn list_entities_paged(
+        &self,
+        agent_id: &str,
+        entity_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<EntityPage>;
+
+    /// Per-agent relationship page with the exact deduplicated total for the
+    /// same agent/type scope. Ordering is deterministic:
+    /// `mention_count DESC, id`.
+    async fn list_relationships_paged(
+        &self,
+        agent_id: &str,
+        relationship_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<RelationshipPage>;
+
+    /// Cross-agent entity page (optional ward/type filters) with the exact
+    /// total for the same filters. Ordering is deterministic:
+    /// `mention_count DESC, agent_id, id`.
+    async fn list_all_entities_paged(
+        &self,
+        ward_id: Option<&str>,
+        entity_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<EntityPage>;
+
+    /// Cross-agent relationship page (optional type filter) with the exact
+    /// deduplicated total for the same filter.
+    async fn list_all_relationships_paged(
+        &self,
+        relationship_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<RelationshipPage>;
+
     /// Vec0-index health snapshot: which of the expected vector tables
     /// exist in the backing store and how many rows are indexed in
     /// total. Backend-specific in implementation (SQLite-vec aux tables,
