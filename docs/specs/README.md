@@ -21,10 +21,11 @@ Feature specs for AgentZero. Each spec is the canonical artifact for its scope, 
 | [Intent Ward Archetype Selection](intent-ward-archetype-selection/spec.md) | Draft | Ward archetype selection driven by intent analysis. |
 | [Provenance-aware Context Compaction](provenance-aware-context-compaction/spec.md) | Draft | Default provenance-aware context editing with a legacy feature-flag control. |
 
-## Recently Shipped (2026 Q3)
+## Recently Shipped
 
 | Spec | Summary |
 | --- | --- |
+| [CI Recovery](ci-recovery/spec.md) | Repairs the Research Stop fixture and generated async-trait Clippy errors; records remaining baseline security findings. |
 | [Rig Intent Preflight Recovery](intent-rig-preflight/spec.md) | Rig intent completion, bounded z.ai/Ollama GLM reasoning and validated corrections. |
 | [Ollama Intent JSON Fallback](ollama-intent-json-fallback/spec.md) | Bounded, validated JSON code block fallback for Ollama intent decisions. |
 | [Intent Output Fallback](intent-output-fallback/spec.md) | Validated provider-aware intent decisions for native schemas, z.ai JSON mode, and Ollama Cloud tools. |

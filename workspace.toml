@@ -33,7 +33,9 @@ active = [
   { path = "docs/specs/rig-043-migration/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/rig-043-migration/spec.md", revision = "ee35d6720922174f95a9ffc59d11b2482eecf675", parent = "docs/product/briefs/rig-hooks-session-graph.md" }, summary = "Upgrade Rig to exactly 0.43.0 with execution/provider parity", needs = [] },
   { path = "docs/specs/desktop-session-shell/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/desktop-session-shell/spec.md" }, summary = "Shared Chat and Research conversation shell with truthful session details and direct Memory and Observatory access", needs = [] },
 ]
-shipped = []
+shipped = [
+  { path = "docs/specs/ci-recovery/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/ci-recovery/spec.md" }, summary = "Repair the Research Stop fixture and generated async-trait Clippy error", needs = [] },
+]
 
 [ini-002.brief_queue]
 draft = [
@@ -45,10 +47,16 @@ ready = [
 
 [backlog]
 open = [
-  # pre-existing: ResearchPage.test.tsx:570 expects stopAgent on click, but the
-  # isolated test and full UI suite both observe no call; unrelated to slide panel CSS.
-  # Repair the Stop test/behavior against the current cancellation contract.
-  { slug = "pre-existing-research-stop-assertion", source = "pre-flight/2026-09-27" },
+  # Subsequent CI checks exposed unchanged rustls 0.23.36 TLS advisory
+  # RUSTSEC-2026-0285; cargo audit --db <fresh-temp-dir> and cargo deny check fail.
+  # Update the affected TLS closure with its own provider/transport regression proof.
+  { slug = "pre-existing-ci-rustls-advisory", source = "pre-flight/2026-10-03-ci-recovery" },
+  # cargo deny check fails because services/distillation/Cargo.toml declares no
+  # package license. Reconcile metadata with the existing workspace license.
+  { slug = "pre-existing-distillation-license", source = "pre-flight/2026-10-03-ci-recovery" },
+  # node scripts/npm-audit-high.mjs apps/ui reports unchanged brace-expansion
+  # and nanoid high advisories. Patch those transitive lockfile entries and rerun UI gates.
+  { slug = "pre-existing-ci-node-advisories", source = "pre-flight/2026-10-03-ci-recovery" },
   # pre-existing: gateway/tests/saved_surfaces.rs:66 expects a bare surface; the API returns its session/execution/time envelope.
   # Fix the baseline fixture against the current persisted-surface API contract and rerun the workspace test gate.
   { slug = "pre-existing-saved-surfaces-envelope", source = "pre-flight/2026-09-06" },
