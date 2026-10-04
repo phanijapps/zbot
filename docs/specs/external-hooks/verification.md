@@ -198,3 +198,5 @@ The original security job failed on the recorded rustls advisory. Bounded indepe
 Clean. Hosted Node setup correction passed. PR #278 merged into develop as
 af9ff454 on 2026-10-04; the full hosted CI rerun was still in progress at merge.
 No completed CI or clean security-scan claim is made.
+
+User-instance validation — 2026-10-04: **UNVERIFIED / follow up later.** User cannot confirm whether `simple-hook` actually runs. Configuration and direct script checks passed; live daemon invocation is not confirmed. User will revisit; no successful or failed live run is asserted.
