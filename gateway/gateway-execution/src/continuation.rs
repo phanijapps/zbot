@@ -50,6 +50,7 @@ pub async fn spawn_continuation_turn(
     // The runner or HTTP handler will pick this up and invoke the agent
     event_bus
         .publish(GatewayEvent::SessionContinuationReady {
+            hook_invocation_id: None,
             session_id: session_id.to_string(),
             root_agent_id: root_agent_id.to_string(),
             root_execution_id: continuation_id.clone(),

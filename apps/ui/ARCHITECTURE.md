@@ -285,6 +285,11 @@ Three-column layout under `apps/ui/src/features/memory/command-deck/`:
 
 ## Adding New Components
 
+The session shell's read-only `ActivityPanel` consumes `getSessionDetails` with a
+confirmed session ID. Hook rows use native disclosures and `.session-activity__*`
+classes in `components.css`; fixed hook statuses and metadata are the only hook
+content rendered. QuickChat reports its existing bootstrap ID without remounting.
+
 1. Define CSS class in `components.css`
 2. Use ONLY design tokens from `theme.css`
 3. Follow BEM naming convention

@@ -461,6 +461,7 @@ async fn host_peer_outcome_plumbing_blocks_real_rig_effects_before_dispatch() {
             context_config: Default::default(),
             events: None,
             stop: None,
+            external_hooks: None,
         })
         .build();
     let tool_context = ToolContext::new().with_scope(Arc::new(HostToolScope {

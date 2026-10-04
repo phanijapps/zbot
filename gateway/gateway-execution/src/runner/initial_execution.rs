@@ -117,6 +117,11 @@ impl ExecutionRunner {
         let partial_execution_id = partial.execution_id.clone();
         let partial_session_id = partial.session_id.clone();
         let partial_handle = partial.handle.clone();
+        let partial_owner = partial
+            .accepted_hooks
+            .run
+            .as_ref()
+            .map(|run| run.invocation().clone());
         let setup = match self
             .bootstrap
             .finish_setup(&config, &message, partial)
@@ -124,6 +129,7 @@ impl ExecutionRunner {
         {
             Ok(setup) => setup,
             Err(error) => {
+                super::external_hooks::clear_if_terminal(&self.ctx, partial_owner.as_ref(), true);
                 if log_internal_error {
                     tracing::error!(
                         session_id = %partial_session_id,
@@ -142,6 +148,24 @@ impl ExecutionRunner {
                     }
                 }
                 const SAFE_SETUP_ERROR: &str = "Unable to start this request";
+                if partial_handle.is_stop_requested() {
+                    if partial_owner.is_some() && !partial_handle.claim_stop_settlement() {
+                        return Err(ExecutionError::Config("Execution stopped by caller".into()));
+                    }
+                    crate::lifecycle::stop_execution(crate::lifecycle::StopExecution {
+                        state_service: &self.ctx.state_service,
+                        log_service: &self.ctx.log_service,
+                        event_bus: &self.ctx.event_bus,
+                        execution_id: &partial_execution_id,
+                        session_id: &partial_session_id,
+                        agent_id: &config.agent_id,
+                        conversation_id: &config.conversation_id,
+                        iteration: partial_handle.current_iteration(),
+                    })
+                    .await;
+                    return Err(ExecutionError::Config("Execution stopped by caller".into()));
+                }
+
                 crash_execution(CrashExecution {
                     state_service: &self.ctx.control.state_service,
                     log_service: &self.ctx.log_service,
@@ -179,7 +203,11 @@ impl ExecutionRunner {
             bridge_registry: self.ctx.bridge_registry.clone(),
             bridge_outbox: self.ctx.bridge_outbox.clone(),
         };
+        let owner = setup.hook_invocation.clone();
+        let retention = setup.hook_retention;
+        let execution_services = self.ctx.clone();
         let ctx = super::execution_stream::ExecutionContext {
+            hook_invocation: setup.hook_invocation,
             mode: super::execution_stream::ExecutionMode::Root,
             execution_id: setup.execution_id,
             session_id: setup.session_id.clone(),
@@ -198,7 +226,17 @@ impl ExecutionRunner {
         let peer_registry = self.ctx.steering_registry.clone();
         let peer_execution_id = ctx.execution_id.clone();
         tokio::spawn(async move {
+            let stop = ctx.handle.stop_signal();
             let _ = stream.run(ctx, setup.executor).await;
+            let pending = owner.as_ref().is_some_and(|owner| {
+                execution_services
+                    .state_service
+                    .get_session(owner.session_id())
+                    .ok()
+                    .flatten()
+                    .is_some_and(|session| session.pending_delegations > 0)
+            });
+            retention.finish(pending && !stop.load(std::sync::atomic::Ordering::Acquire));
             peer_registry.remove(&peer_execution_id);
         });
         Ok((setup.handle, setup.session_id))

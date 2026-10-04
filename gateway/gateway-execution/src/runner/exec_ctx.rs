@@ -38,6 +38,7 @@ pub struct ExecCtx {
 
     // --- Live control (handles, delegation registry) ---
     pub control: SessionControl,
+    pub(crate) hook_invocations: Arc<super::external_hooks::HookInvocationRegistry>,
     pub delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
     /// Limits concurrent delegation spawns.
     pub delegation_semaphore: Arc<Semaphore>,
@@ -75,12 +76,36 @@ impl super::session_invoker::ContinuationSpawner for ExecCtx {
         session_id: String,
         root_agent_id: String,
     ) -> Result<(), ExecutionError> {
+        let owner = super::external_hooks::resolve(self, &session_id, None).await?;
+        self.spawn_continuation_for_invocation(
+            session_id,
+            root_agent_id,
+            owner.map(|owner| owner.id().to_owned()),
+        )
+        .await
+    }
+    async fn spawn_continuation_for_invocation(
+        &self,
+        session_id: String,
+        root_agent_id: String,
+        invocation_id: Option<String>,
+    ) -> Result<(), ExecutionError> {
+        if invocation_id
+            .as_deref()
+            .is_some_and(|id| self.hook_invocations.get(id, &session_id).is_none())
+        {
+            return Err(ExecutionError::Config("hook_invocation_unavailable".into()));
+        }
         if let Err(error) = self.state_service.clear_continuation(&session_id) {
             tracing::warn!(%session_id, %error, "Failed to clear continuation flag");
         }
-        let result =
-            super::continuation_execution::invoke_continuation(self, &session_id, &root_agent_id)
-                .await;
+        let result = super::continuation_execution::invoke_continuation_for_invocation(
+            self,
+            &session_id,
+            &root_agent_id,
+            invocation_id.as_deref(),
+        )
+        .await;
         if let Err(error) = result {
             // An unstarted continuation must not leave the session hanging:
             // publish the crash lifecycle so state and UI converge. The raw

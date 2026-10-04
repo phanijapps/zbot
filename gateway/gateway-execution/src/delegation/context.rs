@@ -125,6 +125,7 @@ fn looks_like_direct_artifact(child_agent_id: &str, task_lower: &str) -> bool {
 /// COMPLETED before the subagent execution exists.
 #[derive(Debug, Clone)]
 pub struct DelegationRequest {
+    pub hook_invocation: Option<std::sync::Arc<agent_runtime::external_hooks::HookInvocation>>,
     /// ID of the parent agent initiating the delegation
     pub parent_agent_id: String,
     /// Session ID (shared across the entire conversation tree)

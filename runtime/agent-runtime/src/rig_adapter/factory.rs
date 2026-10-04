@@ -9,6 +9,8 @@ mod context_tests;
 #[cfg(test)]
 mod control_tests;
 #[cfg(test)]
+mod external_hook_tests;
+#[cfg(test)]
 mod live_context_tests;
 #[cfg(test)]
 mod mcp_tests;
@@ -83,6 +85,7 @@ pub fn build_engine(prepared: PreparedExecution, mut rig_config: RigAgentConfig)
         .with_single_action_mode(cfg.single_action_mode)
         .with_context_policy(policy.clone());
     RigAgentEngine::with_hooks(rig_config, model.erase(), tools, shared, hooks_arc)
+        .with_external_hooks(prepared.external_hooks)
         .with_execution_turn_limit(cfg.max_turns)
         .with_context_policy(policy)
         .with_result_context(crate::ToolResultContextConfig {

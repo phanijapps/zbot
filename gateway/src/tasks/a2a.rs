@@ -1186,6 +1186,7 @@ impl A2aOutboundPollHandler {
         }
         self.event_bus
             .publish(crate::events::GatewayEvent::SessionContinuationReady {
+                hook_invocation_id: None,
                 session_id: payload.source_session_id.clone(),
                 root_agent_id: root.agent_id,
                 root_execution_id: root.id,

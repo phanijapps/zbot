@@ -215,6 +215,7 @@ fn gateway_scenarios() -> Vec<Value> {
                     child_conversation_id: Some("child-conversation".to_string()),
                 },
                 GatewayEvent::SessionContinuationReady {
+                    hook_invocation_id: None,
                     session_id: SESSION_ID.to_string(),
                     root_agent_id: AGENT_ID.to_string(),
                     root_execution_id: EXECUTION_ID.to_string(),

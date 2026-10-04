@@ -176,7 +176,59 @@ impl ExecutionRunner {
     /// extend to a BFS over `get_children` if multi-level delegation
     /// becomes common.
     pub async fn stop(&self, conversation_id: &str) -> Result<(), ExecutionError> {
-        self.ctx.control.stop(conversation_id).await
+        let result = self.ctx.control.stop(conversation_id).await;
+        let owners = self
+            .ctx
+            .hook_invocations
+            .cancel_conversation(conversation_id);
+        let handle = self
+            .ctx
+            .control
+            .handles
+            .read()
+            .await
+            .get(conversation_id)
+            .cloned();
+        if let Some(handle) = handle {
+            for owner in owners {
+                let Some(session) = self
+                    .ctx
+                    .state_service
+                    .get_session(owner.session_id())
+                    .map_err(ExecutionError::from)?
+                else {
+                    continue;
+                };
+                // A root awaiting children has already yielded its stream; there
+                // is no live root loop left to perform the usual Stop settlement.
+                if session.pending_delegations == 0 {
+                    continue;
+                }
+                let Some(root) = self
+                    .ctx
+                    .state_service
+                    .get_root_execution(owner.session_id())
+                    .map_err(ExecutionError::from)?
+                else {
+                    continue;
+                };
+                if root.status.is_terminal() || !handle.claim_stop_settlement() {
+                    continue;
+                }
+                crate::lifecycle::stop_execution(crate::lifecycle::StopExecution {
+                    state_service: &self.ctx.state_service,
+                    log_service: &self.ctx.log_service,
+                    event_bus: &self.ctx.event_bus,
+                    execution_id: &root.id,
+                    session_id: owner.session_id(),
+                    agent_id: &root.agent_id,
+                    conversation_id,
+                    iteration: handle.current_iteration(),
+                })
+                .await;
+            }
+        }
+        result
     }
 
     /// Continue an execution after max iterations.
@@ -253,7 +305,9 @@ impl ExecutionRunner {
     ///
     /// Cancellation immediately stops the execution and marks it as cancelled.
     pub async fn cancel(&self, session_id: &str) -> Result<(), ExecutionError> {
-        self.ctx.control.cancel(session_id).await
+        let result = self.ctx.control.cancel(session_id).await;
+        self.ctx.hook_invocations.cancel_session(session_id);
+        result
     }
 
     /// Cancel one session and signal its exact conversation's delegation tree.
@@ -264,10 +318,13 @@ impl ExecutionRunner {
         session_id: &str,
         conversation_id: &str,
     ) -> Result<(), ExecutionError> {
-        self.ctx
+        let result = self
+            .ctx
             .control
             .cancel_exact(session_id, conversation_id)
-            .await
+            .await;
+        self.ctx.hook_invocations.cancel_session(session_id);
+        result
     }
 
     /// End a session (mark as completed).
@@ -275,7 +332,9 @@ impl ExecutionRunner {
     /// Called when user explicitly ends a session via /end, /new, or +new button.
     /// This marks the session as completed regardless of running executions.
     pub async fn end_session(&self, session_id: &str) -> Result<(), ExecutionError> {
-        self.ctx.control.end_session(session_id).await
+        let result = self.ctx.control.end_session(session_id).await;
+        self.ctx.hook_invocations.cancel_session(session_id);
+        result
     }
 
     /// Get execution handle for a conversation.

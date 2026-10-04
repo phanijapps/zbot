@@ -155,7 +155,7 @@ impl RuntimeService {
             checkpoints,
             mcp_service,
             skill_service,
-            log_service,
+            log_service: log_service.clone(),
             state_service,
             peer_messages,
             a2a_delegation,
@@ -174,6 +174,9 @@ impl RuntimeService {
         });
 
         // Initialize fallback-only model metadata registry.
+        runner.set_external_hook_activity_sink(Arc::new(
+            super::hook_activity::PersistHookActivity(log_service),
+        ));
         runner.set_model_registry(Arc::new(gateway_services::models::ModelRegistry::load()));
 
         if let Some(ks) = kg_store {

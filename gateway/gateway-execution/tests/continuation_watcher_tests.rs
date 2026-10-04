@@ -95,6 +95,7 @@ async fn watcher_invokes_session_on_continuation_ready_event() {
 
     f.bus
         .publish(GatewayEvent::SessionContinuationReady {
+            hook_invocation_id: None,
             session_id: session.id.clone(),
             root_agent_id: "test-agent".to_string(),
             root_execution_id: "exec-1".to_string(),
@@ -146,6 +147,7 @@ async fn watcher_continues_after_invoker_error() {
     // Publish two events — both should be handled despite the first failing.
     for i in 0..2u32 {
         bus.publish(GatewayEvent::SessionContinuationReady {
+            hook_invocation_id: None,
             session_id: format!("session-{i}"),
             root_agent_id: "test-agent".to_string(),
             root_execution_id: format!("exec-{i}"),

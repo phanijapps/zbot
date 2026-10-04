@@ -195,6 +195,7 @@ mod tests {
         bus.publish_session(
             "sess-123",
             GatewayEvent::SessionContinuationReady {
+                hook_invocation_id: None,
                 session_id: "sess-123".to_string(),
                 root_agent_id: "root".to_string(),
                 root_execution_id: "exec-1".to_string(),
@@ -220,6 +221,7 @@ mod tests {
         bus.publish_session(
             "sess-1",
             GatewayEvent::SessionContinuationReady {
+                hook_invocation_id: None,
                 session_id: "sess-1".to_string(),
                 root_agent_id: "root".to_string(),
                 root_execution_id: "exec-1".to_string(),

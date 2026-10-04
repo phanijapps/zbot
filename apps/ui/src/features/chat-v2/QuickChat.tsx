@@ -119,13 +119,14 @@ function refToArtifact(ref: QuickChatArtifactRef, sessionId: string): Artifact {
 const CLEAR_CONFIRM =
   "Clear this chat and start a new session? Past messages remain in Logs.";
 
-export function QuickChat({ onActive }: {onActive?: (active: boolean) => void} = {}) {
+export function QuickChat({ onActive, onSessionId }: {onActive?: (active: boolean) => void; onSessionId?: (sessionId: string | null) => void} = {}) {
   const { state, isActive, pillState, surfaces, sendMessage, stopAgent, clearSession } = useQuickChat();
   const endRef = useRef<HTMLDivElement | null>(null);
   const [viewing, setViewing] = useState<Artifact | null>(null);
 
   const active = isActive || state.status === "running" || (!state.sessionId && state.status !== "error");
   useEffect(() => { onActive?.(active); }, [active, onActive]);
+  useEffect(() => { onSessionId?.(state.sessionId); }, [state.sessionId, onSessionId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });

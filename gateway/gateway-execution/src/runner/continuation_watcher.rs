@@ -52,6 +52,7 @@ impl ContinuationWatcher {
                         session_id,
                         root_agent_id,
                         root_execution_id,
+                        hook_invocation_id,
                     }) => {
                         tracing::info!(
                             session_id = %session_id,
@@ -59,7 +60,8 @@ impl ContinuationWatcher {
                             root_execution_id = %root_execution_id,
                             "ContinuationWatcher: SessionContinuationReady received"
                         );
-                        Self::handle(&*invoker, session_id, root_agent_id).await;
+                        Self::handle(&*invoker, session_id, root_agent_id, hook_invocation_id)
+                            .await;
                     }
                     Ok(_) => {
                         // Ignore other events.
@@ -76,9 +78,14 @@ impl ContinuationWatcher {
         })
     }
 
-    async fn handle(invoker: &dyn ContinuationSpawner, session_id: String, root_agent_id: String) {
+    async fn handle(
+        invoker: &dyn ContinuationSpawner,
+        session_id: String,
+        root_agent_id: String,
+        invocation_id: Option<String>,
+    ) {
         if let Err(error) = invoker
-            .spawn_continuation(session_id.clone(), root_agent_id)
+            .spawn_continuation_for_invocation(session_id.clone(), root_agent_id, invocation_id)
             .await
         {
             tracing::error!(

@@ -8,6 +8,7 @@ import { ChatConversation, ResearchConversation, type PendingMessage } from "./C
 import { sessionMode, type SessionMode } from "./mode";
 import { DesktopRail } from "./DesktopRail";
 import { useRecentSessions } from "./useRecentSessions";
+import { ActivityPanel } from "./ActivityPanel";
 
 export function SessionShell({ initialSessionId }: {initialSessionId?: string} = {}) {
   const { sessionId: routeSessionId } = useParams<{sessionId: string}>();
@@ -24,6 +25,9 @@ export function SessionShell({ initialSessionId }: {initialSessionId?: string} =
   const routedPending = (location.state as { shellPendingMessage?: PendingMessage } | null)?.shellPendingMessage;
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [quickChatId, setQuickChatId] = useState<string | null>(null);
+  const [detailTab, setDetailTab] = useState("Activity");
+  const confirmedSessionId = sessionId ? record?.id === sessionId ? sessionId : undefined : search.get("mode") !== "research" ? quickChatId ?? undefined : undefined;
   const mode: SessionMode = sessionId ? sessionMode(record?.id === sessionId ? record.mode : undefined) : search.get("mode") === "research" ? "research" : "chat";
   const opening = Boolean(sessionId && record?.id !== sessionId && !error);
   const locked = loading || opening || busy || active;
@@ -98,14 +102,24 @@ export function SessionShell({ initialSessionId }: {initialSessionId?: string} =
         : mode === "unknown" ? <div className="session-shell__empty"><h1>This session's mode is unknown.</h1><p>Choose Chat or Research to start a new conversation. This one will be kept.</p></div>
         : mode === "research" ? <ResearchConversation key={sessionId ?? "new-research"} sessionId={sessionId} onActive={reportActive} />
         : sessionId ? <ChatConversation key={sessionId} sessionId={sessionId} pending={routedPending ?? null} onActive={reportActive} onSent={sent} />
-        : <QuickChat onActive={reportActive} />}
+        : <QuickChat onActive={reportActive} onSessionId={setQuickChatId} />}
     </main>
     <aside className="session-shell__details" aria-label="Session details">
       <h2>Workspace</h2>
       <div className="tab-bar" role="tablist" aria-label="Session detail panels">
-        {["Activity", "Sources", "Files"].map((name, index) => <button key={name} className="tab-bar__tab" role="tab" aria-selected={index === 0}>{name}</button>)}
+        {["Activity", "Sources", "Files"].map((name, index, tabs) => <button key={name} id={`session-details-${name.toLowerCase()}`} aria-controls="session-detail-panel" tabIndex={detailTab === name ? 0 : -1}
+          className={`tab-bar__tab${detailTab === name ? " tab-bar__tab--active" : ""}`} role="tab" aria-selected={detailTab === name} onClick={() => setDetailTab(name)}
+          onKeyDown={event => {
+            const next = event.key === "ArrowRight" ? (index + 1) % tabs.length : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : undefined;
+            if (next === undefined) return;
+            event.preventDefault(); setDetailTab(tabs[next]);
+            event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("button")[next]?.focus();
+          }}>{name}</button>)}
       </div>
-      <p className="session-shell__hint">Select a conversation to inspect its recorded details.</p>
+      <div id="session-detail-panel" role="tabpanel" aria-labelledby={`session-details-${detailTab.toLowerCase()}`} tabIndex={0}>
+        {detailTab === "Activity" ? <ActivityPanel sessionId={confirmedSessionId} active={active} />
+          : <p className="session-shell__hint">{detailTab} details will be available in the next session update.</p>}
+      </div>
       <button className="session-shell__mobile-close btn btn--ghost" onClick={() => setDetailsOpen(false)}>Close details</button>
     </aside>
   </div>;

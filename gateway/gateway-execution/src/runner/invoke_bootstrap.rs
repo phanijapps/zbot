@@ -17,6 +17,7 @@ use std::path::{Component, Path};
 use std::sync::Arc;
 
 use agent_primitives::vault_paths::SharedVaultPaths;
+use agent_runtime::external_hooks::HookSnapshot;
 use agent_runtime::{BoxedAgentEngine, ChatMessage, ContextActorKind, PreparedExecution};
 use gateway_events::GatewayEvent;
 use gateway_services::{McpService, SkillService};
@@ -62,6 +63,8 @@ impl InvokeBootstrap {
 /// this value, so the subscriber is registered before `AgentStarted`,
 /// `IntentAnalysisStarted`, and `IntentAnalysisComplete` fire.
 pub(super) struct PartialSetup {
+    pub(super) hooks: Arc<HookSnapshot>,
+    pub(super) accepted_hooks: super::external_hooks::AcceptedHooks,
     pub(super) session_id: String,
     pub(super) execution_id: String,
     /// Durable row for the prompt supplied to this invocation. Phase 2 omits
@@ -76,6 +79,8 @@ pub(super) struct PartialSetup {
 /// Output of [`InvokeBootstrap::finish_setup`]. Contains everything that lives
 /// across the seam between bootstrap and stream execution.
 pub(super) struct SetupResult {
+    pub(super) hook_invocation: Option<Arc<agent_runtime::external_hooks::HookInvocation>>,
+    pub(super) hook_retention: super::external_hooks::HookRetention,
     pub(super) session_id: String,
     pub(super) execution_id: String,
     /// Durable prompt row ID (phase-2 write). The engine receives its content
@@ -105,6 +110,7 @@ struct CreateExecutorArgs<'a> {
     user_message: Option<&'a str>,
     execution_id: &'a str,
     initial_recall_keys: std::collections::HashSet<String>,
+    external_hooks: Option<Arc<agent_runtime::external_hooks::HookRun>>,
 }
 
 /// Per-request services and settings gathered by
@@ -519,6 +525,12 @@ fn ward_purpose_blurb(agents_md: &str) -> Option<String> {
 // ============================================================================
 
 impl InvokeBootstrap {
+    async fn load_hooks_snapshot(&self) -> Result<Arc<HookSnapshot>, ExecutionError> {
+        HookSnapshot::load(&self.ctx.paths, &[self.ctx.paths.wards_dir()])
+            .await
+            .map_err(|error| ExecutionError::Config(error.to_string()))
+    }
+
     /// Phase 1: create or resume the session, persist routing, start the
     /// execution record, store the handle, and invoke the session-ready
     /// callback. Returns BEFORE any agent or intent events fire.
@@ -528,6 +540,7 @@ impl InvokeBootstrap {
         message: &str,
         on_session_ready: Option<OnSessionReady>,
     ) -> Result<PartialSetup, ExecutionError> {
+        let hooks = self.load_hooks_snapshot().await?;
         let handle = ExecutionHandle::new(config.max_iterations);
         let root_message_id = client_message_id(config);
 
@@ -625,6 +638,19 @@ impl InvokeBootstrap {
                 "Unable to start this request".to_string()
             })?;
 
+        let accepted_hooks = super::external_hooks::accept(
+            &self.ctx,
+            super::external_hooks::AcceptHooks {
+                snapshot: hooks.clone(),
+                session: &session_id,
+                execution: &execution_id,
+                message: &root_message_id,
+                config,
+                handle: &handle,
+                resume: false,
+            },
+        )?;
+
         // A terminal session is reopened only after its next root message is
         // durable. If persistence failed above, neither status nor delegation
         // bookkeeping is changed. Treat a reactivation failure as an invoke
@@ -695,6 +721,8 @@ impl InvokeBootstrap {
         }
 
         Ok(PartialSetup {
+            accepted_hooks,
+            hooks,
             session_id,
             execution_id,
             root_message_id,
@@ -715,6 +743,7 @@ impl InvokeBootstrap {
         expected_message_id: &str,
         on_session_ready: Option<OnSessionReady>,
     ) -> Result<PartialSetup, ExecutionError> {
+        let hooks = self.load_hooks_snapshot().await?;
         let session_id = config
             .session_id
             .clone()
@@ -766,6 +795,19 @@ impl InvokeBootstrap {
                 .map_err(|_| "durable_resume_mode_write_failed".to_string())?;
         }
 
+        let handle = ExecutionHandle::new(config.max_iterations);
+        let accepted_hooks = super::external_hooks::accept(
+            &self.ctx,
+            super::external_hooks::AcceptHooks {
+                snapshot: hooks.clone(),
+                session: &session_id,
+                execution: expected_execution_id,
+                message: expected_message_id,
+                config,
+                handle: &handle,
+                resume: true,
+            },
+        )?;
         if session.status == execution_state::SessionStatus::Paused {
             self.ctx
                 .state_service
@@ -790,7 +832,6 @@ impl InvokeBootstrap {
             None,
         );
 
-        let handle = ExecutionHandle::new(config.max_iterations);
         {
             let mut handles = self.ctx.control.handles.write().await;
             handles.insert(config.conversation_id.clone(), handle.clone());
@@ -800,6 +841,8 @@ impl InvokeBootstrap {
         }
 
         Ok(PartialSetup {
+            accepted_hooks,
+            hooks,
             session_id,
             execution_id: expected_execution_id.to_owned(),
             root_message_id: expected_message_id.to_owned(),
@@ -821,12 +864,34 @@ impl InvokeBootstrap {
         partial: PartialSetup,
     ) -> Result<SetupResult, ExecutionError> {
         let PartialSetup {
+            hooks,
+            accepted_hooks,
             session_id,
             execution_id,
             root_message_id,
             handle,
             ward_id,
         } = partial;
+
+        if accepted_hooks.ingress_required {
+            if let Some(run) = &accepted_hooks.run {
+                if run.ingress(accepted_hooks.session_start, message).await {
+                    self.ctx.hook_invocations.remove(run.invocation().id());
+                    return Err(ExecutionError::Config(
+                        "Request blocked by external hook".into(),
+                    ));
+                }
+            }
+        }
+        debug_assert!(accepted_hooks.run.as_ref().is_none_or(|run| run
+            .invocation()
+            .snapshot()
+            .revision()
+            == hooks.revision()));
+        let hook_invocation = accepted_hooks
+            .run
+            .as_ref()
+            .map(|run| run.invocation().clone());
 
         // Emit start event — subscriber is already registered at this point.
         emit_agent_started(
@@ -887,6 +952,7 @@ impl InvokeBootstrap {
                 user_message: Some(message),
                 execution_id: &execution_id,
                 initial_recall_keys,
+                external_hooks: accepted_hooks.run.clone(),
             })
             .await
         {
@@ -956,6 +1022,8 @@ impl InvokeBootstrap {
         }
 
         Ok(SetupResult {
+            hook_retention: accepted_hooks.retention,
+            hook_invocation,
             session_id,
             execution_id,
             root_message_id,
@@ -1460,14 +1528,16 @@ impl InvokeBootstrap {
             user_message,
             execution_id,
             initial_recall_keys,
+            external_hooks,
         } = args;
 
         // Phase 1: gather per-request services and settings.
         let inputs = self.collect_execution_inputs(config, provider).await;
 
         // Phase 2: construct the builder with every optional service wired.
-        let builder =
-            self.wire_builder_services(config, &agent.id, session_id, execution_id, &inputs);
+        let builder = self
+            .wire_builder_services(config, &agent.id, session_id, execution_id, &inputs)
+            .with_external_hooks(external_hooks);
 
         // Phase 3: intent analysis + agent/builder mutation.
         let outcome = self
@@ -1875,6 +1945,116 @@ impl InvokeBootstrap {
 mod tests {
     use super::*;
     use crate::middleware::intent::{ExecutionStrategy, WardRecommendation};
+
+    fn hooks_test_bootstrap(paths: Arc<VaultPaths>) -> InvokeBootstrap {
+        paths.ensure_dirs_exist().unwrap();
+        let db = Arc::new(DatabaseManager::new(paths.clone()).unwrap());
+        let pool = zbot_conversation::open_conversation_pool(&paths.conversations_db()).unwrap();
+        test_bootstrap(
+            paths,
+            db.clone(),
+            Arc::new(zbot_conversation::SqliteMessageStore::new(pool.clone())),
+            Arc::new(RwLock::new(HashMap::new())),
+            Arc::new(StateService::new(db.clone())),
+            Arc::new(LogService::new(db)),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Arc::new(zbot_conversation::SqliteSessionMetaStore::new(pool.clone())),
+            Arc::new(zbot_conversation::SqliteCheckpointStore::new(pool)),
+        )
+    }
+
+    fn write_test_hooks(paths: &VaultPaths, content: &str) {
+        std::fs::write(paths.hooks_config(), content).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(paths.hooks_config(), std::fs::Permissions::from_mode(0o600))
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_hooks_config_prevents_both_ingress_paths_from_activation() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = Arc::new(VaultPaths::new(temp.path().to_owned()));
+        let bootstrap = hooks_test_bootstrap(paths.clone());
+        write_test_hooks(&paths, "invalid operator content secret-sentinel");
+        let mut config =
+            ExecutionConfig::new("root".into(), "conversation".into(), temp.path().to_owned());
+        let result = bootstrap.begin_setup(&mut config, "hello", None).await;
+        assert!(result.is_err());
+        assert!(bootstrap
+            .ctx
+            .state_service
+            .list_sessions(&Default::default())
+            .unwrap()
+            .is_empty());
+        assert!(bootstrap.ctx.control.handles.read().await.is_empty());
+
+        std::fs::remove_file(paths.hooks_config()).unwrap();
+        let partial = bootstrap
+            .begin_setup(&mut config, "hello", None)
+            .await
+            .unwrap();
+        bootstrap
+            .ctx
+            .state_service
+            .pause_session(&partial.session_id)
+            .unwrap();
+        config.session_id = Some(partial.session_id.clone());
+        write_test_hooks(&paths, "invalid");
+        let result = bootstrap
+            .begin_setup_from_persisted(
+                &mut config,
+                "hello",
+                &partial.execution_id,
+                &partial.root_message_id,
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+        assert_eq!(
+            bootstrap
+                .ctx
+                .state_service
+                .get_session(&partial.session_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            execution_state::SessionStatus::Paused
+        );
+    }
+
+    #[tokio::test]
+    async fn accepted_ingress_freezes_config_until_next_root_message() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = Arc::new(VaultPaths::new(temp.path().to_owned()));
+        let bootstrap = hooks_test_bootstrap(paths.clone());
+        write_test_hooks(
+            &paths,
+            r#"{"version":1,"hooks":[{"id":"first","event":"run_start","command":["true"]}]}"#,
+        );
+        let mut config =
+            ExecutionConfig::new("root".into(), "conversation".into(), temp.path().to_owned());
+        let first = bootstrap
+            .begin_setup(&mut config, "hello", None)
+            .await
+            .unwrap();
+        write_test_hooks(&paths, r#"{"version":1,"hooks":[]}"#);
+        config.session_id = Some(first.session_id.clone());
+        let second = bootstrap
+            .begin_setup(&mut config, "next", None)
+            .await
+            .unwrap();
+        assert_eq!(first.hooks.hooks()[0].id, "first");
+        assert!(second.hooks.hooks().is_empty());
+        assert_ne!(first.hooks.revision(), second.hooks.revision());
+    }
     use agent_primitives::vault_paths::VaultPaths;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -1952,6 +2132,9 @@ mod tests {
             messages,
             session_meta: meta_store.clone(),
             checkpoints: checkpoint_store.clone(),
+            hook_invocations: Arc::new(
+                crate::runner::external_hooks::HookInvocationRegistry::default(),
+            ),
             control: super::super::session_control::SessionControl {
                 handles,
                 delegation_registry: Arc::new(DelegationRegistry::new()),

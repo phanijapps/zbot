@@ -1,0 +1,9 @@
+{
+  "session_id": "sess-synthetic-hook-proof",
+  "title": "External hook delegation proof",
+  "executions": [
+    {"execution_id": "exec-hook-root", "agent_id": "root", "parent_execution_id": null, "started_at_offset_ms": 0, "ended_at_offset_ms": 1000},
+    {"execution_id": "exec-hook-child", "agent_id": "builder-agent", "parent_execution_id": "exec-hook-root", "started_at_offset_ms": 200, "ended_at_offset_ms": 800}
+  ],
+  "artifacts": []
+}

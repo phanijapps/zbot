@@ -1,7 +1,7 @@
 # Plan: File-configured external hooks
 
 - **Spec:** [`spec.md`](spec.md)
-- **Status:** Approved
+- **Status:** Done
 
 ## Approach
 

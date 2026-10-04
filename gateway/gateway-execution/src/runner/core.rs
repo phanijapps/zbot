@@ -238,6 +238,13 @@ fn format_mid_session_recall_message(context: &str) -> String {
 }
 
 impl ExecutionRunner {
+    pub fn set_external_hook_activity_sink(
+        &self,
+        sink: Arc<dyn agent_runtime::external_hooks::HookActivitySink>,
+    ) {
+        self.ctx.hook_invocations.set_activity_sink(sink);
+    }
+
     /// Create a new execution runner from a [`ExecutionRunnerConfig`].
     ///
     /// Initializes the runner and spawns background tasks for processing
@@ -306,6 +313,9 @@ impl ExecutionRunner {
             messages,
             session_meta,
             checkpoints,
+            hook_invocations: Arc::new(
+                crate::runner::external_hooks::HookInvocationRegistry::default(),
+            ),
             control: super::session_control::SessionControl {
                 handles,
                 delegation_registry,
@@ -513,6 +523,8 @@ impl ExecutionRunner {
 
 #[cfg(test)]
 mod delegation_flow_tests;
+#[cfg(test)]
+mod external_hooks_tests;
 #[cfg(test)]
 mod golden_trace_tests;
 #[cfg(test)]

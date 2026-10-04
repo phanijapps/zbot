@@ -7,6 +7,7 @@ mod capability_catalog;
 pub mod groups;
 
 pub(crate) use bootstrap::FlatAppState;
+mod hook_defaults;
 pub(crate) mod persistence_factory;
 mod seeded_defaults;
 mod seeding;

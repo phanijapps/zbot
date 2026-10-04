@@ -34,6 +34,7 @@ pub enum ActivityKind {
     Error,
     MemoryRecall,
     MemoryWrite,
+    Hook,
 }
 
 #[derive(Debug, Serialize)]
@@ -44,6 +45,8 @@ pub struct ActivityRecord {
     pub kind: ActivityKind,
     pub label: &'static str,
     pub occurred_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hook: Option<api_logs::HookActivityMetadata>,
 }
 
 #[derive(Debug, Serialize)]
@@ -78,8 +81,9 @@ impl SessionDetails {
             .filter_map(|log| activity_class(log).map(|(kind, label)| (log, kind, label)))
             .collect();
         ordered.sort_by(|(left, _, _), (right, _, _)| {
-            left.timestamp
-                .cmp(&right.timestamp)
+            chrono::DateTime::parse_from_rfc3339(&left.timestamp)
+                .ok()
+                .cmp(&chrono::DateTime::parse_from_rfc3339(&right.timestamp).ok())
                 .then_with(|| left.id.cmp(&right.id))
         });
 
@@ -94,6 +98,7 @@ impl SessionDetails {
                 kind,
                 label,
                 occurred_at: log.timestamp.clone(),
+                hook: api_logs::HookActivityMetadata::from_log(log),
             })
             .collect();
         let activity_truncated = activity.len() > ACTIVITY_LIMIT;
@@ -136,6 +141,9 @@ pub fn safe_id(value: &str) -> bool {
 }
 
 fn activity_class(log: &ExecutionLog) -> Option<(ActivityKind, &'static str)> {
+    if let Some(hook) = api_logs::HookActivityMetadata::from_log(log) {
+        return Some((ActivityKind::Hook, hook.status.label()));
+    }
     match log.category {
         LogCategory::ToolCall => match log
             .metadata
@@ -248,5 +256,40 @@ mod tests {
         .unwrap();
         assert_eq!(value["activity"].as_array().unwrap().len(), 1);
         assert_eq!(value["activity"][0]["id"], "event-cont");
+    }
+
+    #[test]
+    fn malformed_or_private_hook_metadata_never_projects() {
+        let metadata = serde_json::json!({"hookId":"observe","event":"run_end","eventId":"event-1",
+            "invocationId":"invocation-1","agentId":"child","runId":null,"status":"completed","durationMs":12,"exitCode":0});
+        let mut valid = log(
+            "hook-valid",
+            LogCategory::System,
+            "/private/script.py secret",
+        );
+        valid.metadata = Some(serde_json::json!({"hook":metadata}));
+        let mut unknown = valid.clone();
+        unknown.id = "hook-unknown".into();
+        unknown.metadata.as_mut().unwrap()["hook"]["reason"] = "private sentinel".into();
+        let mut unsafe_id = valid.clone();
+        unsafe_id.id = "hook-unsafe".into();
+        unsafe_id.metadata.as_mut().unwrap()["hook"]["agentId"] = "/private/script.py".into();
+        let mut missing = valid.clone();
+        missing.id = "hook-missing".into();
+        missing.metadata.as_mut().unwrap()["hook"]
+            .as_object_mut()
+            .unwrap()
+            .remove("runId");
+        let projected = serde_json::to_value(SessionDetails::project(
+            "sess-1",
+            Some("fast"),
+            &[valid, unknown, unsafe_id, missing],
+        ))
+        .unwrap();
+        assert_eq!(projected["activity"].as_array().unwrap().len(), 1);
+        assert_eq!(projected["activity"][0]["kind"], "hook");
+        assert_eq!(projected["activity"][0]["label"], "Hook completed");
+        assert!(!projected.to_string().contains("private"));
+        assert!(!projected.to_string().contains("secret"));
     }
 }

@@ -135,6 +135,7 @@ pub fn handle_delegation(
 
     // Send request with pre-created execution_id
     let _ = ctx.delegation_tx.send(DelegationRequest {
+        hook_invocation: ctx.hook_invocation.clone(),
         parent_agent_id: ctx.agent_id.clone(),
         session_id: ctx.session_id.clone(),
         parent_execution_id: ctx.execution_id.clone(),

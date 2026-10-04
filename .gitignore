@@ -138,6 +138,11 @@ docs/*
 !docs/project-graph.html
 !docs/specs/
 !docs/specs/**
+!docs/guides/
+docs/guides/*
+!docs/guides/reference/
+docs/guides/reference/*
+!docs/guides/reference/external-hooks.md
 !docs/rfc/
 !docs/rfc/**
 !docs/architecture/

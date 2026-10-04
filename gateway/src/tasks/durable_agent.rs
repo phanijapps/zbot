@@ -390,7 +390,11 @@ impl DurableAgentTaskService {
             .map_err(|_| AgentTaskCancelError::Unauthorized)?;
         validate_bounded_identifier(conversation_id, MAX_CONVERSATION_ID_BYTES)
             .map_err(|_| AgentTaskCancelError::Unauthorized)?;
+        // Legacy reserved Chat is a live execution, not a queued Research job.
+        // Admit its existing spelling so a missing job can reach live cancellation;
+        // an actual queued job still requires exact persisted provenance below.
         validate_prefixed_uuid(session_id, "sess-")
+            .or_else(|_| validate_prefixed_uuid(session_id, "sess-chat-"))
             .map_err(|_| AgentTaskCancelError::Unauthorized)?;
         let scope = execution_state::WorkScope::new(
             AGENT_TASK_SOURCE,
@@ -997,6 +1001,79 @@ mod tests {
             execution_id: "exec-550e8400-e29b-41d4-a716-446655440001".to_owned(),
             message_id: "msg-550e8400-e29b-41d4-a716-446655440002".to_owned(),
         }
+    }
+
+    fn cancellation_service() -> (tempfile::TempDir, DurableAgentTaskService) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::state::AppState::minimal(dir.path().to_owned());
+        let service = DurableAgentTaskService::new(
+            state.durable_work_store(),
+            state.durable_work_transport(),
+            state.state_service().clone(),
+            state.agents().clone(),
+            state.messages(),
+            "node-local",
+        );
+        (dir, service)
+    }
+
+    #[test]
+    fn cancellation_legacy_chat_without_research_job_reaches_live_runtime() {
+        let (_dir, service) = cancellation_service();
+        assert_eq!(
+            service.cancel_research(
+                "connection-1",
+                "chat-1",
+                "sess-chat-550e8400-e29b-41d4-a716-446655440000"
+            ),
+            Ok(AgentTaskCancelOutcome::NotFound)
+        );
+    }
+
+    #[test]
+    fn cancellation_rejects_malformed_session_identities() {
+        let (_dir, service) = cancellation_service();
+        for id in [
+            "",
+            "sess-chat-not-a-uuid",
+            "sess-chat-550e8400-e29b-41d4-a716-446655440000/other",
+            "sess-not-a-uuid",
+        ] {
+            assert_eq!(
+                service.cancel_research("connection-1", "chat-1", id),
+                Err(AgentTaskCancelError::Unauthorized)
+            );
+        }
+    }
+
+    #[test]
+    fn cancellation_keeps_queued_actor_conversation_and_session_provenance_protected() {
+        let (_dir, service) = cancellation_service();
+        let task = valid_task();
+        let envelope =
+            authorized_envelope(serde_json::to_value(&task).unwrap(), &task.conversation_id);
+        service.store.enqueue(&envelope).unwrap();
+        assert_eq!(
+            service.cancel_research("other-actor", &task.conversation_id, &task.session_id),
+            Ok(AgentTaskCancelOutcome::NotFound)
+        );
+        assert_eq!(
+            service.cancel_research("connection-1", "other-conversation", &task.session_id),
+            Ok(AgentTaskCancelOutcome::NotFound)
+        );
+        for id in [
+            "sess-550e8400-e29b-41d4-a716-446655440099",
+            "sess-chat-550e8400-e29b-41d4-a716-446655440000",
+        ] {
+            assert_eq!(
+                service.cancel_research("connection-1", &task.conversation_id, id),
+                Err(AgentTaskCancelError::Unauthorized)
+            );
+        }
+        assert_eq!(
+            service.cancel_research("connection-1", &task.conversation_id, &task.session_id),
+            Ok(AgentTaskCancelOutcome::Canceled)
+        );
     }
 
     #[test]

@@ -13,6 +13,8 @@ use std::sync::Arc;
 pub struct ExecutionHandle {
     /// Flag to signal stop
     stop_flag: Arc<AtomicBool>,
+    /// Shared Stop settlement ownership across a hook-enabled root and control.
+    stop_settled: Arc<AtomicBool>,
     /// Flag to signal pause
     pause_flag: Arc<AtomicBool>,
     /// Flag to signal cancel
@@ -28,6 +30,7 @@ impl ExecutionHandle {
     pub fn new(max_iterations: u32) -> Self {
         Self {
             stop_flag: Arc::new(AtomicBool::new(false)),
+            stop_settled: Arc::new(AtomicBool::new(false)),
             pause_flag: Arc::new(AtomicBool::new(false)),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             iteration: Arc::new(AtomicU32::new(0)),
@@ -50,6 +53,10 @@ impl ExecutionHandle {
     /// Check if stop was requested.
     pub fn is_stop_requested(&self) -> bool {
         self.stop_flag.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn claim_stop_settlement(&self) -> bool {
+        !self.stop_settled.swap(true, Ordering::SeqCst)
     }
 
     /// Get a cloned `Arc` to the underlying stop flag.

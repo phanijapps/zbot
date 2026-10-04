@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- File-configured external hooks in `<vault>/config/hooks.json` can run Python,
+  Node `.mjs`, or native programs at agent lifecycle events. Session Activity
+  shows bounded hook outcomes after reload. Execution currently supports Linux
+  with systemd as PID 1; setup examples document permissions and limits.
+
 - **Agent-driven intent analysis** — a small intent agent searches indexed
   resources itself (skills, agents, wards, procedures) and returns a JSON
   contract including `solution_path` (seeds the planner) and task

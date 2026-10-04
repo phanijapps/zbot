@@ -15,6 +15,7 @@ pub(super) mod core;
 mod delegation_dispatcher;
 pub(crate) mod exec_ctx;
 mod execution_stream;
+pub(crate) mod external_hooks;
 mod initial_execution;
 pub(crate) mod integrations;
 mod invoke_bootstrap;

@@ -10,6 +10,7 @@ mod mcp_tools;
 /// Session setup data. This type does not execute model or tool turns.
 pub struct PreparedExecution {
     /// Adapter construction metadata, separate from shared execution policy.
+    pub external_hooks: Option<Arc<crate::external_hooks::HookRun>>,
     pub rig_config: Option<crate::rig_adapter::RigAgentConfig>,
     pub config: ExecutorConfig,
     pub llm_client: Arc<dyn LlmClient>,
@@ -30,6 +31,7 @@ impl PreparedExecution {
         middleware_pipeline: Arc<MiddlewarePipeline>,
     ) -> Self {
         Self {
+            external_hooks: None,
             rig_config: None,
             config,
             llm_client,

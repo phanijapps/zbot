@@ -64,6 +64,10 @@ fastembed = { version = "4", default-features = false, features = ["hf-hub-rustl
 # Tokenization — real tokenizer for middleware token counting
 tiktoken-rs = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+# Existing workspace process-control dependency, also used by agent-tools.
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 tokio-test = "0.4"

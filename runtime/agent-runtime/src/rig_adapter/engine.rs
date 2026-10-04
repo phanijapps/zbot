@@ -40,6 +40,7 @@ pub struct RigAgentEngine {
     hooks: Arc<HookSet>,
     result_context: crate::ToolResultContextConfig,
     context_policy: Option<Arc<super::context_policy::ContextPolicy>>,
+    external_hooks: Option<Arc<crate::external_hooks::HookRun>>,
 }
 
 impl RigAgentEngine {
@@ -118,6 +119,7 @@ impl RigAgentEngine {
             hooks,
             result_context: crate::ToolResultContextConfig::default(),
             context_policy: None,
+            external_hooks: None,
         }
     }
 
@@ -138,6 +140,14 @@ impl RigAgentEngine {
         policy: Arc<super::context_policy::ContextPolicy>,
     ) -> Self {
         self.context_policy = Some(policy);
+        self
+    }
+
+    pub(super) fn with_external_hooks(
+        mut self,
+        hooks: Option<Arc<crate::external_hooks::HookRun>>,
+    ) -> Self {
+        self.external_hooks = hooks;
         self
     }
 
@@ -172,10 +182,42 @@ impl RigAgentEngine {
         stop_flag: Option<Arc<AtomicBool>>,
         on_event: &mut StreamEventSink<'_>,
     ) -> Result<(), ExecutorError> {
+        let settlement = self
+            .external_hooks
+            .clone()
+            .map(crate::external_hooks::HookSettlementGuard::new);
         let cleanup = self.resources.as_ref().map(SessionResources::for_run);
-        let result = self
+        let mut result = self
             .run_inner(user_message, history, stop_flag, on_event)
             .await;
+        if self
+            .external_hooks
+            .as_ref()
+            .is_some_and(|run| run.blocked())
+            && !matches!(result, Err(ExecutorError::Stopped))
+        {
+            result = Err(ExecutorError::ConfigError(
+                "Execution blocked by external hook".into(),
+            ));
+        }
+        if let Some(settlement) = settlement {
+            use crate::external_hooks::HookRunStatus;
+            let stopped = matches!(result, Err(ExecutorError::Stopped));
+            let status = if stopped {
+                HookRunStatus::Cancelled
+            } else if self
+                .external_hooks
+                .as_ref()
+                .is_some_and(|run| run.blocked())
+            {
+                HookRunStatus::Blocked
+            } else if result.is_err() {
+                HookRunStatus::Failed
+            } else {
+                HookRunStatus::Completed
+            };
+            settlement.finish(status, stopped).await;
+        }
         if let Some(policy) = &self.context_policy {
             if let Some(state) = policy.checkpoint() {
                 on_event(StreamEvent::ContextState {
@@ -244,6 +286,7 @@ impl RigAgentEngine {
                 context_config: self.result_context.clone(),
                 events: Some(lifecycle_tx),
                 stop: stop_flag.clone(),
+                external_hooks: self.external_hooks.clone(),
             })
             .add_hook(TurnLimitHook {
                 limit: self.hard_turn_limit,

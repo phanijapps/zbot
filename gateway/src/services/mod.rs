@@ -9,5 +9,6 @@
 pub use gateway_services::*;
 
 // RuntimeService stays in gateway (depends on execution types)
+mod hook_activity;
 pub mod runtime;
 pub use runtime::RuntimeService;

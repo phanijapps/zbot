@@ -16,6 +16,7 @@ use tokio::sync::{mpsc, Semaphore};
 
 fn make_request(session_id: &str, child_agent_id: &str, task: &str) -> DelegationRequest {
     DelegationRequest {
+        hook_invocation: None,
         parent_agent_id: "root".into(),
         session_id: session_id.into(),
         parent_execution_id: "exec-root".into(),

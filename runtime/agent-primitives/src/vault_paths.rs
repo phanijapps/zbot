@@ -61,6 +61,16 @@ impl VaultPaths {
         self.vault_dir.join("config").join("settings.json")
     }
 
+    /// Operator-managed external lifecycle hooks.
+    pub fn hooks_config(&self) -> PathBuf {
+        self.config_dir().join("hooks.json")
+    }
+
+    /// Local editor schema for external hooks; never fetched at runtime.
+    pub fn hooks_schema(&self) -> PathBuf {
+        self.config_dir().join("hooks.schema.json")
+    }
+
     /// Path to `config/providers.json`
     pub fn providers(&self) -> PathBuf {
         self.vault_dir.join("config").join("providers.json")
@@ -459,6 +469,11 @@ mod tests {
         assert_eq!(
             paths.settings(),
             dir.path().join("config").join("settings.json")
+        );
+        assert_eq!(paths.hooks_config(), dir.path().join("config/hooks.json"));
+        assert_eq!(
+            paths.hooks_schema(),
+            dir.path().join("config/hooks.schema.json")
         );
         assert_eq!(
             paths.providers(),
