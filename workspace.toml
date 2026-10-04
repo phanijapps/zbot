@@ -68,6 +68,13 @@ open = [
   # precedence correction or a config-only AC13 amendment. Docker entrypoint
   # (--host 0.0.0.0) demotion on fresh volumes rides on the same decision.
   { slug = "cli-host-bind-precedence", source = "spec/desktop-session-completion AC1" },
+  # User-reported 2026-10-04 against the LIVE bot instance (not the test
+  # harness): /session only partially styled and the Activity/Sources/Files
+  # tabs not working there. The delivered inspector work rides on PR #279
+  # (feat/desktop-session-completion), which is unmerged — the live daemon
+  # serves an older build. Re-verify on the live instance after #279 merges
+  # and the bot updates; same live-instance verification gap as the hook run.
+  { slug = "live-session-tabs-verification", source = "user-observation/2026-10-04" },
   # cargo deny check fails because services/distillation/Cargo.toml declares no
   # package license. Reconcile metadata with the existing workspace license.
   { slug = "pre-existing-distillation-license", source = "pre-flight/2026-10-03-ci-recovery" },
