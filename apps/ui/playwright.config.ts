@@ -4,6 +4,7 @@ export const E2E_SUITE_FILES = {
   required: [
     'navigation.spec.ts',
     'persistent-surfaces.spec.ts',
+    'slide-panel-layout.spec.ts',
     'smoke.spec.ts',
   ],
   'live-daemon': [

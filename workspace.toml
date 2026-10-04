@@ -14,6 +14,10 @@ shipped = []
 
 [backlog]
 open = [
+  # pre-existing: ResearchPage.test.tsx:570 expects stopAgent on click, but the
+  # isolated test and full UI suite both observe no call; unrelated to slide panel CSS.
+  # Repair the Stop test/behavior against the current cancellation contract.
+  { slug = "pre-existing-research-stop-assertion", source = "pre-flight/2026-09-27" },
   # pre-existing: gateway/tests/saved_surfaces.rs:66 expects a bare surface; the API returns its session/execution/time envelope.
   # Fix the baseline fixture against the current persisted-surface API contract and rerun the workspace test gate.
   { slug = "pre-existing-saved-surfaces-envelope", source = "pre-flight/2026-09-06" },
