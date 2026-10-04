@@ -1,6 +1,6 @@
 # Spec: Complete and styled graph exploration
 
-- **Status:** Approved
+- **Status:** Implementing
 - **Owner:** @videogamer
 - **Plan:** [`plan.md`](plan.md)
 - **Constrained by:** Existing KnowledgeGraphStore/Engram adapter and Observatory contracts (current implementation); [RFC-0021](../../rfc/0021-conversation-first-desktop-agent.md) desktop local-caller posture
