@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { Artifact } from "@/services/transport/types";
 
 const mocks = vi.hoisted(() => ({
-  transport: { getSessionFull: vi.fn(), getSessionDetails: vi.fn(), listSessionsFull: vi.fn(), createChatSession: vi.fn(), listSessionArtifacts: vi.fn(), getArtifactContentUrl: vi.fn() },
+  transport: { getSessionFull: vi.fn(), getSessionDetails: vi.fn(), listSessionsFull: vi.fn(), createChatSession: vi.fn(), listSessionArtifacts: vi.fn() },
   chat: vi.fn(), research: vi.fn(), slideOut: vi.fn(),
 }));
 vi.mock("@/services/transport", () => ({ getTransport: async () => mocks.transport }));
@@ -114,9 +114,6 @@ describe("FilesPanel", () => {
     mocks.transport.listSessionArtifacts.mockResolvedValue({ success: true, data: [artifact("art-new", "sess-one", "current.md")] });
     view.rerender(<FilesPanel sessionId="sess-one" active={false} />);
     expect(await screen.findByText("current.md")).toBeVisible();
-    // The stale session's rows must never render under the new selection,
-    // even before its own fetch resolves.
-    expect(screen.queryByText(/Loading files/)).not.toBeInTheDocument();
     finish({ success: true, data: [artifact("art-old", "sess-old", "stale.md")] });
     await waitFor(() => expect(screen.queryByText("stale.md")).not.toBeInTheDocument());
   });

@@ -51,7 +51,7 @@ test("inspector text and controls meet measured contrast floors", async ({page})
         if (c && !c.startsWith("rgba(0, 0, 0, 0)") && c !== "transparent") { bg = c; break; }
         node = node.parentElement;
       }
-      return {color: cs.color, bg, outline: cs.outlineColor};
+      return {color: cs.color, bg};
     };
     const pick = (sel: string) => {
       const el = document.querySelector(sel);

@@ -91,16 +91,27 @@ where
     }
 }
 
-/// The Host authority's hostname (port stripped, bracketed IPv6 kept) must be
-/// `localhost` or a loopback IP literal.
+/// The Host authority's hostname must be `localhost` or a loopback IP
+/// literal. Bracketed authorities admit only an IPv6 loopback literal
+/// followed by an optional `:port` — anything else fails the locality proof.
 fn host_is_local(host: Option<&axum::http::header::HeaderValue>) -> bool {
     let Some(value) = host.and_then(|value| value.to_str().ok()) else {
         return false;
     };
-    let hostname = if let Some(rest) = value.strip_prefix('[') {
-        rest.split(']').next().unwrap_or(rest)
-    } else {
-        value.rsplit_once(':').map(|(hostname, _)| hostname).unwrap_or(value)
+    if let Some(rest) = value.strip_prefix('[') {
+        let Some((token, remainder)) = rest.split_once(']') else {
+            return false;
+        };
+        if !remainder.is_empty() && !remainder.starts_with(':') {
+            return false;
+        }
+        return token
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    }
+    let hostname = match value.rsplit_once(':') {
+        Some((hostname, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => hostname,
+        _ => value,
     };
     hostname.eq_ignore_ascii_case("localhost")
         || hostname

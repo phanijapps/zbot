@@ -241,7 +241,8 @@ async fn details_rejects_rebinding_host_even_with_matching_origin() {
     assert_eq!(body["error"].as_str().unwrap(), "session details unavailable");
 
     // Loopback-literal Host authorities (with or without port) stay usable
-    // for browser callers addressing the gateway directly.
+    // for browser callers addressing the gateway directly; conforming-only
+    // bracketed IPv6 with a loopback literal.
     for host in ["127.0.0.1", "127.0.0.1:18791", "localhost:18791", "[::1]:18791"] {
         let allowed = server
             .get("/api/sessions/sess-test/details")
@@ -249,6 +250,16 @@ async fn details_rejects_rebinding_host_even_with_matching_origin() {
             .add_header("origin", format!("http://{host}"))
             .await;
         allowed.assert_status_ok();
+    }
+    // Non-conforming or foreign authorities fail the locality proof even with
+    // a matching Origin.
+    for host in ["[localhost]:18791", "[::1]attacker.example", "localhost.attacker.example", "127.0.0.1.attacker.example", "attacker.example:127.0.0.1"] {
+        let denied = server
+            .get("/api/sessions/sess-test/details")
+            .add_header("host", host)
+            .add_header("origin", format!("http://{host}"))
+            .await;
+        denied.assert_status(StatusCode::FORBIDDEN);
     }
 }
 
