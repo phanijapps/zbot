@@ -38,4 +38,11 @@ describe("ArtifactSlideOut", () => {
     expect(screen.getByRole("link", { name: /Download report\.docx/i })).toBeTruthy();
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
   });
+
+  it("shows a bounded unavailable state when artifact content is denied", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 403 }));
+    const denied: Artifact = { ...OFFICE_ARTIFACT, fileName: "secret.md", fileType: "md" };
+    render(<ArtifactSlideOut artifact={denied} onClose={vi.fn()} />);
+    expect(await screen.findByText(/Unable to load this artifact \(HTTP 403\)/i)).toBeTruthy();
+  });
 });
