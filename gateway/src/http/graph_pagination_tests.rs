@@ -1,6 +1,6 @@
 //! Red stubs for the graph-exploration pagination contract (spec
 //! observatory-graph-completeness AC1). Today the cross-agent routes report
-//! `total` as the page length and carry no `nextOffset`; these tests stay red
+//! `total` as the page length and carry no `next_offset`; these tests stay red
 //! until T2 lands the contract surface.
 
 use std::{net::IpAddr, sync::Arc};
@@ -65,7 +65,7 @@ async fn all_entities_total_is_exact_scope_count_with_next_offset() {
     assert_eq!(body["total"].as_u64(), Some(3), "total must be the exact scope count");
     assert!(
         body.get("next_offset").is_some_and(|v| !v.is_null()),
-        "a page with more rows must carry nextOffset"
+        "a page with more rows must carry next_offset"
     );
 }
 

@@ -314,11 +314,11 @@ describe("useBackfill", () => {
 // ---------------------------------------------------------------------------
 // STUB: AC1/AC2 — progressive paged loading beyond the first page.
 // Red today: useGraphData fetches one page (limit 200) and never follows
-// nextOffset. The stub serves two pages through the transport and asserts a
+// next_offset. The stub serves two pages through the transport and asserts a
 // duplicate-free merged traversal with a truthful complete state.
 // ---------------------------------------------------------------------------
 describe("useGraphData progressive paging (stub)", () => {
-  it("follows nextOffset pages and merges entities without duplicates", async () => {
+  it("follows next_offset pages and merges entities without duplicates", async () => {
     const page = (offset: number) => ({
       success: true,
       data: {
