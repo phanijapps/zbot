@@ -65,6 +65,7 @@ pub struct ExecutionStream {
 /// Constructed by callers as part of session setup and passed verbatim to
 /// [`ExecutionStream::run`].
 pub struct ExecutionContext {
+    pub hook_invocation: Option<Arc<agent_runtime::external_hooks::HookInvocation>>,
     pub mode: ExecutionMode,
     pub execution_id: String,
     pub session_id: String,
@@ -270,6 +271,7 @@ impl ExecutionStream {
         executor: BoxedAgentEngine,
     ) -> Result<(), String> {
         let ExecutionContext {
+            hook_invocation,
             mode,
             execution_id,
             session_id,
@@ -285,6 +287,7 @@ impl ExecutionStream {
             recommended_skills,
             model_info,
         } = ctx;
+        let configured_hooks = hook_invocation.is_some();
 
         // Create batch writer for non-blocking DB writes.
         let batch_writer = spawn_batch_writer_with_traces(
@@ -317,6 +320,7 @@ impl ExecutionStream {
             self.delegation_tx.clone(),
             self.paths.vault_dir().clone(),
         )
+        .with_hook_invocation(hook_invocation)
         .with_batch_writer(batch_writer.clone())
         .with_recommended_skills(recommended_skills.clone())
         .with_model_info(model_info)
@@ -765,7 +769,7 @@ impl ExecutionStream {
         }
 
         // Check if stopped
-        if handle.is_stop_requested() {
+        if handle.is_stop_requested() && (!configured_hooks || handle.claim_stop_settlement()) {
             stop_execution(StopExecution {
                 state_service: &self.state_service,
                 log_service: &self.log_service,

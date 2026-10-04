@@ -17,6 +17,18 @@ impl ExecutionRunner {
             .as_ref()
             .ok_or("No child_session_id on crashed execution")?;
 
+        let hook_identity = self
+            .ctx
+            .session_meta
+            .hook_invocation_identity(child_session_id)
+            .map_err(|_| ExecutionError::Config("hook_invocation_unavailable".into()))?;
+        let hook_invocation = match hook_identity {
+            Some((id, _)) => {
+                super::external_hooks::resolve(&self.ctx, session_id, Some(&id)).await?
+            }
+            None => None,
+        };
+
         // 1. Reactivate root session and execution.
         if self
             .ctx
@@ -113,6 +125,7 @@ impl ExecutionRunner {
             .unwrap_or_else(|| "root".to_string());
 
         let request = DelegationRequest {
+            hook_invocation,
             parent_agent_id: root_agent_id,
             session_id: session_id.to_string(),
             parent_execution_id: parent_execution_id.clone(),

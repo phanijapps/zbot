@@ -1682,19 +1682,87 @@ components:
       properties:
         id:
           type: string
+          minLength: 1
+          maxLength: 128
           pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         sequence:
           type: integer
           minimum: 0
+        turnId:
+          type: string
+          nullable: true
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         kind:
           type: string
-          enum: [plan, tool, delegation, error, memory_recall, memory_write]
+          enum: [plan, tool, delegation, error, memory_recall, memory_write, hook]
         label:
           type: string
           maxLength: 160
         occurredAt:
           type: string
           format: date-time
+        memoryRecordId:
+          type: string
+          nullable: true
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        hook:
+          $ref: '#/components/schemas/HookActivity'
+      oneOf:
+        - properties:
+            kind:
+              type: string
+              enum: [hook]
+          required: [hook]
+        - properties:
+            kind:
+              type: string
+              enum: [plan, tool, delegation, error, memory_recall, memory_write]
+          not:
+            required: [hook]
+
+    HookActivity:
+      type: object
+      additionalProperties: false
+      required: [hookId, event, eventId, invocationId, agentId, runId, status, durationMs, exitCode]
+      properties:
+        hookId:
+          type: string
+          pattern: '^[a-z][a-z0-9-]{0,63}$'
+        event:
+          type: string
+          enum: [session_start, user_prompt, run_start, run_end, before_model, after_model, before_tool, after_tool, invalid_tool_call]
+        eventId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        invocationId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        agentId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        runId:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 128
+        status:
+          type: string
+          enum: [running, completed, blocked, failed, timeout, cancelled, skipped]
+        durationMs:
+          type: integer
+          nullable: true
+          minimum: 0
+        exitCode:
+          type: integer
+          nullable: true
+      description: Bounded persisted metadata only. Activity id identifies one command invocation,
+        updated from running to settled with the same id/sequence. runId is null at ingress.
+        Labels use fixed server strings; no response reason, arguments, payloads, diagnostics or paths.
 
     SessionSourceRecord:
       type: object

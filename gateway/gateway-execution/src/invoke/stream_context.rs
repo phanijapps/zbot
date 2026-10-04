@@ -25,6 +25,7 @@ use super::batch_writer::BatchWriterHandle;
 /// stream events during agent execution.
 #[derive(Clone)]
 pub struct StreamContext {
+    pub(crate) hook_invocation: Option<Arc<agent_runtime::external_hooks::HookInvocation>>,
     /// Agent ID
     pub agent_id: String,
     /// Conversation ID (for gateway events)
@@ -78,6 +79,7 @@ impl StreamContext {
         vault_dir: PathBuf,
     ) -> Self {
         Self {
+            hook_invocation: None,
             agent_id,
             conversation_id,
             session_id,
@@ -94,6 +96,14 @@ impl StreamContext {
             model_info: None,
             memory_store: None,
         }
+    }
+
+    pub(crate) fn with_hook_invocation(
+        mut self,
+        owner: Option<Arc<agent_runtime::external_hooks::HookInvocation>>,
+    ) -> Self {
+        self.hook_invocation = owner;
+        self
     }
 
     /// Stamp the (provider, model) identity on every trace event this

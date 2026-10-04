@@ -499,6 +499,17 @@ export interface IntentAnalysisConfig {
 // ============================================================================
 
 /** Safe, redacted server projection for the conversation-shell inspector. */
+export interface HookActivity {
+  hookId: string;
+  event: "session_start" | "user_prompt" | "run_start" | "run_end" | "before_model" | "after_model" | "before_tool" | "after_tool" | "invalid_tool_call";
+  eventId: string;
+  invocationId: string;
+  agentId: string;
+  runId: string | null;
+  status: "running" | "completed" | "blocked" | "failed" | "timeout" | "cancelled" | "skipped";
+  durationMs: number | null;
+  exitCode: number | null;
+}
 export interface SessionDetails {
   sessionId: string;
   mode: "chat" | "research" | "unknown";
@@ -506,7 +517,8 @@ export interface SessionDetails {
     id: string;
     sequence: number;
     turnId?: string | null;
-    kind: "plan" | "tool" | "delegation" | "error" | "memory_recall" | "memory_write";
+    kind: "plan" | "tool" | "delegation" | "error" | "memory_recall" | "memory_write" | "hook";
+    hook?: HookActivity;
     label: string;
     occurredAt: string;
     memoryRecordId?: string | null;

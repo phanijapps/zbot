@@ -51,6 +51,9 @@ pub mod middleware;
 /// Gateway-facing execution facade
 pub mod engine;
 
+/// Operator-configured external hook protocol and execution.
+pub mod external_hooks;
+
 /// Rig adapter boundary
 pub mod rig_adapter;
 

@@ -251,6 +251,8 @@ pub enum GatewayEvent {
     /// Emitted when the last pending delegation completes and the session
     /// has requested continuation.
     SessionContinuationReady {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hook_invocation_id: Option<String>,
         session_id: String,
         root_agent_id: String,
         /// The execution ID that should be continued

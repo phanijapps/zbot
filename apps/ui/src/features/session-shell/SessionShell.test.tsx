@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 const mocks = vi.hoisted(() => ({
-  transport: { getSessionFull: vi.fn(), listSessionsFull: vi.fn(), createChatSession: vi.fn() },
+  transport: { getSessionFull: vi.fn(), getSessionDetails: vi.fn(), listSessionsFull: vi.fn(), createChatSession: vi.fn() },
   chat: vi.fn(), research: vi.fn(),
   liveChats: 0, maxLiveChats: 0,
 }));
@@ -32,6 +32,7 @@ beforeEach(() => {
   mocks.liveChats = 0; mocks.maxLiveChats = 0;
   Element.prototype.scrollIntoView = vi.fn();
   mocks.transport.listSessionsFull.mockResolvedValue({ success: true, data: [] });
+  mocks.transport.getSessionDetails.mockImplementation(async (sessionId: string) => ({success:true,data:{sessionId,mode:"chat",activity:[],activityTruncated:false,sources:[],sourcesTruncated:false}}));
   mocks.transport.getSessionFull.mockResolvedValue({ success: true, data: { id: "sess-1", mode: "fast", title: "Earlier chat", executions: [] } });
   mocks.transport.createChatSession.mockResolvedValue({ success: true, data: { sessionId: "sess-new", conversationId: "sess-new", created: true, isLive: false } });
   mocks.chat.mockReturnValue({ state: {sessionId:"sess-1", status:"idle", messages:[{id:"answer", content:"Restored Chat answer"}], artifacts:[]}, isActive:false, surfaces:[], pillState:{}, sendMessage:vi.fn(), stopAgent:vi.fn() });
@@ -54,6 +55,15 @@ describe("SessionShell", () => {
     expect(mocks.chat).toHaveBeenCalledWith({sessionId:"sess-1"});
     expect(screen.getByRole("tab", {name:"Chat"})).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(mocks.liveChats).toBe(1));
+    expect(mocks.maxLiveChats).toBe(1);
+  });
+
+  it("uses the default QuickChat confirmed ID for Activity without bootstrap or remount", async () => {
+    render(<MemoryRouter><SessionShell /></MemoryRouter>);
+    await waitFor(() => expect(mocks.transport.getSessionDetails).toHaveBeenCalledWith("sess-1"));
+    expect(mocks.transport.getSessionFull).not.toHaveBeenCalled();
+    expect(mocks.transport.createChatSession).not.toHaveBeenCalled();
+    expect(mocks.liveChats).toBe(1);
     expect(mocks.maxLiveChats).toBe(1);
   });
 

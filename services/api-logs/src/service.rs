@@ -34,6 +34,19 @@ impl<D: DbProvider> LogService<D> {
         self.repo.insert_log(&entry)
     }
 
+    pub fn log_hook_activity(&self, record: &crate::HookLogRecord) -> Result<(), String> {
+        self.repo
+            .upsert_hook_log(&record.validated_log()?)
+            .map_err(|_| "Hook activity unavailable".into())
+    }
+
+    /// Startup-only recovery: settle metadata, never execute or replay programs.
+    pub fn recover_interrupted_hook_activity(&self) -> Result<usize, String> {
+        self.repo
+            .recover_hook_logs()
+            .map_err(|_| "Hook activity unavailable".into())
+    }
+
     /// Log multiple entries in a batch.
     pub fn log_batch(&self, entries: Vec<ExecutionLog>) -> Result<(), String> {
         self.repo.insert_batch(&entries)

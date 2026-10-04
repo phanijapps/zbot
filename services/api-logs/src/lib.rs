@@ -32,9 +32,11 @@
 //! ```
 
 mod handlers;
+mod hooks;
 mod repository;
 mod service;
 mod types;
+pub use hooks::*;
 
 // Re-export public types
 pub use repository::DbProvider;

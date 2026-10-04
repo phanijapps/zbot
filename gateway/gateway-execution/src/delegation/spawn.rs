@@ -98,6 +98,15 @@ pub async fn spawn_delegated_agent(
             .unwrap_or("0")
     );
 
+    if request
+        .hook_invocation
+        .as_ref()
+        .is_some_and(|owner| owner.cancelled())
+    {
+        let _ = state_service.complete_delegation(&request.session_id);
+        let _ = state_service.cancel_execution(&request.child_execution_id);
+        return Err(ExecutionError::Config("hook_invocation_cancelled".into()));
+    }
     // Reject a mismatched or nonexistent dynamic target before creating the
     // child session or invoking AgentLoader. This prevents the loader's
     // compatibility auto-create path from turning an untrusted model target
@@ -178,6 +187,14 @@ pub async fn spawn_delegated_agent(
     // a race condition where try_complete_session() could mark the session
     // COMPLETED before the subagent execution exists.
     let execution_id = request.child_execution_id.clone();
+    if let Some(owner) = &request.hook_invocation {
+        session_meta
+            .record_hook_invocation_identity(
+                &child_session_id,
+                Some((owner.id(), owner.snapshot().revision())),
+            )
+            .map_err(|_| ExecutionError::Config("hook_child_identity_write_failed".into()))?;
+    }
     let session_id = request.session_id.clone();
     let delegation_mode =
         infer_delegation_mode(&request.child_agent_id, &request.task, request.mode);
@@ -531,8 +548,39 @@ pub async fn spawn_delegated_agent(
         guard.get(&provider_id).cloned()
     };
 
+    // Create execution handle
+    // Complexity-based iteration budget (overrides default if complexity is set)
+    let max_iter = match request.complexity.as_deref() {
+        Some("S") => request.max_iterations.unwrap_or(15),
+        Some("M") => request.max_iterations.unwrap_or(30),
+        Some("L") => request.max_iterations.unwrap_or(50),
+        Some("XL") => request.max_iterations.unwrap_or(100),
+        _ => request.max_iterations.unwrap_or(1000),
+    };
+    let handle = ExecutionHandle::new(max_iter);
+
     // Build executor using ExecutorBuilder
+    let hook_run = request.hook_invocation.as_ref().map(|owner| {
+        owner.run(
+            request.child_agent_id.clone(),
+            execution_id.clone(),
+            crate::runner::external_hooks::mode(
+                state_service
+                    .get_session(&session_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|session| {
+                        matches!(
+                            crate::config::SessionMode::from_mode_string(session.mode.as_deref()),
+                            crate::config::SessionMode::Chat
+                        )
+                    }),
+            ),
+            handle.stop_signal(),
+        )
+    });
     let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
+        .with_external_hooks(hook_run)
         .with_model_registry(model_registry)
         .with_actor_kind(actor_kind)
         // ward-slim P4: the planner's ward surface is lifecycle + lint
@@ -694,16 +742,6 @@ pub async fn spawn_delegated_agent(
         Vec::new()
     };
 
-    // Create execution handle
-    // Complexity-based iteration budget (overrides default if complexity is set)
-    let max_iter = match request.complexity.as_deref() {
-        Some("S") => request.max_iterations.unwrap_or(15),
-        Some("M") => request.max_iterations.unwrap_or(30),
-        Some("L") => request.max_iterations.unwrap_or(50),
-        Some("XL") => request.max_iterations.unwrap_or(100),
-        _ => request.max_iterations.unwrap_or(1000),
-    };
-    let handle = ExecutionHandle::new(max_iter);
     let handle_clone = handle.clone();
 
     // Store handle (by conversation_id for general lookups, by execution_id for kill_agent)
@@ -1155,6 +1193,7 @@ fn spawn_execution_task(ctx: SpawnContext) {
             delegation_tx,
             paths.vault_dir().clone(),
         )
+        .with_hook_invocation(request.hook_invocation.clone())
         .with_batch_writer(batch_writer.clone())
         .with_model_info(model_info)
         .with_memory_store(fact_store_for_ctx.clone());
@@ -1303,12 +1342,22 @@ fn spawn_execution_task(ctx: SpawnContext) {
             represented_output_ids: &child_represented_ids,
         });
 
+        let result = if request
+            .hook_invocation
+            .as_ref()
+            .is_some_and(|owner| owner.cancelled())
+        {
+            Err(agent_runtime::ExecutorError::Stopped)
+        } else {
+            result
+        };
         match result {
             Ok(()) => {
                 // Unblock any wait_agent before firing callbacks.
                 agent_result_bus.resolve(&execution_id, &agent_id, &accumulated_response);
 
                 handle_execution_success(HandleExecutionSuccess {
+                    hook_invocation_id: request.hook_invocation.as_ref().map(|owner| owner.id()),
                     messages: messages.as_ref(),
                     session_meta: session_meta.as_ref(),
                     state_service: &state_service,
@@ -1360,6 +1409,7 @@ fn spawn_execution_task(ctx: SpawnContext) {
                 );
 
                 handle_execution_failure(HandleExecutionFailure {
+                    hook_invocation_id: request.hook_invocation.as_ref().map(|owner| owner.id()),
                     messages: messages.as_ref(),
                     state_service: &state_service,
                     log_service: &log_service,
@@ -1413,6 +1463,7 @@ fn spawn_execution_task(ctx: SpawnContext) {
 /// Inputs for `handle_execution_success` — same pattern as `SpawnContext`
 /// but borrowed (these are called from inside the spawn-owned async closure).
 struct HandleExecutionSuccess<'a> {
+    hook_invocation_id: Option<&'a str>,
     messages: &'a dyn zbot_conversation::MessageStore,
     session_meta: &'a dyn zbot_conversation::SessionMetaStore,
     state_service: &'a StateService<DatabaseManager>,
@@ -1431,6 +1482,7 @@ struct HandleExecutionSuccess<'a> {
 
 async fn handle_execution_success(ctx: HandleExecutionSuccess<'_>) {
     let HandleExecutionSuccess {
+        hook_invocation_id,
         messages,
         session_meta,
         state_service,
@@ -1507,6 +1559,7 @@ async fn handle_execution_success(ctx: HandleExecutionSuccess<'_>) {
             if let Ok(Some(root_exec)) = state_service.get_root_execution(session_id) {
                 event_bus
                     .publish(GatewayEvent::SessionContinuationReady {
+                        hook_invocation_id: hook_invocation_id.map(str::to_owned),
                         session_id: session_id.to_string(),
                         root_agent_id: root_exec.agent_id.clone(),
                         root_execution_id: root_exec.id.clone(),
@@ -1593,6 +1646,7 @@ async fn handle_early_spawn_failure(ctx: EarlySpawnFailure<'_>) {
         },
     );
     handle_execution_failure(HandleExecutionFailure {
+        hook_invocation_id: ctx.request.hook_invocation.as_ref().map(|owner| owner.id()),
         messages: ctx.messages,
         state_service: ctx.state_service,
         log_service: ctx.log_service,
@@ -1620,6 +1674,7 @@ async fn handle_early_spawn_failure(ctx: EarlySpawnFailure<'_>) {
 /// named fields prevent order-swap bugs between `session_id` and
 /// `parent_execution_id`.
 struct HandleExecutionFailure<'a> {
+    hook_invocation_id: Option<&'a str>,
     messages: &'a dyn zbot_conversation::MessageStore,
     state_service: &'a StateService<DatabaseManager>,
     log_service: &'a LogService<DatabaseManager>,
@@ -1639,6 +1694,7 @@ struct HandleExecutionFailure<'a> {
 /// Handle execution failure.
 async fn handle_execution_failure(ctx: HandleExecutionFailure<'_>) {
     let HandleExecutionFailure {
+        hook_invocation_id,
         messages,
         state_service,
         log_service,
@@ -1716,6 +1772,7 @@ async fn handle_execution_failure(ctx: HandleExecutionFailure<'_>) {
                 if let Ok(Some(root_exec)) = state_service.get_root_execution(session_id) {
                     event_bus
                         .publish(GatewayEvent::SessionContinuationReady {
+                            hook_invocation_id: hook_invocation_id.map(str::to_owned),
                             session_id: session_id.to_string(),
                             root_agent_id: root_exec.agent_id.clone(),
                             root_execution_id: root_exec.id.clone(),
@@ -2033,6 +2090,9 @@ mod tests {
             messages,
             session_meta,
             checkpoints,
+            hook_invocations: Arc::new(
+                crate::runner::external_hooks::HookInvocationRegistry::default(),
+            ),
             control: crate::runner::session_control::SessionControl {
                 handles,
                 delegation_registry,
@@ -2122,6 +2182,7 @@ mod tests {
             .expect("seed tool result");
 
         let request = DelegationRequest {
+            hook_invocation: None,
             session_id: session.id.clone(),
             parent_execution_id: root_execution.id.clone(),
             child_agent_id: "planner-agent".to_string(),
@@ -2164,6 +2225,7 @@ mod tests {
         // the race. Only the request context carries the ward.
 
         let request = DelegationRequest {
+            hook_invocation: None,
             parent_agent_id: "root".to_string(),
             session_id: session.id.clone(),
             parent_execution_id: root_execution.id,
@@ -2224,6 +2286,7 @@ mod tests {
         let state = StateService::new(Arc::new(DatabaseManager::new(paths).expect("state db")));
         let (parent, execution) = state.create_session("root").expect("parent session");
         let request = DelegationRequest {
+            hook_invocation: None,
             parent_agent_id: "root".to_string(),
             session_id: parent.id.clone(),
             parent_execution_id: execution.id,
@@ -2426,6 +2489,7 @@ mod tests {
             mcps: vec!["blender-mcp".to_string()],
         };
         let request = DelegationRequest {
+            hook_invocation: None,
             parent_agent_id: "root".to_string(),
             session_id: session.id.clone(),
             parent_execution_id: root_execution.id.clone(),

@@ -93,6 +93,27 @@ pub trait LlmClient: Send + Sync {
         callback: StreamCallback,
     ) -> Result<ChatResponse, LlmError>;
 
+    /// One streaming provider attempt, without a hidden non-streaming fallback.
+    /// Providers without that fallback preserve their existing implementation.
+    async fn chat_stream_attempt(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Option<Value>,
+        callback: StreamCallback,
+    ) -> Result<ChatResponse, LlmError> {
+        self.chat_stream(messages, tools, callback).await
+    }
+
+    /// The provider's existing fallback request after a stream breaks before
+    /// any answer or tool call. Kept separate so hooks can admit this attempt.
+    async fn chat_stream_fallback(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Option<Value>,
+    ) -> Result<ChatResponse, LlmError> {
+        self.chat(messages, tools).await
+    }
+
     /// Check if the model supports tool calling
     fn supports_tools(&self) -> bool {
         true
@@ -133,6 +154,10 @@ pub struct ToolCallChunk {
 /// Errors from LLM operations
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
+    /// A streaming body broke before any answer/tool call was emitted. Only a
+    /// caller which owns attempt admission should issue the fallback request.
+    #[error("Streaming response requires a non-streaming fallback")]
+    StreamFallbackRequired,
     /// Error from the HTTP client
     #[error("HTTP error: {0}")]
     HttpError(#[from] reqwest::Error),

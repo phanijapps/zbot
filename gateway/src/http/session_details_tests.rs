@@ -42,6 +42,85 @@ fn seed_session(state: &AppState, id: &str, mode: &str) {
     state.state_service().set_session_mode(id, mode).unwrap();
 }
 
+#[tokio::test]
+async fn hook_details_keep_order_identity_and_actual_child_metadata_after_reload() {
+    use api_logs::{HookActivityMetadata, HookActivityStatus, HookEventName, HookLogRecord};
+    let (server, dir, state) = setup("127.0.0.1".parse().unwrap());
+    seed_session(&state, "sess-hooks", "deep");
+    let root = AgentExecution::new_root("sess-hooks", "root");
+    state.state_service().create_execution(&root).unwrap();
+    let child = AgentExecution::new_delegated(
+        "sess-hooks",
+        "research-child",
+        &root.id,
+        execution_state::DelegationType::Sequential,
+        "private prompt sentinel",
+    );
+    state.state_service().create_execution(&child).unwrap();
+    let statuses = [
+        HookActivityStatus::Running,
+        HookActivityStatus::Completed,
+        HookActivityStatus::Blocked,
+        HookActivityStatus::Failed,
+        HookActivityStatus::Timeout,
+        HookActivityStatus::Cancelled,
+        HookActivityStatus::Skipped,
+    ];
+    for (index, status) in statuses.into_iter().enumerate() {
+        state
+            .log_service()
+            .log_hook_activity(&HookLogRecord {
+                // Deliberately reverse lexical IDs; actual start timestamps determine order.
+                id: format!("hook-{}", 7 - index),
+                execution_id: child.id.clone(),
+                session_id: "sess-hooks".into(),
+                occurred_at: format!("2026-10-04T12:00:00.{index:06}Z"),
+                hook: HookActivityMetadata {
+                    hook_id: format!("observe-{index}"),
+                    event: HookEventName::RunEnd,
+                    event_id: "event-1".into(),
+                    invocation_id: "invocation-1".into(),
+                    agent_id: "research-child".into(),
+                    run_id: Some("actual-child-run".into()),
+                    status,
+                    duration_ms: Some(12),
+                    exit_code: Some(0),
+                },
+            })
+            .unwrap();
+    }
+    let read = server.get("/api/sessions/sess-hooks/details").await;
+    read.assert_status_ok();
+    let first: Value = read.json();
+    let activity = first["activity"].as_array().unwrap();
+    assert_eq!(activity.len(), 7);
+    assert_eq!(activity[0]["id"], "hook-7");
+    assert_eq!(activity[0]["hook"]["agentId"], "research-child");
+    assert_eq!(activity[0]["hook"]["runId"], "actual-child-run");
+    assert_eq!(activity[4]["label"], "Hook timed out");
+    let rebuilt = AppState::minimal(dir.path().to_owned());
+    assert_eq!(
+        rebuilt
+            .log_service()
+            .recover_interrupted_hook_activity()
+            .unwrap(),
+        0
+    );
+    let read = server.get("/api/sessions/sess-hooks/details").await;
+    let second: Value = read.json();
+    assert_eq!(second["activity"][0]["hook"]["status"], "cancelled");
+    assert_eq!(
+        second["activity"][0]["occurredAt"],
+        first["activity"][0]["occurredAt"]
+    );
+    assert_eq!(
+        second["activity"][0]["sequence"],
+        first["activity"][0]["sequence"]
+    );
+    assert!(!second.to_string().contains("private prompt sentinel"));
+    assert!(!second.to_string().contains(dir.path().to_str().unwrap()));
+}
+
 // STUB: AC2 AC4 AC5 — a persisted session with no evidence is still a 200.
 #[tokio::test]
 async fn details_returns_persisted_mode_and_honest_empty_arrays() {
@@ -188,6 +267,162 @@ async fn served_openapi_contains_session_details() {
         body["paths"]["/api/sessions/{sessionId}/details"]["get"]["operationId"],
         "getSessionDetails"
     );
+}
+
+#[tokio::test]
+async fn served_openapi_hook_activity_matches_canonical_contract_in_both_formats() {
+    use api_logs::{HookActivityMetadata, HookActivityStatus, HookEventName, HookLogRecord};
+    let (server, _dir, state) = setup("127.0.0.1".parse().unwrap());
+    let canonical: Value = serde_yaml::from_str(include_str!(
+        "../../../contracts/openapi/session-details.yaml"
+    ))
+    .unwrap();
+    let yaml = server.get("/api/openapi.yaml").await;
+    yaml.assert_status_ok();
+    let served_yaml: Value = serde_yaml::from_str(&yaml.text()).unwrap();
+    let json = server.get("/api/openapi.json").await;
+    json.assert_status_ok();
+    let served: Value = json.json();
+    assert_eq!(
+        served, served_yaml,
+        "served YAML and JSON must publish the same contract"
+    );
+    assert_eq!(served["openapi"], "3.0.3");
+    let schemas = &served["components"]["schemas"];
+    for (served_name, canonical_name) in [
+        ("SessionActivityRecord", "ActivityRecord"),
+        ("HookActivity", "HookActivity"),
+    ] {
+        let actual = &schemas[served_name];
+        let expected = &canonical["components"]["schemas"][canonical_name];
+        assert_eq!(actual["type"], expected["type"]);
+        assert_eq!(actual["additionalProperties"], false);
+        assert_eq!(actual["required"], expected["required"]);
+        let actual_fields = actual["properties"]
+            .as_object()
+            .expect("served schema properties");
+        let expected_fields = expected["properties"].as_object().unwrap();
+        assert_eq!(
+            actual_fields.keys().collect::<Vec<_>>(),
+            expected_fields.keys().collect::<Vec<_>>()
+        );
+        for (field, expected_field) in expected_fields {
+            let actual_field = &actual_fields[field];
+            let expected_type = if let Some(types) = expected_field["type"].as_array() {
+                assert_eq!(
+                    actual_field["nullable"], true,
+                    "{served_name}.{field} must translate nullable fields to OpenAPI 3.0"
+                );
+                types.iter().find(|kind| **kind != "null").unwrap().clone()
+            } else if expected_field.get("type").is_none() && expected_field.get("enum").is_some() {
+                serde_json::json!("string")
+            } else {
+                expected_field["type"].clone()
+            };
+            assert_eq!(
+                actual_field["type"], expected_type,
+                "{served_name}.{field} type"
+            );
+            for key in [
+                "$ref",
+                "enum",
+                "minLength",
+                "maxLength",
+                "pattern",
+                "minimum",
+                "format",
+            ] {
+                assert_eq!(
+                    actual_field[key], expected_field[key],
+                    "{served_name}.{field}.{key}"
+                );
+            }
+        }
+    }
+    let activity = &schemas["SessionActivityRecord"];
+    assert!(
+        activity.get("allOf").is_none(),
+        "OpenAPI 3.0 must not contain the canonical 3.1 if/then conditional"
+    );
+    assert_eq!(
+        activity["oneOf"][0]["properties"]["kind"]["enum"],
+        serde_json::json!(["hook"])
+    );
+    assert_eq!(
+        activity["oneOf"][0]["required"],
+        serde_json::json!(["hook"])
+    );
+    let ordinary: Vec<_> = canonical["components"]["schemas"]["ActivityRecord"]["properties"]
+        ["kind"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|kind| **kind != "hook")
+        .cloned()
+        .collect();
+    assert_eq!(
+        activity["oneOf"][1]["properties"]["kind"]["enum"],
+        serde_json::json!(ordinary)
+    );
+    assert_eq!(
+        activity["oneOf"][1]["not"]["required"],
+        serde_json::json!(["hook"])
+    );
+
+    // Exercise an actual ingress response: required null-valued fields remain
+    // present and correspond to the nullable served declarations.
+    seed_session(&state, "sess-contract-hook", "fast");
+    let root = AgentExecution::new_root("sess-contract-hook", "root");
+    state.state_service().create_execution(&root).unwrap();
+    state
+        .log_service()
+        .log_hook_activity(&HookLogRecord {
+            id: "contract-hook".into(),
+            execution_id: root.id,
+            session_id: "sess-contract-hook".into(),
+            occurred_at: "2026-10-04T12:00:00Z".into(),
+            hook: HookActivityMetadata {
+                hook_id: "observe".into(),
+                event: HookEventName::UserPrompt,
+                event_id: "event-one".into(),
+                invocation_id: "invocation-one".into(),
+                agent_id: "root".into(),
+                run_id: None,
+                status: HookActivityStatus::Running,
+                duration_ms: None,
+                exit_code: None,
+            },
+        })
+        .unwrap();
+    let details = server.get("/api/sessions/sess-contract-hook/details").await;
+    details.assert_status_ok();
+    let details: Value = details.json();
+    let row = &details["activity"][0];
+    assert_eq!(row["kind"], "hook");
+    let metadata = row["hook"].as_object().unwrap();
+    assert_eq!(
+        metadata.keys().collect::<Vec<_>>(),
+        schemas["HookActivity"]["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>()
+    );
+    for field in ["runId", "durationMs", "exitCode"] {
+        assert!(metadata[field].is_null());
+        assert_eq!(
+            schemas["HookActivity"]["properties"][field]["nullable"],
+            true
+        );
+    }
+    assert!(schemas["HookActivity"]["properties"]["status"]["enum"]
+        .as_array()
+        .unwrap()
+        .contains(&row["hook"]["status"]));
+    assert!(schemas["HookActivity"]["properties"]["event"]["enum"]
+        .as_array()
+        .unwrap()
+        .contains(&row["hook"]["event"]));
 }
 
 // STUB: AC2 AC14 — exercise actual creation, not mocked ID uniqueness.

@@ -242,6 +242,9 @@ impl AppState {
             tracing::warn!("Failed to migrate legacy vault layout: {}", e);
         }
 
+        if super::hook_defaults::seed(&paths).is_err() {
+            tracing::warn!("Hook starter configuration unavailable");
+        }
         let agents_dir = paths.agents_dir();
         let skills_roots = paths.skills_dirs();
         let event_bus = Arc::new(EventBus::new());
@@ -288,6 +291,9 @@ impl AppState {
 
         // Create log service for execution tracing
         let log_service = Arc::new(LogService::new(db_manager.clone()));
+        if log_service.recover_interrupted_hook_activity().is_err() {
+            tracing::warn!("Hook activity recovery unavailable");
+        }
 
         // Create state service for execution state management
         let state_service = Arc::new(StateService::new(db_manager.clone()));
@@ -1005,6 +1011,9 @@ impl AppState {
         if let Err(e) = paths.migrate_legacy_layout() {
             tracing::warn!("Failed to migrate legacy vault layout: {}", e);
         }
+        if super::hook_defaults::seed(&paths).is_err() {
+            tracing::warn!("Hook starter configuration unavailable");
+        }
         let agents_dir = paths.agents_dir();
         let skills_roots = paths.skills_dirs();
         let event_bus = Arc::new(EventBus::new());
@@ -1015,6 +1024,9 @@ impl AppState {
                 .expect("Failed to initialize conversation database"),
         );
         let log_service = Arc::new(LogService::new(db_manager.clone()));
+        if log_service.recover_interrupted_hook_activity().is_err() {
+            tracing::warn!("Hook activity recovery unavailable");
+        }
         let bridge_outbox = Arc::new(gateway_bridge::OutboxRepository::new(db_manager.clone()));
         let state_service = Arc::new(StateService::new(db_manager.clone()));
         let durable_work_store: Arc<dyn WorkStore> = Arc::new(SqliteWorkStore::new(db_manager));

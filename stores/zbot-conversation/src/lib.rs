@@ -18,4 +18,4 @@ pub use domain::{
 };
 pub use messages::{MessageStore, SqliteMessageStore};
 pub use pool::open_conversation_pool;
-pub use session_meta::{SessionMetaStore, SqliteSessionMetaStore};
+pub use session_meta::{HookInvocationClaim, SessionMetaStore, SqliteSessionMetaStore};

@@ -30,6 +30,15 @@ use crate::delegation::DelegationRequest;
 /// message itself — callers do NOT supply a message.
 #[async_trait]
 pub trait ContinuationSpawner: Send + Sync {
+    async fn spawn_continuation_for_invocation(
+        &self,
+        session_id: String,
+        root_agent_id: String,
+        _invocation_id: Option<String>,
+    ) -> Result<(), ExecutionError> {
+        self.spawn_continuation(session_id, root_agent_id).await
+    }
+
     async fn spawn_continuation(
         &self,
         session_id: String,
@@ -136,6 +145,17 @@ use super::core::ExecutionRunner;
 
 #[async_trait]
 impl ContinuationSpawner for ExecutionRunner {
+    async fn spawn_continuation_for_invocation(
+        &self,
+        session_id: String,
+        root_agent_id: String,
+        invocation_id: Option<String>,
+    ) -> Result<(), ExecutionError> {
+        self.ctx
+            .spawn_continuation_for_invocation(session_id, root_agent_id, invocation_id)
+            .await
+    }
+
     async fn spawn_continuation(
         &self,
         session_id: String,

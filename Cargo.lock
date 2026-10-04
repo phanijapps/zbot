@@ -56,6 +56,7 @@ dependencies = [
  "dirs 5.0.1",
  "fastembed",
  "futures",
+ "libc",
  "reqwest 0.12.28",
  "reqwest 0.13.4",
  "rig",

@@ -916,11 +916,32 @@ impl LlmClient for OpenAiClient {
         tools: Option<Value>,
         callback: StreamCallback,
     ) -> Result<ChatResponse, LlmError> {
-        tracing::info!("Starting streaming chat with {} messages", messages.len());
+        let callback: Arc<dyn Fn(StreamChunk) + Send + Sync> = callback.into();
+        let streamed = callback.clone();
+        let result = self
+            .chat_stream_attempt(
+                messages.clone(),
+                tools.clone(),
+                Box::new(move |chunk| streamed(chunk)),
+            )
+            .await;
+        if !matches!(result, Err(LlmError::StreamFallbackRequired)) {
+            return result;
+        }
+        let parsed = self.chat_stream_fallback(messages, tools).await?;
+        if !parsed.content.is_empty() {
+            callback(StreamChunk::Token(parsed.content.clone()));
+        }
+        Ok(parsed)
+    }
 
-        // Clone messages+tools for non-streaming fallback if stream breaks
-        let fallback_messages = messages.clone();
-        let fallback_tools = tools.clone();
+    async fn chat_stream_attempt(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Option<Value>,
+        callback: StreamCallback,
+    ) -> Result<ChatResponse, LlmError> {
+        tracing::info!("Starting streaming chat with {} messages", messages.len());
 
         let url = format!("{}/chat/completions", self.config.base_url);
 
@@ -997,16 +1018,7 @@ impl LlmClient for OpenAiClient {
 
                     // If we haven't emitted anything yet, retry as non-streaming
                     if full_content.is_empty() && tool_accumulators.is_empty() {
-                        tracing::info!("No content emitted yet, retrying as non-streaming request");
-                        let body =
-                            self.build_request_body(fallback_messages, fallback_tools, None)?;
-                        let response = self.make_request(body).await?;
-                        let parsed = self.parse_response(response);
-                        // Emit the full response as a single token
-                        if !parsed.content.is_empty() {
-                            callback(StreamChunk::Token(parsed.content.clone()));
-                        }
-                        return Ok(parsed);
+                        return Err(LlmError::StreamFallbackRequired);
                     }
 
                     // Do not commit partial assistant text as a successful turn.
@@ -1269,6 +1281,16 @@ impl LlmClient for OpenAiClient {
             },
             usage: Some(usage),
         })
+    }
+
+    async fn chat_stream_fallback(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Option<Value>,
+    ) -> Result<ChatResponse, LlmError> {
+        let body = self.build_request_body(messages, tools, None)?;
+        let response = self.make_request(body).await?;
+        Ok(self.parse_response(response))
     }
 
     fn supports_reasoning(&self) -> bool {

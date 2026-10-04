@@ -473,8 +473,56 @@ impl<D: DbProvider> LogsRepository<D> {
 }
 
 // ============================================================================
-// UNIT TESTS
+// HOOK ACTIVITY
 // ============================================================================
+
+impl<D: DbProvider> LogsRepository<D> {
+    pub(crate) fn upsert_hook_log(&self, log: &ExecutionLog) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO execution_logs (id, session_id, conversation_id, agent_id, timestamp, level, category, message, metadata, duration_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'info', 'system', ?6, ?7, ?8)
+                 ON CONFLICT(id) DO UPDATE SET message=excluded.message, metadata=excluded.metadata, duration_ms=excluded.duration_ms
+                 WHERE execution_logs.category='system' AND json_valid(execution_logs.metadata)
+                   AND json_extract(execution_logs.metadata, '$.hook.status')='running'
+                   AND execution_logs.session_id=excluded.session_id
+                   AND execution_logs.conversation_id=excluded.conversation_id
+                   AND execution_logs.agent_id=excluded.agent_id
+                   AND json_extract(execution_logs.metadata, '$.hook.hookId')=json_extract(excluded.metadata, '$.hook.hookId')
+                   AND json_extract(execution_logs.metadata, '$.hook.eventId')=json_extract(excluded.metadata, '$.hook.eventId')
+                   AND json_extract(execution_logs.metadata, '$.hook.invocationId')=json_extract(excluded.metadata, '$.hook.invocationId')",
+                params![log.id, log.session_id, log.conversation_id, log.agent_id, log.timestamp,
+                    log.message, log.metadata.as_ref().map(|value| value.to_string()), log.duration_ms],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub(crate) fn recover_hook_logs(&self) -> Result<usize, String> {
+        self.db.with_connection(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let mut rows = tx.prepare("SELECT id, metadata FROM execution_logs WHERE category='system' AND json_valid(metadata) AND json_extract(metadata, '$.hook.status')='running'")?;
+            let pending = rows.query_map([], |row| Ok((row.get::<_,String>(0)?, row.get::<_,String>(1)?)))?
+                .collect::<Result<Vec<_>,_>>()?;
+            drop(rows);
+            let mut recovered = 0;
+            for (id, metadata) in pending {
+                if metadata.len() > 4096 { continue; }
+                let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&metadata) else { continue; };
+                let Some(hook) = value.get("hook") else { continue; };
+                let Ok(mut hook) = serde_json::from_value::<crate::HookActivityMetadata>(hook.clone()) else { continue; };
+                if !hook.validate() { continue; }
+                hook.status = crate::HookActivityStatus::Cancelled;
+                hook.duration_ms = None;
+                hook.exit_code = None;
+                value = serde_json::json!({"hook":hook});
+                recovered += tx.execute("UPDATE execution_logs SET message='Hook cancelled', metadata=?1, duration_ms=NULL WHERE id=?2", params![value.to_string(),id])?;
+            }
+            tx.commit()?;
+            Ok(recovered)
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {

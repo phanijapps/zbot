@@ -166,6 +166,21 @@
 .session-shell__details h2 { margin-bottom: var(--spacing-5); font-size: var(--text-lg); font-weight: 550; }
 .session-shell__details .tab-bar { margin: 0; padding: 0; }
 .session-shell__details .tab-bar__tab { flex: 1; justify-content: center; padding: var(--spacing-3) var(--spacing-1); }
+.session-activity { min-width: 0; padding-top: var(--spacing-4); }
+.session-activity__list { margin: 0; padding: 0; list-style: none; }
+.session-activity__item { padding: var(--spacing-3) 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.session-activity__hook summary { min-height: var(--spacing-8); cursor: pointer; overflow-wrap: anywhere; line-height: 1.6; font-size: var(--text-sm); }
+.session-activity__hook summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: var(--radius-sm); }
+.session-activity__name { font-weight: 550; margin-right: var(--spacing-2); }
+.session-activity__status { color: var(--muted-foreground); }
+.session-activity__hook--blocked .session-activity__status, .session-activity__hook--failed .session-activity__status, .session-activity__hook--timeout .session-activity__status { color: var(--destructive); }
+.session-activity__metadata { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: var(--spacing-2); padding: var(--spacing-3) 0; font-size: var(--text-sm); }
+.session-activity__metadata dt { color: var(--muted-foreground); }
+.session-activity__metadata dd { margin: 0; overflow-wrap: anywhere; }
+.session-activity__time { color: var(--muted-foreground); font-size: var(--text-xs); }
+.session-activity__label { font-size: var(--text-sm); }
+.session-activity__notice { padding: var(--spacing-3) 0; color: var(--muted-foreground); font-size: var(--text-sm); line-height: 1.6; }
+.session-activity__notice .btn { margin-top: var(--spacing-2); }
 
 .session-shell--knowledge { grid-template-columns: var(--shell-navigation-width) minmax(0, 1fr); }
 .session-shell__knowledge-header { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-4); padding: var(--spacing-5) var(--spacing-6); border-bottom: 1px solid var(--border); }

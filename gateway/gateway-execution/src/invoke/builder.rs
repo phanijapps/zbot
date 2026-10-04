@@ -200,9 +200,18 @@ pub struct ExecutorBuilder {
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
     chat_mode: bool,
     remote_peer_prompt: Option<crate::a2a::RemotePeerPrompt>,
+    external_hooks: Option<Arc<agent_runtime::external_hooks::HookRun>>,
 }
 
 impl ExecutorBuilder {
+    pub(crate) fn with_external_hooks(
+        mut self,
+        hooks: Option<Arc<agent_runtime::external_hooks::HookRun>>,
+    ) -> Self {
+        self.external_hooks = hooks;
+        self
+    }
+
     /// Create a new executor builder.
     pub fn new(vault_dir: PathBuf, tool_settings: ToolSettings) -> Self {
         Self {
@@ -234,6 +243,7 @@ impl ExecutorBuilder {
             extra_initial_state: None,
             chat_mode: false,
             remote_peer_prompt: None,
+            external_hooks: None,
         }
     }
 
@@ -737,6 +747,15 @@ impl ExecutorBuilder {
                 .map_err(|e| format!("Failed to create LLM client: {}", e))?,
         );
 
+        let raw_client = if let Some(run) = &self.external_hooks {
+            Arc::new(agent_runtime::external_hooks::HookedLlmClient::new(
+                raw_client,
+                run.clone(),
+            )) as Arc<dyn agent_runtime::LlmClient>
+        } else {
+            raw_client
+        };
+
         // Wrap with retry logic: 3 retries, 500ms base delay, exponential backoff with jitter
         let retrying_client: Arc<dyn agent_runtime::LlmClient> =
             Arc::new(RetryingLlmClient::new(raw_client, RetryPolicy::default()));
@@ -851,6 +870,7 @@ impl ExecutorBuilder {
             middleware_pipeline,
         );
         prepared.rig_config = Some(rig_agent_config);
+        prepared.external_hooks = self.external_hooks.clone();
         prepared
             .resolve_mcp_tools()
             .await

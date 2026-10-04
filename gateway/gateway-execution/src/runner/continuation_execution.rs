@@ -171,11 +171,35 @@ fn render_session_plan_for_continuation(snapshot: &SessionPlanSnapshot) -> Strin
 /// - Original user message
 /// - Previous assistant responses
 /// - Callback messages from completed subagents (as system messages)
+#[cfg(test)]
 pub(super) async fn invoke_continuation(
     ctx: &super::exec_ctx::ExecCtx,
     session_id: &str,
     root_agent_id: &str,
 ) -> Result<(), ExecutionError> {
+    let owner = super::external_hooks::resolve(ctx, session_id, None).await?;
+    invoke_continuation_for_invocation(
+        ctx,
+        session_id,
+        root_agent_id,
+        owner.as_ref().map(|owner| owner.id()),
+    )
+    .await
+}
+
+pub(super) async fn invoke_continuation_for_invocation(
+    ctx: &super::exec_ctx::ExecCtx,
+    session_id: &str,
+    root_agent_id: &str,
+    hook_invocation_id: Option<&str>,
+) -> Result<(), ExecutionError> {
+    let owner = if let Some(id) = hook_invocation_id {
+        super::external_hooks::resolve(ctx, session_id, Some(id)).await?
+    } else {
+        None
+    };
+    let retention =
+        super::external_hooks::HookRetention::new(ctx.hook_invocations.clone(), owner.clone());
     let super::exec_ctx::ExecCtx {
         event_bus,
         agent_service,
@@ -345,7 +369,27 @@ pub(super) async fn invoke_continuation(
     // the runtime no longer rewrites them before continuation.
 
     // Build executor
-    let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings);
+    let hook_run = owner.as_ref().map(|owner| {
+        owner.run(
+            root_agent_id.to_owned(),
+            execution_id.clone(),
+            super::external_hooks::mode(
+                ctx.state_service
+                    .get_session(session_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|session| {
+                        matches!(
+                            crate::config::SessionMode::from_mode_string(session.mode.as_deref()),
+                            crate::config::SessionMode::Chat
+                        )
+                    }),
+            ),
+            handle.stop_signal(),
+        )
+    });
+    let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
+        .with_external_hooks(hook_run);
     if let Some(registry) = model_registry {
         builder = builder.with_model_registry(registry);
     }
@@ -461,7 +505,10 @@ pub(super) async fn invoke_continuation(
         bridge_outbox: None,
         handoff_writer,
     };
+    let hook_session = session_id.to_owned();
+    let hook_state = ctx.state_service.clone();
     let ctx = super::execution_stream::ExecutionContext {
+        hook_invocation: owner.clone(),
         mode: super::execution_stream::ExecutionMode::Continuation,
         execution_id: execution_id.clone(),
         session_id: session_id.to_owned(),
@@ -480,7 +527,16 @@ pub(super) async fn invoke_continuation(
         model_info: Some((provider.name.clone(), agent.model.clone())),
     };
     tokio::spawn(async move {
+        let stop = ctx.handle.stop_signal();
         let _ = stream.run(ctx, executor).await;
+        if owner.is_some() {
+            let pending = hook_state
+                .get_session(&hook_session)
+                .ok()
+                .flatten()
+                .is_some_and(|session| session.pending_delegations > 0);
+            retention.finish(pending && !stop.load(std::sync::atomic::Ordering::Acquire));
+        }
         steering_registry.remove(&execution_id);
     });
 
