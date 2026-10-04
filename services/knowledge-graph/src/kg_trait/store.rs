@@ -332,6 +332,39 @@ pub trait KnowledgeGraphStore: Send + Sync {
         offset: usize,
     ) -> GraphStoreResult<RelationshipPage>;
 
+    /// Agent-scoped name search page with the exact total for the same
+    /// query/filter; deterministic `mention_count DESC, agent_id, id` order.
+    async fn search_entities_paged(
+        &self,
+        agent_id: &str,
+        query: &str,
+        entity_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<EntityPage>;
+
+    /// Aggregate (cross-agent) name search page with the exact total for the
+    /// same query/type filter. Case-insensitive substring match against the
+    /// persisted name; deterministic `mention_count DESC, agent_id, id` order.
+    async fn search_all_entities_paged(
+        &self,
+        query: &str,
+        entity_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<EntityPage>;
+
+    /// Agent-scoped hydrated neighbor page with the exact total for the same
+    /// entity/direction scope.
+    async fn get_neighbors_full_paged(
+        &self,
+        agent_id: &str,
+        entity_id: &str,
+        direction: Direction,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<NeighborPage>;
+
     /// Vec0-index health snapshot: which of the expected vector tables
     /// exist in the backing store and how many rows are indexed in
     /// total. Backend-specific in implementation (SQLite-vec aux tables,

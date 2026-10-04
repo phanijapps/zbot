@@ -14,8 +14,8 @@ mod store;
 pub use error::{GraphStoreError, GraphStoreResult};
 pub use extracted::ExtractedKnowledge;
 pub use kg_types::{
-    ArchivableEntity, EntityId, EntityPage, KgStats, Neighbor, ReindexReport, RelationshipId,
-    RelationshipPage, ResolveOutcome, StoreOutcome, TraversalHit, VecIndexHealth,
+    ArchivableEntity, EntityId, EntityPage, KgStats, Neighbor, NeighborPage, ReindexReport,
+    RelationshipId, RelationshipPage, ResolveOutcome, StoreOutcome, TraversalHit, VecIndexHealth,
 };
 pub use store::{
     EntityWithEmbedding, KgNodesForEpisodes, KnowledgeGraphStore, LcaPath, WeightedTraversalHit,

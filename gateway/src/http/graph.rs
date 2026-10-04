@@ -2,6 +2,7 @@
 //!
 //! HTTP API for querying the knowledge graph.
 
+use super::SameOrigin;
 use super::ErrorResponse;
 use crate::state::AppState;
 use axum::{
@@ -57,6 +58,9 @@ pub struct NeighborQuery {
     /// Maximum number of neighbors
     #[serde(default = "default_limit")]
     pub limit: usize,
+    /// Offset for pagination
+    #[serde(default)]
+    pub offset: usize,
 }
 
 /// Query parameters for subgraph queries.
@@ -90,20 +94,83 @@ pub struct EntityResponse {
     pub mention_count: i64,
     pub first_seen_at: String,
     pub last_seen_at: String,
+    /// True when the name or properties were clipped/omitted to meet the
+    /// projection budgets (AC3). Counts stay exact regardless.
+    pub projection_truncated: bool,
 }
 
-impl From<Entity> for EntityResponse {
-    fn from(entity: Entity) -> Self {
-        Self {
-            id: entity.id,
-            agent_id: entity.agent_id,
-            entity_type: entity.entity_type.as_str().to_string(),
-            name: entity.name,
-            properties: entity.properties,
-            mention_count: entity.mention_count,
-            first_seen_at: entity.first_seen_at.to_rfc3339(),
-            last_seen_at: entity.last_seen_at.to_rfc3339(),
+/// Clip a string at a Unicode boundary to at most `max_chars`.
+fn clip_unicode(value: String, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value;
+    }
+    value.chars().take(max_chars).collect()
+}
+
+/// Project an entity into its bounded response shape. Over-budget properties
+/// are omitted entirely (as `{}`) with `projection_truncated: true`; the
+/// stored row is untouched (AC3: truncation flagged per row without losing
+/// counts).
+fn project_entity(entity: Entity) -> EntityResponse {
+    let name_over = entity.name.chars().count() > GRAPH_MAX_NAME_CHARS;
+    let mut truncated = name_over;
+    let name = if name_over {
+        clip_unicode(entity.name.clone(), GRAPH_MAX_NAME_CHARS)
+    } else {
+        entity.name
+    };
+    let properties_ok = entity.properties.len() <= GRAPH_MAX_PROPERTY_ENTRIES
+        && entity
+            .properties
+            .values()
+            .all(property_within_budget);
+    let properties = if properties_ok {
+        entity.properties
+    } else {
+        truncated = true;
+        HashMap::new()
+    };
+    let mut response = EntityResponse {
+        id: entity.id,
+        agent_id: entity.agent_id,
+        entity_type: entity.entity_type.as_str().to_string(),
+        name,
+        properties,
+        mention_count: entity.mention_count,
+        first_seen_at: entity.first_seen_at.to_rfc3339(),
+        last_seen_at: entity.last_seen_at.to_rfc3339(),
+        projection_truncated: truncated,
+    };
+    // Row byte budget (AC3): an over-budget row drops its properties rather
+    // than being dropped itself — counts stay exact, truncation is flagged.
+    if serde_json::to_string(&response).map(|s| s.len()).unwrap_or(0) > GRAPH_ROW_BUDGET_BYTES {
+        response.properties = HashMap::new();
+        response.projection_truncated = true;
+    }
+    response
+}
+
+/// Recursive budget check: strings ≤ 4096 chars, ≤ 64 entries per container,
+/// ≤ 4 nesting levels, serialized value within the row budget's property
+/// share (≤ 8 KiB enforced at serialization time below).
+fn property_within_budget(value: &serde_json::Value) -> bool {
+    property_depth_within(value, 4)
+}
+
+fn property_depth_within(value: &serde_json::Value, depth: usize) -> bool {
+    match value {
+        serde_json::Value::String(text) => text.chars().count() <= GRAPH_MAX_PROPERTY_CHARS,
+        serde_json::Value::Array(items) => {
+            depth > 0
+                && items.len() <= GRAPH_MAX_PROPERTY_ENTRIES
+                && items.iter().all(|item| property_depth_within(item, depth - 1))
         }
+        serde_json::Value::Object(map) => {
+            depth > 0
+                && map.len() <= GRAPH_MAX_PROPERTY_ENTRIES
+                && map.values().all(|item| property_depth_within(item, depth - 1))
+        }
+        _ => true,
     }
 }
 
@@ -116,6 +183,7 @@ pub struct RelationshipResponse {
     pub target_entity_id: String,
     pub relationship_type: String,
     pub mention_count: i64,
+    pub projection_truncated: bool,
 }
 
 impl From<Relationship> for RelationshipResponse {
@@ -127,6 +195,7 @@ impl From<Relationship> for RelationshipResponse {
             target_entity_id: rel.target_entity_id,
             relationship_type: rel.relationship_type.as_str().to_string(),
             mention_count: rel.mention_count,
+            projection_truncated: false,
         }
     }
 }
@@ -153,25 +222,53 @@ impl From<GraphStats> for GraphStatsResponse {
     }
 }
 
-/// Entity list response.
+/// Entity list response: exact scope total, echo of the requested offset, and
+/// `next_offset` when more rows exist (null when exhausted). `total` is the
+/// exact same-scope count, never the page length.
 #[derive(Debug, Serialize)]
 pub struct EntityListResponse {
     pub entities: Vec<EntityResponse>,
     pub total: usize,
+    pub offset: usize,
+    pub next_offset: Option<usize>,
 }
 
-/// Relationship list response.
+/// Relationship list response with the same pagination semantics.
 #[derive(Debug, Serialize)]
 pub struct RelationshipListResponse {
     pub relationships: Vec<RelationshipResponse>,
     pub total: usize,
+    pub offset: usize,
+    pub next_offset: Option<usize>,
 }
 
-/// Neighbor response.
+/// Enforce the page byte budget by dropping serialized rows beyond 2 MiB.
+/// Returns the shortened vector; `next_offset` is computed from the returned
+/// count by the caller, so no row is skipped — the next page starts exactly
+/// where this one stopped.
+fn enforce_page_budget<T: Serialize>(mut rows: Vec<T>) -> Vec<T> {
+    let mut used = 0usize;
+    let mut keep = 0usize;
+    for row in &rows {
+        let size = serde_json::to_string(row).map(|s| s.len()).unwrap_or(0);
+        if used + size > GRAPH_PAGE_BUDGET_BYTES && keep > 0 {
+            break;
+        }
+        used += size;
+        keep += 1;
+    }
+    rows.truncate(keep.max(1).min(rows.len()));
+    rows
+}
+
+/// Neighbor response with pagination semantics.
 #[derive(Debug, Serialize)]
 pub struct NeighborResponse {
     pub entity_id: String,
     pub neighbors: Vec<NeighborEntry>,
+    pub total: usize,
+    pub offset: usize,
+    pub next_offset: Option<usize>,
 }
 
 /// Single neighbor entry.
@@ -197,7 +294,7 @@ impl From<Subgraph> for SubgraphResponse {
             entities: subgraph
                 .entities
                 .into_iter()
-                .map(EntityResponse::from)
+                .map(project_entity)
                 .collect(),
             relationships: subgraph
                 .relationships
@@ -223,6 +320,8 @@ fn normalize_agent_id(id: &str) -> &str {
 /// GET /api/graph/:agent_id/stats
 /// Get graph statistics for an agent.
 pub async fn get_graph_stats(
+    _origin: SameOrigin,
+    _bind: super::sessions::LoopbackBind,
     Path(agent_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Json<GraphStatsResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -237,13 +336,16 @@ pub async fn get_graph_stats(
 /// GET /api/graph/:agent_id/entities
 /// List entities for an agent.
 pub async fn list_entities(
+    _origin: SameOrigin,
+    _bind: super::sessions::LoopbackBind,
     Path(agent_id): Path<String>,
     Query(query): Query<EntityListQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<EntityListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    validate_paging(query.limit, query.offset)?;
     let kg_store = require_kg_store(&state)?;
-    let entities = kg_store
-        .list_entities(
+    let page = kg_store
+        .list_entities_paged(
             normalize_agent_id(&agent_id),
             query.entity_type.as_deref(),
             query.limit,
@@ -251,23 +353,28 @@ pub async fn list_entities(
         )
         .await
         .map_err(store_err_to_http)?;
-    let total = entities.len();
+    let returned = page.entities.len();
     Ok(Json(EntityListResponse {
-        entities: entities.into_iter().map(EntityResponse::from).collect(),
-        total,
+        entities: enforce_page_budget(page.entities.into_iter().map(project_entity).collect()),
+        total: page.total,
+        offset: query.offset,
+        next_offset: next_offset(query.offset, returned, page.total),
     }))
 }
 
 /// GET /api/graph/:agent_id/relationships
 /// List relationships for an agent.
 pub async fn list_relationships(
+    _origin: SameOrigin,
+    _bind: super::sessions::LoopbackBind,
     Path(agent_id): Path<String>,
     Query(query): Query<RelationshipListQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<RelationshipListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    validate_paging(query.limit, query.offset)?;
     let kg_store = require_kg_store(&state)?;
-    let relationships = kg_store
-        .list_relationships(
+    let page = kg_store
+        .list_relationships_paged(
             normalize_agent_id(&agent_id),
             query.relationship_type.as_deref(),
             query.limit,
@@ -275,40 +382,50 @@ pub async fn list_relationships(
         )
         .await
         .map_err(store_err_to_http)?;
-    let total = relationships.len();
+    let returned = page.relationships.len();
     Ok(Json(RelationshipListResponse {
-        relationships: relationships
-            .into_iter()
-            .map(RelationshipResponse::from)
-            .collect(),
-        total,
+        relationships: enforce_page_budget(
+            page.relationships
+                .into_iter()
+                .map(RelationshipResponse::from)
+                .collect(),
+        ),
+        total: page.total,
+        offset: query.offset,
+        next_offset: next_offset(query.offset, returned, page.total),
     }))
 }
 
 /// GET /api/graph/:agent_id/entities/:entity_id/neighbors
 /// Get neighbors of an entity.
 pub async fn get_entity_neighbors(
+    _origin: SameOrigin,
+    _bind: super::sessions::LoopbackBind,
     Path((agent_id, entity_id)): Path<(String, String)>,
     Query(query): Query<NeighborQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<NeighborResponse>, (StatusCode, Json<ErrorResponse>)> {
+    validate_paging(query.limit, query.offset)?;
     let kg_store = require_kg_store(&state)?;
     let direction = parse_direction(query.direction.as_deref());
-    let neighbors = kg_store
-        .get_neighbors_full(
+    let page = kg_store
+        .get_neighbors_full_paged(
             normalize_agent_id(&agent_id),
             &entity_id,
             direction,
             query.limit,
+            query.offset,
         )
         .await
         .map_err(store_err_to_http)?;
-    let neighbor_entries: Vec<NeighborEntry> = neighbors
+    let returned = page.neighbors.len();
+    let neighbors: Vec<NeighborEntry> = page
+        .neighbors
         .into_iter()
-        .map(|n| NeighborEntry {
-            entity: EntityResponse::from(n.entity),
-            relationship: RelationshipResponse::from(n.relationship),
-            direction: match n.direction {
+        .map(|info| NeighborEntry {
+            entity: project_entity(info.entity),
+            relationship: RelationshipResponse::from(info.relationship),
+            direction: match info.direction {
                 Direction::Outgoing => "outgoing".to_string(),
                 Direction::Incoming => "incoming".to_string(),
                 Direction::Both => "both".to_string(),
@@ -317,7 +434,10 @@ pub async fn get_entity_neighbors(
         .collect();
     Ok(Json(NeighborResponse {
         entity_id,
-        neighbors: neighbor_entries,
+        total: page.total,
+        offset: query.offset,
+        next_offset: next_offset(query.offset, returned, page.total),
+        neighbors,
     }))
 }
 
@@ -335,10 +455,15 @@ fn parse_direction(s: Option<&str>) -> StoreDirection {
 /// GET /api/graph/:agent_id/entities/:entity_id/subgraph
 /// Get subgraph around an entity.
 pub async fn get_entity_subgraph(
+    _origin: SameOrigin,
+    _bind: super::sessions::LoopbackBind,
     Path((agent_id, entity_id)): Path<(String, String)>,
     Query(query): Query<SubgraphQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<SubgraphResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if query.max_hops == 0 || query.max_hops > GRAPH_MAX_HOPS {
+        return Err(bad_request("max_hops must be between 1 and 4"));
+    }
     let kg_store = require_kg_store(&state)?;
     kg_store
         .get_subgraph(normalize_agent_id(&agent_id), &entity_id, query.max_hops)
@@ -353,24 +478,93 @@ pub async fn get_entity_subgraph(
 /// Backed by `kg_store` (KnowledgeGraphStore trait). Response shape
 /// is identical to the historical handler.
 pub async fn search_entities(
+    _origin: SameOrigin,
+    _bind: super::sessions::LoopbackBind,
     Path(agent_id): Path<String>,
     Query(query): Query<SearchQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<EntityListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = query.limit.unwrap_or(20);
+    validate_paging(limit, query.offset)?;
+    if query.q.chars().count() > GRAPH_MAX_QUERY_CHARS {
+        return Err(bad_request("query too long"));
+    }
     let kg_store = require_kg_store(&state)?;
-    let entities = kg_store
-        .search_entities_by_name(
+    let page = kg_store
+        .search_entities_paged(
             normalize_agent_id(&agent_id),
             &query.q,
-            query.limit.unwrap_or(20),
+            None,
+            limit,
+            query.offset,
         )
         .await
         .map_err(store_err_to_http)?;
-    let total = entities.len();
+    let returned = page.entities.len();
     Ok(Json(EntityListResponse {
-        entities: entities.into_iter().map(EntityResponse::from).collect(),
-        total,
+        entities: enforce_page_budget(page.entities.into_iter().map(project_entity).collect()),
+        total: page.total,
+        offset: query.offset,
+        next_offset: next_offset(query.offset, returned, page.total),
     }))
+}
+
+/// GET /api/graph/all/search — aggregate (cross-agent) entity search with
+/// exact totals and offset paging (exploration contract).
+pub async fn search_all_entities(
+    _origin: SameOrigin,
+    _bind: super::sessions::LoopbackBind,
+    Query(query): Query<AllSearchQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<EntityListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    validate_paging(query.limit, query.offset)?;
+    if query.q.chars().count() > GRAPH_MAX_QUERY_CHARS {
+        return Err(bad_request("query too long"));
+    }
+    let kg_store = require_kg_store(&state)?;
+    let page = kg_store
+        .search_all_entities_paged(
+            &query.q,
+            query.entity_type.as_deref(),
+            query.limit,
+            query.offset,
+        )
+        .await
+        .map_err(store_err_to_http)?;
+    let returned = page.entities.len();
+    Ok(Json(EntityListResponse {
+        entities: enforce_page_budget(page.entities.into_iter().map(project_entity).collect()),
+        total: page.total,
+        offset: query.offset,
+        next_offset: next_offset(query.offset, returned, page.total),
+    }))
+}
+
+/// GET /api/graph/:agent_id/entities/:entity_id — direct agent-scoped entity
+/// read (exploration contract: endpoint resolution for edge endpoints).
+pub async fn get_scoped_entity(
+    _origin: SameOrigin,
+    _bind: super::sessions::LoopbackBind,
+    Path((agent_id, entity_id)): Path<(String, String)>,
+    State(state): State<AppState>,
+) -> Result<Json<EntityResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if entity_id.is_empty() || entity_id.len() > 128 {
+        return Err(bad_request("invalid entity ID"));
+    }
+    let kg_store = require_kg_store(&state)?;
+    let agent = normalize_agent_id(&agent_id);
+    let entity = kg_store
+        .get_entity(&knowledge_graph::kg_trait::EntityId(entity_id.clone()))
+        .await
+        .map_err(store_err_to_http)?
+        .filter(|entity| entity.agent_id == agent || entity.agent_id == "__global__")
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::new("Entity not found".to_string())),
+            )
+        })?;
+    Ok(Json(project_entity(entity)))
 }
 
 /// Resolve `state.kg_store` or short-circuit with 503. Centralised so
@@ -433,6 +627,9 @@ pub struct SearchQuery {
     pub q: String,
     /// Maximum number of results
     pub limit: Option<usize>,
+    /// Offset for pagination
+    #[serde(default)]
+    pub offset: usize,
 }
 
 /// Query parameters for cross-agent entity listing.
@@ -445,10 +642,81 @@ pub struct AllEntitiesQuery {
     /// Maximum number of results
     #[serde(default = "default_all_entities_limit")]
     pub limit: usize,
+    /// Offset for pagination
+    #[serde(default)]
+    pub offset: usize,
+}
+
+/// Query parameters for cross-agent relationship listing.
+#[derive(Debug, Deserialize)]
+pub struct AllRelationshipsQuery {
+    /// Filter by relationship type
+    pub relationship_type: Option<String>,
+    /// Maximum number of results
+    #[serde(default = "default_all_entities_limit")]
+    pub limit: usize,
+    /// Offset for pagination
+    #[serde(default)]
+    pub offset: usize,
+}
+
+/// Query parameters for aggregate (cross-agent) entity search.
+#[derive(Debug, Deserialize)]
+pub struct AllSearchQuery {
+    /// Search query string
+    pub q: String,
+    /// Maximum number of results
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    /// Offset for pagination
+    #[serde(default)]
+    pub offset: usize,
+    /// Filter by entity type
+    pub entity_type: Option<String>,
 }
 
 fn default_all_entities_limit() -> usize {
     200
+}
+
+/// Exploration contract bounds (AC1/AC3): bounded page size, bounded offset,
+/// bounded query strings, bounded traversal depth.
+const GRAPH_MAX_LIMIT: usize = 1000;
+const GRAPH_MAX_OFFSET: usize = 1_000_000;
+const GRAPH_MAX_QUERY_CHARS: usize = 256;
+const GRAPH_MAX_HOPS: usize = 4;
+/// Serialized page byte budget (2 MiB) and per-row budget (16 KiB).
+const GRAPH_PAGE_BUDGET_BYTES: usize = 2 * 1024 * 1024;
+const GRAPH_ROW_BUDGET_BYTES: usize = 16 * 1024;
+/// Projection caps (AC3): name, property strings, entries per container,
+/// serialized properties size.
+const GRAPH_MAX_NAME_CHARS: usize = 1024;
+const GRAPH_MAX_PROPERTY_CHARS: usize = 4096;
+const GRAPH_MAX_PROPERTY_ENTRIES: usize = 64;
+
+fn bad_request(message: &str) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse::new(message.to_string())),
+    )
+}
+
+fn validate_paging(limit: usize, offset: usize) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if limit == 0 || limit > GRAPH_MAX_LIMIT {
+        return Err(bad_request("limit must be between 1 and 1000"));
+    }
+    if offset > GRAPH_MAX_OFFSET {
+        return Err(bad_request("offset too large"));
+    }
+    Ok(())
+}
+
+/// `next_offset` when more rows exist beyond this page (contract: null on
+/// exhaustion). The page may have been shortened by the byte budget, so the
+/// decision uses the returned row count, never the requested limit.
+fn next_offset(offset: usize, returned: usize, total: usize) -> Option<usize> {
+    let next = offset + returned;
+    (next < total).then_some(next)
 }
 
 /// Aggregate graph statistics for the Observatory health bar.
@@ -596,6 +864,8 @@ pub async fn trigger_distillation(
 /// Distillation run status remains on the conversation database; semantic
 /// counts route through backend-neutral stores.
 pub async fn graph_stats(
+    _origin: SameOrigin,
+    _bind: super::sessions::LoopbackBind,
     State(state): State<AppState>,
 ) -> Result<Json<AggregateGraphStats>, (StatusCode, Json<ErrorResponse>)> {
     // Reads through the stores group: this handler needs 5 of its members.
@@ -646,43 +916,60 @@ pub async fn graph_stats(
 /// GET /api/graph/all/relationships
 /// Cross-agent relationship listing for the Observatory "All Agents" mode.
 pub async fn all_relationships(
-    Query(query): Query<AllEntitiesQuery>,
+    _origin: SameOrigin,
+    _bind: super::sessions::LoopbackBind,
+    Query(query): Query<AllRelationshipsQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<RelationshipListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    validate_paging(query.limit, query.offset)?;
     let kg_store = require_kg_store(&state)?;
-    let relationships = kg_store
-        .list_all_relationships(query.limit)
+    let page = kg_store
+        .list_all_relationships_paged(
+            query.relationship_type.as_deref(),
+            query.limit,
+            query.offset,
+        )
         .await
         .map_err(store_err_to_http)?;
-    let total = relationships.len();
+    let returned = page.relationships.len();
     Ok(Json(RelationshipListResponse {
-        relationships: relationships
-            .into_iter()
-            .map(RelationshipResponse::from)
-            .collect(),
-        total,
+        relationships: enforce_page_budget(
+            page.relationships
+                .into_iter()
+                .map(RelationshipResponse::from)
+                .collect(),
+        ),
+        total: page.total,
+        offset: query.offset,
+        next_offset: next_offset(query.offset, returned, page.total),
     }))
 }
 
 /// GET /api/graph/all/entities
 /// Cross-agent entity listing for the Observatory "All Agents" mode.
 pub async fn all_entities(
+    _origin: SameOrigin,
+    _bind: super::sessions::LoopbackBind,
     Query(query): Query<AllEntitiesQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<EntityListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    validate_paging(query.limit, query.offset)?;
     let kg_store = require_kg_store(&state)?;
-    let entities = kg_store
-        .list_all_entities(
+    let page = kg_store
+        .list_all_entities_paged(
             query.ward_id.as_deref(),
             query.entity_type.as_deref(),
             query.limit,
+            query.offset,
         )
         .await
         .map_err(store_err_to_http)?;
-    let total = entities.len();
+    let returned = page.entities.len();
     Ok(Json(EntityListResponse {
-        entities: entities.into_iter().map(EntityResponse::from).collect(),
-        total,
+        entities: enforce_page_budget(page.entities.into_iter().map(project_entity).collect()),
+        total: page.total,
+        offset: query.offset,
+        next_offset: next_offset(query.offset, returned, page.total),
     }))
 }
 
@@ -708,6 +995,8 @@ fn valid_ward_directory_id(value: &str) -> bool {
 /// Returns 503 only when neither trait is wired (defensive —
 /// production always has both).
 pub async fn reindex_all_wards(
+    _origin: SameOrigin,
+    _bind: super::sessions::LoopbackBind,
     State(state): State<AppState>,
 ) -> Result<Json<ReindexResponse>, StatusCode> {
     let episode_store = state

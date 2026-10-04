@@ -104,3 +104,98 @@ async fn lan_bound_gateway_denies_graph_reads_before_store_access() {
     let body: Value = denied.json();
     assert!(body["error"].as_str().is_some_and(|e| e.len() <= 160));
 }
+
+// AC1/AC8 — no /api/graph/* route reaches the store unguarded: on a LAN-bound
+// gateway every graph route must deny before any handler/store work.
+#[tokio::test]
+async fn every_graph_route_denies_on_lan_bind() {
+    let (lan, _dir, _state) = setup("0.0.0.0".parse().unwrap());
+    for path in [
+        "/api/graph/stats",
+        "/api/graph/all/entities?limit=10",
+        "/api/graph/all/relationships?limit=10",
+        "/api/graph/all/search?q=x&limit=10",
+        "/api/graph/root/stats",
+        "/api/graph/root/entities?limit=10",
+        "/api/graph/root/relationships?limit=10",
+        "/api/graph/root/search?q=x&limit=10",
+        "/api/graph/root/entities/e/neighbors?limit=10",
+        "/api/graph/root/entities/e",
+        "/api/graph/root/entities/e/subgraph?max_hops=2",
+    ] {
+        let denied = lan.get(path).await;
+        denied.assert_status(axum::http::StatusCode::FORBIDDEN);
+    }
+    lan.post("/api/graph/reindex")
+        .json(&serde_json::json!({}))
+        .await
+        .assert_status(axum::http::StatusCode::FORBIDDEN);
+}
+
+// AC1 — invalid parameters fail with a bounded body.
+#[tokio::test]
+async fn invalid_paging_parameters_fail() {
+    let (server, _dir, state) = setup("127.0.0.1".parse().unwrap());
+    seed_entities(&state, "agent-a", 3).await;
+    for path in [
+        "/api/graph/all/entities?limit=0",
+        "/api/graph/all/entities?limit=1001",
+        "/api/graph/all/entities?limit=10&offset=1000001",
+        "/api/graph/all/search?q=x&limit=0",
+    ] {
+        server.get(path).await.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    }
+    let long_query = "q=".to_string() + &"x".repeat(300);
+    server
+        .get(&format!("/api/graph/all/search?{long_query}&limit=5"))
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+    for hops in ["max_hops=0", "max_hops=5"] {
+        server
+            .get(&format!("/api/graph/root/entities/e/subgraph?{hops}"))
+            .await
+            .assert_status(axum::http::StatusCode::BAD_REQUEST);
+    }
+}
+
+// AC3 — projection: oversized names clip at a Unicode boundary with the
+// truncation flag; over-budget properties are omitted without losing counts.
+#[tokio::test]
+async fn projection_flags_truncation_without_losing_counts() {
+    use knowledge_graph::types::Entity as DomainEntity;
+    use knowledge_graph::types::EntityType;
+    let (server, _dir, state) = setup("127.0.0.1".parse().unwrap());
+    let store = state.kg_store().expect("kg store");
+    let mut long_name = DomainEntity::new(
+        "agent-a".to_string(),
+        EntityType::Concept,
+        "é".repeat(1200),
+    );
+    long_name.id = "entity-long-name".to_string();
+    store.upsert_entity("agent-a", long_name).await.expect("long name");
+    let mut deep_props = DomainEntity::new(
+        "agent-a".to_string(),
+        EntityType::Concept,
+        "Deep".to_string(),
+    );
+    deep_props.id = "entity-deep-props".to_string();
+    for index in 0..80 {
+        deep_props.properties.insert(
+            format!("key{index}"),
+            serde_json::json!(format!("v{}", "y".repeat(64))),
+        );
+    }
+    store.upsert_entity("agent-a", deep_props).await.expect("deep props");
+
+    let response = server.get("/api/graph/all/entities?limit=10").await;
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["total"].as_u64(), Some(2), "counts stay exact");
+    let entities = body["entities"].as_array().expect("entities");
+    let long = entities.iter().find(|e| e["id"] == "entity-long-name").expect("long");
+    assert_eq!(long["name"].as_str().map(|n| n.chars().count()), Some(1024));
+    assert_eq!(long["projection_truncated"], true);
+    let deep = entities.iter().find(|e| e["id"] == "entity-deep-props").expect("deep");
+    assert_eq!(deep["properties"].as_object().map(|p| p.len()), Some(0));
+    assert_eq!(deep["projection_truncated"], true);
+}

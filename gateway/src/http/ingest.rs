@@ -40,6 +40,8 @@ pub struct IngestResponse {
 }
 
 pub async fn ingest(
+    _origin: crate::http::SameOrigin,
+    _bind: crate::http::sessions::LoopbackBind,
     State(state): State<AppState>,
     Json(req): Json<IngestRequest>,
 ) -> Result<(StatusCode, Json<IngestResponse>), (StatusCode, String)> {
@@ -127,6 +129,8 @@ pub struct ProgressResponse {
 }
 
 pub async fn progress(
+    _origin: crate::http::SameOrigin,
+    _bind: crate::http::sessions::LoopbackBind,
     State(state): State<AppState>,
     Path(source_id): Path<String>,
 ) -> Result<Json<ProgressResponse>, (StatusCode, String)> {

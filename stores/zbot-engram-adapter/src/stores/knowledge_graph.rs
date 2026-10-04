@@ -17,8 +17,8 @@ use knowledge_graph::kg_trait::kg_types::{
 use knowledge_graph::kg_trait::{
     ArchivableEntity, EntityNameEmbeddingHit, EntityPage, EntityWithEmbedding, ExtractedKnowledge,
     GraphStoreError, GraphStoreResult, GraphView, HierarchySummary, InterClusterRelationHit,
-    KgStats, KnowledgeGraphStore, LcaPath, RelationshipPage, ReindexReport, StoreOutcome,
-    VecIndexHealth,
+    KgStats, KnowledgeGraphStore, LcaPath, NeighborPage, RelationshipPage, ReindexReport,
+    StoreOutcome, VecIndexHealth,
 };
 use knowledge_graph::types::Direction;
 use knowledge_graph::types::{
@@ -919,6 +919,119 @@ impl KnowledgeGraphStore for EngramKnowledgeGraphStore {
             relationships: entries
                 .into_iter()
                 .map(|entry| entry.relationship)
+                .collect(),
+            total,
+        })
+    }
+
+    async fn search_entities_paged(
+        &self,
+        agent_id: &str,
+        query: &str,
+        entity_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<EntityPage> {
+        let needle = query.to_lowercase();
+        let rows = self
+            .sidecar
+            .list_entity_entries(Some(agent_id), entity_type, usize::MAX, 0)?;
+        let mut matched: Vec<_> = rows
+            .into_iter()
+            .filter(|entry| entry.entity.name.to_lowercase().contains(&needle))
+            .collect();
+        matched.sort_by(|left, right| {
+            right
+                .entity
+                .mention_count
+                .cmp(&left.entity.mention_count)
+                .then_with(|| left.entity.agent_id.cmp(&right.entity.agent_id))
+                .then_with(|| left.entity.id.cmp(&right.entity.id))
+        });
+        let total = matched.len();
+        Ok(EntityPage {
+            entities: matched
+                .into_iter()
+                .skip(offset)
+                .take(limit.max(1))
+                .map(|entry| entry.entity)
+                .collect(),
+            total,
+        })
+    }
+
+    async fn search_all_entities_paged(
+        &self,
+        query: &str,
+        entity_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<EntityPage> {
+        let needle = query.to_lowercase();
+        let rows = self
+            .sidecar
+            .list_entity_entries(None, entity_type, usize::MAX, 0)?;
+        let mut matched: Vec<_> = rows
+            .into_iter()
+            .filter(|entry| entry.entity.name.to_lowercase().contains(&needle))
+            .collect();
+        matched.sort_by(|left, right| {
+            right
+                .entity
+                .mention_count
+                .cmp(&left.entity.mention_count)
+                .then_with(|| left.entity.agent_id.cmp(&right.entity.agent_id))
+                .then_with(|| left.entity.id.cmp(&right.entity.id))
+        });
+        let total = matched.len();
+        Ok(EntityPage {
+            entities: matched
+                .into_iter()
+                .skip(offset)
+                .take(limit.max(1))
+                .map(|entry| entry.entity)
+                .collect(),
+            total,
+        })
+    }
+
+    async fn get_neighbors_full_paged(
+        &self,
+        agent_id: &str,
+        entity_id: &str,
+        direction: Direction,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<NeighborPage> {
+        let id = EntityId(entity_id.to_string());
+        let rows = self.sidecar.neighbors(&id, direction, usize::MAX)?;
+        let mut hydrated = Vec::new();
+        for row in rows {
+            let Some(entity) = self.sidecar.get_entity(&row.neighbor_id)? else {
+                continue;
+            };
+            if entity.agent_id != agent_id {
+                continue;
+            }
+            hydrated.push(NeighborInfo {
+                entity,
+                relationship: row.relationship,
+                direction: kg_direction(row.direction),
+            });
+        }
+        hydrated.sort_by(|left, right| {
+            right
+                .relationship
+                .mention_count
+                .cmp(&left.relationship.mention_count)
+                .then_with(|| left.entity.id.cmp(&right.entity.id))
+        });
+        let total = hydrated.len();
+        Ok(NeighborPage {
+            neighbors: hydrated
+                .into_iter()
+                .skip(offset)
+                .take(limit.max(1))
                 .collect(),
             total,
         })

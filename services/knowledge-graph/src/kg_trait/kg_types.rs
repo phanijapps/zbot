@@ -1,4 +1,4 @@
-use crate::types::{Entity, Relationship};
+use crate::types::{Entity, NeighborInfo, Relationship};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -142,5 +142,13 @@ pub struct EntityPage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelationshipPage {
     pub relationships: Vec<Relationship>,
+    pub total: usize,
+}
+
+/// One consistent page of hydrated neighbors with the exact agent-scoped
+/// total (exploration contract AC1).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NeighborPage {
+    pub neighbors: Vec<NeighborInfo>,
     pub total: usize,
 }
