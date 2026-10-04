@@ -120,7 +120,7 @@ pub use engine::{
     PreparedExecution, RecallPacket, RecallSchedule, StreamEventSink, ToolDecision,
     ToolExecutionMode,
 };
-pub use rig_adapter::{CompletionClient, RigAgentConfig, RigConfigError, RigModelConfig};
+pub use rig_adapter::{RigAgentConfig, RigConfigError, RigModelConfig};
 
 pub use steering::{
     SteeringHandle, SteeringMessage, SteeringPriority, SteeringQueue, SteeringSource,

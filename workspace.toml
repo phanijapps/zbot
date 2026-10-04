@@ -30,10 +30,10 @@ queue = [
   { path = "docs/specs/observatory-graph-completeness/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/observatory-graph-completeness/spec.md", revision = "ee35d6720922174f95a9ffc59d11b2482eecf675", parent = "docs/product/briefs/rig-hooks-session-graph.md" }, summary = "Explore and search beyond one graph page with measured styled UX", needs = [] },
 ]
 active = [
-  { path = "docs/specs/rig-043-migration/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/rig-043-migration/spec.md", revision = "ee35d6720922174f95a9ffc59d11b2482eecf675", parent = "docs/product/briefs/rig-hooks-session-graph.md" }, summary = "Upgrade Rig to exactly 0.43.0 with execution/provider parity", needs = [] },
   { path = "docs/specs/desktop-session-shell/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/desktop-session-shell/spec.md" }, summary = "Shared Chat and Research conversation shell with truthful session details and direct Memory and Observatory access", needs = [] },
 ]
 shipped = [
+  { path = "docs/specs/rig-043-migration/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/rig-043-migration/spec.md", revision = "ee35d6720922174f95a9ffc59d11b2482eecf675", parent = "docs/product/briefs/rig-hooks-session-graph.md" }, summary = "Upgrade Rig to exactly 0.43.0 with execution/provider parity", needs = [] },
   { path = "docs/specs/ci-recovery/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/ci-recovery/spec.md" }, summary = "Repair the Research Stop fixture and generated async-trait Clippy error", needs = [] },
 ]
 

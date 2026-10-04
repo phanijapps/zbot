@@ -45,21 +45,18 @@ pub(super) fn map_assistant_tool_call(
     peer_influenced: bool,
     on_event: &mut StreamEventSink<'_>,
 ) {
-    let tool_id = tool_call
-        .call_id
-        .clone()
-        .unwrap_or_else(|| tool_call.id.clone());
+    let tool_id = tool_call.id.to_string();
     tool_names_by_call_id.insert(
         tool_id.clone(),
         (
-            tool_call.function.name.clone(),
+            tool_call.function.name.to_string(),
             tool_call.function.arguments.clone(),
         ),
     );
     on_event(StreamEvent::ToolCallStart {
         timestamp: current_timestamp(),
         tool_id,
-        tool_name: tool_call.function.name.clone(),
+        tool_name: tool_call.function.name.to_string(),
         args: externally_visible_tool_args(
             &tool_call.function.name,
             &tool_call.function.arguments,
@@ -85,13 +82,12 @@ pub(super) fn map_tool_result(
     tool_result: &RigToolResult,
     results: &SharedToolResults,
     policy: Option<&Arc<ContextPolicy>>,
-    shared_context: &super::SharedToolContext,
     tool_names_by_call_id: &mut HashMap<String, (String, serde_json::Value)>,
     on_event: &mut StreamEventSink<'_>,
 ) -> super::turn_signal::TurnSignal {
     use super::turn_signal::TurnSignal;
 
-    let outcome = results.take();
+    let outcome = results.take(&tool_result.call.to_string());
     let context_text = outcome
         .context
         .unwrap_or_else(|| tool_result_text(tool_result));
@@ -101,20 +97,20 @@ pub(super) fn map_tool_result(
         // no tool ran; retain our attempt trace.
         on_event(StreamEvent::ToolCallStart {
             timestamp: current_timestamp(),
-            tool_id: tool_result.id.clone(),
+            tool_id: tool_result.call.to_string(),
             tool_name: name.clone(),
             args: externally_visible_tool_args(name, args, results.peer_influenced()),
         });
     }
     let tool_info = tool_names_by_call_id
-        .remove(&tool_result.id)
+        .remove(&tool_result.call.to_string())
         .or(outcome.rejected_call);
     let is_surface_tool = tool_info
         .as_ref()
         .is_some_and(|(name, _)| name == "present_surface");
     if let (Some(policy), Some((name, args))) = (policy, &tool_info) {
         policy.record_tool(name, args, outcome.error.as_deref());
-        policy.completed(&tool_result.id, name, args, &context_text);
+        policy.completed(&tool_result.call.to_string(), name, args, &context_text);
     }
     let (event_result, event_context, event_error) = externally_visible_tool_result(
         results.peer_influenced(),
@@ -126,7 +122,7 @@ pub(super) fn map_tool_result(
     // (delegate/respond), mirroring the legacy executor. Without
     // ActionDelegate, delegate_to_agent would not spawn a child and
     // wait_agent would hang forever on the Rig path.
-    let actions = shared_context.take_actions();
+    let actions = outcome.actions;
     let mut signal = TurnSignal::Continue;
     if let Some(delegate) = actions.delegate {
         if !delegate.parallel {
@@ -181,7 +177,7 @@ pub(super) fn map_tool_result(
     emit_result_markers(&result_text, is_surface_tool, on_event);
     on_event(StreamEvent::ToolResult {
         timestamp: current_timestamp(),
-        tool_id: tool_result.id.clone(),
+        tool_id: tool_result.call.to_string(),
         result: event_result,
         context_result: event_context,
         error: event_error,
@@ -190,7 +186,7 @@ pub(super) fn map_tool_result(
     if let Some((tool_name, args)) = tool_info {
         on_event(StreamEvent::ToolCallEnd {
             timestamp: current_timestamp(),
-            tool_id: tool_result.id.clone(),
+            tool_id: tool_result.call.to_string(),
             args: externally_visible_tool_args(&tool_name, &args, results.peer_influenced()),
             tool_name,
         });
@@ -307,12 +303,15 @@ fn emit_result_markers(
 
 /// Completion-call usage → cumulative `TokenUpdate` emit.
 pub(super) fn map_completion_call(
-    input_tokens: u64,
-    output_tokens: u64,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
     total_input: &mut u64,
     total_output: &mut u64,
     on_event: &mut StreamEventSink<'_>,
 ) {
+    let (Some(input_tokens), Some(output_tokens)) = (input_tokens, output_tokens) else {
+        return;
+    };
     // Emit token usage (cumulative) so the gateway records per-execution
     // token counts via TokenUpdate → batch_writer.
     *total_input += input_tokens;

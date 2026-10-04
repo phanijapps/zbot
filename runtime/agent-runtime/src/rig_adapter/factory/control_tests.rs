@@ -48,10 +48,7 @@ impl LlmClient for PendingProvider {
     }
 }
 
-fn engine(
-    provider: Arc<dyn LlmClient>,
-    manager: Arc<McpManager>,
-) -> RigAgentEngine<LlmCompletionModel> {
+fn engine(provider: Arc<dyn LlmClient>, manager: Arc<McpManager>) -> RigAgentEngine {
     let cfg = ExecutorConfig::new(
         "actor".into(),
         "fixture-provider".into(),

@@ -1,7 +1,7 @@
 # Plan: Rig 0.43.0 execution parity
 
 - **Spec:** [`spec.md`](spec.md)
-- **Status:** Approved
+- **Status:** Done
 
 ## Approach
 

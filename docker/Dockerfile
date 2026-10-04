@@ -26,7 +26,7 @@ RUN cd apps/ui && npm run build
 # ---------------------------------------------------------------------------
 # Stage 2: Rust Build
 # ---------------------------------------------------------------------------
-FROM rust:1.93-slim-bookworm AS builder
+FROM rust:1.97-slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

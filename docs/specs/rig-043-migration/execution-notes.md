@@ -20,4 +20,31 @@ tool data/absent usage, transcript-only response history and dispatch gating are
 proven for the SDK. Native integration resolves rmcp 2.2.0, requiring deliberate
 compatibility work with host 1.7.0. No host migration gate is claimed passed.
 
-Open: T2 dependency/bridge implementation, T3 runner/hook/context port, and T4 migrated-release parity. Existing tests remain the regression authority; do not weaken sequential-terminal or checkpoint assertions.
+Resolved: T2 dependency/bridge and T3 lifecycle/context/MCP migration pass the
+frozen regression suite. T4 proves Chat/Research reload, Research delegation
+join, real pending-request cancellation and continuation, and bounded live
+intent checks for configured Ollama and Z.AI at 5000 tokens. See verification.md
+for exact commands/results and baseline gate exceptions.
+
+Review shape: the 2302-line runtime diff is split for review into released
+model/structured/client plus private tool-scope/results, then runner/lifecycle/
+context and mechanical MCP fixture mappings. Released signatures are coupled
+at compile time; both groups share the complete working tree and retained
+regression assertions. No intermediate incompatible engine is introduced.
+
+Bundled fix resolved: the new compiler's multimodal Object match guard keeps
+the same condition/body and passes strict clippy. Existing rustls advisory,
+distillation license metadata and unrelated spec vocabulary remain registered
+baseline issues; this migration neither suppresses nor expands their scope.
+
+Resolved: adversarial, security and whole-spec quality reviews each report
+Clean — ready to commit. All AC1–8 evidence is verified; no review findings
+remain. The code loop awaits the human merge decision after PR publication.
+Project-knowledge not requested. No production frontend changes in this Rig
+slice; frontend review does not fire, and experience-reviewer is unavailable
+(named skip for the documentation-only reader surface).
+
+Capture triage: the reusable callback-contract lesson is a normative verification
+procedure, so it is not admitted as a project-knowledge observation. It is
+captured through the required memex procedure seam. No observation receipts
+exist to distill and no project-knowledge journal diff is created.

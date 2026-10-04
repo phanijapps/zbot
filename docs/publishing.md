@@ -21,7 +21,7 @@ directory.
 
 ### All Platforms
 
-- **Rust** 1.75+ (`rustup` recommended)
+- **Rust** 1.95+ (`rustup` recommended; the workspace selects Rust 1.97)
 - **Node.js** 20+ and **npm**
 - **Git**
 
@@ -280,7 +280,7 @@ jobs:
           path: apps/ui/dist/
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.0
         with:
           targets: ${{ matrix.target }}
 
@@ -319,7 +319,7 @@ jobs:
           path: apps/ui/dist/
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.0
         with:
           targets: ${{ matrix.target }}
 
@@ -358,7 +358,7 @@ jobs:
           path: apps/ui/dist/
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.0
         with:
           targets: ${{ matrix.target }}
 
@@ -534,7 +534,7 @@ package() {
 
 ```dockerfile
 # Dockerfile
-FROM rust:1.75 AS builder
+FROM rust:1.97 AS builder
 
 WORKDIR /app
 COPY . .

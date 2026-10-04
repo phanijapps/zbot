@@ -362,7 +362,7 @@ async fn build_harness(provider: ScriptedProvider) -> TaskHarness {
 impl TaskHarness {
     /// Run one session to root completion; assert the root completes
     /// within the timeout. Returns the session id.
-    async fn run_to_completion(&self, prompt: &str) -> String {
+    async fn run_to_completion(&self, prompt: &str, mode: &str) -> String {
         let (_, session_id) = self
             .runner
             .invoke_with_callback(
@@ -371,7 +371,7 @@ impl TaskHarness {
                     "golden-tasks".to_owned(),
                     self.paths.vault_dir().clone(),
                 )
-                .with_mode("chat".to_owned()),
+                .with_mode(mode.to_owned()),
                 prompt.to_owned(),
                 None,
             )
@@ -445,7 +445,7 @@ async fn golden_task_ward_then_plan() {
     let harness = build_harness(provider).await;
 
     let session_id = harness
-        .run_to_completion("research and build in goldward")
+        .run_to_completion("research and build in goldward", "chat")
         .await;
 
     // (a) Ward binding: the ROOT session row is bound — the async
@@ -618,7 +618,7 @@ async fn golden_task_procedure_contract() {
         .expect("seed procedure");
 
     let session_id = harness
-        .run_to_completion("run the golden greet procedure for world")
+        .run_to_completion("run the golden greet procedure for world", "chat")
         .await;
 
     // The procedure executed with the supplied args: the tool result
@@ -683,7 +683,7 @@ async fn golden_task_memory_persistence() {
     let harness = build_harness(provider).await;
 
     let session_id = harness
-        .run_to_completion("remember something important")
+        .run_to_completion("remember something important", "chat")
         .await;
     assert!(!session_id.is_empty());
 
@@ -732,7 +732,7 @@ async fn golden_task_simple_fast_path() {
     let harness = build_harness(provider).await;
 
     let mut events = harness.event_bus.subscribe_all();
-    let session_id = harness.run_to_completion("quick question").await;
+    let session_id = harness.run_to_completion("quick question", "chat").await;
 
     // No delegation events fired.
     let mut stray = None;
@@ -749,7 +749,7 @@ async fn golden_task_simple_fast_path() {
     assert_eq!(wards.count(), 0, "fast path must not create wards");
 }
 
-/// Scenario 5 — parallel delegation join: two `parallel: true` children
+/// Scenario 5 — Research-mode parallel delegation join: two `parallel: true` children
 /// fire back-to-back without per-session claim blocking, and the root
 /// resumes only after BOTH complete (the continuation-watcher join).
 ///
@@ -795,8 +795,19 @@ async fn golden_task_parallel_join() {
     // arrive after both child completions).
     let mut ordering = harness.event_bus.subscribe_all();
     let session_id = harness
-        .run_to_completion("build and research in parallel")
+        .run_to_completion("build and research in parallel", "research")
         .await;
+    assert_eq!(
+        harness
+            .state
+            .get_session(&session_id)
+            .unwrap()
+            .unwrap()
+            .mode
+            .as_deref(),
+        Some("research"),
+        "delegated journey must retain Research mode across continuation"
+    );
 
     // (a) Both children spawned: two distinct child sessions with the
     // right agents, linked to the parent session.

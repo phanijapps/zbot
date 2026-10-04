@@ -3,10 +3,10 @@
   "run_id": "dd5b3f89-9315-4831-ae7c-d343ea94256c",
   "feature": "ci-recovery",
   "mode": "code",
-  "state": "CODE-HUMAN-GATE",
-  "last_event": "reviewers-clean",
+  "state": "DONE",
+  "last_event": "done",
   "last_event_context": null,
-  "transition_sequence": 16,
-  "last_transition_at": "2026-10-04T02:14:50Z",
-  "gate_question": "Are these changes correct and ready to merge?"
+  "transition_sequence": 17,
+  "last_transition_at": "2026-10-04T02:19:28Z",
+  "gate_question": null
 }

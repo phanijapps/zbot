@@ -181,7 +181,7 @@ pub(super) fn prepared(provider: Arc<Provider>) -> PreparedExecution {
         Arc::new(MiddlewarePipeline::new()),
     )
 }
-pub(super) fn engine(prepared: PreparedExecution) -> RigAgentEngine<LlmCompletionModel> {
+pub(super) fn engine(prepared: PreparedExecution) -> RigAgentEngine {
     let config = RigAgentConfig::new(
         "actor",
         "Actor",

@@ -1,217 +1,139 @@
-//! Bridge from AgentZero (`agent_primitives::Tool`) tools into Rig's tool dispatch.
-//!
-//! Rig owns the agent loop (multi-turn, tool scheduling, hooks, streaming).
-//! AgentZero keeps owning its tools, their executable filtering, and the
-//! runtime context they need. This module adapts an existing AgentZero tool
-//! into Rig's object-safe [`ToolDyn`] so a Rig agent can call it without the
-//! tool, its arguments, or its result knowing Rig exists.
-//!
-//! ## Hidden context — `ToolCallExtensions`, never model-visible args
-//!
-//! AgentZero tools receive an `Arc<ToolContext>` carrying session id, agent id,
-//! ward, auth scopes, loaded-skill state, and similar runtime data that must
-//! never be exposed to the model. Rig's equivalent carrier is
-//! [`ToolCallExtensions`] — a typed map threaded into `call_with_extensions`.
-//! The engine inserts the shared `Arc<ToolContext>` once per run
-//! ([`SharedToolContext`]); each bridged tool reads it back. Because the same
-//! `Arc` is shared across every tool call in a turn, state written by one tool
-//! (e.g. `load_skill`) persists for the next, matching the current executor.
-//!
-//! ## Result shape — model-visible string only
-//!
-//! The adapter returns a model-visible `String`: a bare JSON string passes
-//! through verbatim, any other JSON value becomes a JSON string (mirroring
-//! Rig's own `serialize_tool_output`). AgentZero's richer `context_result`
-//! rewriting — large-result offload, truncation, the raw/context/persisted/UI
-//! distinction — is applied later by the engine through Rig's
-//! `Flow::RewriteResult` hook, not here.
-
-use std::sync::Arc;
-
-use agent_primitives::Tool as ZeroTool;
-use rig::completion::ToolDefinition;
-use rig::tool::{ToolCallExtensions, ToolDyn, ToolError};
-use rig::wasm_compat::WasmBoxedFuture;
-use serde_json::{json, Value};
-
+//! Host tools exposed through Rig's dynamic tool callbacks and private scope.
 use super::tool_results::{SharedToolResults, ToolOutcome};
 use crate::tools::context::ToolContext;
+use agent_primitives::Tool as ZeroTool;
+use rig::tool::{DynamicTool, ToolContext as RigToolContext, ToolOutput};
+use serde_json::{json, Value};
+use std::sync::Arc;
 
-/// Shared AgentZero tool execution context carried through Rig's
-/// `ToolCallExtensions`.
-///
-/// This is an alias, not a newtype, so the engine can keep constructing the
-/// existing `Arc<ToolContext>` and merely `insert` it. The indirection through
-/// a named type keeps the extension key stable and self-documenting at the
-/// call site (`extensions.get::<SharedToolContext>()`).
 pub type SharedToolContext = Arc<ToolContext>;
-
-/// Adapter wrapping an existing AgentZero tool as a Rig [`ToolDyn`].
-///
-/// One adapter per AgentZero tool. Register the resulting `Box<dyn ToolDyn>`
-/// values with `AgentBuilder::tools`.
+pub(super) struct HostToolScope {
+    pub context: SharedToolContext,
+    pub results: SharedToolResults,
+}
+#[derive(Clone)]
 pub struct RigToolAdapter {
     inner: Arc<dyn ZeroTool>,
 }
-
 #[derive(Debug, thiserror::Error)]
 #[error("Host tool execution context is missing")]
 struct MissingToolContext;
-
 impl RigToolAdapter {
-    /// Wrap an existing AgentZero tool.
     #[must_use]
     pub fn new(inner: Arc<dyn ZeroTool>) -> Self {
         Self { inner }
     }
-
-    /// Wrap an existing AgentZero tool as a boxed Rig dynamic tool.
     #[must_use]
-    pub fn boxed(inner: Arc<dyn ZeroTool>) -> Box<dyn ToolDyn> {
-        Box::new(Self::new(inner))
+    pub fn boxed(inner: Arc<dyn ZeroTool>) -> DynamicTool {
+        Self::new(inner).into_dynamic()
     }
-}
-
-impl ToolDyn for RigToolAdapter {
-    fn name(&self) -> String {
-        self.inner.name().to_string()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
-        // Clone the Arc so the returned future does not borrow `self`.
-        let inner = self.inner.clone();
-        Box::pin(async move {
-            let parameters = crate::tool_schema::harden_tool_schema(
-                inner
-                    .parameters_schema()
-                    .filter(|v| !v.is_null())
-                    .unwrap_or_else(empty_object_schema),
-            );
-            ToolDefinition {
-                name: inner.name().to_string(),
-                description: inner.description().to_string(),
-                parameters,
-            }
-        })
-    }
-
-    fn call<'a>(&'a self, args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
-        // No extensions on this path; the engine is expected to go through the
-        // `call_with_extensions` entry point for real runs.
-        self.dispatch(args, None, None)
-    }
-
-    fn call_with_extensions<'a>(
-        &'a self,
-        args: String,
-        extensions: &'a ToolCallExtensions,
-    ) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
-        // Extract hidden runtime context into an owned value up front so the
-        // returned future does not borrow `extensions` (keeps the borrow off
-        // the await boundary and off the `call` path's temporary).
-        self.dispatch(
-            args,
-            extensions.get::<SharedToolContext>().cloned(),
-            extensions.get::<SharedToolResults>().cloned(),
+    pub fn into_dynamic(self) -> DynamicTool {
+        let schema = crate::tool_schema::harden_tool_schema(
+            self.inner
+                .parameters_schema()
+                .filter(|v| !v.is_null())
+                .unwrap_or_else(empty_object_schema),
+        );
+        DynamicTool::new_with_context(
+            self.inner.name().to_owned(),
+            self.inner.description().to_owned(),
+            schema,
+            move |context: &mut RigToolContext, arguments| {
+                let scope = context.scope::<HostToolScope>();
+                let inner = self.inner.clone();
+                Box::pin(async move {
+                    let scope = scope.ok_or_else(|| {
+                        rig::tool::ToolExecutionError::other(MissingToolContext.to_string())
+                    })?;
+                    let id = scope.context.get_function_call_id();
+                    RigToolAdapter::new(inner)
+                        .dispatch(arguments, scope.context.clone(), scope.results.clone(), id)
+                        .await
+                        .map(ToolOutput::text)
+                })
+            },
         )
     }
 }
-
 impl RigToolAdapter {
-    /// Core dispatch shared by both `ToolDyn` entry points.
-    ///
-    /// Takes an owned context so the returned future borrows nothing from the
-    /// caller. `shared_ctx` is required and cannot be supplied by model arguments;
-    /// the engine inserts a real shared context for every run.
-    ///
-    /// Per-tool-call id is deliberately NOT threaded here: rig builds one
-    /// `ToolCallExtensions` per request, so it cannot represent a distinct id
-    /// per tool call in a turn, and writing it onto the shared `ToolContext`'s
-    /// single `function_call_id` field would race under `tool_concurrency > 1`.
-    /// The engine owns call-id fidelity (and its concurrency model) in T7.
-    fn dispatch<'a>(
-        &'a self,
-        args: String,
-        shared_ctx: Option<SharedToolContext>,
-        results: Option<SharedToolResults>,
-    ) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
-        let ctx = match shared_ctx {
-            Some(ctx) => ctx,
-            None => {
-                return Box::pin(async {
-                    Err(ToolError::ToolCallError(Box::new(MissingToolContext)))
-                });
-            }
-        };
+    /// Run a host tool with its private scope and sequential call identity.
+    async fn dispatch(
+        &self,
+        args: Value,
+        ctx: SharedToolContext,
+        results: SharedToolResults,
+        call_id: String,
+    ) -> Result<String, rig::tool::ToolExecutionError> {
         let inner = self.inner.clone();
-        Box::pin(async move {
-            let started = std::time::Instant::now();
-            let result = async {
-                if results
-                    .as_ref()
-                    .is_some_and(|results| results.peer_influenced())
-                    && inner.name() != "respond"
+        let started = std::time::Instant::now();
+        let result: Result<String, rig::tool::ToolExecutionError> = async {
+            if results.terminal() {
+                return Ok(json!({"blocked":true,"reason":"terminal_action_committed"}).to_string());
+            }
+            if results.peer_influenced() && inner.name() != "respond" {
+                return Ok(
+                    json!({"blocked":true,"reason":"peer_data_authority_boundary"}).to_string(),
+                );
+            }
+            // Providers send null for tools whose arguments are all optional.
+            let args_value = if args.is_null() { json!({}) } else { args };
+
+            if agent_tools::guards::planning_gate_blocks_tool(
+                ctx.as_ref(),
+                inner.name(),
+                &args_value,
+            ) {
+                return Ok(agent_tools::guards::cold_graph_redirect().to_string());
+            }
+
+            if let Some(result) = crate::tool_replay::intercept(ctx.as_ref(), inner.name()) {
+                return Ok(result);
+            }
+
+            let result = inner
+                .execute(ctx.clone(), args_value)
+                .await
+                .map_err(|e| rig::tool::ToolExecutionError::other(e.to_string()))?;
+
+            Ok(serialize_model_visible(result))
+        }
+        .await;
+        let duration_ms = started.elapsed().as_millis() as i64;
+        match result {
+            Ok(raw) => {
+                let actions = ctx.take_actions();
+                if actions.respond.is_some()
+                    || actions.delegate.as_ref().is_some_and(|a| !a.parallel)
                 {
-                    return Ok(
-                        json!({"blocked":true,"reason":"peer_data_authority_boundary"}).to_string(),
-                    );
-                }
-                // LLMs send `null` for tools whose arguments are all optional. JSON
-                // `null` parses to `Value::Null`, so normalize both the parsed-null
-                // and the unparseable cases to an empty object.
-                let args_value: Value = match serde_json::from_str::<Value>(&args) {
-                    Ok(Value::Null) => Value::Object(Default::default()),
-                    Ok(v) => v,
-                    Err(_) if args.trim() == "null" => Value::Object(Default::default()),
-                    Err(e) => return Err(ToolError::JsonError(e)),
-                };
-
-                if agent_tools::guards::planning_gate_blocks_tool(
-                    ctx.as_ref(),
-                    inner.name(),
-                    &args_value,
-                ) {
-                    return Ok(agent_tools::guards::cold_graph_redirect().to_string());
+                    results.mark_terminal();
                 }
 
-                if let Some(result) = crate::tool_replay::intercept(ctx.as_ref(), inner.name()) {
-                    return Ok(result);
-                }
-
-                let result = inner
-                    .execute(ctx, args_value)
-                    .await
-                    .map_err(|e| ToolError::ToolCallError(Box::new(e)))?;
-
-                Ok(serialize_model_visible(result))
+                results.record(
+                    &call_id,
+                    ToolOutcome {
+                        raw: Some(raw.clone()),
+                        actions,
+                        duration_ms,
+                        ..ToolOutcome::default()
+                    },
+                );
+                Ok(raw)
             }
-            .await;
-            if let Some(results) = results {
-                let duration_ms = started.elapsed().as_millis() as i64;
-                match result {
-                    Ok(raw) => {
-                        results.record(ToolOutcome {
-                            raw: Some(raw.clone()),
-                            duration_ms,
-                            ..ToolOutcome::default()
-                        });
-                        Ok(raw)
-                    }
-                    Err(error) => {
-                        let error = error.to_string();
-                        results.record(ToolOutcome {
-                            raw: Some(String::new()),
-                            error: Some(error.clone()),
-                            duration_ms,
-                            ..ToolOutcome::default()
-                        });
-                        Ok(json!({"error":error}).to_string())
-                    }
-                }
-            } else {
-                result
+            Err(error) => {
+                let _ = ctx.take_actions();
+                let error = error.to_string();
+                results.record(
+                    &call_id,
+                    ToolOutcome {
+                        raw: Some(String::new()),
+                        error: Some(error.clone()),
+                        duration_ms,
+                        ..ToolOutcome::default()
+                    },
+                );
+                Ok(json!({"error":error}).to_string())
             }
-        })
+        }
     }
 }
 
@@ -325,7 +247,7 @@ mod tests {
     async fn definition_maps_name_description_and_schema() {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let adapter = RigToolAdapter::new(Arc::new(RecordingTool::new(seen)));
-        let def = adapter.definition("ignored prompt".to_string()).await;
+        let def = adapter.into_dynamic().definition();
 
         assert_eq!(def.name, "record");
         assert_eq!(def.description, "Records its call");
@@ -347,14 +269,20 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let adapter = RigToolAdapter::new(Arc::new(RecordingTool::new(seen.clone())));
 
-        let mut extensions = ToolCallExtensions::new();
-        extensions.insert::<SharedToolContext>(shared_context_with_secret());
+        let mut context = RigToolContext::new();
+        context = context.with_scope(Arc::new(HostToolScope {
+            context: shared_context_with_secret(),
+            results: Arc::new(super::super::tool_results::ToolResults::default()),
+        }));
 
         let args_string = json!({"x": 42}).to_string();
         let model_visible = adapter
-            .call_with_extensions(args_string.clone(), &extensions)
+            .clone()
+            .into_dynamic()
+            .execute_with(&mut context, serde_json::from_str(&args_string).unwrap())
             .await
-            .expect("tool call");
+            .expect("tool call")
+            .render();
 
         let call = {
             let calls = seen.lock().unwrap();
@@ -378,7 +306,7 @@ mod tests {
         assert!(!observed_args.contains("sk-secret-never-for-model"));
         assert!(!model_visible.contains("sk-secret-never-for-model"));
         // And it is not in the schema the model sees either.
-        let def = adapter.definition(String::new()).await;
+        let def = adapter.into_dynamic().definition();
         let schema_str = def.parameters.to_string();
         assert!(!schema_str.contains("sk-secret-never-for-model"));
         assert!(!schema_str.contains("auth_token"));
@@ -401,13 +329,19 @@ mod tests {
             ))
             .unwrap(),
         );
-        let mut extensions = ToolCallExtensions::new();
-        extensions.insert::<SharedToolContext>(ctx);
+        let mut context = RigToolContext::new();
+        context = context.with_scope(Arc::new(HostToolScope {
+            context: ctx,
+            results: Arc::new(super::super::tool_results::ToolResults::default()),
+        }));
 
         let result = adapter
-            .call_with_extensions("{}".to_string(), &extensions)
+            .clone()
+            .into_dynamic()
+            .execute_with(&mut context, json!({}))
             .await
-            .expect("gate returns a redirect");
+            .expect("gate returns a redirect")
+            .render();
 
         assert!(result.contains("redirect"));
         assert!(result.contains("planner-agent"));
@@ -422,13 +356,19 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let adapter = RigToolAdapter::new(Arc::new(RecordingTool::new(seen.clone())));
 
-        let mut extensions = ToolCallExtensions::new();
-        extensions.insert::<SharedToolContext>(shared_context_with_secret());
+        let mut context = RigToolContext::new();
+        context = context.with_scope(Arc::new(HostToolScope {
+            context: shared_context_with_secret(),
+            results: Arc::new(super::super::tool_results::ToolResults::default()),
+        }));
 
         adapter
-            .call_with_extensions("null".to_string(), &extensions)
+            .clone()
+            .into_dynamic()
+            .execute_with(&mut context, Value::Null)
             .await
-            .expect("tool call");
+            .expect("tool call")
+            .render();
 
         let calls = seen.lock().unwrap();
         assert_eq!(calls[0].args, Value::Object(Default::default()));
@@ -438,15 +378,19 @@ mod tests {
     async fn direct_dispatch_respects_host_owned_peer_authority() {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let adapter = RigToolAdapter::new(Arc::new(RecordingTool::new(seen.clone())));
-        let mut extensions = ToolCallExtensions::new();
-        extensions.insert::<SharedToolContext>(shared_context_with_secret());
         let results = Arc::new(super::super::tool_results::ToolResults::default());
         results.mark_peer_influenced();
-        extensions.insert::<SharedToolResults>(results);
+        let mut context = RigToolContext::new().with_scope(Arc::new(HostToolScope {
+            context: shared_context_with_secret(),
+            results,
+        }));
         let response = adapter
-            .call_with_extensions("{\"peer_influenced\":false}".into(), &extensions)
+            .clone()
+            .into_dynamic()
+            .execute_with(&mut context, json!({"peer_influenced":false}))
             .await
-            .unwrap();
+            .unwrap()
+            .render();
         assert!(response.contains("peer_data_authority_boundary"));
         assert!(seen.lock().unwrap().is_empty());
     }
@@ -489,20 +433,25 @@ mod tests {
             }
         }
 
-        let mut extensions = ToolCallExtensions::new();
-        extensions.insert::<SharedToolContext>(shared_context_with_secret());
+        let mut context = RigToolContext::new();
+        context = context.with_scope(Arc::new(HostToolScope {
+            context: shared_context_with_secret(),
+            results: Arc::new(super::super::tool_results::ToolResults::default()),
+        }));
 
         let s = RigToolAdapter::new(Arc::new(StringTool))
-            .call_with_extensions("{}".to_string(), &extensions)
+            .into_dynamic()
+            .execute_with(&mut context, json!({}))
             .await
             .unwrap();
-        assert_eq!(s, "plain text result");
+        assert_eq!(s.render(), "plain text result");
 
         let o = RigToolAdapter::new(Arc::new(ObjectTool))
-            .call_with_extensions("{}".to_string(), &extensions)
+            .into_dynamic()
+            .execute_with(&mut context, json!({}))
             .await
             .unwrap();
-        assert_eq!(o, json!({"path": "/a/b", "bytes": 10}).to_string());
+        assert_eq!(o.render(), json!({"path": "/a/b", "bytes": 10}).to_string());
     }
 
     #[tokio::test]
@@ -530,16 +479,21 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
 
         let shared = shared_context_with_secret();
-        let mut extensions = ToolCallExtensions::new();
-        extensions.insert::<SharedToolContext>(shared.clone());
+        let mut context = RigToolContext::new();
+        context = context.with_scope(Arc::new(HostToolScope {
+            context: shared.clone(),
+            results: Arc::new(super::super::tool_results::ToolResults::default()),
+        }));
 
         RigToolAdapter::new(Arc::new(Writer))
-            .call_with_extensions("{}".to_string(), &extensions)
+            .into_dynamic()
+            .execute_with(&mut context, json!({}))
             .await
             .unwrap();
         // Second adapter, same extensions -> same shared Arc<ToolContext>.
         RigToolAdapter::new(Arc::new(RecordingTool::new(seen.clone())))
-            .call_with_extensions("{}".to_string(), &extensions)
+            .into_dynamic()
+            .execute_with(&mut context, json!({}))
             .await
             .unwrap();
 
@@ -563,11 +517,13 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let adapter = RigToolAdapter::new(Arc::new(RecordingTool::new(seen.clone())));
 
-        let extensions = ToolCallExtensions::new();
+        let mut context = RigToolContext::new();
         adapter
-            .call_with_extensions(
-                r#"{"agent_id":"forged","execution_id":"forged"}"#.to_string(),
-                &extensions,
+            .clone()
+            .into_dynamic()
+            .execute_with(
+                &mut context,
+                json!({"agent_id":"forged","execution_id":"forged"}),
             )
             .await
             .expect_err("hidden host context is mandatory");
@@ -598,7 +554,7 @@ mod tests {
         // parameters_schema() defaults to None via the trait.
         let adapter = RigToolAdapter::new(Arc::new(NoSchema));
         // Drive the definition future on a current-thread runtime.
-        let def = futures::executor::block_on(adapter.definition(String::new()));
+        let def = adapter.into_dynamic().definition();
         assert_eq!(
             def.parameters,
             crate::tool_schema::harden_tool_schema(empty_object_schema())
@@ -611,16 +567,22 @@ mod tests {
         if let Ok(mode) = std::env::var("ZBOT_RIG_REPLAY_PROBE") {
             let seen = Arc::new(Mutex::new(Vec::new()));
             let adapter = RigToolAdapter::new(Arc::new(RecordingTool::new(seen.clone())));
-            let mut extensions = ToolCallExtensions::new();
-            extensions.insert::<SharedToolContext>(shared_context_with_secret());
+            let mut context = RigToolContext::new();
+            context = context.with_scope(Arc::new(HostToolScope {
+                context: shared_context_with_secret(),
+                results: Arc::new(super::super::tool_results::ToolResults::default()),
+            }));
             let output = std::panic::AssertUnwindSafe(
-                adapter.call_with_extensions("{}".into(), &extensions),
+                adapter.into_dynamic().execute_with(&mut context, json!({})),
             )
             .catch_unwind()
             .await;
             match mode.as_str() {
                 "hit" => {
-                    assert_eq!(output.unwrap().unwrap(), "recorded without execution");
+                    assert_eq!(
+                        output.unwrap().unwrap().render(),
+                        "recorded without execution"
+                    );
                     assert!(seen.lock().unwrap().is_empty());
                 }
                 "strict" | "drift" => {

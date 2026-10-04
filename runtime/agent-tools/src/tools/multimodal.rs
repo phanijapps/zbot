@@ -72,13 +72,12 @@ fn coerce_multimodal_content(args: &mut serde_json::Value) {
             tracing::debug!("coerced multimodal content string→array");
             args["content"] = serde_json::json!([{ "type": "image", "source": source }]);
         }
-        serde_json::Value::Object(map) => {
+        serde_json::Value::Object(map)
             if map.contains_key("source")
-                && map.get("type").and_then(serde_json::Value::as_str) == Some("image")
-            {
-                tracing::debug!("coerced multimodal content object→array");
-                args["content"] = serde_json::json!([content.clone()]);
-            }
+                && map.get("type").and_then(serde_json::Value::as_str) == Some("image") =>
+        {
+            tracing::debug!("coerced multimodal content object→array");
+            args["content"] = serde_json::json!([content.clone()]);
         }
         _ => {}
     }

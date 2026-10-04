@@ -1,6 +1,6 @@
 //! The production factory owns MCP cleanup across every execution lifetime.
 
-use super::{factory::build_engine, model::LlmCompletionModel, RigAgentConfig, RigModelConfig};
+use super::{factory::build_engine, RigAgentConfig, RigModelConfig};
 use crate::{
     engine::{AgentEngine, ExecutorConfig, PreparedExecution},
     llm::{ChatMessage, ChatResponse, LlmClient, LlmConfig, LlmError, StreamCallback},
@@ -50,7 +50,7 @@ impl LlmClient for Provider {
 async fn fixture(
     mode: &'static str,
 ) -> (
-    super::engine::RigAgentEngine<LlmCompletionModel>,
+    super::engine::RigAgentEngine,
     Arc<McpManager>,
     tempfile::TempDir,
     Arc<Provider>,

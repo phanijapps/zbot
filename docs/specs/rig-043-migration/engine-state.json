@@ -3,12 +3,10 @@
   "run_id": "7570a8cf-cfab-441e-a31f-ea6d7a0263f1",
   "feature": "rig-043-migration",
   "mode": "code",
-  "state": "CODE-IMPLEMENTATION",
-  "last_event": "wave-passed",
-  "last_event_context": {
-    "completed_wave_index": 0
-  },
-  "transition_sequence": 7,
-  "last_transition_at": "2026-10-04T01:26:56Z",
-  "gate_question": null
+  "state": "CODE-HUMAN-GATE",
+  "last_event": "reviewers-clean",
+  "last_event_context": null,
+  "transition_sequence": 14,
+  "last_transition_at": "2026-10-04T03:16:01Z",
+  "gate_question": "Are these changes correct and ready to merge?"
 }

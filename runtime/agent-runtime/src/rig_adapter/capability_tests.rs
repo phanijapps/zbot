@@ -3,25 +3,22 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use super::model::{HostFrame, HostWire};
 use futures::StreamExt;
-use rig::agent::{AgentBuilder, AgentHook, Flow, RequestOverride, StepEvent};
-use rig::completion::{
-    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, GetTokenUsage, Usage,
+use rig::agent::{
+    AgentBuilder, AgentHook, CompletionCallAction, CompletionCallEvent, HookContext, OutcomeAction,
+    OutcomeEvent, RequestPatch,
 };
-use rig::streaming::{RawStreamingChoice, StreamingChat, StreamingCompletionResponse};
+use rig::completion::{CompletionRequest, Usage};
+use rig::driver::{Exchange, Opened, Opening, Transport};
+use rig::wire::Mode;
 use tokio::sync::Notify;
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-struct MeteredResponse;
-
-impl GetTokenUsage for MeteredResponse {
-    fn token_usage(&self) -> Usage {
-        Usage {
-            input_tokens: 11,
-            output_tokens: 3,
-            total_tokens: 14,
-            ..Usage::new()
-        }
+fn metered_usage() -> Usage {
+    Usage {
+        input_tokens: Some(11),
+        output_tokens: Some(3),
+        total_tokens: Some(14),
+        ..Default::default()
     }
 }
 
@@ -40,39 +37,18 @@ struct DropNotice(Arc<Notify>);
 #[derive(Clone)]
 struct HistoryPolicyModel(ProbeModel);
 
-impl CompletionModel for HistoryPolicyModel {
-    type Response = MeteredResponse;
-    type StreamingResponse = MeteredResponse;
-    type Client = ();
-
-    fn make(_: &(), _: impl Into<String>) -> Self {
-        Self(ProbeModel::default())
-    }
-
-    async fn completion(
+impl Transport<HostWire> for HistoryPolicyModel {
+    fn send(
         &self,
-        _: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        panic!("streaming probe");
-    }
-
-    async fn stream(
-        &self,
-        mut request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let retained = request
-            .chat_history
-            .iter()
-            .filter(|message| {
-                // A deliberately small deterministic policy: remove the complete
-                // obsolete user/assistant pair while preserving system and prompt.
-                let value = serde_json::to_string(message).unwrap();
-                !value.contains("obsolete-pair")
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        request.chat_history = rig::one_or_many::OneOrMany::many(retained).unwrap();
-        self.0.stream(request).await
+        (mut request, mode): (CompletionRequest, Mode),
+        exchange: Exchange,
+    ) -> Opening<HostFrame> {
+        request.chat_history.retain(|message| {
+            !serde_json::to_string(message)
+                .unwrap()
+                .contains("obsolete-pair")
+        });
+        self.0.send((request, mode), exchange)
     }
 }
 
@@ -82,46 +58,24 @@ impl Drop for DropNotice {
     }
 }
 
-impl CompletionModel for ProbeModel {
-    type Response = MeteredResponse;
-    type StreamingResponse = MeteredResponse;
-    type Client = ();
-
-    fn make(_: &(), _: impl Into<String>) -> Self {
-        Self::default()
-    }
-
-    async fn completion(
-        &self,
-        _: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        panic!("streaming probe must not call non-streaming completion")
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        self.requests.lock().unwrap().push(request);
-        if self.pending {
-            let entered = self.entered.clone();
-            let notice = DropNotice(self.dropped.clone());
-            let stream = futures::stream::once(async move {
-                let _notice = notice;
-                entered.notify_one();
-                futures::future::pending::<
-                    Result<RawStreamingChoice<MeteredResponse>, CompletionError>,
-                >()
-                .await
-            });
-            return Ok(StreamingCompletionResponse::stream(Box::pin(stream)));
-        }
-        Ok(StreamingCompletionResponse::stream(Box::pin(
-            futures::stream::iter([
-                Ok(RawStreamingChoice::Message("answer".into())),
-                Ok(RawStreamingChoice::FinalResponse(MeteredResponse)),
-            ]),
-        )))
+impl Transport<HostWire> for ProbeModel {
+    fn send(&self, (request, _): (CompletionRequest, Mode), _: Exchange) -> Opening<HostFrame> {
+        let this = self.clone();
+        Opening::new(async move {
+            this.requests.lock().unwrap().push(request);
+            if this.pending {
+                let notice = DropNotice(this.dropped.clone());
+                return Ok(Opened::new(futures::stream::once(async move {
+                    let _notice = notice;
+                    this.entered.notify_one();
+                    futures::future::pending::<Result<HostFrame, rig::error::ProviderError>>().await
+                })));
+            }
+            Ok(Opened::new(futures::stream::iter([
+                Ok(HostFrame::Text("answer".into())),
+                Ok(HostFrame::End(metered_usage())),
+            ])))
+        })
     }
 }
 
@@ -131,23 +85,24 @@ struct RequestPolicy {
     usage: Arc<Mutex<Vec<Usage>>>,
 }
 
-impl AgentHook<ProbeModel> for RequestPolicy {
-    async fn on_event(&self, event: StepEvent<'_, ProbeModel>) -> Flow {
-        match event {
-            StepEvent::CompletionCall { turn, .. } => {
-                self.turns.lock().unwrap().push(turn);
-                Flow::override_request(
-                    RequestOverride::new()
-                        .preamble("bounded system context")
-                        .max_tokens(23),
-                )
-            }
-            StepEvent::StreamResponseFinish { response, .. } => {
-                self.usage.lock().unwrap().push(response.token_usage());
-                Flow::cont()
-            }
-            _ => Flow::cont(),
+impl AgentHook for RequestPolicy {
+    async fn on_completion_call(
+        &self,
+        _: &HookContext,
+        event: CompletionCallEvent<'_>,
+    ) -> CompletionCallAction {
+        self.turns.lock().unwrap().push(event.turn);
+        CompletionCallAction::patch(
+            RequestPatch::new()
+                .preamble("bounded system context")
+                .max_tokens(23),
+        )
+    }
+    async fn on_outcome(&self, _: &HookContext, event: OutcomeEvent<'_>) -> OutcomeAction {
+        if let Some(response) = event.completion() {
+            self.usage.lock().unwrap().push(response.usage);
         }
+        OutcomeAction::Proceed
     }
 }
 
@@ -155,14 +110,12 @@ impl AgentHook<ProbeModel> for RequestPolicy {
 async fn rig_applies_request_policy_before_provider_and_exposes_usage() {
     let model = ProbeModel::default();
     let policy = RequestPolicy::default();
-    let agent = AgentBuilder::new(model.clone())
+    let agent = AgentBuilder::new(rig::Model::new(HostWire, model.clone()).erase())
         .preamble("original context")
         .max_tokens(99)
         .add_hook(policy.clone())
         .build();
-    let mut stream = agent
-        .stream_chat("hello", Vec::<rig::completion::Message>::new())
-        .await;
+    let mut stream = agent.prompt("hello").stream();
     while let Some(item) = stream.next().await {
         item.expect("Rig streaming turn");
     }
@@ -171,15 +124,12 @@ async fn rig_applies_request_policy_before_provider_and_exposes_usage() {
     // Rig resolves the override into a system history message; the provider
     // request's separate preamble field is intentionally empty.
     assert!(matches!(
-        requests[0].chat_history.iter().next(),
+        requests[0].chat_history.first(),
         Some(rig::completion::Message::System { content }) if content == "bounded system context"
     ));
     assert_eq!(requests[0].max_tokens, Some(23));
     assert_eq!(*policy.turns.lock().unwrap(), [1]);
-    assert_eq!(
-        *policy.usage.lock().unwrap(),
-        [MeteredResponse.token_usage()]
-    );
+    assert_eq!(*policy.usage.lock().unwrap(), [metered_usage()]);
 }
 
 #[tokio::test]
@@ -188,10 +138,8 @@ async fn dropping_rig_run_releases_a_provider_stream_that_never_yields() {
         pending: true,
         ..ProbeModel::default()
     };
-    let agent = AgentBuilder::new(model.clone()).build();
-    let mut stream = agent
-        .stream_chat("hello", Vec::<rig::completion::Message>::new())
-        .await;
+    let agent = AgentBuilder::new(rig::Model::new(HostWire, model.clone()).erase()).build();
+    let mut stream = agent.prompt("hello").stream();
     // The provider must actually be polled before cancellation: an unpolled
     // future would make a resource-release assertion vacuous.
     tokio::time::timeout(Duration::from_secs(1), async {
@@ -214,14 +162,15 @@ async fn dropping_rig_run_releases_a_provider_stream_that_never_yields() {
 async fn model_boundary_can_apply_history_policy_before_provider_dispatch() {
     use rig::completion::Message;
     let provider = ProbeModel::default();
-    let agent = AgentBuilder::new(HistoryPolicyModel(provider.clone()))
-        .preamble("preserved system")
-        .build();
+    let agent =
+        AgentBuilder::new(rig::Model::new(HostWire, HistoryPolicyModel(provider.clone())).erase())
+            .preamble("preserved system")
+            .build();
     let history = vec![
         Message::user("obsolete-pair question"),
         Message::assistant("obsolete-pair answer"),
     ];
-    let mut stream = agent.stream_chat("current question", history).await;
+    let mut stream = agent.prompt("current question").history(history).stream();
     while let Some(item) = stream.next().await {
         item.expect("Rig turn through request policy");
     }

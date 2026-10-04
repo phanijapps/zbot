@@ -20,20 +20,21 @@ ALLOWED_MCP_HTTP_SOURCES = {
     Path("runtime/agent-runtime/src/mcp/native.rs"),
     Path("runtime/agent-runtime/src/mcp/native_http.rs"),
 }
+RIG_CRATE = r"(?:rig|rig_core|rig_agent|rig_rmcp|rig_cassette|rig_http)"
 RIG_IMPORT_RE = re.compile(
-    r"\b(?:use|extern\s+crate)\s+(?:::)?(?:rig|rig_core)\b"
-    r"|\b(?:rig|rig_core)\s*::"
-    r"|\brig_core\b"
+    rf"\b(?:use|extern\s+crate)\s+(?:::)?{RIG_CRATE}\b"
+    rf"|\b{RIG_CRATE}\s*::"
+    r"|\b(?:rig_core|rig_agent|rig_rmcp|rig_cassette|rig_http)\b"
 )
-RIG_PROVIDER_DIRECT_RE = re.compile(r"\b(?:rig|rig_core)\s*::\s*providers\b")
+RIG_PROVIDER_DIRECT_RE = re.compile(rf"\b{RIG_CRATE}\s*::\s*providers\b")
 RIG_PROVIDER_GROUP_RE = re.compile(
-    r"\buse\s+(?:::)?(?:rig|rig_core)\s*::\s*\{[^;]*\bproviders\b",
+    rf"\buse\s+(?:::)?{RIG_CRATE}\s*::\s*\{{[^;]*\bproviders\b",
     re.DOTALL,
 )
 RIG_ALIAS_RE = re.compile(
-    r"\buse\s+(?:::)?(?:rig|rig_core)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*;"
-    r"|\bextern\s+crate\s+(?:rig|rig_core)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*;"
-    r"|\buse\s+(?:::)?(?:rig|rig_core)\s*::\s*\{[^;]*\bself\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\b",
+    rf"\buse\s+(?:::)?{RIG_CRATE}\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*;"
+    rf"|\bextern\s+crate\s+{RIG_CRATE}\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*;"
+    rf"|\buse\s+(?:::)?{RIG_CRATE}\s*::\s*\{{[^;]*\bself\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\b",
     re.DOTALL,
 )
 
@@ -60,7 +61,7 @@ def check_direct_dependencies(metadata: dict) -> None:
         package_name = package["name"]
         for dep in package["dependencies"]:
             dep_name = dep["name"]
-            if dep_name in RIG_DEP_NAMES and package_name != ALLOWED_RIG_PACKAGE:
+            if (dep_name in RIG_DEP_NAMES or dep_name.startswith("rig-")) and package_name != ALLOWED_RIG_PACKAGE:
                 violations.append(f"{package_name} -> {dep_name}")
             if dep_name == "reqwest" and dep.get("req", "").startswith("^0.13"):
                 # The MCP SDK's cancellation-aware transport requires its own

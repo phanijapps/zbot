@@ -1,4 +1,4 @@
-# Rig 0.43.0 migration map — T1
+# Rig 0.43.0 migration map
 
 Release oracle: published rig, rig-agent, rig-core and rig-rmcp 0.43.0 source
 (downloaded by cargo info), revision 654567eb64274fca00cab86cdd32c86b9913769e.
@@ -9,7 +9,10 @@ Oracle tier: strong for Rust types; T1 verifies shipped source signatures and
 the existing host regression baseline. The T2 compiler/runtime probe verifies
 the released custom Wire/Transport, erased single call, scoped DynamicTool,
 dispatch gate and response-history contract; see verification.md. Production
-host parity against the new release remains unverified.
+host parity is now verified by the runtime, gateway, browser and bounded live
+provider results in [verification.md](verification.md). The dependency/compiler
+notes below retain the original T1 baseline for comparison; the final workspace
+selects Rust 1.97.0 and rmcp 2.2.0.
 
 ## Dependency and compiler contract
 
@@ -39,7 +42,7 @@ All direct production Rig imports remain in runtime/agent-runtime/src/rig_adapte
 | tool_hook.rs | InvalidToolCall recovery | on_invalid_tool_call -> Some(InvalidToolCallAction::skip); denied names remain feedback, never executable repair. |
 | engine.rs::TurnLimitHook | One-based CompletionCall | on_completion_call retains one-based turn; CompletionCallAction::Stop enforces existing tick-before-check policy, independent of changed native budget semantics. |
 | context_policy.rs::ContextCapture | CompletionCall prompt/history snapshot | on_completion_call copies history and prompt with event.turn; no log reconstruction is needed before preparing the next provider request. |
-| engine.rs/context_policy.rs | FinalResponse.history() | PromptResponse.messages() returns the run transcript, excluding supplied history. Preserve seed history explicitly before final_history/checkpoint assembly. |
+| engine.rs/context_policy.rs | FinalResponse.history() | PromptResponse.messages() returns the run transcript, excluding supplied history. Pass the SDK transcript to the existing base/tail checkpoint assembler; do not prepend the seed again. |
 | turn_events.rs | ToolCall id/call_id; old streamed choices | Unified CallId; to_string for host correlation, wire for provider identity. Map separate committed ToolCall once; text/reasoning use Item<StreamEvent>. |
 | structured.rs/client.rs | CompletionClient/TypedPrompt/agent.completion | Direct single Rig model.call(CompletionRequest) for complete_once, with no agent loop/retry/tool execution. Typed agent prompt returns TypedPromptResponse.output. |
 | capability/mcp tests | Old hook/flow/native ToolDyn probes | Port probes to released event actions/DynamicTool. Keep independent connections and close-on-stop evidence; facade rmcp path remains native-only. |
@@ -51,8 +54,10 @@ All direct production Rig imports remain in runtime/agent-runtime/src/rig_adapte
    one. Breaking the host stream after a respond/delegate result is too late to
    prevent a sibling side effect. Gate subsequent host dispatch immediately when
    terminal/delegation action state is set; retain completed tool/action evidence.
-2. Final transcript excludes seed input history. Preserve that history during
-   checkpoint reconciliation instead of dropping earlier conversation messages.
+2. Final transcript excludes seed input history. ContextPolicy already owns the
+   base conversation and strips the absorbed prefix from the run transcript.
+   Prepending the seed again duplicates history; retain the frozen snapshot
+   regression as the oracle.
 3. Streaming frames and committed tool calls have different boundaries. Exactly
    one host ToolCallStart is emitted per admitted call, with stable correlation.
 4. Completion calls have optional provider usage; single intent completion still

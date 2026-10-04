@@ -1,7 +1,7 @@
 import { expect } from "@playwright/test";
 import { bootFullMode } from "../../lib/harness-full";
 
-const { test, handle } = bootFullMode({ fixture: "stop-and-continue" });
+const { test, handle } = bootFullMode({ fixture: "stop-and-continue", freshVault: true, sameOrigin: true, localOnly: true });
 
 test.describe("regression: stop mid-session, continue, root completes", () => {
   // Locks in:

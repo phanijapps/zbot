@@ -1,27 +1,5 @@
-//! Rig-backed execution engine behind the [`AgentEngine`] facade.
-//!
-//! Drives a Rig [`Agent`](rig::agent::Agent) built from a [`RigAgentConfig`],
-//! a [`CompletionModel`], and a set of bridged [`ToolDyn`] tools, and maps its
-//! multi-turn stream onto AgentZero [`StreamEvent`]s. It is generic over the
-//! model so contract tests can drive it without the production provider bridge.
-//!
-//! ## Status (T7)
-//!
-//! Wired and tested: agent construction, multi-turn stream driving via
-//! `stream_chat` (with `ChatMessage`→`Message` history), cooperative stop,
-//! streaming-error mapping, and mapping of `MultiTurnStreamItem` onto
-//! `StreamEvent` — text→`Token`, reasoning→`Reasoning`, tool-call→
-//! `ToolCallStart`, tool-result→`ToolResult`, terminal→`Done`. The
-//! `LlmCompletionModel` bridge (`model.rs`) lets Rig drive the real
-//! OpenAI-compatible `LlmClient`.
-//!
-//! Tool results retain raw/error/duration telemetry separately from the
-//! offloaded/truncated/after-hook context sent to the model.
-//!
-//! T7c is wired: [`RigExecutionHook`] surfaces `before_tool_call`
-//! (`Block`→`Flow::Skip`) and `after_tool_call` (→`Flow::RewriteResult`), and
-//! sets the per-call `function_call_id` from `StepEvent::ToolCall`.
-//! `tool_concurrency(1)` keeps the shared context race-free.
+//! Rig-backed execution engine behind the host AgentEngine facade.
+//! The SDK owns model turns and dispatch; the host maps policy and stream events.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,15 +7,17 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use rig::agent::{
-    Agent, AgentBuilder, AgentHook, Flow, MultiTurnStreamItem, StepEvent, StreamingError,
+    Agent, AgentBuilder, AgentHook, CompletionCallAction, CompletionCallEvent, HookContext,
+    MultiTurnStreamItem, StreamingError,
 };
-use rig::completion::{CompletionModel, Message};
-use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat};
-use rig::tool::{ToolCallExtensions, ToolDyn};
+use rig::completion::Message;
+use rig::streaming::{Item, StreamEvent as RigStreamEvent};
+use rig::tool::{DynamicTool, ToolContext};
+use rig::{operation::Completion, DynModel};
 
 use super::resources::SessionResources;
-use super::tool_hook::RigExecutionHook;
-use super::tool_results::{SharedToolResults, ToolResults};
+use super::tool_hook::{RigExecutionHook, ToolLifecycle};
+use super::tool_results::ToolResults;
 use crate::engine::hooks::HookSet;
 use crate::engine::ExecutorError;
 use crate::engine::{AgentEngine, StreamEventSink};
@@ -49,12 +29,10 @@ const DEFAULT_MAX_TURNS: usize = 50;
 
 /// Rig-backed implementation of the gateway-facing [`AgentEngine`] facade.
 ///
-/// The agent is built once at construction (tools baked in) and reused across
-/// `execute_*` calls; per-request hidden context is threaded through Rig's
-/// `ToolCallExtensions` each run.
-pub struct RigAgentEngine<M: CompletionModel> {
+/// Tools are registered once; each run receives its private host scope.
+pub struct RigAgentEngine {
     config: RigAgentConfig,
-    agent: Agent<M>,
+    agent: Agent,
     shared_context: SharedToolContext,
     max_turns: usize,
     hard_turn_limit: u32,
@@ -64,17 +42,17 @@ pub struct RigAgentEngine<M: CompletionModel> {
     context_policy: Option<Arc<super::context_policy::ContextPolicy>>,
 }
 
-impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
+impl RigAgentEngine {
     /// Build a Rig agent behind the facade.
     ///
-    /// `tools` are the already actor-filtered, bridged [`ToolDyn`] set; this
+    /// `tools` are the already actor-filtered, bridged dynamic tool set; this
     /// engine performs no executable filtering of its own (that stays in
     /// gateway-execution's actor gating, per AC7).
     #[must_use]
     pub fn new(
         config: RigAgentConfig,
-        model: M,
-        tools: Vec<Box<dyn ToolDyn>>,
+        model: impl Into<DynModel<Completion>>,
+        tools: Vec<DynamicTool>,
         shared_context: SharedToolContext,
     ) -> Self {
         Self::with_max_turns(config, model, tools, shared_context, DEFAULT_MAX_TURNS)
@@ -84,8 +62,8 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
     #[must_use]
     pub fn with_max_turns(
         config: RigAgentConfig,
-        model: M,
-        tools: Vec<Box<dyn ToolDyn>>,
+        model: impl Into<DynModel<Completion>>,
+        tools: Vec<DynamicTool>,
         shared_context: SharedToolContext,
         max_turns: usize,
     ) -> Self {
@@ -99,15 +77,12 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
         )
     }
 
-    /// Same as [`Self::new`] with the engine hook set. Hooks map onto Rig's
-    /// `Flow` model: a `before_tool` [`crate::ToolDecision::Block`] becomes
-    /// `Flow::Skip` (the reason returns to the model as the tool result);
-    /// an `after_tool` replacement becomes `Flow::RewriteResult`.
+    /// Build with the host's ordered veto and result-shaping hooks.
     #[must_use]
     pub fn with_hooks(
         config: RigAgentConfig,
-        model: M,
-        tools: Vec<Box<dyn ToolDyn>>,
+        model: impl Into<DynModel<Completion>>,
+        tools: Vec<DynamicTool>,
         shared_context: SharedToolContext,
         hooks: Arc<HookSet>,
     ) -> Self {
@@ -123,16 +98,15 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
 
     fn build(
         config: RigAgentConfig,
-        model: M,
-        tools: Vec<Box<dyn ToolDyn>>,
+        model: impl Into<DynModel<Completion>>,
+        tools: Vec<DynamicTool>,
         shared_context: SharedToolContext,
         max_turns: usize,
         hooks: Arc<HookSet>,
     ) -> Self {
-        let agent = AgentBuilder::new(model)
+        let agent = AgentBuilder::new(model.into())
             .preamble(&config.instructions)
-            .tools(tools)
-            .default_max_turns(max_turns)
+            .dynamic_tools(tools)
             .build();
         Self {
             config,
@@ -252,42 +226,41 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
             .map(|policy| policy.begin(history, user_message, chat_history.len(), results.clone()))
             .transpose()?;
 
-        let mut extensions = ToolCallExtensions::new();
-        extensions.insert::<SharedToolContext>(self.shared_context.clone());
-        extensions.insert::<SharedToolResults>(results.clone());
-
-        // Awaiting the `StreamingPromptRequest` IntoFuture yields the agent
-        // stream directly: `Stream<Item = Result<MultiTurnStreamItem, _>>`.
-        // `tool_concurrency(1)` keeps tool execution sequential within a turn,
-        // matching the legacy executor and keeping the shared `ToolContext`'s
-        // per-call state (e.g. function_call_id) race-free until T7c moves it
-        // onto a proper per-call carrier.
+        let context = ToolContext::new().with_scope(Arc::new(super::tool::HostToolScope {
+            context: self.shared_context.clone(),
+            results: results.clone(),
+        }));
+        let (lifecycle_tx, mut lifecycle_rx) = tokio::sync::mpsc::unbounded_channel();
         let limit_reached = Arc::new(AtomicBool::new(false));
         let mut request = self
             .agent
-            .stream_chat(prompt, chat_history)
-            .tool_extensions(extensions)
+            .prompt(prompt)
+            .history(chat_history.clone())
+            .tool_context(context)
             .add_hook(RigExecutionHook {
                 ctx: self.shared_context.clone(),
                 hooks: self.hooks.clone(),
                 results: results.clone(),
                 context_config: self.result_context.clone(),
+                events: Some(lifecycle_tx),
+                stop: stop_flag.clone(),
             })
             .add_hook(TurnLimitHook {
                 limit: self.hard_turn_limit,
                 reached: limit_reached.clone(),
             })
-            .multi_turn(self.max_turns)
+            .max_turns(self.max_turns)
             .tool_concurrency(1);
         if let Some(policy) = &self.context_policy {
             request = request.add_hook(super::context_policy::ContextCapture(policy.clone()));
         }
-        let mut stream = request.await;
+        let mut stream = request.stream();
 
         let mut final_message = String::new();
         let mut total_input: u64 = 0;
         let mut total_output: u64 = 0;
         let mut tool_names_by_call_id = HashMap::new();
+        let mut lifecycle_open = true;
         let mut signal = super::turn_signal::TurnSignal::Continue;
         let mut stop_poll = tokio::time::interval(std::time::Duration::from_millis(100));
         let mut heartbeat = tokio::time::interval_at(
@@ -303,6 +276,18 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
             let item = tokio::select! {
             biased;
             _ = stop_poll.tick(), if stop_flag.is_some() => { continue; }
+            event = lifecycle_rx.recv(), if lifecycle_open => {
+                if let Some((event, ack)) = event {
+                    match event {
+                        ToolLifecycle::Start(call) => super::turn_events::map_assistant_tool_call(&call, &mut tool_names_by_call_id, results.peer_influenced(), on_event),
+                        ToolLifecycle::Result(result) => signal = super::turn_events::map_tool_result(&result, &results, self.context_policy.as_ref(), &mut tool_names_by_call_id, on_event),
+                    }
+                    if is_stopped() { return Err(ExecutorError::Stopped); }
+                    let _ = ack.send(());
+                    if signal != super::turn_signal::TurnSignal::Continue { break; }
+                } else { lifecycle_open = false; }
+                continue;
+            }
             event = async { match policy_events.as_mut() { Some(events) => events.recv().await, None => futures::future::pending().await } }, if policy_events.is_some() => {
                 if let Some(event) = event { on_event(event); } else { policy_events = None; }
                 continue;
@@ -338,44 +323,17 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
                 }
             };
             match item {
-                MultiTurnStreamItem::StreamAssistantItem(content) => match content {
-                    StreamedAssistantContent::Text(text) => {
-                        super::turn_events::map_assistant_text(
-                            self.context_policy.as_ref(),
-                            &text.text,
-                            &mut final_message,
-                            on_event,
-                        );
+                MultiTurnStreamItem::StreamAssistantItem(Item::Event(content)) => match content {
+                    RigStreamEvent::Text { text, .. } => super::turn_events::map_assistant_text(
+                        self.context_policy.as_ref(),
+                        &text,
+                        &mut final_message,
+                        on_event,
+                    ),
+                    RigStreamEvent::Reasoning { text, .. } => {
+                        super::turn_events::map_reasoning(text, on_event)
                     }
-                    StreamedAssistantContent::ToolCall { tool_call, .. } => {
-                        super::turn_events::map_assistant_tool_call(
-                            &tool_call,
-                            &mut tool_names_by_call_id,
-                            results.peer_influenced(),
-                            on_event,
-                        );
-                    }
-                    StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
-                        super::turn_events::map_reasoning(reasoning, on_event);
-                    }
-                    other => {
-                        // Deltas / complete-reasoning / unknown low-level items
-                        // are folded into the aggregated assistant message by
-                        // Rig; full surfacing rides on the AgentHook (T7c).
-                        let _ = other;
-                    }
-                },
-                MultiTurnStreamItem::StreamUserItem(user_content) => match user_content {
-                    StreamedUserContent::ToolResult { tool_result, .. } => {
-                        signal = super::turn_events::map_tool_result(
-                            &tool_result,
-                            &results,
-                            self.context_policy.as_ref(),
-                            &self.shared_context,
-                            &mut tool_names_by_call_id,
-                            on_event,
-                        );
-                    }
+                    _ => {}
                 },
                 MultiTurnStreamItem::CompletionCall(cc) => {
                     super::turn_events::map_completion_call(
@@ -388,7 +346,7 @@ impl<M: CompletionModel + Send + Sync + 'static> RigAgentEngine<M> {
                 }
                 MultiTurnStreamItem::FinalResponse(response) => {
                     if let (Some(policy), Some(history)) =
-                        (&self.context_policy, response.history())
+                        (&self.context_policy, response.messages())
                     {
                         policy.final_history(history);
                     }
@@ -430,15 +388,17 @@ struct TurnLimitHook {
     reached: Arc<AtomicBool>,
 }
 
-impl<M: CompletionModel> AgentHook<M> for TurnLimitHook {
-    async fn on_event(&self, event: StepEvent<'_, M>) -> Flow {
-        if let StepEvent::CompletionCall { turn, .. } = event {
-            if self.limit > 0 && turn >= self.limit as usize {
-                self.reached.store(true, Ordering::Release);
-                return Flow::terminate("Configured hard turn limit reached");
-            }
+impl AgentHook for TurnLimitHook {
+    async fn on_completion_call(
+        &self,
+        _: &HookContext,
+        event: CompletionCallEvent<'_>,
+    ) -> CompletionCallAction {
+        if self.limit > 0 && event.turn >= self.limit as usize {
+            self.reached.store(true, Ordering::Release);
+            return CompletionCallAction::stop("Configured hard turn limit reached");
         }
-        Flow::cont()
+        CompletionCallAction::Continue
     }
 }
 
@@ -460,7 +420,7 @@ fn convert_history(history: &[ChatMessage]) -> Vec<Message> {
 }
 
 #[async_trait::async_trait]
-impl<M: CompletionModel + Send + Sync + 'static> AgentEngine for RigAgentEngine<M> {
+impl AgentEngine for RigAgentEngine {
     async fn execute_stream(
         &self,
         user_message: &str,
@@ -510,15 +470,13 @@ fn map_streaming_error(error: StreamingError) -> ExecutorError {
 
 #[cfg(test)]
 mod tests {
+    use super::super::model::{host_tool_call, HostFrame, HostWire};
     use super::*;
     use crate::rig_adapter::RigToolAdapter;
     use crate::ToolDecision;
-    use rig::completion::{
-        AssistantContent, CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
-        Usage,
-    };
-    use rig::one_or_many::OneOrMany;
-    use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
+    use rig::completion::{CompletionRequest, Usage};
+    use rig::driver::{Exchange, Opened, Opening, Transport};
+    use rig::wire::Mode;
     use serde_json::Value;
     use std::sync::atomic::AtomicU32;
     use std::sync::Mutex;
@@ -539,40 +497,25 @@ mod tests {
         }
     }
 
-    impl CompletionModel for StubModel {
-        type Response = ();
-        type StreamingResponse = ();
-        type Client = ();
-
-        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-            Self { chunks: Vec::new() }
-        }
-
-        async fn completion(
-            &self,
-            _request: CompletionRequest,
-        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-            Ok(CompletionResponse {
-                choice: OneOrMany::one(AssistantContent::text(self.chunks.join(""))),
-                usage: Usage::new(),
-                raw_response: (),
-                message_id: None,
-            })
-        }
-
-        async fn stream(
-            &self,
-            _request: CompletionRequest,
-        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            let mut choices: Vec<Result<RawStreamingChoice<()>, CompletionError>> = self
+    impl Transport<HostWire> for StubModel {
+        fn send(&self, _: (CompletionRequest, Mode), _: Exchange) -> Opening<HostFrame> {
+            let mut frames = self
                 .chunks
                 .iter()
-                .map(|c| Ok(RawStreamingChoice::Message(c.clone())))
-                .collect();
-            // Terminal marker so the agent loop finalizes cleanly.
-            choices.push(Ok(RawStreamingChoice::FinalResponse(())));
-            let stream = futures::stream::iter(choices);
-            Ok(StreamingCompletionResponse::stream(Box::pin(stream)))
+                .cloned()
+                .map(HostFrame::Text)
+                .collect::<Vec<_>>();
+            frames.push(HostFrame::End(Usage::default()));
+            Opening::new(async move {
+                Ok(Opened::new(futures::stream::iter(
+                    frames.into_iter().map(Ok),
+                )))
+            })
+        }
+    }
+    impl From<StubModel> for DynModel<Completion> {
+        fn from(model: StubModel) -> Self {
+            rig::Model::new(HostWire, model).erase()
         }
     }
 
@@ -597,7 +540,7 @@ mod tests {
         )
     }
 
-    async fn collect_events(engine: &RigAgentEngine<StubModel>, prompt: &str) -> Vec<StreamEvent> {
+    async fn collect_events(engine: &RigAgentEngine, prompt: &str) -> Vec<StreamEvent> {
         let mut events = Vec::new();
         engine
             .execute_stream(prompt, &[], &mut |event| events.push(event))
@@ -649,6 +592,12 @@ mod tests {
         );
 
         let events = collect_events(&engine, "hi").await;
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::TokenUpdate { .. })),
+            "unavailable provider usage must not be emitted as zero"
+        );
         assert!(events.iter().any(
             |e| matches!(e, StreamEvent::Done { final_message, .. } if final_message.is_empty())
         ));
@@ -870,54 +819,33 @@ mod tests {
         }
     }
 
-    impl CompletionModel for ToolCallModel {
-        type Response = ();
-        type StreamingResponse = ();
-        type Client = ();
-
-        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-            Self {
-                tool_name: String::new(),
-                emitted: Arc::new(AtomicU32::new(0)),
-            }
-        }
-
-        async fn completion(
-            &self,
-            _request: CompletionRequest,
-        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-            Ok(CompletionResponse {
-                choice: OneOrMany::one(AssistantContent::text("ok")),
-                usage: Usage::new(),
-                raw_response: (),
-                message_id: None,
+    impl Transport<HostWire> for ToolCallModel {
+        fn send(&self, _: (CompletionRequest, Mode), _: Exchange) -> Opening<HostFrame> {
+            let first_turn = self.emitted.fetch_or(1, Ordering::SeqCst) == 0;
+            let name = self.tool_name.clone();
+            Opening::new(async move {
+                let mut frames = Vec::new();
+                if first_turn {
+                    frames.push(HostFrame::Call(
+                        host_tool_call(crate::types::ToolCall::new(
+                            "call_7".into(),
+                            name,
+                            serde_json::json!({}),
+                        ))
+                        .expect("valid fixture tool name"),
+                    ));
+                }
+                frames.push(HostFrame::Text("done".into()));
+                frames.push(HostFrame::End(Usage::default()));
+                Ok(Opened::new(futures::stream::iter(
+                    frames.into_iter().map(Ok),
+                )))
             })
         }
-
-        async fn stream(
-            &self,
-            _request: CompletionRequest,
-        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            use rig::streaming::RawStreamingToolCall;
-            // Emit the tool call only on the first turn.
-            let first_turn = self.emitted.fetch_or(1, Ordering::SeqCst) == 0;
-            let mut choices: Vec<Result<RawStreamingChoice<()>, CompletionError>> = Vec::new();
-            if first_turn {
-                choices.push(Ok(RawStreamingChoice::ToolCall(RawStreamingToolCall {
-                    id: "call_7".to_string(),
-                    internal_call_id: "call_7".to_string(),
-                    call_id: Some("call_7".to_string()),
-                    name: self.tool_name.clone(),
-                    arguments: serde_json::json!({}),
-                    signature: None,
-                    additional_params: None,
-                })));
-            }
-            choices.push(Ok(RawStreamingChoice::Message("done".to_string())));
-            choices.push(Ok(RawStreamingChoice::FinalResponse(())));
-            Ok(StreamingCompletionResponse::stream(Box::pin(
-                futures::stream::iter(choices),
-            )))
+    }
+    impl From<ToolCallModel> for DynModel<Completion> {
+        fn from(model: ToolCallModel) -> Self {
+            rig::Model::new(HostWire, model).erase()
         }
     }
 
@@ -1192,46 +1120,29 @@ mod tests {
         #[derive(Clone)]
         struct WardThenMutationModel;
 
-        impl CompletionModel for WardThenMutationModel {
-            type Response = ();
-            type StreamingResponse = ();
-            type Client = ();
-
-            fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-                Self
+        impl Transport<HostWire> for WardThenMutationModel {
+            fn send(&self, _: (CompletionRequest, Mode), _: Exchange) -> Opening<HostFrame> {
+                Opening::new(async move {
+                    let call = |id: &str, name: &str| {
+                        host_tool_call(crate::types::ToolCall::new(
+                            id.into(),
+                            name.into(),
+                            serde_json::json!({}),
+                        ))
+                        .map(HostFrame::Call)
+                        .expect("valid fixture tool name")
+                    };
+                    Ok(Opened::new(futures::stream::iter(vec![
+                        Ok(call("ward_call", "ward")),
+                        Ok(call("mutation_call", "mutation")),
+                        Ok(HostFrame::End(Usage::default())),
+                    ])))
+                })
             }
-
-            async fn completion(
-                &self,
-                _request: CompletionRequest,
-            ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-                unreachable!("streaming test model")
-            }
-
-            async fn stream(
-                &self,
-                _request: CompletionRequest,
-            ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError>
-            {
-                use rig::streaming::RawStreamingToolCall;
-                let call = |id: &str, name: &str| {
-                    Ok(RawStreamingChoice::ToolCall(RawStreamingToolCall {
-                        id: id.to_string(),
-                        internal_call_id: id.to_string(),
-                        call_id: Some(id.to_string()),
-                        name: name.to_string(),
-                        arguments: serde_json::json!({}),
-                        signature: None,
-                        additional_params: None,
-                    }))
-                };
-                Ok(StreamingCompletionResponse::stream(Box::pin(
-                    futures::stream::iter(vec![
-                        call("ward_call", "ward"),
-                        call("mutation_call", "mutation"),
-                        Ok(RawStreamingChoice::FinalResponse(())),
-                    ]),
-                )))
+        }
+        impl From<WardThenMutationModel> for DynModel<Completion> {
+            fn from(model: WardThenMutationModel) -> Self {
+                rig::Model::new(HostWire, model).erase()
             }
         }
 
