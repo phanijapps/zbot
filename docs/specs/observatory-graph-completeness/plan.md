@@ -11,7 +11,7 @@ First make the scoped store/API traversal truthful, then connect bounded progres
 
 - The approved [brief](../../product/briefs/rig-hooks-session-graph.md) and the spec's Boundaries govern scope.
 - Preserve existing uncommitted work. Spec authoring does not approve implementation or reset another workflow.
-- Current branch is two commits behind `origin/main`; obtain a fresh isolated implementation base before code work. Do not stage/rebase the shared dirty checkout.
+- Refresh from the execution base branch (`origin/develop`) into an isolated worktree before code work; never stage or rebase the shared dirty checkout.
 
 ## Construction tests
 
@@ -107,3 +107,4 @@ Keep the current renderer until paging/search correctness passes. Publish measur
 ## Changelog
 
 - 2026-10-03: Draft delivery contract and construction strategy from the approved brief; no runtime implementation.
+- 2026-10-04: Owner confirmed the governing outcome is the full force graph explorable end-to-end; the renderer is measurement-driven (cosmos.gl is a reference, not a requirement — D3 stays unless it fails the AC5 budgets). Recorded ahead of execution.
