@@ -9,6 +9,8 @@ import { sessionMode, type SessionMode } from "./mode";
 import { DesktopRail } from "./DesktopRail";
 import { useRecentSessions } from "./useRecentSessions";
 import { ActivityPanel } from "./ActivityPanel";
+import { SourcesPanel } from "./SourcesPanel";
+import { FilesPanel } from "./FilesPanel";
 
 export function SessionShell({ initialSessionId }: {initialSessionId?: string} = {}) {
   const { sessionId: routeSessionId } = useParams<{sessionId: string}>();
@@ -118,7 +120,8 @@ export function SessionShell({ initialSessionId }: {initialSessionId?: string} =
       </div>
       <div id="session-detail-panel" role="tabpanel" aria-labelledby={`session-details-${detailTab.toLowerCase()}`} tabIndex={0}>
         {detailTab === "Activity" ? <ActivityPanel sessionId={confirmedSessionId} active={active} />
-          : <p className="session-shell__hint">{detailTab} details will be available in the next session update.</p>}
+          : detailTab === "Sources" ? <SourcesPanel sessionId={confirmedSessionId} active={active} />
+          : <FilesPanel sessionId={confirmedSessionId} active={active} />}
       </div>
       <button className="session-shell__mobile-close btn btn--ghost" onClick={() => setDetailsOpen(false)}>Close details</button>
     </aside>
