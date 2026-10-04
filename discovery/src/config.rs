@@ -55,7 +55,10 @@ pub struct AdvancedConfig {
 }
 
 fn default_expose_to_lan() -> bool {
-    true
+    // RFC-0021 desktop posture: loopback bind and no mDNS advertisement
+    // unless LAN exposure is explicitly enabled in settings. The gateway
+    // resolves its effective bind host from this default.
+    false
 }
 fn default_service_type() -> String {
     "_zbot._tcp.local.".to_string()
@@ -114,7 +117,8 @@ mod tests {
     #[test]
     fn defaults_match_spec() {
         let cfg = DiscoveryConfig::default();
-        assert!(cfg.expose_to_lan);
+        // RFC-0021 desktop posture: loopback default; LAN exposure is opt-in.
+        assert!(!cfg.expose_to_lan);
         assert_eq!(cfg.discovery.service_type, "_zbot._tcp.local.");
         assert_eq!(cfg.discovery.hostname_alias, "zbot.local");
         assert_eq!(

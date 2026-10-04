@@ -23,4 +23,16 @@ test("capture Activity, Sources and Files tabs", async ({page}) => {
   await expect(page.getByRole("region", {name: "Session files"})).toBeVisible();
   await expect(page.getByRole("tabpanel")).not.toContainText("will be available in the next session update");
   await page.screenshot({path: "test-results/session-tabs-files.png", fullPage: false});
+
+  // Narrow band: details becomes an operable drawer over the conversation.
+  await page.setViewportSize({width: 390, height: 844});
+  await page.getByRole("button", {name: "Toggle session details"}).click();
+  await expect(page.getByRole("region", {name: "Session files"})).toBeVisible();
+  await page.screenshot({path: "test-results/session-narrow-files-drawer.png", fullPage: false});
+  await page.getByRole("tab", {name: "Sources"}).click();
+  await expect(page.getByRole("region", {name: "Recorded sources"})).toBeVisible();
+  await page.screenshot({path: "test-results/session-narrow-sources-drawer.png", fullPage: false});
+  await page.getByRole("button", {name: "Close details"}).click();
+  await expect(page.locator("textarea").first()).toBeVisible();
+  await page.screenshot({path: "test-results/session-narrow-conversation.png", fullPage: false});
 });

@@ -151,7 +151,10 @@ mod resolve_bind_tests {
 
     #[test]
     fn on_yields_unspecified() {
-        let cfg = DiscoveryConfig::default();
+        let cfg = DiscoveryConfig {
+            expose_to_lan: true,
+            ..Default::default()
+        };
         assert!(cfg.expose_to_lan);
         assert_eq!(resolve_bind_host(&cfg), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
     }

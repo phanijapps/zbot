@@ -20,7 +20,7 @@ export function DesktopRail({returnTo, recents, unavailable, sessionId, locked, 
   return <aside className="session-shell__rail" aria-label="Conversation navigation" onKeyDown={event => { if (event.key === "Escape") onClose(); }}>
     <Link className="session-shell__brand" to={returnTo} onClick={onClose}>zbot</Link>
     {onNewChat
-      ? <button className="session-shell__nav-item" disabled={locked} onClick={onNewChat}><Plus size={18} aria-hidden="true" />New chat</button>
+      ? <button type="button" className="session-shell__nav-item" disabled={locked} onClick={onNewChat}><Plus size={18} aria-hidden="true" />New chat</button>
       : <Link className="session-shell__nav-item" to="/session" onClick={onClose}><Plus size={18} aria-hidden="true" />New chat</Link>}
     <h2 className="session-shell__section-title">Recent</h2>
     <nav className="session-shell__recents" aria-label="Recent conversations">
@@ -29,7 +29,7 @@ export function DesktopRail({returnTo, recents, unavailable, sessionId, locked, 
       {recents.map(item => {
         const label = item.title || (sessionMode(item.mode) === "research" ? "Untitled research" : sessionMode(item.mode) === "chat" ? "Untitled chat" : "Unknown mode");
         return onSelect
-          ? <button key={item.id} className="session-shell__nav-item" disabled={locked} aria-current={item.id === sessionId ? "page" : undefined} onClick={() => onSelect(item.id)}><span>{label}</span></button>
+          ? <button key={item.id} type="button" className="session-shell__nav-item" disabled={locked} aria-current={item.id === sessionId ? "page" : undefined} onClick={() => onSelect(item.id)}><span>{label}</span></button>
           : <Link key={item.id} className="session-shell__nav-item" to={`/session/${encodeURIComponent(item.id)}`} onClick={onClose}><span>{label}</span></Link>;
       })}
     </nav>
@@ -40,6 +40,6 @@ export function DesktopRail({returnTo, recents, unavailable, sessionId, locked, 
       <Link className="session-shell__nav-item" aria-current={pathname === "/integrations" ? "page" : undefined} to={knowledgeDestination("/integrations", returnTo)} onClick={onClose}><Plug size={18} aria-hidden="true" />Integrations</Link>
       <Link className="session-shell__nav-item" aria-current={pathname === "/settings" ? "page" : undefined} to={knowledgeDestination("/settings", returnTo)} onClick={onClose}><Settings size={18} aria-hidden="true" />Settings</Link>
     </nav>
-    <button className="session-shell__mobile-close btn btn--ghost" onClick={onClose}>Close navigation</button>
+    <button type="button" className="session-shell__mobile-close btn btn--ghost" onClick={onClose}>Close navigation</button>
   </aside>;
 }

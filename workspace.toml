@@ -51,11 +51,8 @@ open = [
   # intent-output-fallback, intent-rig-preflight, ollama-intent-json-fallback,
   # and 'ward' in ward-search-dedup. Repair those source references separately.
   { slug = "pre-existing-intent-ward-traceability", source = "pre-flight/2026-10-04-external-hooks" },
-  # Full rendered /session and /session/:id HTML validation (standard,a11y)
-  # reports 14 existing implicit-button/native-element/text-content violations.
-  # HEAD ChatInput/DesktopRail/SessionShell retain the same offending markup;
-  # new Activity subtree passes. Finish shell accessibility in desktop-session-completion.
-  { slug = "pre-existing-session-shell-html-validation", source = "pre-flight/2026-10-04-external-hooks" },
+  # Shell rendered-HTML validation (standard,a11y) shipped clean in desktop-session-completion
+  # T3 (0 violations on /session and /session/:id) — slug removed on ship.
   # Subsequent CI checks exposed unchanged rustls 0.23.36 TLS advisory
   # RUSTSEC-2026-0285; cargo audit --db <fresh-temp-dir> and cargo deny check fail.
   # Update the affected TLS closure with its own provider/transport regression proof.
