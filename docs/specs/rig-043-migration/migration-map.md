@@ -5,9 +5,11 @@ Release oracle: published rig, rig-agent, rig-core and rig-rmcp 0.43.0 source
 The [versioned source](https://github.com/0xPlaygrounds/rig/tree/654567eb64274fca00cab86cdd32c86b9913769e)
 is authoritative. No main-branch concept signature is treated as a release API.
 
-Oracle tier: strong for Rust types; this task verifies shipped source signatures
-and the existing host regression baseline. New-release call-site compiler and
-runtime probes belong to T2/T3; they are not claimed passed here.
+Oracle tier: strong for Rust types; T1 verifies shipped source signatures and
+the existing host regression baseline. The T2 compiler/runtime probe verifies
+the released custom Wire/Transport, erased single call, scoped DynamicTool,
+dispatch gate and response-history contract; see verification.md. Production
+host parity against the new release remains unverified.
 
 ## Dependency and compiler contract
 
@@ -19,6 +21,9 @@ runtime probes belong to T2/T3; they are not claimed passed here.
   during T2. CI uses stable; its effective compiler must satisfy the minimum.
 - The current SDK feature/transitive rmcp version must be checked rather than
   assumed equivalent. Existing host MCP ownership and actor filtering stay intact.
+  The isolated 0.43.0 closure resolves rig-rmcp to rmcp 2.2.0; host 1.7.0 is
+  not assumed type-compatible. The public decoder finish import is
+  rig::operation::Finish; operation::completion is private.
 
 ## Adapter replacements
 

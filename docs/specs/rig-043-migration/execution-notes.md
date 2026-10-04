@@ -14,4 +14,10 @@ Resolved: new branch contains current develop and published work; no stale-base 
 
 Resolved: T1 migration-map.md cites the released adapter signatures and runtime semantic traps; the frozen 456-test baseline passes.
 
+Resolved: T2 release-only typed/runtime probe passes three contract tests using
+Rust 1.97.0 and exact rig 0.43.0, agent/rmcp enabled. Scope privacy, single-call
+tool data/absent usage, transcript-only response history and dispatch gating are
+proven for the SDK. Native integration resolves rmcp 2.2.0, requiring deliberate
+compatibility work with host 1.7.0. No host migration gate is claimed passed.
+
 Open: T2 dependency/bridge implementation, T3 runner/hook/context port, and T4 migrated-release parity. Existing tests remain the regression authority; do not weaken sequential-terminal or checkpoint assertions.
