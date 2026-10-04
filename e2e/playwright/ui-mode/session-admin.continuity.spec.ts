@@ -16,20 +16,23 @@ test("administration pages preserve the conversation and expose no hook manageme
   const answer = page.locator(".quick-chat__assistant").last();
   await answer.waitFor({timeout: 30_000});
   const finalText = await answer.innerText();
+  let independentCreates = 0;
+  page.on("request", req => { if (req.method() === "POST" && new URL(req.url()).pathname === "/api/sessions/chat") independentCreates++; });
 
   for (const destination of ["Agents", "Settings", "Integrations"]) {
     await page.getByRole("link", {name: destination}).click();
     await expect(page.getByRole("link", {name: "Back to conversation"})).toBeVisible();
     // Navigation must never create or reset conversations.
     await expect(page.locator(".session-shell__alert")).toHaveCount(0);
+    // No hook-management control on any administration page.
+    await expect(page.getByText(/hook/i)).toHaveCount(0);
     await page.getByRole("link", {name: "Back to conversation"}).click();
     await expect(page.locator("textarea").first()).toBeVisible();
     await expect(page.locator(".quick-chat__assistant").last()).toHaveText(finalText, {useInnerText: true});
   }
 
-  // Hook management stays absent everywhere in the shell.
-  await page.getByRole("link", {name: "Settings"}).click();
-  await expect(page.getByText(/hook/i)).toHaveCount(0);
+  // Administration navigation never created an independent Chat.
+  expect(independentCreates).toBe(0);
 
   await handle.assertZeroDrift(request);
 });

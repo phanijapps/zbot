@@ -72,7 +72,28 @@ test("inspector text and controls meet measured contrast floors", async ({page})
     report[name] = ratio(style.color, style.bg);
   }
   console.log("contrast report:", JSON.stringify(report, null, 2));
+  // A missing selector must fail the measurement, not silently skip it.
+  expect(Object.keys(report).sort()).toEqual(["activeTab", "activityRow", "emptyComposer", "inactiveTab", "mutedTime"]);
   for (const [name, value] of Object.entries(report)) {
     expect(value, `${name} text contrast`).toBeGreaterThanOrEqual(4.5);
   }
+
+  // Necessary controls: the focused tab's focus outline must clear 3:1
+  // against its background.
+  const focus = await page.evaluate(() => {
+    const tab = document.querySelectorAll<HTMLButtonElement>(".tab-bar__tab")[0];
+    tab.focus();
+    const cs = getComputedStyle(tab);
+    let node: Element | null = tab;
+    let bg = "rgb(255, 255, 255)";
+    while (node) {
+      const c = getComputedStyle(node).backgroundColor;
+      if (c && !c.startsWith("rgba(0, 0, 0, 0)") && c !== "transparent") { bg = c; break; }
+      node = node.parentElement;
+    }
+    return {outline: cs.outlineColor, bg};
+  });
+  const focusRatio = ratio(focus.outline, focus.bg);
+  console.log("focus outline contrast:", focusRatio);
+  expect(focusRatio, "focused tab outline contrast").toBeGreaterThanOrEqual(3);
 });

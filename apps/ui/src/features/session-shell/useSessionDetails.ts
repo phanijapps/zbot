@@ -15,7 +15,7 @@ export function useSessionDetails(sessionId: string | undefined, active: boolean
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [retry, setRetry] = useState(0);
-  const details = cached?.sessionId === sessionId ? cached : null;
+  const details = cached && cached.sessionId === sessionId ? cached : null;
 
   useEffect(() => {
     if (!sessionId) return;
@@ -34,6 +34,10 @@ export function useSessionDetails(sessionId: string | undefined, active: boolean
         if (active || running || Date.now() < cleanupUntil) timer = setTimeout(() => void load(), 1000);
       } catch {
         if (!cancelled) setError(true);
+        // A transient failure during an active run must not freeze the
+        // inspector: keep the 1s cadence (with the error notice) while the
+        // session is active so Stop/cleanup outcomes still land.
+        if (active || Date.now() < cleanupUntil) timer = setTimeout(() => void load(), 1000);
       } finally {
         if (!cancelled) setLoading(false);
       }

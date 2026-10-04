@@ -178,8 +178,6 @@
 .session-activity__metadata dt { color: var(--muted-foreground); }
 .session-activity__metadata dd { margin: 0; overflow-wrap: anywhere; }
 .session-activity__time { color: var(--muted-foreground); font-size: var(--text-xs); }
-.session-activity__notice { padding: var(--spacing-2) 0; color: var(--muted-foreground); font-size: var(--text-sm); line-height: 1.6; }
-.session-activity__notice .btn { margin-top: var(--spacing-2); }
 .session-sources { min-width: 0; padding-top: var(--spacing-4); }
 .session-sources__list { margin: 0; padding: 0; list-style: none; }
 .session-sources__item { display: flex; flex-direction: column; gap: var(--spacing-1); padding: var(--spacing-3) 0; border-bottom: 1px solid var(--border); min-width: 0; }
@@ -197,8 +195,8 @@ a.session-sources__link:focus-visible { outline: 2px solid var(--primary); outli
 .session-files__name { font-size: var(--text-sm); font-weight: 500; overflow-wrap: anywhere; min-width: 0; }
 .session-files__size { margin-left: auto; color: var(--muted-foreground); font-size: var(--text-xs); white-space: nowrap; }
 .session-activity__label { font-size: var(--text-sm); }
-.session-activity__notice { padding: var(--spacing-3) 0; color: var(--muted-foreground); font-size: var(--text-sm); line-height: 1.6; }
-.session-activity__notice .btn { margin-top: var(--spacing-2); }
+.session-inspector__notice { padding: var(--spacing-3) 0; color: var(--muted-foreground); font-size: var(--text-sm); line-height: 1.6; }
+.session-inspector__notice .btn { margin-top: var(--spacing-2); }
 
 .session-shell--knowledge { grid-template-columns: var(--shell-navigation-width) minmax(0, 1fr); }
 .session-shell__knowledge-header { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-4); padding: var(--spacing-5) var(--spacing-6); border-bottom: 1px solid var(--border); }

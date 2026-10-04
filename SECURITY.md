@@ -156,7 +156,7 @@ Please include:
 
 | Component | Exposure | Controls |
 |-----------|----------|----------|
-| HTTP API + static UI (`:18791`) | LAN by default; configurable | Bind host, firewall, route-specific validation |
+| HTTP API + static UI (`:18791`) | Loopback by default; LAN is an explicit opt-in | Bind host, firewall, route-specific validation |
 | Client event WebSocket (`:18791/ws`) | Shares the HTTP listener | Configurable bind host, typed client protocol |
 | Bridge worker WebSocket (`:18791/bridge/ws`) | Shares the HTTP listener | Configurable bind host, typed Hello handshake with timeout |
 | Shell Tool | Command execution | Guardrails, sandboxing |
@@ -164,8 +164,8 @@ Please include:
 | LLM Integration | External API calls | API key isolation |
 
 The effective gateway bind address comes from network settings: `advanced.bindHost`
-takes precedence; otherwise `network.exposeToLan=true` (the default) binds all
-interfaces, while `false` binds loopback only. Both WebSocket routes share that
+takes precedence; otherwise `network.exposeToLan=true` binds all
+interfaces, while `false` (the default) binds loopback only. Both WebSocket routes share that
 listener. The gateway does not currently provide transport TLS or built-in client
 authentication, so LAN deployments must use a trusted network, firewall, or an
 authenticating TLS reverse proxy.

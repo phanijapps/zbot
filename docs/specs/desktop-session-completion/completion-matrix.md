@@ -25,7 +25,7 @@ companion without its own verification/review and authorized workflow transition
 | --- | --- | --- | --- |
 | AC1 shared entry | Pass (component+e2e) | `SessionShell.test.tsx` (entry, recents, mode switch, knowledge destinations, no ward link); `session-shell.ui.spec.ts` t1 (reload restore) | None |
 | AC2 pinned mode | Pass | `SessionShell.test.tsx` (QuickChat reservation, unknown mode, recent selection by ID); e2e t1 | None |
-| AC3 runtime parity | Pass with baseline note | e2e t1 (Chat/Research answers + reload, Stop absent after completion); `Conversations.tsx` Stop wiring | `pre-existing-research-stop-assertion` backlog entry (ResearchPage component-level test) is a known baseline failure, not a shell regression; failed-Stop journey asserted in T3/T4 |
+| AC3 runtime parity | Pass | e2e t1 (Chat/Research answers + reload, Stop absent after completion); `Conversations.tsx` Stop wiring; failed-Stop coverage in useQuickChat.test.ts (error state, isActive preserved) | The historical ResearchPage stopAgent component-test failure no longer reproduces — the full UI suite (including ResearchPage tests) is green at HEAD; the old backlog slug was retired with the register cleanup |
 | AC4 truthful Activity | Pass | `ActivityPanel.tsx` + `ActivityPanel.test.tsx`; `session-details.yaml`; `session_details_tests.rs` (order, truncation, hook rows) | None |
 | AC5 truthful Sources | **Delivered (T2)** | SourcesPanel + tests (safe-destination links, evidence labels, truncation, unavailable/retry, stale-guard); contract + backend unchanged | None |
 | AC6 truthful memory activity | Pass | `session_details_tests.rs` `details_reopens_root_and_continuation_activity_redacted`; labels rendered without raw content | Memory-record link-through not asserted in UI; retained as-is unless details contract exposes stable IDs (it currently does not) |
@@ -37,21 +37,28 @@ companion without its own verification/review and authorized workflow transition
 | AC12 sanitized failures | Pass | `session_details_tests.rs` `details_denies_lan_bind_and_cross_origin_with_fixed_errors` (bounded body, denial precedes read) | Re-verify unchanged in T4 full matrix |
 | AC13 local details boundary | **Default half delivered (T3)** | Details handler guard + loopback CLI default (pre-existing); effective default now loopback with fail-closed load errors (discovery default flip + server.rs), startup-state unit tests + fresh-vault real-daemon proof | CLI `--host` vs settings precedence conflict pending owner disposition (below) — the `--host`-selects-LAN half of AC13 stays unverified until resolved |
 | AC14 independent chat lifecycle | Pass | `SessionShell.test.tsx` (New chat independence, failure keeps QuickChat, single creation, no reset); `createChatSession` gateway contract from original T2 | None |
-| AC15 visible subagents | Pass | e2e t2 (all subagent states, bands, contrast in QA artifact) | Re-capture after T3 styling work |
+| AC15 visible subagents | Pass | e2e t2 (all subagent states, bands, contrast in QA artifact); refreshed desktop.png/narrow.png committed by the passing suite at HEAD | None |
 
 ## Named gap: CLI `--host` vs settings-backed precedence (owner disposition required)
 
-`gateway/src/server.rs:183-189` lets settings-backed resolution silently override
+`gateway/src/server.rs` lets settings-backed resolution silently override
 the daemon CLI `--host` in **both directions**: explicit `--host 0.0.0.0` is
 demoted to loopback by a loopback-leaning settings file; explicit
 `--host 127.0.0.1` is promoted to `0.0.0.0` by a LAN-leaning one. The existing
-daemon test (`main.rs:143-151`) proves parse-level acceptance only. Original AC13
+daemon test (`main.rs`) proves parse-level acceptance only. Original AC13
 reads "an explicit `--host` or config can still select a LAN bind" — as written,
 its `--host` half cannot pass effective-bind verification under T3's authorized
 scope (default correction only). **Disposition required before T4 claims AC13**:
 either (a) fresh owner approval for a precedence correction (explicit CLI host
 wins, or a documented precedence rule), or (b) amend AC13's second clause to
 config-only LAN selection. Surfaced to owner 2026-10-04.
+
+**Docker consequence (adversarial review 2026-10-04):** `docker/Dockerfile`'s
+entrypoint passes `--host 0.0.0.0`; with the loopback default, a fresh or
+network-block-less mounted volume now resolves `127.0.0.1` and replaces it,
+leaving the published `18791:18791` port unreachable. **This merge is gated on
+the owner disposition above** — a precedence correction, or baking
+`network.exposeToLan=true` into the image/compose vault.
 
 ## Audit runs (2026-10-04, worktree feat/desktop-session-completion @ 59828ad0)
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { Artifact } from "@/services/transport/types";
 
@@ -38,7 +38,6 @@ beforeEach(() => {
   mocks.transport.getSessionFull.mockResolvedValue({ success: true, data: { id: "sess-1", mode: "fast", title: "Chat", executions: [] } });
   mocks.transport.getSessionDetails.mockImplementation(async (sessionId: string) => ({success:true,data:{sessionId, mode:"chat", activity:[], activityTruncated:false, sources:[], sourcesTruncated:false}}));
   mocks.transport.listSessionArtifacts.mockImplementation(async (sessionId: string) => ({ success: true, data: [artifact("art-1", sessionId, "summary.md")] }));
-  mocks.transport.getArtifactContentUrl.mockImplementation((artifactId: string, sessionId: string) => `/api/artifacts/${artifactId}/content?session=${sessionId}`);
   mocks.chat.mockReturnValue({ state: {sessionId:"sess-1", status:"idle", messages:[], artifacts:[]}, isActive:false, surfaces:[], pillState:{}, sendMessage:vi.fn(), stopAgent:vi.fn() });
   mocks.research.mockReturnValue({ state: {sessionId:"sess-1", status:"idle", turns:[], artifacts:[], error:null}, surfaces:[], pillState:{}, sendMessage:vi.fn(), stopAgent:vi.fn() });
 });
@@ -47,9 +46,12 @@ beforeEach(() => {
 describe("FilesPanel (shell wiring)", () => {
   it("lists the session's artifacts under the Files tab", async () => {
     render(<MemoryRouter><SessionShell initialSessionId="sess-1" /></MemoryRouter>);
-    fireEvent.click(await screen.findByRole("tab", { name: "Files" }));
+    const tab = await screen.findByRole("tab", { name: "Files" });
+    fireEvent.click(tab);
+    expect(tab).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByText("summary.md")).toBeVisible();
     expect(mocks.transport.listSessionArtifacts).toHaveBeenCalledWith("sess-1");
+    expect(mocks.transport.createChatSession).not.toHaveBeenCalled();
   });
 
   // Delivered STUB: AC2 — opening an artifact resolves content by artifact ID under the selected session
@@ -102,6 +104,29 @@ describe("FilesPanel", () => {
     mocks.transport.listSessionArtifacts.mockResolvedValue({ success: true, data: [artifact("art-final", "sess-one", "final.md")] });
     view.rerender(<FilesPanel sessionId="sess-one" active={false} />);
     expect(await screen.findByText("final.md")).toBeVisible();
+  });
+
+  it("discards a late response and stale rows for a previously selected session", async () => {
+    let finish!: (value: unknown) => void;
+    mocks.transport.listSessionArtifacts.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    const view = render(<FilesPanel sessionId="sess-old" active={false} />);
+    await waitFor(() => expect(mocks.transport.listSessionArtifacts).toHaveBeenCalledWith("sess-old"));
+    mocks.transport.listSessionArtifacts.mockResolvedValue({ success: true, data: [artifact("art-new", "sess-one", "current.md")] });
+    view.rerender(<FilesPanel sessionId="sess-one" active={false} />);
+    expect(await screen.findByText("current.md")).toBeVisible();
+    // The stale session's rows must never render under the new selection,
+    // even before its own fetch resolves.
+    expect(screen.queryByText(/Loading files/)).not.toBeInTheDocument();
+    finish({ success: true, data: [artifact("art-old", "sess-old", "stale.md")] });
+    await waitFor(() => expect(screen.queryByText("stale.md")).not.toBeInTheDocument());
+  });
+
+  it("closes an open preview when the selected conversation changes", async () => {
+    const view = render(<FilesPanel sessionId="sess-one" active={false} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open artifact summary.md" }));
+    expect(await screen.findByRole("dialog", { name: "Preview summary.md" })).toBeVisible();
+    view.rerender(<FilesPanel sessionId="sess-two" active={false} />);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("closes the artifact preview and can open another file", async () => {

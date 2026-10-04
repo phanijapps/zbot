@@ -60,5 +60,21 @@ No acceptance criterion is marked complete by approval alone.
 
 ## Handoff (owner decisions pending)
 
-1. **CLI `--host` precedence** (named gap in completion-matrix.md): explicit `--host` is silently overridden by settings-backed resolution in both directions. Options: (a) approve a precedence correction; (b) amend original AC13 to config-only LAN selection. Required before claiming original AC13 fully at effective-bind depth.
+1. **CLI `--host` precedence + Docker entrypoint** (named gap in completion-matrix.md): explicit `--host` is silently overridden by settings-backed resolution in both directions; the Docker image's `--host 0.0.0.0` entrypoint is demoted on fresh volumes. Options: (a) approve a precedence correction; (b) amend original AC13 to config-only LAN selection and bake `network.exposeToLan=true` into the image/compose vault. **Merge is gated on this disposition.**
 2. **Original shell workflow completion**: this companion delivers the substance of the original cohort's remaining waves, but the original spec/cohort must complete through its own verification/review and authorized transition per its replan-adversarial constraints. Recommend the owner authorizes that closure review next.
+
+## Implementation-review fixes (round 1, applied)
+
+- **Stale artifact manifest across session switch** (adversarial B1): useSessionArtifacts now keys its cache by session (rows from a previous session never render; late responses discarded) and FilesPanel clears an open preview on session change — cross-session and preview-close tests added.
+- **Mirror startup test** (QE B1): extracted `network_config_or_default` so the corrupt-settings fail-closed leg executes the production path.
+- **DNS-rebinding hardening** (security C2): LoopbackBind now rejects browser requests (Origin present) whose Host authority is not `localhost`/loopback literal even when Origin matches Host; negative + allowed-host tests.
+- **Roving keyboard artifact** (QE B2): SessionShell test asserts arrow/Home/End roving with automatic activation (focus + aria-selected + tabindex).
+- **Contrast measurement hardened** (QE C3/C4, adversarial C5): key-set assertion prevents empty reports; focused-tab outline measured at 14.22:1 (≥ 3:1 floor).
+- **aria-selected/no-creation assertions** (QE C5) in both wiring tests.
+- **Shared InspectorNotice** (QE C6/C8): one loading/unavailable/retry block for all three panels (`session-inspector__notice`); duplicate CSS rule removed.
+- **Admin journey counter** (QE C7/N10): asserts zero `POST /api/sessions/chat` across the administration loop; hook-absence counted on every page.
+- **Poll on transient failure while active** (adversarial N7): useSessionDetails keeps its 1s cadence with the error notice.
+- **Sanitized network-info error** (security N3): fixed message, detail logged server-side.
+- **Truthful daemon `--host` doc** (security C1 partial) and README/SECURITY loopback-default corrections (adversarial C3).
+- **Original cohort evidence images** (adversarial C6): refreshed desktop.png/narrow.png committed; AC15 re-capture gap closed.
+- **Docker consequence recorded** (adversarial B2): named gap extended; merge gated on owner disposition.

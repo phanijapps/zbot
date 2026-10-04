@@ -170,18 +170,7 @@ impl GatewayServer {
         // Read network settings from AppSettings (cached in SettingsService).
         // If exposeToLan changed since startup, the user must restart — this
         // read happens at boot so a stale toggle from a prior run is fine.
-        // A missing/unreadable settings file fails closed to the loopback
-        // default — the desktop posture is loopback unless LAN is explicit.
-        let network_cfg = match self.state.settings().load() {
-            Ok(s) => s.network,
-            Err(e) => {
-                warn!(
-                    "Failed to load settings.json for network config: {}; failing closed to the loopback default",
-                    e
-                );
-                discovery::DiscoveryConfig::default()
-            }
-        };
+        let network_cfg = network_config_or_default(&self.state.settings());
         let resolved_host = effective_bind_host(&network_cfg);
         if resolved_host != self.config.host {
             info!(
@@ -643,6 +632,24 @@ pub(crate) fn persist_instance_id(
     settings.save(&current)
 }
 
+/// Settings-backed network config for startup resolution. A missing settings
+/// file resolves through `AppSettings::default()` (loopback); an unreadable or
+/// corrupt file fails closed to the loopback default — the desktop posture is
+/// loopback unless LAN exposure is explicit. Extracted so startup tests
+/// execute this exact production path.
+fn network_config_or_default(settings: &gateway_services::settings::SettingsService) -> discovery::DiscoveryConfig {
+    match settings.load() {
+        Ok(s) => s.network,
+        Err(e) => {
+            warn!(
+                "Failed to load settings.json for network config: {}; failing closed to the loopback default",
+                e
+            );
+            discovery::DiscoveryConfig::default()
+        }
+    }
+}
+
 /// Effective bind host from settings-backed network config: `advanced.bindHost`
 /// when present and valid, otherwise LAN exposure only when explicitly enabled,
 /// otherwise loopback. Pure over the config; startup tests enumerate the
@@ -659,12 +666,7 @@ mod startup_bind_tests {
     use tempfile::TempDir;
 
     fn bind_host_for(service: &SettingsService) -> IpAddr {
-        match service.load() {
-            Ok(s) => effective_bind_host(&s.network),
-            // Fail closed: the missing/corrupt settings path resolves the
-            // default config, never LAN.
-            Err(_) => effective_bind_host(&discovery::DiscoveryConfig::default()),
-        }
+        effective_bind_host(&network_config_or_default(service))
     }
 
     #[test]

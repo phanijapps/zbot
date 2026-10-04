@@ -1,4 +1,5 @@
 import { useSessionDetails } from "./useSessionDetails";
+import { InspectorNotice } from "./InspectorNotice";
 import type { HookActivity } from "@/services/transport/types";
 
 const statuses: Record<HookActivity["status"], string> = {
@@ -11,14 +12,9 @@ export function ActivityPanel({ sessionId, active }: {sessionId?: string; active
 
   if (!sessionId) return <p className="session-shell__hint">Select or start a conversation to inspect its recorded activity.</p>;
   return <section className="session-activity" aria-label="Recorded activity">
-    <div role="status" aria-atomic="true">
-    {loading && !details && <p className="session-shell__hint">Loading activity…</p>}
-    {error && <div className="session-activity__notice">
-      <p>Activity is unavailable. Your conversation and previously loaded activity have been kept.</p>
-      <button type="button" className="btn btn--outline btn--sm" onClick={retry}>Retry</button>
-    </div>}
-    </div>
-    {details?.activityTruncated && <p className="session-activity__notice">Most recent 500 activity records shown. Earlier records are not included.</p>}
+    <InspectorNotice loading={loading} hasData={Boolean(details)} error={error}
+      loadingLabel="Loading activity…" unavailable="Activity is unavailable. Your conversation and previously loaded activity have been kept." retry={retry} />
+    {details?.activityTruncated && <p className="session-inspector__notice">Most recent 500 activity records shown. Earlier records are not included.</p>}
     {details?.activity.length === 0 && <p className="session-shell__hint">No recorded activity for this conversation.</p>}
     <ol className="session-activity__list" aria-busy={loading}>
       {details?.activity.map(row => <li key={row.id} className="session-activity__item">

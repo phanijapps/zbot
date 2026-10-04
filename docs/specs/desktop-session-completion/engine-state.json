@@ -3,12 +3,10 @@
   "run_id": "dbe820eb-963e-4e6c-9abf-42b68e402562",
   "feature": "desktop-session-completion",
   "mode": "code",
-  "state": "CODE-IMPLEMENTATION",
-  "last_event": "wave-passed",
-  "last_event_context": {
-    "completed_wave_index": 2
-  },
-  "transition_sequence": 15,
-  "last_transition_at": "2026-10-04T21:29:45Z",
+  "state": "CODE-REVIEW",
+  "last_event": "gates-clean",
+  "last_event_context": null,
+  "transition_sequence": 17,
+  "last_transition_at": "2026-10-04T21:44:02Z",
   "gate_question": null
 }

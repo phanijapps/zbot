@@ -1,4 +1,5 @@
 import { useSessionDetails } from "./useSessionDetails";
+import { InspectorNotice } from "./InspectorNotice";
 import type { SessionDetails } from "@/services/transport/types";
 
 const evidence: Record<SessionDetails["sources"][number]["evidence"], string> = {
@@ -19,14 +20,9 @@ export function SourcesPanel({ sessionId, active }: {sessionId?: string; active:
 
   if (!sessionId) return <p className="session-shell__hint">Select or start a conversation to inspect its sources.</p>;
   return <section className="session-sources" aria-label="Recorded sources">
-    <div role="status" aria-atomic="true">
-    {loading && !details && <p className="session-shell__hint">Loading sources…</p>}
-    {error && <div className="session-activity__notice">
-      <p>Sources are unavailable. Your conversation and previously loaded sources have been kept.</p>
-      <button type="button" className="btn btn--outline btn--sm" onClick={retry}>Retry</button>
-    </div>}
-    </div>
-    {details?.sourcesTruncated && <p className="session-activity__notice">First 100 sources in citation/use order shown. Later sources are not included.</p>}
+    <InspectorNotice loading={loading} hasData={Boolean(details)} error={error} loadingLabel="Loading sources…"
+      unavailable="Sources are unavailable. Your conversation and previously loaded sources have been kept." retry={retry} />
+    {details?.sourcesTruncated && <p className="session-inspector__notice">First 100 sources in citation/use order shown. Later sources are not included.</p>}
     {details && details.sources.length === 0 && <p className="session-shell__hint">No cited or used sources for this conversation yet.</p>}
     <ul className="session-sources__list" aria-busy={loading}>
       {details?.sources.map(source => {

@@ -160,14 +160,12 @@ Common operations:
 
 ### LAN access
 
-By default the daemon advertises itself on your local network so phones, tablets, and other devices can reach it without typing an IP. Visit:
+The daemon binds loopback (`127.0.0.1`) by default. To reach it from phones, tablets, and other devices on your network, enable LAN exposure first — toggle **Expose to LAN** on in Settings or set `network.exposeToLan: true` in `~/Documents/zbot/config/settings.json` (restart required). Then visit:
 
 - `http://zbot.local` from any device on the same Wi-Fi.
 - Or scan the QR code in **Settings → Network** to open the URL on your phone.
 
-If you'd rather keep the daemon loopback-only, toggle **Expose to LAN** off in Settings or set `network.exposeToLan: false` in `~/Documents/zbot/config/settings.json` (restart required).
-
-**Heads up for upgraders:** prior versions only listened on `127.0.0.1`. After this release the daemon listens on `0.0.0.0` by default.
+**Heads up for upgraders:** prior releases listened on `0.0.0.0` by default. This release binds `127.0.0.1` (loopback) by default; LAN exposure is the explicit opt-in described above.
 
 ### Public tunnel with ngrok
 

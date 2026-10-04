@@ -45,9 +45,13 @@ beforeEach(() => {
 describe("SourcesPanel (shell wiring)", () => {
   it("shows a server-provided source under the Sources tab", async () => {
     render(<MemoryRouter><SessionShell initialSessionId="sess-1" /></MemoryRouter>);
-    fireEvent.click(await screen.findByRole("tab", { name: "Sources" }));
+    const tab = await screen.findByRole("tab", { name: "Sources" });
+    fireEvent.click(tab);
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "false");
     expect(await screen.findByText("Measured contrast study")).toBeVisible();
     expect(mocks.transport.getSessionDetails).toHaveBeenCalledWith("sess-1");
+    expect(mocks.transport.createChatSession).not.toHaveBeenCalled();
   });
 });
 
