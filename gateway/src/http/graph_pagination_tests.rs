@@ -64,13 +64,13 @@ async fn all_entities_total_is_exact_scope_count_with_next_offset() {
     let body: Value = response.json();
     assert_eq!(body["total"].as_u64(), Some(3), "total must be the exact scope count");
     assert!(
-        body.get("nextOffset").is_some_and(|v| !v.is_null()),
+        body.get("next_offset").is_some_and(|v| !v.is_null()),
         "a page with more rows must carry nextOffset"
     );
 }
 
-// STUB: AC1 — an exhausted page is explicit (offset passthrough proven too:
-// today the route ignores offset entirely and echoes the first page).
+// STUB: AC1 — an exhausted page is explicit; the returned ids also prove
+// offset passthrough (today the route ignores offset and echoes page one).
 #[tokio::test]
 async fn all_entities_final_page_marks_exhaustion() {
     let (server, _dir, state) = setup("127.0.0.1".parse().unwrap());
@@ -79,8 +79,28 @@ async fn all_entities_final_page_marks_exhaustion() {
     response.assert_status_ok();
     let body: Value = response.json();
     assert_eq!(body["total"].as_u64(), Some(4), "total must be the exact scope count");
+    let ids: Vec<&str> = body["entities"]
+        .as_array()
+        .expect("entities array")
+        .iter()
+        .map(|e| e["id"].as_str().expect("id"))
+        .collect();
+    assert_eq!(ids, vec!["entity-agent-a-2", "entity-agent-a-3"], "offset must advance rows");
     assert!(
-        body.get("nextOffset").is_none_or(|v| v.is_null()),
+        body.get("next_offset").is_none_or(|v| v.is_null()),
         "the final page must be explicitly exhausted"
     );
+}
+
+// STUB: AC1 — the graph surface is loopback-only: a LAN-bound gateway must
+// deny graph reads before any store access. Red today: the routes are
+// unguarded and answer 200.
+#[tokio::test]
+async fn lan_bound_gateway_denies_graph_reads_before_store_access() {
+    let (lan, _dir, state) = setup("0.0.0.0".parse().unwrap());
+    seed_entities(&state, "agent-a", 1).await;
+    let denied = lan.get("/api/graph/all/entities?limit=2").await;
+    denied.assert_status(axum::http::StatusCode::FORBIDDEN);
+    let body: Value = denied.json();
+    assert!(body["error"].as_str().is_some_and(|e| e.len() <= 160));
 }

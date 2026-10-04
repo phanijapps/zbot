@@ -323,15 +323,15 @@ describe("useGraphData progressive paging (stub)", () => {
       success: true,
       data: {
         entities: [
-          { id: `entity-${offset + 1}`, agentId: "agent-a", name: `E${offset + 1}`, entityType: "Concept" },
-          { id: `entity-${offset + 2}`, agentId: "agent-a", name: `E${offset + 2}`, entityType: "Concept" },
+          { id: `entity-${offset + 1}`, agent_id: "agent-a", name: `E${offset + 1}`, entity_type: "Concept" },
+          { id: `entity-${offset + 2}`, agent_id: "agent-a", name: `E${offset + 2}`, entity_type: "Concept" },
         ],
         total: 4,
-        nextOffset: offset + 2 < 4 ? offset + 2 : null,
+        next_offset: offset + 2 < 4 ? offset + 2 : null,
       },
     });
     mockGetGraphEntities.mockImplementation(async (_id: string, options?: {offset?: number}) => page(options?.offset ?? 0));
-    mockGetGraphRelationships.mockResolvedValue({ success: true, data: { relationships: [], total: 0, nextOffset: null } });
+    mockGetGraphRelationships.mockResolvedValue({ success: true, data: { relationships: [], total: 0, next_offset: null } });
 
     const { result } = renderHook(() => useGraphData("agent-a"));
     await waitFor(() => expect(result.current.loading).toBe(false));

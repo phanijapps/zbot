@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Zbot Observatory graph exploration
   version: 0.1.0
-  description: Draft delivery contract; additive paging of existing scoped graph reads.
+  description: Draft delivery contract; paging of existing scoped graph reads with two explicit semantics changes: total becomes the exact scope count (was page length) and ordering gains a unique (agent_id, id) tiebreaker after the unchanged mention_count DESC ranking.
     Every route under /api/graph/* — the operations modeled here and the sibling
     per-agent stats, aggregate stats, subgraph (max_hops bounded 1-4), reindex and
     ingest routes — runs gateway::http::SameOrigin and the hardened
