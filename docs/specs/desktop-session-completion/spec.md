@@ -20,9 +20,9 @@ The existing /session experience is complete and testably coherent: the visible 
 
 ### Always do
 
-- Treat desktop-session-shell/spec.md AC1–AC15 and accepted amendments as the authoritative baseline; record each criterion’s current evidence and remaining gap before editing.
+- Treat all Acceptance Criteria of [desktop-session-shell/spec.md](../desktop-session-shell/spec.md) as amended — enumerated once in this spec’s completion-matrix.md — as the authoritative baseline; record each criterion’s current evidence and remaining gap before editing.
 - Reuse SessionShell, Conversations, QuickChat, existing details/artifact APIs, shared tokens and administration pages.
-- Preserve all existing user edits and workflow tracking; use seeded/isolated browser data.
+- Preserve all existing user edits and workflow tracking; use seeded/isolated browser data. Every journey boots the isolated harness with a seeded vault (`--fresh-vault`); the host data dir (`~/Documents/zbot`) is neither read nor written by any fixture.
 
 ### Ask first
 
@@ -36,7 +36,7 @@ The existing /session experience is complete and testably coherent: the visible 
 
 ## Testing Strategy
 
-TDD component/transport tests cover proven QuickChat/session identity, actual tab selection, stale-response protection and mode/Stop/navigation behavior. Isolated HTTP and browser journeys verify server-backed details and artifacts across reload. Visual/manual QA compares the rendered surface to the approved mockup at 1280×800, 720px and 390px, with keyboard/focus/contrast checks and long content. The original contract’s acceptance matrix is the full baseline; this spec adds completion and evidence obligations rather than restating it.
+TDD component/transport tests cover proven QuickChat/session identity, actual tab selection, stale-response protection and mode/Stop/navigation behavior. Isolated HTTP and browser journeys verify server-backed details and artifacts across reload. Visual/manual QA compares the rendered surface to the approved mockup at the viewport set pinned in AC4, with keyboard/focus/contrast checks and long content. The original contract’s acceptance matrix is the full baseline; this spec adds completion and evidence obligations rather than restating it.
 
 ## Acceptance Criteria
 
@@ -45,11 +45,11 @@ TDD component/transport tests cover proven QuickChat/session identity, actual ta
 - [ ] **AC3 — Conversation parity: default QuickChat and explicit New chat remain distinct as specified; recent selection, mode lock, streaming, scoped Stop, final answers and artifacts survive navigation and reload with persisted identity. A failed Stop does not claim cancellation.**
 - [ ] **AC4 — Presentation: at 1280×800 the centered mode switch, main conversation/composer and secondary inspector match the approved visual hierarchy; at 720px and 390px navigation/details are operable drawers and long Markdown/code/cards do not cause horizontal page overflow or obscure the composer. Shared tokens provide measured 4.5:1 text and 3:1 necessary control/focus contrast.**
 - [ ] **AC5 — Administration continuity: existing Agents/Settings/Integrations actions and editor validation remain usable in the accepted shell styling; return-to-session and query state survive reload without destructive mutations. Hook management stays absent.**
-- [ ] **AC6 — Evidence and completion: isolated journeys exercise empty/populated, running/completed/stopped/error, reconnect/reload, missing details and denied artifacts. Keyboard/focus and screenshot comparisons are retained. The original shell cannot be marked shipped through this companion without its own verification/review and authorized workflow transition.**
+- [ ] **AC6 — Evidence and completion: isolated journeys exercise empty/populated, running/completed/stopped/error, reconnect/reload, missing details and denied artifacts. Keyboard/focus and screenshot comparisons are retained, containing generated content only — never user conversation data. The original shell cannot be marked shipped through this companion without its own verification/review and authorized workflow transition.**
 
 ## Assumptions
 
-- Technical: SessionShell renders placeholder outer tabs; the details endpoint and existing conversation components already exist (apps/ui/src/features/session-shell/SessionShell.tsx; contracts/openapi/session-details.yaml).
+- Technical: Activity already renders a details-endpoint-backed panel with stale-response protection and polling (ActivityPanel.tsx); only the Sources and Files tabs are placeholders. The details endpoint (activity + sources), artifact manifest/content endpoints, and existing conversation components already exist (apps/ui/src/features/session-shell/SessionShell.tsx; contracts/openapi/session-details.yaml; gateway/src/http/artifacts.rs).
 - Product: the existing approved mockup and completion request govern UX; no redesign is assumed (user approval 2026-10-03).
 - Process: original plan is locked/Approved and spec is Implementing; no substantive plan edit or cohort reset is performed during this authoring pass.
 - Design: experience-design pack is absent; the approved docs/product/zbot-desktop-ui-preview.html and apps/ui/ARCHITECTURE.md ground hierarchy and tokens, while final rendered review remains mandatory.

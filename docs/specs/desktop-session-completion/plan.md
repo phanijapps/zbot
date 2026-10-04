@@ -1,7 +1,7 @@
 # Plan: Desktop session completion
 
 - **Spec:** [`spec.md`](spec.md)
-- **Status:** Approved
+- **Status:** Drafting
 
 ## Approach
 
@@ -11,11 +11,11 @@ Reconcile the existing implementation and its evidence, then close verified gaps
 
 - The approved [brief](../../product/briefs/rig-hooks-session-graph.md) and the spec's Boundaries govern scope.
 - Preserve existing uncommitted work. Spec authoring does not approve implementation or reset another workflow.
-- Current branch is two commits behind `origin/main`; obtain a fresh isolated implementation base before code work. Do not stage/rebase the shared dirty checkout.
+- Refresh from the execution base branch (`origin/develop`) into an isolated worktree before code work; never stage or rebase the shared dirty checkout.
 
 ## Construction tests
 
-Existing isolated browser fixtures provide the primary evidence. Include request-count assertions on navigation to prove read-only selection and test failed Stop/no-proven-live-key states. Visual captures use generated content instead of user messages. Never rely on the default live view as proof of active/reload parity.
+Existing isolated browser fixtures provide the primary evidence. Include request-count assertions on navigation to prove read-only selection and test failed Stop/no-proven-live-key states. Visual captures use generated content only, per the spec's AC6 retention clause. Never rely on the default live view as proof of active/reload parity.
 
 ## Design (LLD)
 
@@ -43,13 +43,14 @@ Typography, surfaces and controls use existing theme.css/components.css tokens, 
 
 **Tests:**
 - Re-run existing SessionShell/QuickChat/conversation/administration tests and isolated e2e/playwright/ui-mode/session-shell.ui.spec.ts. Retain failures rather than changing the expected behavior.
+- completion-matrix.md records the overlap disposition — owner authorization 2026-10-04: this companion delivers the inspector/presentation scope still outstanding in the original cohort's remaining waves; the original cohort is inspected read-only, never reset, and its own completion remains a separate authorized transition (AC6). T2 may not start without this recorded disposition.
 
 **Approach:**
-Create completion-matrix.md mapping original AC1–AC15 to current artifacts and specific unresolved gaps, including effective network bind. Inspect the active shell cohort read-only and name any overlapping locked task; do not reset it.
+Create completion-matrix.md enumerating every original Acceptance Criterion (as amended) with its current artifact or specific unresolved gap, including effective network bind. Inspect the active shell cohort read-only and record the overlap disposition above; do not reset it.
 
 ### T2: Make one session-bound inspector functional
 
-**Depends on:** T1
+**Depends on:** T1 (including its recorded overlap disposition)
 
 **Verification mode:** TDD
 
@@ -57,6 +58,9 @@ Create completion-matrix.md mapping original AC1–AC15 to current artifacts and
 
 **Tests:**
 - Tab content/ARIA, default proven identity, unavailable identity, conversation switch with a late response, empty/failed details and artifact boundary cases.
+- `apps/ui/src/features/session-shell/SourcesPanel.test.tsx` (stub: true — red stub asserts the Sources tab renders a server-provided source row)
+- `apps/ui/src/features/session-shell/FilesPanel.test.tsx` (stub: true — red stub asserts the Files tab renders the artifact manifest and opens content by artifact ID)
+- `apps/ui/src/features/session-shell/SessionShell.test.tsx` additions for tab-switch identity and stale-response protection
 
 **Approach:**
 Reuse existing components and APIs in SessionShell/Conversations and chat-v2 state. Unify duplicate inspectors only where verified; preserve QuickChat behavior and selected-session semantics. Any required identity contract correction receives HTTP-negative tests.
@@ -73,7 +77,7 @@ Reuse existing components and APIs in SessionShell/Conversations and chat-v2 sta
 - Mode/Stop/reload and administration return journeys; desktop/narrow/code/long-card captures, contrast readings and focus restoration.
 
 **Approach:**
-Apply only gaps in completion-matrix.md to current components/styles; preserve existing source edits. Effective startup-default correction uses the original approved local-only requirement with LAN opt-in and actual startup tests; coordinate any locked-plan change before executing.
+Apply only gaps in completion-matrix.md to current components/styles; preserve existing source edits. The effective startup-default correction (gateway/src/server.rs resolves the bind from settings-backed network config, defaulting to LAN exposure) is executed under the owner's standing authorization recorded with this spec's approval (2026-10-04): default loopback with explicit LAN opt-in, verified by actual startup tests; any change beyond that scope requires fresh approval. Coordinate any locked-plan change before executing.
 
 ### T4: Complete full acceptance evidence and original handoff
 
@@ -84,7 +88,8 @@ Apply only gaps in completion-matrix.md to current components/styles; preserve e
 **Spec mapping:** AC1–6
 
 **Tests:**
-- Full original AC1–AC15 matrix, both execution routes, unauthorized details/files, active Stop and final-answer reload; no external calls or private-vault mutations in fixtures.
+- Full original Acceptance Criteria matrix (as amended, enumerated in completion-matrix.md), both execution routes, unauthorized details/files, active Stop and final-answer reload; no external calls or private-vault reads or mutations in fixtures.
+- Administration journeys assert no hook-management control or hook execution action is rendered (AC5).
 
 **Approach:**
 Record verification.md and refreshed QA artifacts; run npm run build and relevant Vitest/Playwright suites plus gateway HTTP checks. Propose original workflow completion only after its independent gate passes.
