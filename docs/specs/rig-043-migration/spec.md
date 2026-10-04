@@ -1,6 +1,6 @@
 # Spec: Rig 0.43.0 execution parity
 
-- **Status:** Draft
+- **Status:** Implementing
 - **Owner:** @videogamer
 - **Plan:** [`plan.md`](plan.md)
 - **Constrained by:** [Rig-only execution](../rig-only-execution/spec.md); existing engine-hook semantics
