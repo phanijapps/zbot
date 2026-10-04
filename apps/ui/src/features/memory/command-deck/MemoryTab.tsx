@@ -13,6 +13,8 @@ import { ContradictionList } from "./beliefs/ContradictionList";
 
 interface Props {
   agentId: string;
+  embedded?: boolean;
+  observatoryHref?: string;
 }
 
 /**
@@ -45,7 +47,7 @@ function buildFactKey(content: string): string {
   return slug || `fact-${Date.now()}`;
 }
 
-export function MemoryTab({ agentId }: Props) {
+export function MemoryTab({ agentId, embedded = false, observatoryHref }: Props) {
   const wards = useWards();
   const [activeId, setActiveId] = useState<string>("");
   const [subTab, setSubTab] = useState<MemorySubTab>("facts");
@@ -91,7 +93,7 @@ export function MemoryTab({ agentId }: Props) {
 
   return (
     <div className="memory-tab-deck" role="region" aria-label="Memory command deck">
-      <header className="memory-tab-deck__masthead">
+      {!embedded && <header className="memory-tab-deck__masthead">
         <div>
           <div className="memory-tab-deck__overline">Durable knowledge / unified recall</div>
           <h1>Memory</h1>
@@ -100,7 +102,7 @@ export function MemoryTab({ agentId }: Props) {
             needed.
           </p>
         </div>
-      </header>
+      </header>}
       <div className="memory-tab-deck__top">
         {subTab === "facts" ? (
           <>
@@ -133,6 +135,7 @@ export function MemoryTab({ agentId }: Props) {
             data={data}
             days={days}
             onDeleteFact={deleteFact}
+            observatoryHref={observatoryHref}
           />
         </section>
         {subTab === "facts" ? (
@@ -190,6 +193,7 @@ interface CenterPanelProps {
   data: ReturnType<typeof useWardContent>["data"];
   days: number;
   onDeleteFact: (id: string) => Promise<void>;
+  observatoryHref?: string;
 }
 
 function CenterPanel(p: CenterPanelProps) {
@@ -234,6 +238,7 @@ function CenterPanel(p: CenterPanelProps) {
       data={p.data}
       timewarpDays={p.days}
       onDeleteFact={p.onDeleteFact}
+      observatoryHref={p.observatoryHref}
     />
   );
 }

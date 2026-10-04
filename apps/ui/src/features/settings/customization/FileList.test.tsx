@@ -31,6 +31,6 @@ describe("FileList", () => {
   it("highlights the selected file", () => {
     render(<FileList files={sampleFiles} selectedPath="agent/SOUL.md" onSelect={() => {}} />);
     const row = screen.getByText("SOUL.md").closest("button");
-    expect(row?.getAttribute("aria-selected")).toBe("true");
+    expect(row?.getAttribute("aria-pressed")).toBe("true");
   });
 });

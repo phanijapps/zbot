@@ -209,7 +209,7 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
           <Cpu style={{ width: 16, height: 16, color: "var(--muted-foreground)" }} />
           Model Configuration
         </h3>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--spacing-3)" }}>
+        <div className="administration-field-grid">
           <div className="form-group">
             <label className="form-label" htmlFor="edit-agent-provider">Provider</label>
             <select
@@ -250,7 +250,7 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
             )}
           </div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "var(--spacing-3)", marginTop: "var(--spacing-3)" }}>
+        <div className="administration-field-grid administration-field-grid--three">
           <div className="form-group">
             <label className="form-label" style={{ display: "flex", alignItems: "center", gap: "var(--spacing-1)" }}>
               <Thermometer style={{ width: 14, height: 14 }} />

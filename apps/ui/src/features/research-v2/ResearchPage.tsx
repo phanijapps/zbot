@@ -273,7 +273,7 @@ interface MainColumnProps {
   showSubagents: boolean;
 }
 
-function MainColumn({ state, surfaces, onSend, showSubagents }: MainColumnProps) {
+export function MainColumn({ state, surfaces, onSend, showSubagents }: MainColumnProps) {
   const hasContent = state.turns.length > 0 || state.sessionId !== null;
 
   if (!hasContent) return <EmptyHero onSend={onSend} />;

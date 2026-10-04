@@ -8,6 +8,7 @@ import type { PillState } from "../shared/statusPill";
 // A configurable hook mock so tests can drive different UI states.
 interface MockHookReturn {
   state: QuickChatState;
+  isActive?: boolean;
   pillState: PillState;
   sendMessage: ReturnType<typeof vi.fn>;
   stopAgent: ReturnType<typeof vi.fn>;
@@ -74,6 +75,18 @@ describe("<QuickChat>", () => {
     renderPage();
     expect(screen.getByText("Quick chat")).toBeTruthy();
     expect(screen.getByText(/bound to stock-analysis/)).toBeTruthy();
+  });
+
+  it("reports activity without changing legacy initialization or losing a failed Stop lock", () => {
+    const onActive = vi.fn();
+    const {rerender} = render(<MemoryRouter><QuickChat onActive={onActive} /></MemoryRouter>);
+    expect(onActive).toHaveBeenLastCalledWith(false);
+    mockHookRef.current = {...makeIdleHook(),isActive:true,state:{...makeIdleHook().state,status:"error"}};
+    rerender(<MemoryRouter><QuickChat onActive={onActive} /></MemoryRouter>);
+    expect(onActive).toHaveBeenLastCalledWith(true);
+    mockHookRef.current = makeIdleHook();
+    rerender(<MemoryRouter><QuickChat onActive={onActive} /></MemoryRouter>);
+    expect(onActive).toHaveBeenLastCalledWith(false);
   });
 
   it("shows the ward chip when a ward is active", () => {

@@ -43,7 +43,7 @@ pub use config::{
 };
 #[cfg(test)]
 pub(crate) use context_editing::compress_old_assistant_messages;
-pub use context_editing::ContextEditingMiddleware;
+pub use context_editing::{ContextEditingMiddleware, ProvenanceAwareContextEditingMiddleware};
 pub use pipeline::MiddlewarePipeline;
 pub use plan_block::{extract_plan_state, PlanBlockMiddleware};
 pub use summarization::SummarizationMiddleware;

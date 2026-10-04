@@ -92,11 +92,16 @@ function generateId(name: string): string {
 
 export function WebAgentsPanel() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = searchParams.get("tab") || "agents";
+  const requestedTab = searchParams.get("tab") || "agents";
+  const activeTab = ["agents", "skills", "schedules"].includes(requestedTab) ? requestedTab : "agents";
 
   const setActiveTab = useCallback(
     (tab: string) => {
-      setSearchParams(tab === "agents" ? {} : { tab });
+      setSearchParams(previous => {
+        const next = new URLSearchParams(previous);
+        if (tab === "agents") next.delete("tab"); else next.set("tab", tab);
+        return next;
+      });
     },
     [setSearchParams],
   );
@@ -849,7 +854,7 @@ export function WebAgentsPanel() {
             rows={2}
           />
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--spacing-4)" }}>
+        <div className="administration-field-grid administration-field-grid--spacious">
           <div className="form-group">
             <label className="form-label" htmlFor="create-agent-provider">Provider</label>
             <select

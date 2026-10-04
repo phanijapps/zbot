@@ -2,6 +2,7 @@
 //!
 //! HTTP API for persistent chat session initialization and message history.
 
+use super::{sessions::LoopbackBind, HttpErrorResponse, SameOrigin};
 use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
@@ -30,6 +31,127 @@ pub struct ChatInitResponse {
     pub session_id: String,
     pub conversation_id: String,
     pub created: bool,
+}
+
+/// Independent shell Chat identity; legacy ChatInitResponse is unchanged.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellChatResponse {
+    pub session_id: String,
+    pub conversation_id: String,
+    pub created: bool,
+    pub is_live: bool,
+}
+
+fn chat_error(status: StatusCode, message: &'static str) -> (StatusCode, Json<HttpErrorResponse>) {
+    (
+        status,
+        Json(HttpErrorResponse {
+            error: message.to_owned(),
+        }),
+    )
+}
+
+/// POST /api/sessions/chat — one insert, no singleton or history mutation.
+pub async fn create_chat_session(
+    _origin: SameOrigin,
+    _bind: LoopbackBind,
+    State(state): State<AppState>,
+) -> Result<(StatusCode, Json<ShellChatResponse>), (StatusCode, Json<HttpErrorResponse>)> {
+    let mut session =
+        execution_state::Session::new_queued("root", execution_state::TriggerSource::Web);
+    session.mode = Some("fast".into());
+    session.metadata = Some(serde_json::json!({"shell_chat_conversation_id": session.id}));
+    state
+        .state_service()
+        .create_session_from(&session)
+        .map_err(|_| {
+            chat_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "chat session unavailable",
+            )
+        })?;
+    Ok((
+        StatusCode::CREATED,
+        Json(ShellChatResponse {
+            conversation_id: session.id.clone(),
+            session_id: session.id,
+            created: true,
+            is_live: false,
+        }),
+    ))
+}
+
+/// GET /api/sessions/:id/chat — validate server mode before selected hydration.
+pub async fn open_chat_session(
+    _origin: SameOrigin,
+    _bind: LoopbackBind,
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Result<Json<ShellChatResponse>, (StatusCode, Json<HttpErrorResponse>)> {
+    if !gateway_execution::session_details::safe_id(&session_id) {
+        return Err(chat_error(
+            StatusCode::BAD_REQUEST,
+            "invalid session identifier",
+        ));
+    }
+    let selected = state
+        .state_service()
+        .get_session_with_executions(&session_id)
+        .map_err(|_| {
+            chat_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "chat session unavailable",
+            )
+        })?
+        .ok_or_else(|| chat_error(StatusCode::NOT_FOUND, "chat session not found"))?;
+    let session = selected.session;
+    if !matches!(session.mode.as_deref(), Some("fast" | "chat"))
+        || session.parent_session_id.is_some()
+        || session.root_agent_id != "root"
+    {
+        return Err(chat_error(StatusCode::CONFLICT, "not a root chat session"));
+    }
+    let is_live = selected
+        .executions
+        .iter()
+        .any(|execution| !execution.status.is_terminal());
+    let canonical_key = session
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("shell_chat_conversation_id"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|key| *key == session_id);
+    let conversation_id = if canonical_key.is_some() {
+        session_id.clone()
+    } else {
+        let settings = state.settings().get_execution_settings().map_err(|_| {
+            chat_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "chat session unavailable",
+            )
+        })?;
+        let reserved_key = settings.chat.conversation_id.filter(|key| {
+            settings.chat.session_id.as_deref() == Some(session_id.as_str())
+                && gateway_execution::session_details::safe_id(key)
+        });
+        match reserved_key {
+            Some(key) => key,
+            None if !is_live => session_id.clone(),
+            None => {
+                return Err(chat_error(
+                    StatusCode::CONFLICT,
+                    "active chat routing unavailable",
+                ))
+            }
+        }
+    };
+    Ok(Json(ShellChatResponse {
+        session_id,
+        conversation_id,
+        created: false,
+        is_live,
+    }))
 }
 
 /// Query parameters for GET /api/sessions/:id/messages.

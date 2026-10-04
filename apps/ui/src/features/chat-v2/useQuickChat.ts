@@ -104,22 +104,28 @@ async function fetchArtifacts(
 
 /** Idempotent bootstrap: init the reserved session, pull history + artifacts. */
 async function bootstrapChatSession(
-  transport: Transport
+  transport: Transport,
+  selectedSessionId?: string,
 ): Promise<{
   sessionId: string;
   conversationId: string;
   messages: QuickChatMessage[];
   artifacts: QuickChatArtifactRef[];
   surfaces: SavedSurface[];
+  isLive: boolean;
 } | null> {
-  const init = await transport.initChatSession();
+  const init = selectedSessionId
+    ? await transport.openChatSession(selectedSessionId)
+    : await transport.initChatSession();
   if (!init.success || !init.data) return null;
+  if (selectedSessionId && init.data.sessionId !== selectedSessionId) return null;
 
   const { sessionId, conversationId, created } = init.data;
+  const isLive = "isLive" in init.data && init.data.isLive === true;
 
   // New sessions have no history or artifacts to fetch.
-  if (created) {
-    return { sessionId, conversationId, messages: [], artifacts: [], surfaces: [] };
+  if (created && !selectedSessionId) {
+    return { sessionId, conversationId, messages: [], artifacts: [], surfaces: [], isLive };
   }
 
   const [history, artifacts, savedSurfaces] = await Promise.all([
@@ -127,6 +133,7 @@ async function bootstrapChatSession(
     fetchArtifacts(transport, sessionId),
     transport.listSavedSessionSurfaces(sessionId).catch(() => ({ success: false } as const)),
   ]);
+  if (selectedSessionId && (!history.success || !history.data)) return null;
   const messages =
     history.success && history.data
       ? history.data
@@ -136,7 +143,7 @@ async function bootstrapChatSession(
       : [];
 
   const surfaces = savedSurfaces.success && savedSurfaces.data ? savedSurfaces.data : [];
-  return { sessionId, conversationId, messages, artifacts, surfaces };
+  return { sessionId, conversationId, messages, artifacts, surfaces, isLive };
 }
 
 /** Build the WS event handler once; closure captures the stable pill sink. */
@@ -144,6 +151,7 @@ function makeEventHandler(
   pillSink: PillEventSink,
   dispatch: Dispatch<QuickChatAction>,
   onSurface: (event: ConversationEvent) => void,
+  onAction?: (action: QuickChatAction) => void,
 ) {
   return (event: ConversationEvent) => {
     if (event.type === "surface_created" || event.type === "surface_updated" || event.type === "surface_deleted") {
@@ -159,7 +167,10 @@ function makeEventHandler(
     if (respondFromComplete) dispatch(respondFromComplete);
 
     const action = mapGatewayEventToQuickChatAction(event);
-    if (action) dispatch(action);
+    if (action) {
+      dispatch(action);
+      onAction?.(action);
+    }
     const pillEv = mapGatewayEventToPillEvent(event);
     if (pillEv) pillSink.push(pillEv);
   };
@@ -169,31 +180,33 @@ function makeEventHandler(
 // Hook
 // ---------------------------------------------------------------------------
 
-export function useQuickChat() {
+export function useQuickChat(options?: { sessionId: string }) {
+  const selectedSessionId = options?.sessionId;
   const [state, dispatch] = useReducer(reduceQuickChat, EMPTY_QUICK_CHAT_STATE);
   const { state: pillState, sink: pillSink } = useStatusPill();
   const [surfaces, setSurfaces] = useState<SavedSurface[]>([]);
-
-  // Bootstrap idempotency guard. Set AFTER the async work resolves, not
-  // before, so StrictMode's synthetic unmount doesn't leave us in a "bootstrap
-  // started but never completed" state. The server-side init is idempotent
-  // (same session ids on every call), so two concurrent calls in dev are
-  // harmless — this ref only guarantees we dispatch HYDRATE once.
-  const bootstrappedRef = useRef(false);
+  const [isActive, setIsActive] = useState(false);
+  const restoringActiveRef = useRef(false);
   const subscribedConvIdRef = useRef<string | null>(null);
 
-  // --- Bootstrap: init reserved session + hydrate history ---
+  // Both boot paths are idempotent reads (legacy init self-heals server-side).
+  // A cancelled effect cannot publish the previous selected session's result.
   useEffect(() => {
-    if (bootstrappedRef.current) return;
+    let cancelled = false;
+    dispatch({ type: "RESET" });
+    setSurfaces([]);
+    setIsActive(false);
+    restoringActiveRef.current = false;
     (async () => {
       const transport = await getTransport();
-      const result = await bootstrapChatSession(transport);
-      if (bootstrappedRef.current) return;
-      bootstrappedRef.current = true;
+      const result = await bootstrapChatSession(transport, selectedSessionId);
+      if (cancelled) return;
       if (!result) {
         dispatch({ type: "ERROR", message: "Failed to initialise chat" });
         return;
       }
+      setIsActive(result.isLive);
+      restoringActiveRef.current = Boolean(selectedSessionId && result.isLive);
       setSurfaces(result.surfaces);
       dispatch({
         type: "HYDRATE",
@@ -202,14 +215,19 @@ export function useQuickChat() {
         messages: result.messages,
         wardName: null, // populated by later WardChanged events
         artifacts: result.artifacts,
+        isLive: result.isLive,
       });
-    })();
-  }, []);
+    })().catch(() => {
+      if (!cancelled) dispatch({ type: "ERROR", message: "Failed to initialise chat" });
+    });
+    return () => { cancelled = true; };
+  }, [selectedSessionId]);
 
   // --- Subscribe to WS events for the persisted conversationId ---
   useEffect(() => {
     const convId = state.conversationId;
     if (!convId || subscribedConvIdRef.current === convId) return;
+    let cancelled = false;
     subscribedConvIdRef.current = convId;
     const onEvent = makeEventHandler(pillSink, dispatch, (event) => {
       const raw = event as unknown as { surface?: WorkSurface; surface_id?: string; execution_id?: string; session_id?: string };
@@ -227,12 +245,21 @@ export function useQuickChat() {
           next,
         ]);
       }
+    }, action => {
+      if (action.type === "AGENT_STARTED") setIsActive(true);
+      if (action.type === "TURN_COMPLETE" || action.type === "AGENT_COMPLETED" || action.type === "ERROR") {
+        setIsActive(false);
+      }
     });
     const unsubscribe = Promise.resolve().then(async () => {
       const transport = await getTransport();
-      return transport.subscribeConversation(convId, { onEvent });
+      if (cancelled) return undefined;
+      return transport.subscribeConversation(convId, { onEvent: event => {
+        if (!cancelled) onEvent(event);
+      } });
     });
     return () => {
+      cancelled = true;
       unsubscribe.then((fn) => fn?.()).catch(() => {
         /* no-op */
       });
@@ -242,6 +269,38 @@ export function useQuickChat() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.conversationId]);
+
+  // Reopened active sessions may have missed their terminal WS frame. Poll the
+  // read-only identity until it settles, then restore the durable final history.
+  useEffect(() => {
+    if (!selectedSessionId || !isActive || !restoringActiveRef.current) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try {
+        const transport = await getTransport();
+        const opened = await transport.openChatSession(selectedSessionId);
+        if (cancelled) return;
+        if (!opened.success || !opened.data) {
+          dispatch({ type: "ERROR", message: "Chat status unavailable" });
+        } else if (!opened.data.isLive) {
+          const snapshot = await bootstrapChatSession(transport, selectedSessionId);
+          if (cancelled) return;
+          if (snapshot) {
+            setIsActive(snapshot.isLive);
+            setSurfaces(snapshot.surfaces);
+            dispatch({ type: "HYDRATE", ...snapshot, wardName: null });
+            if (!snapshot.isLive) return;
+          }
+        }
+      } catch {
+        if (!cancelled) dispatch({ type: "ERROR", message: "Chat status unavailable" });
+      }
+      if (!cancelled) timer = setTimeout(refresh, 2000);
+    };
+    timer = setTimeout(refresh, 2000);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [selectedSessionId, isActive]);
 
   // --- Refresh artifacts on turn completion ---
   // When a turn finishes the agent may have written new files; pull the
@@ -262,7 +321,7 @@ export function useQuickChat() {
   const sendMessage = useCallback(
     async (text: string, attachments: UploadedFile[] = []) => {
       const trimmed = text.trim();
-      if (!trimmed || state.status === "running") return;
+      if (!trimmed || state.status === "running" || (selectedSessionId && isActive)) return;
       if (!state.sessionId || !state.conversationId) return;
       // Splice uploaded-file metadata (incl. absolute server paths) into the
       // prompt — executeAgent has no separate attachments channel, so the
@@ -278,6 +337,8 @@ export function useQuickChat() {
           attachments: displayAttachments(attachments),
         },
       });
+      restoringActiveRef.current = false;
+      setIsActive(true);
       const transport = await getTransport();
       const result = await transport.executeAgent(
         CHAT_AGENT_ID,
@@ -287,24 +348,26 @@ export function useQuickChat() {
         CHAT_MODE
       );
       if (!result.success) {
+        setIsActive(false);
         dispatch({ type: "ERROR", message: result.error ?? "Failed to send" });
       }
     },
-    [state.status, state.conversationId, state.sessionId]
+    [state.status, state.conversationId, state.sessionId, selectedSessionId, isActive]
   );
 
   // --- Stop a running turn ---
   const stopAgent = useCallback(async () => {
-    if (state.status !== "running" || !state.conversationId || !state.sessionId) return;
+    if ((!isActive && state.status !== "running") || !state.conversationId || !state.sessionId) return;
     const transport = await getTransport();
     const result = await transport.cancelSession(state.sessionId, state.conversationId);
     if (!result.success) {
       dispatch({ type: "ERROR", message: result.error ?? "Failed to cancel request" });
     }
-  }, [state.status, state.conversationId, state.sessionId]);
+  }, [state.status, state.conversationId, state.sessionId, isActive]);
 
   // --- Clear the reserved session and bootstrap a fresh one ---
   const clearSession = useCallback(async () => {
+    if (selectedSessionId) return; // Only the legacy route owns destructive reset.
     const transport = await getTransport();
     const deleted = await transport.deleteChatSession();
     if (!deleted.success) {
@@ -326,7 +389,7 @@ export function useQuickChat() {
       wardName: null,
       artifacts: fresh.artifacts,
     });
-  }, []);
+  }, [selectedSessionId]);
 
-  return { state, pillState, surfaces, sendMessage, stopAgent, clearSession };
+  return { state, pillState, surfaces, isActive, sendMessage, stopAgent, clearSession };
 }

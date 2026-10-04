@@ -66,6 +66,16 @@ describe("MemoryItemCard — delete button", () => {
     expect(onClick).not.toHaveBeenCalled();
   });
 
+  it("keeps inspect and delete as separate keyboard controls", () => {
+    const onClick = vi.fn();
+    render(<MemoryItemCard {...baseProps({ onClick, onDelete: vi.fn() })} />);
+    const inspect = screen.getByRole("button", {name:/User prefers JWT/});
+    const remove = screen.getByRole("button", {name:/delete preference memory/i});
+    expect(inspect.contains(remove)).toBe(false);
+    fireEvent.keyDown(inspect, {key:"Enter"});
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
   it("disables the delete button while a delete is in flight", async () => {
     let resolveDelete: (() => void) | undefined;
     const onDelete = vi.fn(

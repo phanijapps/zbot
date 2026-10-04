@@ -30,6 +30,7 @@ import type {
   ModelRegistryResponse,
   MessageResponse,
   ChatSessionInit,
+  ShellChatSession,
   SessionMessage,
   SessionMessagesQuery,
   ToolSettings,
@@ -97,6 +98,7 @@ import type {
   CommissioningRequest,
   LocalDiagnosis,
   SessionState,
+  SessionDetails,
   Artifact,
   ArtifactListOptions,
   EmbeddingsHealth,
@@ -271,6 +273,8 @@ export interface Transport {
    * surfaces (`/chat` and `/chat-v2`) to avoid creating phantom sessions.
    */
   initChatSession(): Promise<TransportResult<ChatSessionInit>>;
+  createChatSession(): Promise<TransportResult<ShellChatSession>>;
+  openChatSession(sessionId: string): Promise<TransportResult<ShellChatSession>>;
 
   /**
    * Clear the reserved chat session slot.
@@ -341,6 +345,9 @@ export interface Transport {
 
   /** Get structured session state snapshot for reconnection */
   getSessionState(sessionId: string): Promise<TransportResult<SessionState>>;
+
+  /** Read the server's redacted, persisted Activity/Sources projection. */
+  getSessionDetails(sessionId: string): Promise<TransportResult<SessionDetails>>;
 
   /** Delete a log session */
   deleteLogSession(sessionId: string): Promise<TransportResult<void>>;

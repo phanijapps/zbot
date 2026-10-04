@@ -96,3 +96,12 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 npm run daemon:watch ## will run the daemon and watch for changes to code to compile. useful for development
 npm run dev ## will run the UI on port 3000
 ```
+
+## Memory (memex)
+
+- When the user states a durable fact, preference, or rule, or asks to memorize
+  one, write it with `memex_write` (or `memex write`). Choose project scope for
+  workspace architecture, conventions, and decisions; choose global scope for
+  facts intended across projects. If unclear, choose project. Pass
+  `scope="project"` or `scope="global"` to the tool, or the matching `--scope`
+  to the CLI. Check the returned file path.

@@ -7,6 +7,7 @@ use crate::errors::ExecutionError;
 use agent_primitives::vault_paths::SharedVaultPaths;
 use agent_primitives::vault_paths::VaultPaths;
 use agent_primitives::{ConnectorResourceProvider, FileSystemContext};
+use agent_runtime::middleware::ProvenanceAwareContextEditingMiddleware;
 use agent_runtime::{
     ContextCapability, ContextCapabilityCatalog, ContextCapabilityHealth, ContextCapabilityKind,
     ContextEditingConfig, ContextEditingMiddleware, DelegateTool, ExecutorConfig, KeepPolicy,
@@ -1295,21 +1296,33 @@ pub(crate) fn build_runtime_middleware_pipeline(
         };
         let threshold = (context_window_tokens as usize * trigger_pct) / 100;
         trigger_tokens = Some(threshold);
-        pipeline.add_pre_processor(Box::new(ContextEditingMiddleware::new(
-            ContextEditingConfig {
-                enabled: true,
-                trigger_tokens: threshold,
-                keep_tool_results: keep_results,
-                min_reclaim: 500,
-                clear_tool_inputs: true,
-                // Loaded skills are behavioral context; keep them resident rather than
-                // replacing them with reload placeholders during context editing.
-                exclude_tools: vec!["load_skill".to_string()],
-                cascade_unload: true,
-                skill_aware_placeholders: true,
-                ..Default::default()
-            },
-        )))
+        let config = ContextEditingConfig {
+            enabled: true,
+            trigger_tokens: threshold,
+            keep_tool_results: keep_results,
+            min_reclaim: 500,
+            clear_tool_inputs: true,
+            // Loaded skills are behavioral context; keep them resident rather than
+            // replacing them with reload placeholders during context editing.
+            exclude_tools: vec!["load_skill".to_string()],
+            cascade_unload: true,
+            skill_aware_placeholders: true,
+            ..Default::default()
+        };
+        match std::env::var("ZBOT_CONTEXT_EDITING_POLICY").ok().as_deref() {
+            Some("legacy") => {
+                pipeline.add_pre_processor(Box::new(ContextEditingMiddleware::new(config)))
+            }
+            Some(value) if !value.is_empty() && value != "provenance-aware" => {
+                tracing::warn!(policy = %value, selected_policy = "provenance-aware", "Invalid context editing policy; using default");
+                pipeline.add_pre_processor(Box::new(ProvenanceAwareContextEditingMiddleware::new(
+                    config,
+                )))
+            }
+            _ => pipeline.add_pre_processor(Box::new(
+                ProvenanceAwareContextEditingMiddleware::new(config),
+            )),
+        }
     } else {
         pipeline
     };

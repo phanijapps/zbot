@@ -32,6 +32,7 @@ import type {
   McpOAuthStartResponse,
   MessageResponse,
   ChatSessionInit,
+  ShellChatSession,
   SessionMessage,
   SessionMessagesQuery,
   ToolSettings,
@@ -109,6 +110,7 @@ import type {
   CommissioningRequest,
   LocalDiagnosis,
   SessionState,
+  SessionDetails,
   Artifact,
   ArtifactListOptions,
   EmbeddingsHealth,
@@ -382,6 +384,14 @@ export class HttpTransport implements Transport {
     return this.post<ChatSessionInit>("/api/chat/init", {});
   }
 
+  async createChatSession(): Promise<TransportResult<ShellChatSession>> {
+    return this.post<ShellChatSession>("/api/sessions/chat", {});
+  }
+
+  async openChatSession(sessionId: string): Promise<TransportResult<ShellChatSession>> {
+    return this.get<ShellChatSession>(`/api/sessions/${encodeURIComponent(sessionId)}/chat`);
+  }
+
   async deleteChatSession(): Promise<TransportResult<void>> {
     if (!this.config) {
       return { success: false, error: "Transport not initialized" };
@@ -515,6 +525,10 @@ export class HttpTransport implements Transport {
 
   async getSessionState(sessionId: string): Promise<TransportResult<SessionState>> {
     return this.get<SessionState>(`/api/sessions/${encodeURIComponent(sessionId)}/state`);
+  }
+
+  async getSessionDetails(sessionId: string): Promise<TransportResult<SessionDetails>> {
+    return this.get<SessionDetails>(`/api/sessions/${encodeURIComponent(sessionId)}/details`);
   }
 
   async deleteLogSession(sessionId: string): Promise<TransportResult<void>> {

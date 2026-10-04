@@ -72,10 +72,9 @@ struct Args {
     #[arg(long, default_value_t = gateway::DEFAULT_HTTP_PORT)]
     http_port: u16,
 
-    /// Host address to bind to. Default binds to all interfaces so the
-    /// daemon is reachable from other devices on the LAN. Override with
-    /// `--host 127.0.0.1` to restrict to localhost.
-    #[arg(long, default_value = "0.0.0.0")]
+    /// Host address to bind to. Desktop default is loopback; pass
+    /// `--host 0.0.0.0` explicitly to expose the daemon on the LAN.
+    #[arg(long, default_value = "127.0.0.1")]
     host: String,
 
     /// Path to z-Bot data directory (default: ~/Documents/zbot)
@@ -135,6 +134,21 @@ struct Args {
     /// Exact browser origin allowed to call A2A routes (repeatable).
     #[arg(long = "a2a-allow-origin")]
     a2a_allowed_origins: Vec<String>,
+}
+
+#[cfg(test)]
+mod bind_tests {
+    use super::*;
+
+    // STUB: AC13 — local desktop binding is the default; LAN is explicit.
+    #[test]
+    fn daemon_defaults_to_loopback_and_allows_explicit_lan_bind() {
+        assert_eq!(Args::parse_from(["zbotd"]).host, "127.0.0.1");
+        assert_eq!(
+            Args::parse_from(["zbotd", "--host", "0.0.0.0"]).host,
+            "0.0.0.0"
+        );
+    }
 }
 
 /// Merged logging configuration from settings.json and CLI args.

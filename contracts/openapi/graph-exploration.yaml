@@ -1,0 +1,570 @@
+openapi: 3.1.0
+info:
+  title: Zbot Observatory graph exploration
+  version: 0.1.0
+  description: Draft delivery contract; additive paging of existing scoped graph reads.
+    Every operation runs gateway::http::SameOrigin and sessions::LoopbackBind before
+    any store read. Mismatched Origin, LAN bind or missing bind proof returns sanitized
+    403 with zero store access, including Origin-less native callers. Agent IDs select
+    scope, never authenticate. Counts and each page are one consistent store read;
+    pages across requests are a live view, not a frozen snapshot. Names/properties
+    are untrusted display data, never executable HTML. Parameterize query/filter values.
+x-spec:
+- docs/specs/observatory-graph-completeness/
+paths:
+  /api/graph/{agentId}/entities:
+    get:
+      operationId: listAgentEntities
+      parameters:
+      - $ref: '#/components/parameters/Agent'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+      - $ref: '#/components/parameters/EntityType'
+      responses:
+        '200':
+          description: Bounded scoped graph response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntityPage'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '500':
+          $ref: '#/components/responses/Error500'
+        '503':
+          $ref: '#/components/responses/Error503'
+  /api/graph/{agentId}/relationships:
+    get:
+      operationId: listAgentRelationships
+      parameters:
+      - $ref: '#/components/parameters/Agent'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+      - $ref: '#/components/parameters/RelationshipType'
+      responses:
+        '200':
+          description: Bounded scoped graph response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelationshipPage'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '500':
+          $ref: '#/components/responses/Error500'
+        '503':
+          $ref: '#/components/responses/Error503'
+  /api/graph/{agentId}/search:
+    get:
+      operationId: searchAgentEntities
+      parameters:
+      - $ref: '#/components/parameters/Agent'
+      - $ref: '#/components/parameters/Query'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+      - $ref: '#/components/parameters/EntityType'
+      responses:
+        '200':
+          description: Bounded scoped graph response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntityPage'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '500':
+          $ref: '#/components/responses/Error500'
+        '503':
+          $ref: '#/components/responses/Error503'
+  /api/graph/all/entities:
+    get:
+      operationId: listAllEntities
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+      - $ref: '#/components/parameters/EntityType'
+      responses:
+        '200':
+          description: Bounded scoped graph response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntityPage'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '500':
+          $ref: '#/components/responses/Error500'
+        '503':
+          $ref: '#/components/responses/Error503'
+  /api/graph/all/relationships:
+    get:
+      operationId: listAllRelationships
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+      - $ref: '#/components/parameters/RelationshipType'
+      responses:
+        '200':
+          description: Bounded scoped graph response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelationshipPage'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '500':
+          $ref: '#/components/responses/Error500'
+        '503':
+          $ref: '#/components/responses/Error503'
+  /api/graph/all/search:
+    get:
+      operationId: searchAllEntities
+      parameters:
+      - $ref: '#/components/parameters/Query'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+      - $ref: '#/components/parameters/EntityType'
+      responses:
+        '200':
+          description: Bounded scoped graph response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntityPage'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '500':
+          $ref: '#/components/responses/Error500'
+        '503':
+          $ref: '#/components/responses/Error503'
+  /api/graph/{agentId}/entities/{entityId}:
+    get:
+      operationId: getGraphEntity
+      parameters:
+      - $ref: '#/components/parameters/Agent'
+      - $ref: '#/components/parameters/EntityId'
+      responses:
+        '200':
+          description: Bounded scoped graph response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Entity'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '500':
+          $ref: '#/components/responses/Error500'
+        '503':
+          $ref: '#/components/responses/Error503'
+  /api/graph/{agentId}/entities/{entityId}/neighbors:
+    get:
+      operationId: getGraphNeighbors
+      parameters:
+      - $ref: '#/components/parameters/Agent'
+      - $ref: '#/components/parameters/EntityId'
+      - $ref: '#/components/parameters/Direction'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Bounded scoped graph response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Neighbors'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '500':
+          $ref: '#/components/responses/Error500'
+        '503':
+          $ref: '#/components/responses/Error503'
+components:
+  schemas:
+    Entity:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - agent_id
+      - entity_type
+      - name
+      - properties
+      - mention_count
+      - first_seen_at
+      - last_seen_at
+      - projection_truncated
+      properties:
+        id: &id001
+          type: string
+          minLength: 1
+          maxLength: 128
+        agent_id: *id001
+        entity_type: *id001
+        name:
+          type: string
+          maxLength: 1024
+        properties:
+          type: object
+          maxProperties: 64
+          additionalProperties:
+            $ref: '#/components/schemas/PropertyValue3'
+          description: <=8 KiB serialized UTF-8; root plus child containers <=4 nesting
+            levels. Over-limit/invalid properties are omitted as {}, flagged by projection_truncated.
+        mention_count:
+          type: integer
+          minimum: 0
+        first_seen_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        projection_truncated:
+          type: boolean
+          description: Name clipped or properties omitted by documented projection;
+            original stored data unchanged.
+      description: Projected row <=16 KiB UTF-8. Names/properties are bounded escaped
+        display data, never raw HTML. Loss of display fields is explicit and never
+        excludes the row from counts/pagination.
+    Relationship:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - agent_id
+      - source_entity_id
+      - target_entity_id
+      - relationship_type
+      - mention_count
+      properties:
+        id: *id001
+        agent_id: *id001
+        source_entity_id: *id001
+        target_entity_id: *id001
+        relationship_type: *id001
+        mention_count:
+          type: integer
+          minimum: 0
+      description: Endpoint IDs are in this relationship agent_id namespace. Client
+        keys are tuples (agent_id,id), not delimiter concatenation; owner qualification
+        also applies to endpoint resolution.
+    Error:
+      type: object
+      additionalProperties: false
+      required:
+      - error
+      properties:
+        error:
+          type: string
+          maxLength: 160
+    EntityPage:
+      type: object
+      additionalProperties: false
+      required:
+      - entities
+      - total
+      - offset
+      - next_offset
+      properties:
+        entities:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: '#/components/schemas/Entity'
+        total:
+          type: integer
+          minimum: 0
+        offset:
+          type: integer
+          minimum: 0
+        next_offset:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+      description: Stable ascending (agent_id,id) ordering, exact filtered total from
+        the same read as rows. next_offset=offset+returned rows when more rows exist,
+        else null; offset>=total returns empty/exhausted. Under concurrent mutation
+        offsets may shift; UI deduplicates, labels counts as observed live totals,
+        invalidates traversal when totals change or a page makes no progress, and
+        offers refresh. Exhaustion never asserts a frozen snapshot across requests.
+        Serialized page <=2 MiB UTF-8, so fewer than limit rows may be returned. next_offset
+        advances by actual returned rows; projection never drops a row.
+    RelationshipPage:
+      type: object
+      additionalProperties: false
+      required:
+      - relationships
+      - total
+      - offset
+      - next_offset
+      properties:
+        relationships:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: '#/components/schemas/Relationship'
+        total:
+          type: integer
+          minimum: 0
+        offset:
+          type: integer
+          minimum: 0
+        next_offset:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+      description: Stable ascending (agent_id,id) ordering, exact filtered total from
+        the same read as rows. next_offset=offset+returned rows when more rows exist,
+        else null; offset>=total returns empty/exhausted. Under concurrent mutation
+        offsets may shift; UI deduplicates, labels counts as observed live totals,
+        invalidates traversal when totals change or a page makes no progress, and
+        offers refresh. Exhaustion never asserts a frozen snapshot across requests.
+        Serialized page <=2 MiB UTF-8, so fewer than limit rows may be returned. next_offset
+        advances by actual returned rows; projection never drops a row.
+    NeighborEntry:
+      type: object
+      additionalProperties: false
+      required:
+      - entity
+      - relationship
+      - direction
+      properties:
+        entity:
+          $ref: '#/components/schemas/Entity'
+        relationship:
+          $ref: '#/components/schemas/Relationship'
+        direction:
+          enum:
+          - incoming
+          - outgoing
+          - both
+    Neighbors:
+      type: object
+      additionalProperties: false
+      required:
+      - entity_id
+      - neighbors
+      - total
+      - offset
+      - next_offset
+      properties:
+        entity_id: *id001
+        neighbors:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: '#/components/schemas/NeighborEntry'
+        total:
+          type: integer
+          minimum: 0
+        offset:
+          type: integer
+          minimum: 0
+        next_offset:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+      description: ' Serialized page <=2 MiB UTF-8, so fewer than limit rows may be
+        returned. next_offset advances by actual returned rows; projection never drops
+        a row.'
+    PropertyValue0:
+      anyOf:
+      - type: string
+        maxLength: 4096
+      - type:
+        - number
+        - boolean
+        - 'null'
+    PropertyValue1:
+      anyOf:
+      - type: string
+        maxLength: 4096
+      - type:
+        - number
+        - boolean
+        - 'null'
+      - type: array
+        maxItems: 64
+        items:
+          $ref: '#/components/schemas/PropertyValue0'
+      - type: object
+        maxProperties: 64
+        additionalProperties:
+          $ref: '#/components/schemas/PropertyValue0'
+    PropertyValue2:
+      anyOf:
+      - type: string
+        maxLength: 4096
+      - type:
+        - number
+        - boolean
+        - 'null'
+      - type: array
+        maxItems: 64
+        items:
+          $ref: '#/components/schemas/PropertyValue1'
+      - type: object
+        maxProperties: 64
+        additionalProperties:
+          $ref: '#/components/schemas/PropertyValue1'
+    PropertyValue3:
+      anyOf:
+      - type: string
+        maxLength: 4096
+      - type:
+        - number
+        - boolean
+        - 'null'
+      - type: array
+        maxItems: 64
+        items:
+          $ref: '#/components/schemas/PropertyValue2'
+      - type: object
+        maxProperties: 64
+        additionalProperties:
+          $ref: '#/components/schemas/PropertyValue2'
+    PropertyValue4:
+      anyOf:
+      - type: string
+        maxLength: 4096
+      - type:
+        - number
+        - boolean
+        - 'null'
+      - type: array
+        maxItems: 64
+        items:
+          $ref: '#/components/schemas/PropertyValue3'
+      - type: object
+        maxProperties: 64
+        additionalProperties:
+          $ref: '#/components/schemas/PropertyValue3'
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 50
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 1000000
+        default: 0
+    Agent:
+      name: agentId
+      in: path
+      required: true
+      schema: *id001
+      description: 'Bare agent name or agent: prefix, normalized by the existing handler;
+        all is reserved for aggregate routes.'
+    EntityType:
+      name: entity_type
+      in: query
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    RelationshipType:
+      name: relationship_type
+      in: query
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    Query:
+      name: q
+      in: query
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 256
+      description: Case-insensitive literal name substring; query metacharacters have
+        no interpreter meaning.
+    EntityId:
+      name: entityId
+      in: path
+      required: true
+      schema: *id001
+    Direction:
+      name: direction
+      in: query
+      schema:
+        enum:
+        - incoming
+        - outgoing
+        - both
+        default: both
+  responses:
+    Error400:
+      description: Invalid bounded parameters.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error403:
+      description: SameOrigin or effective LoopbackBind rejected before any store
+        read; fixed sanitized error only.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error404:
+      description: Entity or scoped resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error500:
+      description: Sanitized store failure.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error503:
+      description: Store unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

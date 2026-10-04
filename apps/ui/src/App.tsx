@@ -27,14 +27,16 @@ import { CommissioningGuard, CommissioningScreen } from "./features/commissionin
 import { WebAgentsPanel } from "./features/agent/WebAgentsPanel";
 import { WebSettingsPanel } from "./features/settings/WebSettingsPanel";
 import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPanel";
-import { MemoryTab as MemoryPanel } from "./features/memory";
-import { ObservatoryPage } from "./features/observatory";
 import { ObservatoryV2Page } from "./features/observatory-v2";
 import { QuickChat } from "./features/chat-v2";
 import { ResearchPage } from "./features/research-v2";
 import { MissionControlPage } from "./features/mission-control";
 import { VaultPage } from "./features/vault";
 import { AccentPicker } from "./components/AccentPicker";
+import { SessionShell } from "./features/session-shell/SessionShell";
+import { DesktopKnowledgePage } from "./features/session-shell/DesktopKnowledgePage";
+import { DesktopAdministrationPage } from "./features/session-shell/DesktopAdministrationPage";
+import { conversationDestination } from "./features/session-shell/navigation";
 
 // ============================================================================
 // Types
@@ -61,6 +63,15 @@ interface AppInitResult {
 function ResearchV2Redirect() {
   const { sessionId } = useParams<{ sessionId: string }>();
   return <Navigate to={`/research/${sessionId ?? ""}`} replace />;
+}
+
+function AdministrationRedirect({to, tab}: {to: "/agents" | "/settings" | "/integrations"; tab?: string}) {
+  const {search} = useLocation();
+  const query = new URLSearchParams();
+  if (tab) query.set("tab", tab);
+  const returnTo = conversationDestination(new URLSearchParams(search).get("returnTo"));
+  if (returnTo !== "/session") query.set("returnTo", returnTo);
+  return <Navigate to={{pathname:to, search:query.toString()}} replace />;
 }
 
 /**
@@ -229,6 +240,12 @@ function App() {
           {/* Commissioning renders without the application shell. */}
           <Route path="/commission" element={<CommissioningScreen />} />
           <Route path="/setup" element={<CommissioningScreen rerunSetup />} />
+          <Route path="/session/:sessionId?" element={<CommissioningGuard><SessionShell /></CommissioningGuard>} />
+          <Route path="/memory" element={<CommissioningGuard><DesktopKnowledgePage kind="memory" /></CommissioningGuard>} />
+          <Route path="/observatory" element={<CommissioningGuard><DesktopKnowledgePage kind="observatory" /></CommissioningGuard>} />
+          <Route path="/agents" element={<CommissioningGuard><DesktopAdministrationPage><WebAgentsPanel /></DesktopAdministrationPage></CommissioningGuard>} />
+          <Route path="/settings" element={<CommissioningGuard><DesktopAdministrationPage><WebSettingsPanel /></DesktopAdministrationPage></CommissioningGuard>} />
+          <Route path="/integrations" element={<CommissioningGuard><DesktopAdministrationPage><WebIntegrationsPanel /></DesktopAdministrationPage></CommissioningGuard>} />
 
           {/* Main app with sidebar */}
           <Route path="/*" element={
@@ -245,13 +262,8 @@ function App() {
                   {/* Legacy redirects — Dashboard + Logs are now Mission Control. */}
                   <Route path="/dashboard" element={<Navigate to="/mission-control" replace />} />
                   <Route path="/logs" element={<Navigate to="/mission-control" replace />} />
-                  <Route path="/memory" element={<MemoryPanel agentId="root" />} />
-                  <Route path="/observatory" element={<ObservatoryPage />} />
                   <Route path="/observatory-v2" element={<ObservatoryV2Page />} />
-                  <Route path="/agents" element={<WebAgentsPanel />} />
                   <Route path="/vault" element={<VaultPage />} />
-                  <Route path="/integrations" element={<WebIntegrationsPanel />} />
-                  <Route path="/settings" element={<WebSettingsPanel />} />
                   <Route path="/chat" element={<QuickChat />} />
                   {/* Legacy bookmark redirect. */}
                   <Route path="/chat-v2" element={<Navigate to="/chat" replace />} />
@@ -260,11 +272,11 @@ function App() {
                   {/* Legacy bookmark redirects. */}
                   <Route path="/research-v2" element={<Navigate to="/research" replace />} />
                   <Route path="/research-v2/:sessionId" element={<ResearchV2Redirect />} />
-                  <Route path="/providers" element={<Navigate to="/settings" replace />} />
-                  <Route path="/skills" element={<Navigate to="/agents?tab=skills" replace />} />
-                  <Route path="/hooks" element={<Navigate to="/agents?tab=schedules" replace />} />
-                  <Route path="/connectors" element={<Navigate to="/integrations?tab=plugins" replace />} />
-                  <Route path="/mcps" element={<Navigate to="/integrations" replace />} />
+                  <Route path="/providers" element={<AdministrationRedirect to="/settings" />} />
+                  <Route path="/skills" element={<AdministrationRedirect to="/agents" tab="skills" />} />
+                  <Route path="/hooks" element={<AdministrationRedirect to="/agents" tab="schedules" />} />
+                  <Route path="/connectors" element={<AdministrationRedirect to="/integrations" tab="plugins" />} />
+                  <Route path="/mcps" element={<AdministrationRedirect to="/integrations" />} />
                 </Routes>
               </WebAppShell>
             </CommissioningGuard>

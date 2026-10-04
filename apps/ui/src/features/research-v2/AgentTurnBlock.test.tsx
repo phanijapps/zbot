@@ -31,6 +31,13 @@ function makeChild(overrides: Partial<AgentTurn> = {}): AgentTurn {
 }
 
 describe("<AgentTurnBlock> (root)", () => {
+  // STUB: AC15 — subagent state stays readable without relying on color.
+  it.each(["running", "completed", "stopped", "error"] as const)("labels a %s subagent", status => {
+    const root = makeRoot();
+    const child = makeChild({status, completedAt: status === "running" ? null : 2000});
+    render(<AgentTurnBlock turn={root} childTurns={[child]} allTurns={[root, child]} />);
+    expect(screen.getByText(status === "error" ? "Failed" : status === "running" ? "Running" : status === "completed" ? "Completed" : "Stopped")).toBeVisible();
+  });
   it("renders the final respond markdown and a copy button", () => {
     render(<AgentTurnBlock turn={makeRoot()} />);
     expect(screen.getByText("Final answer.")).toBeTruthy();

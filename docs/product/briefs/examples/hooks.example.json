@@ -1,0 +1,41 @@
+{
+  "$schema": "../../../../contracts/jsonschema/hooks.schema.json",
+  "version": 1,
+  "hooks": [
+    {
+      "id": "python-prompt-hook",
+      "enabled": false,
+      "event": "user_prompt",
+      "command": [
+        "python",
+        "hooks/on-prompt.py"
+      ],
+      "cwd": "vault",
+      "timeout_ms": 5000,
+      "on_failure": "continue"
+    },
+    {
+      "id": "node-tool-check",
+      "enabled": false,
+      "event": "before_tool",
+      "command": [
+        "node",
+        "hooks/before-tool.mjs"
+      ],
+      "cwd": "vault",
+      "timeout_ms": 5000,
+      "on_failure": "block"
+    },
+    {
+      "id": "go-run-observer",
+      "enabled": false,
+      "event": "run_end",
+      "command": [
+        "./hooks/run-observer"
+      ],
+      "cwd": "vault",
+      "timeout_ms": 5000,
+      "on_failure": "continue"
+    }
+  ]
+}

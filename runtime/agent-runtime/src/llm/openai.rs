@@ -31,6 +31,7 @@ use agent_primitives::types::{ContentSource, Part};
 pub struct OpenAiClient {
     config: Arc<LlmConfig>,
     http_client: reqwest::Client,
+    strict_tool_arguments: bool,
 }
 
 const MAX_MODEL_VISIBLE_TOOLS: usize = 128;
@@ -392,6 +393,60 @@ fn is_json_complete(json_str: &str) -> bool {
     !in_string && brace_count == 0 && bracket_count == 0
 }
 
+/// Only fixed classifications leave the provider boundary; bodies may echo secrets.
+fn provider_error_code(status: u16, body: &str) -> &'static str {
+    let parsed = serde_json::from_str::<Value>(body).ok();
+    let message = parsed
+        .as_ref()
+        .and_then(|value| {
+            value
+                .pointer("/error/message")
+                .or_else(|| value.get("message"))
+        })
+        .and_then(Value::as_str)
+        .unwrap_or(body)
+        .to_ascii_lowercase();
+    let unsupported = [
+        "not supported",
+        "unsupported",
+        "does not support",
+        "unknown parameter",
+        "unrecognized parameter",
+        "unknown field",
+    ]
+    .iter()
+    .any(|term| message.contains(term));
+    if matches!(status, 400 | 422)
+        && unsupported
+        && !["invalid schema", "schema keyword", "schema validation"]
+            .iter()
+            .any(|term| message.contains(term))
+    {
+        if ["response_format", "json_schema", "structured output"]
+            .iter()
+            .any(|term| message.contains(term))
+        {
+            return "unsupported_response_format";
+        }
+        if ["tools", "tool_choice", "function calling", "tool calling"]
+            .iter()
+            .any(|term| message.contains(term))
+        {
+            return "unsupported_tools";
+        }
+    }
+    let code = parsed
+        .as_ref()
+        .and_then(|value| value.pointer("/error/code").or_else(|| value.get("code")))
+        .map(Value::to_string);
+    match code.as_deref() {
+        Some("1234" | "\"1234\"") => "provider_rate_limit_1234",
+        Some("1302" | "\"1302\"") => "provider_rate_limit_1302",
+        Some("1303" | "\"1303\"") => "provider_rate_limit_1303",
+        _ => "provider_error",
+    }
+}
+
 impl OpenAiClient {
     /// Create a new OpenAI-compatible client
     pub fn new(config: LlmConfig) -> Result<Self, LlmError> {
@@ -415,6 +470,7 @@ impl OpenAiClient {
         Ok(Self {
             config: Arc::new(config),
             http_client,
+            strict_tool_arguments: false,
         })
     }
 
@@ -530,13 +586,19 @@ impl OpenAiClient {
             if let Some(body_map) = body_obj.as_object_mut() {
                 body_map.insert(
                     "response_format".to_string(),
-                    json!({
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "structured_output",
-                            "strict": true,
-                            "schema": strict_json_schema(schema) }
-                    }),
+                    if reqwest::Url::parse(&self.config.base_url)
+                        .ok()
+                        .and_then(|url| url.host_str().map(str::to_owned))
+                        .as_deref()
+                        == Some("api.z.ai")
+                    {
+                        // z.ai documents JSON-object mode, with caller-side schema validation.
+                        json!({"type": "json_object"})
+                    } else {
+                        json!({"type": "json_schema", "json_schema": {
+                            "name": "structured_output", "strict": true,
+                            "schema": strict_json_schema(schema) }})
+                    },
                 );
             }
         }
@@ -546,6 +608,18 @@ impl OpenAiClient {
             if let Some(body_map) = body_obj.as_object_mut() {
                 body_map.insert("thinking".to_string(), json!({"type": "enabled"}));
             }
+        }
+
+        // Forward only this supported hint; provider params cannot override
+        // messages, credentials, tools, output format or token limits.
+        if let Some(effort) = self
+            .config
+            .provider_params
+            .as_ref()
+            .and_then(|params| params.get("reasoning_effort"))
+            .and_then(Value::as_str)
+        {
+            body_obj["reasoning_effort"] = json!(effort);
         }
 
         // Only serialize for logging at debug level (avoids 100KB serialization on every call)
@@ -577,6 +651,45 @@ impl OpenAiClient {
         Ok(body_obj)
     }
 
+    /// Intent decisions opt into exact tool arguments instead of recovery.
+    pub fn with_strict_tool_arguments(mut self) -> Self {
+        self.strict_tool_arguments = true;
+        self
+    }
+
+    fn validate_tool_arguments(&self, response: &Value) -> Result<(), LlmError> {
+        if !self.strict_tool_arguments {
+            return Ok(());
+        }
+        let Some(calls) = response.pointer("/choices/0/message/tool_calls") else {
+            return Ok(());
+        };
+        if calls.is_null() {
+            return Ok(());
+        }
+        let invalid = || LlmError::ParseError("invalid_tool_arguments".into());
+        for call in calls.as_array().ok_or_else(invalid)? {
+            if call
+                .get("id")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+                || call
+                    .pointer("/function/name")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+                || call.get("type").and_then(Value::as_str) != Some("function")
+            {
+                return Err(invalid());
+            }
+            let arguments = call
+                .pointer("/function/arguments")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            serde_json::from_str::<Value>(arguments).map_err(|_| invalid())?;
+        }
+        Ok(())
+    }
+
     /// Make a non-streaming request to the API
     async fn make_request(&self, body: Value) -> Result<Value, LlmError> {
         let url = format!("{}/chat/completions", self.config.base_url);
@@ -595,13 +708,9 @@ impl OpenAiClient {
         if !response.status().is_success() {
             let status = response.status();
             let error_text = bounded_error_text(response).await;
-            let error_text = if self.config.api_key.is_empty() {
-                error_text
-            } else {
-                error_text.replace(&self.config.api_key, "[redacted]")
-            };
-            tracing::error!("API error ({}): {}", status, error_text);
-            return Err(LlmError::ApiError(format!("({status}): {error_text}")));
+            let code = provider_error_code(status.as_u16(), &error_text);
+            tracing::error!(status = status.as_u16(), code, "Provider request failed");
+            return Err(LlmError::ApiError(format!("({status}): {code}")));
         }
 
         response
@@ -612,6 +721,17 @@ impl OpenAiClient {
 
     /// Parse the API response
     fn parse_response(&self, response: Value) -> ChatResponse {
+        let finish_reason = response
+            .pointer("/choices/0/finish_reason")
+            .and_then(Value::as_str)
+            .filter(|reason| {
+                matches!(
+                    *reason,
+                    "stop" | "length" | "tool_calls" | "content_filter" | "function_call"
+                )
+            })
+            .unwrap_or("unknown");
+        tracing::info!(finish_reason, "Provider completion received");
         let mut content = response
             .pointer("/choices/0/message/content")
             .and_then(|v| v.as_str())
@@ -759,6 +879,7 @@ impl LlmClient for OpenAiClient {
 
         let body = self.build_request_body(messages, tools, None)?;
         let response = self.make_request(body).await?;
+        self.validate_tool_arguments(&response)?;
         let parsed = self.parse_response(response);
 
         tracing::info!("Chat completed, response length: {}", parsed.content.len());
@@ -779,6 +900,7 @@ impl LlmClient for OpenAiClient {
 
         let body = self.build_request_body(messages, tools, output_schema)?;
         let response = self.make_request(body).await?;
+        self.validate_tool_arguments(&response)?;
         let parsed = self.parse_response(response);
 
         tracing::info!(
@@ -826,13 +948,9 @@ impl LlmClient for OpenAiClient {
         if !response.status().is_success() {
             let status = response.status();
             let error_text = bounded_error_text(response).await;
-            let error_text = if self.config.api_key.is_empty() {
-                error_text
-            } else {
-                error_text.replace(&self.config.api_key, "[redacted]")
-            };
-            tracing::error!("API error ({}): {}", status, error_text);
-            return Err(LlmError::ApiError(format!("({status}): {error_text}")));
+            let code = provider_error_code(status.as_u16(), &error_text);
+            tracing::error!(status = status.as_u16(), code, "Provider request failed");
+            return Err(LlmError::ApiError(format!("({status}): {code}")));
         }
 
         let mut full_content = String::new();
@@ -1242,6 +1360,23 @@ mod tests {
             "openai".to_string(),
         );
         OpenAiClient::new(config).expect("client")
+    }
+
+    #[test]
+    fn intent_reasoning_hint_cannot_override_request_controls() {
+        let config = LlmConfig::new("https://api.z.ai/api/coding/paas/v4".into(), "secret".into(), "glm-5.3".into(), "provider-z.ai".into())
+            .with_max_tokens(5000)
+            .with_provider_params(json!({"reasoning_effort":"low", "model":"private-canary", "messages":[], "tools":[], "max_tokens":1, "api_key":"private-canary", "unsupported_extra":"private-canary"}));
+        let client = OpenAiClient::new(config).unwrap();
+        let body = client
+            .build_request_body(fixture_messages(), None, None)
+            .unwrap();
+        assert_eq!(body["reasoning_effort"], "low");
+        assert_eq!(body["model"], "glm-5.3");
+        assert_eq!(body["max_tokens"], 5000);
+        assert!(!body["messages"].as_array().unwrap().is_empty());
+        assert!(body.get("tools").is_none());
+        assert!(!body.to_string().contains("private-canary"));
     }
 
     fn fixture_messages() -> Vec<ChatMessage> {
@@ -1678,6 +1813,26 @@ mod tests {
         assert_eq!(a_bytes, b_bytes);
     }
 
+    // STUB: AC1/AC2
+    #[test]
+    fn direct_zai_schema_request_uses_documented_json_object_mode() {
+        let config = LlmConfig::new(
+            "https://api.z.ai/api/coding/paas/v4".into(),
+            "test".into(),
+            "glm-5".into(),
+            "custom-provider-id".into(),
+        );
+        let client = OpenAiClient::new(config).unwrap();
+        let body = client
+            .build_request_body(
+                fixture_messages(),
+                None,
+                Some(json!({"type":"object","properties":{"intent":{"type":"string"}}})),
+            )
+            .unwrap();
+        assert_eq!(body["response_format"], json!({"type":"json_object"}));
+    }
+
     #[test]
     fn request_body_includes_json_schema_response_format() {
         let client = test_client();
@@ -1893,5 +2048,90 @@ mod json_recovery_tests {
         assert!(result.is_some());
         let val = result.unwrap();
         assert_eq!(val["args"]["nested"], "value");
+    }
+    #[test]
+    fn strict_intent_tool_arguments_reject_recovery_and_malformed_mixtures() {
+        let client = OpenAiClient::new(LlmConfig::new(
+            "https://example.org/v1".into(),
+            "test".into(),
+            "glm".into(),
+            "test".into(),
+        ))
+        .unwrap()
+        .with_strict_tool_arguments();
+        let call = |args: &str| json!({"id":"i", "type":"function", "function":{"name":"submit_intent", "arguments":args}});
+        for calls in [
+            json!([call("{}{}")]),
+            json!([call("{}"), call("broken-private-canary")]),
+            json!([{"function":{"name":"submit_intent","arguments":"{}"}}]),
+        ] {
+            let response = json!({"choices":[{"message":{"tool_calls":calls}}]});
+            let error = client
+                .validate_tool_arguments(&response)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("invalid_tool_arguments"));
+            assert!(!error.contains("private-canary"));
+        }
+        let response = json!({"choices":[{"message":{"tool_calls":[call("{}"),call("{}")]}}]});
+        client.validate_tool_arguments(&response).unwrap();
+        assert_eq!(client.parse_response(response).tool_calls.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn provider_errors_expose_only_status_and_fixed_codes() {
+        let unsupported =
+            json!({"error":{"message":"response_format is not supported; private-prompt-canary"}})
+                .to_string();
+        assert_eq!(
+            provider_error_code(400, &unsupported),
+            "unsupported_response_format"
+        );
+        for status in [401, 403, 410, 429, 500] {
+            assert_eq!(provider_error_code(status, &unsupported), "provider_error");
+        }
+        assert_eq!(
+            provider_error_code(
+                400,
+                "Invalid schema: unsupported schema keyword in json_schema"
+            ),
+            "provider_error"
+        );
+        assert_eq!(
+            provider_error_code(422, "tools are not supported"),
+            "unsupported_tools"
+        );
+        assert_eq!(
+            provider_error_code(500, r#"{"error":{"code":"1234","message":"secret"}}"#),
+            "provider_rate_limit_1234"
+        );
+    }
+
+    #[test]
+    fn schema_mode_uses_exact_zai_host_and_preserves_native_otherwise() {
+        for host in ["api.z.ai", "api.z.ai.evil.example", "example.org"] {
+            let client = OpenAiClient::new(LlmConfig::new(
+                format!("https://{host}/api/paas/v4"),
+                "test".into(),
+                "glm".into(),
+                "arbitrary-provider-id".into(),
+            ))
+            .unwrap();
+            let body = client
+                .build_request_body(
+                    vec![ChatMessage::user("test".into())],
+                    None,
+                    Some(json!({"type":"object","properties":{}})),
+                )
+                .unwrap();
+            assert_eq!(
+                body["response_format"]["type"],
+                if host == "api.z.ai" {
+                    "json_object"
+                } else {
+                    "json_schema"
+                }
+            );
+        }
     }
 }

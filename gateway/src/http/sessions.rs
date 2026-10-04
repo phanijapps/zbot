@@ -2,14 +2,16 @@
 //!
 //! HTTP API for archiving and restoring session transcripts.
 
-use super::ErrorResponse;
+use super::{ErrorResponse, HttpErrorResponse, SameOrigin};
+use crate::config::GatewayConfig;
 use crate::state::AppState;
 use axum::{
-    extract::{Path, State},
+    extract::{FromRequestParts, Path, State},
+    http::request::Parts,
     http::StatusCode,
     Json,
 };
-use gateway_execution::{SessionState, SessionStateBuilder};
+use gateway_execution::{session_details::SessionDetails, SessionState, SessionStateBuilder};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -54,6 +56,97 @@ pub struct RestoreResponse {
 // ============================================================================
 // HANDLERS
 // ============================================================================
+
+/// Fail closed when the gateway's effective bind address cannot be proven local.
+pub(super) struct LoopbackBind;
+
+#[axum::async_trait]
+impl<S> FromRequestParts<S> for LoopbackBind
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, Json<HttpErrorResponse>);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        if parts
+            .extensions
+            .get::<GatewayConfig>()
+            .is_some_and(|config| config.host.is_loopback())
+        {
+            Ok(Self)
+        } else {
+            Err(details_error(
+                StatusCode::FORBIDDEN,
+                "session details unavailable",
+            ))
+        }
+    }
+}
+
+fn details_error(
+    status: StatusCode,
+    message: &'static str,
+) -> (StatusCode, Json<HttpErrorResponse>) {
+    (
+        status,
+        Json(HttpErrorResponse {
+            error: message.to_owned(),
+        }),
+    )
+}
+
+/// GET /api/sessions/:id/details — redacted, persisted session projection.
+pub async fn get_session_details(
+    _origin: SameOrigin,
+    _bind: LoopbackBind,
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Result<Json<SessionDetails>, (StatusCode, Json<HttpErrorResponse>)> {
+    if !gateway_execution::session_details::safe_id(&session_id) {
+        return Err(details_error(StatusCode::BAD_REQUEST, "invalid session ID"));
+    }
+
+    let session = state
+        .state_service()
+        .get_session_with_executions(&session_id)
+        .map_err(|_| {
+            details_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "session details unavailable",
+            )
+        })?
+        .ok_or_else(|| details_error(StatusCode::NOT_FOUND, "session not found"))?;
+    let mut logs = state
+        .log_service()
+        .get_session_detail(&session_id)
+        .map_err(|_| {
+            details_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "session details unavailable",
+            )
+        })?
+        .map_or_else(Vec::new, |detail| detail.logs);
+    for execution in &session.executions {
+        if let Some(detail) = state
+            .log_service()
+            .get_session_detail(&execution.id)
+            .map_err(|_| {
+                details_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "session details unavailable",
+                )
+            })?
+        {
+            logs.extend(detail.logs);
+        }
+    }
+
+    Ok(Json(SessionDetails::project(
+        &session_id,
+        session.session.mode.as_deref(),
+        &logs,
+    )))
+}
 
 /// POST /api/sessions/archive
 /// Archive old session transcripts to compressed JSONL files.

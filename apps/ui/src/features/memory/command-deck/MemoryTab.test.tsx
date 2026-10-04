@@ -62,6 +62,10 @@ function emptyContent(wardId: string): WardContent {
 // ---------------------------------------------------------------------------
 
 describe("MemoryTab — delete fact wiring", () => {
+  it("carries the supplied conversation return destination into its Graph link", async () => {
+    render(<MemoryTab agentId="root" embedded observatoryHref="/observatory?returnTo=%2Fsession%2Fsess-kept" />);
+    expect(await screen.findByRole("link", {name:/Graph/})).toHaveAttribute("href", "/observatory?returnTo=%2Fsession%2Fsess-kept");
+  });
   let confirmSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {

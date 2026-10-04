@@ -120,6 +120,7 @@ struct ExecutionInputs {
 }
 
 struct IntentAnalysisCtx<'a> {
+    ward_id: Option<&'a str>,
     agent: &'a gateway_services::agents::Agent,
     provider: &'a gateway_services::providers::Provider,
     config: &'a ExecutionConfig,
@@ -204,6 +205,59 @@ fn canonical_existing_ward_id(paths: &SharedVaultPaths, candidate: &str) -> Opti
 
 fn reusable_existing_ward_id(paths: &SharedVaultPaths, candidate: &str) -> Option<String> {
     canonical_existing_ward_id(paths, candidate)
+}
+
+/// Intent output is a bounded preflight; explicit intent settings retain priority.
+fn intent_output_limit(explicit: Option<u64>) -> u64 {
+    explicit.unwrap_or(4096)
+}
+
+/// Ground model routing in filesystem state, preserving a safe fallback posture.
+fn reconcile_intent_posture(
+    paths: &SharedVaultPaths,
+    analysis: &mut IntentAnalysis,
+    current_ward: Option<&str>,
+    quick_chat: bool,
+) -> Option<String> {
+    let degraded = crate::middleware::intent::is_fallback_analysis(analysis);
+    let bypassed = analysis.primary_intent.is_empty();
+    if degraded {
+        analysis.execution_strategy.approach = ExecutionApproach::Simple;
+    }
+    let existing = if degraded || bypassed {
+        let current = current_ward.and_then(|ward| reusable_existing_ward_id(paths, ward));
+        analysis.ward_recommendation.ward_name =
+            current.clone().unwrap_or_else(|| "scratch".into());
+        analysis.ward_recommendation.action = WardAction::UseExisting;
+        analysis.ward_recommendation.subdirectory = None;
+        analysis.ward_recommendation.structure.clear();
+        if degraded {
+            analysis.ward_recommendation.reason =
+                "Analysis unavailable; continue in the current workspace".into();
+        }
+        current
+    } else {
+        let existing = reusable_existing_ward_id(paths, &analysis.ward_recommendation.ward_name);
+        analysis.ward_recommendation.action = if existing.is_some() {
+            WardAction::UseExisting
+        } else {
+            WardAction::CreateNew
+        };
+        existing
+    };
+    if quick_chat {
+        analysis.execution_strategy.approach = ExecutionApproach::Simple;
+        if degraded {
+            analysis
+                .execution_strategy
+                .explanation
+                .push_str("; Quick Chat continues in the root execution");
+        } else {
+            analysis.execution_strategy.explanation =
+                "Quick Chat runs directly in the root execution".into();
+        }
+    }
+    existing
 }
 
 /// Returns a validated browser-supplied message id or mints a server id for
@@ -1418,6 +1472,7 @@ impl InvokeBootstrap {
         // Phase 3: intent analysis + agent/builder mutation.
         let outcome = self
             .run_intent_analysis(IntentAnalysisCtx {
+                ward_id,
                 agent,
                 provider,
                 config,
@@ -1511,6 +1566,7 @@ impl InvokeBootstrap {
     /// `ExecutionRunner`.
     async fn run_intent_analysis(&self, ctx: IntentAnalysisCtx<'_>) -> Option<IntentOutcome> {
         let IntentAnalysisCtx {
+            ward_id,
             agent,
             provider,
             config,
@@ -1549,18 +1605,6 @@ impl InvokeBootstrap {
         let fs = fact_store?;
         let msg = user_message?;
 
-        // Index resources (fast DB upsert — no LLM call). Runs before
-        // analyze_intent so the analyzer has the latest capability index.
-        index_resources(
-            fs.as_ref(),
-            &self.ctx.skill_service,
-            &self.ctx.agent_service,
-            &self.ctx.mcp_service,
-            &self.ctx.paths,
-        )
-        .await;
-        tracing::info!("Resource indexing complete (skills, agents, wards, MCPs)");
-
         // Emit started event so UI can show "Analyzing..."
         self.ctx
             .event_bus
@@ -1570,9 +1614,6 @@ impl InvokeBootstrap {
             })
             .await;
 
-        crate::middleware::intent::load_intent_analysis_prompt(&self.ctx.paths);
-
-        let _existing_wards = list_existing_wards(&self.ctx.paths);
         // Build the intent agent deps from the configured intent model
         let exec_settings = gateway_services::SettingsService::new(self.ctx.paths.clone())
             .get_execution_settings()
@@ -1591,60 +1632,62 @@ impl InvokeBootstrap {
             .model
             .filter(|m| !m.is_empty())
             .unwrap_or_else(|| agent.model.clone());
-        let intent_max_tokens = intent_cfg.max_tokens.unwrap_or(agent.max_tokens);
+        let intent_max_tokens = intent_output_limit(intent_cfg.max_tokens.map(u64::from));
 
-        let deps = crate::middleware::intent::agent::IntentAgentDeps {
-            fact_store: fs.clone(),
-            procedure_store: self.ctx.procedure_store.clone(),
-            paths: self.ctx.paths.clone(),
-            provider: intent_provider,
-            model: intent_model,
-            max_tokens: intent_max_tokens as u64,
+        // One outer deadline covers indexing, catalog lookup, procedure matching,
+        // semantic retrieval and every outgoing model request.
+        let decision = async {
+            index_resources(
+                fs.as_ref(),
+                &self.ctx.skill_service,
+                &self.ctx.agent_service,
+                &self.ctx.mcp_service,
+                &self.ctx.paths,
+            )
+            .await;
+            let agents =
+                crate::invoke::collect_agents_summary(&self.ctx.agent_service, &self.ctx.paths)
+                    .await;
+            let mut resources = build_planner_capability_catalog(
+                &self.ctx.skill_service,
+                &self.ctx.mcp_service,
+                &[],
+                &agents,
+            )
+            .await;
+            resources["wards"] = serde_json::json!(list_existing_wards(&self.ctx.paths).into_iter().map(|ward| {
+                let (id, description) = ward.split_once(" — ").unwrap_or((&ward, ""));
+                serde_json::json!({"id": id, "description": safe_capability_description(description)})
+            }).collect::<Vec<_>>());
+            let deps = crate::middleware::intent::agent::IntentAgentDeps {
+                fact_store: fs.clone(),
+                procedure_store: self.ctx.procedure_store.clone(),
+                paths: self.ctx.paths.clone(),
+                provider: intent_provider,
+                model: intent_model,
+                max_tokens: intent_max_tokens,
+                resources,
+            };
+            analyze_intent(&deps, msg).await
         };
-        let mut analysis = analyze_intent(&deps, msg).await;
-
-        if config.is_chat_mode() {
-            analysis.execution_strategy.approach = ExecutionApproach::Simple;
-            analysis.execution_strategy.explanation =
-                "Quick Chat runs directly in the root execution".to_string();
-        }
-
-        // Filesystem existence is authoritative for reuse. Ward content and
-        // capabilities are governed by the injected template; they are not a
-        // second lifecycle gate that can turn an existing ward into a new one.
-        let existing_ward_id =
-            reusable_existing_ward_id(&self.ctx.paths, &analysis.ward_recommendation.ward_name);
-        let authoritative_action = if existing_ward_id.is_some() {
-            WardAction::UseExisting
-        } else {
-            WardAction::CreateNew
-        };
-        if analysis.ward_recommendation.action != authoritative_action {
-            tracing::info!(
-                ward = %analysis.ward_recommendation.ward_name,
-                classifier_action = %analysis.ward_recommendation.action,
-                corrected = %authoritative_action,
-                exists = existing_ward_id.is_some(),
-                "Correcting ward action from filesystem ground truth"
-            );
-            analysis.ward_recommendation.action = authoritative_action;
-        }
-
-        if analysis
-            .execution_strategy
-            .explanation
-            .contains("fallback analysis")
-        {
+        let mut analysis = tokio::time::timeout(std::time::Duration::from_secs(45), decision)
+            .await
+            .unwrap_or_else(|_| {
+                crate::middleware::intent::fallback_analysis(msg, "deadline_exceeded")
+            });
+        let degraded = crate::middleware::intent::is_fallback_analysis(&analysis);
+        let existing_ward_id = reconcile_intent_posture(
+            &self.ctx.paths,
+            &mut analysis,
+            ward_id,
+            config.is_chat_mode(),
+        );
+        if degraded {
             tracing::warn!(
-                primary_intent = %analysis.primary_intent,
-                "Intent analysis FELL BACK — agent failed or returned empty; seeded from message"
+                "Intent analysis fell back; continuing with bounded workspace-safe guidance"
             );
         } else {
-            tracing::info!(
-                primary_intent = %analysis.primary_intent,
-                approach = %analysis.execution_strategy.approach,
-                "Intent analysis succeeded"
-            );
+            tracing::info!(approach = %analysis.execution_strategy.approach, "Intent analysis complete");
         }
 
         // Emit IntentAnalysisComplete event with the real analysis.
@@ -1836,6 +1879,46 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    #[test]
+    fn failed_intent_keeps_current_ward_or_scratch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths: SharedVaultPaths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        paths.ensure_dirs_exist().unwrap();
+        std::fs::create_dir(paths.ward_dir("research")).unwrap();
+        for (current, expected) in [
+            (Some("research"), "research"),
+            (None, "scratch"),
+            (Some("../outside"), "scratch"),
+            (Some("missing"), "scratch"),
+        ] {
+            let mut a =
+                crate::middleware::intent::fallback_analysis("Compare sources", "provider_error");
+            reconcile_intent_posture(&paths, &mut a, current, false);
+            assert_eq!(a.ward_recommendation.ward_name, expected);
+            assert_eq!(a.ward_recommendation.action, WardAction::UseExisting);
+            assert!(a.recommended_capabilities.is_empty());
+            assert!(!paths.ward_dir("general").exists());
+        }
+    }
+
+    #[test]
+    fn quick_chat_keeps_fallback_label() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths: SharedVaultPaths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        let mut a = crate::middleware::intent::fallback_analysis("Compare sources", "invalid_json");
+        reconcile_intent_posture(&paths, &mut a, None, true);
+        assert!(crate::middleware::intent::is_fallback_analysis(&a));
+        assert!(a.execution_strategy.explanation.contains("Quick Chat"));
+        assert_eq!(a.ward_recommendation.action, WardAction::UseExisting);
+    }
+
+    #[test]
+    fn intent_token_default_preserves_explicit_override() {
+        assert_eq!(intent_output_limit(None), 4096);
+        assert_eq!(intent_output_limit(Some(1000)), 1000);
+        assert_eq!(intent_output_limit(Some(8000)), 8000);
+    }
+
     /// Test helper: build an InvokeBootstrap around a fresh ExecCtx carrying
     /// exactly the fields a test configures; everything else defaults.
     #[allow(clippy::too_many_arguments)]
@@ -2017,7 +2100,7 @@ mod tests {
         let graph = intent_with_approach(ExecutionApproach::Graph);
         let task = cold_graph_planning_task(&graph, None, "Build a scene")
             .expect("cold graph work requires planning");
-        assert!(task.contains("Original request: Build a scene"));
+        assert!(task.contains("\"original_request\":\"Build a scene\""));
         assert!(task.contains("creative-design"));
 
         assert!(cold_graph_planning_task(&graph, Some("existing-ward"), "Build a scene").is_none());

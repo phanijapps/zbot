@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 /// The routed decision for one user request.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct IntentAnalysis {
     /// Concise kebab-case phrase describing the user's main goal.
     pub primary_intent: String,
@@ -76,6 +77,7 @@ impl std::fmt::Display for WardAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct WardRecommendation {
     pub action: WardAction,
     pub ward_name: String,
@@ -109,6 +111,7 @@ impl std::fmt::Display for ExecutionApproach {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutionStrategy {
     pub approach: ExecutionApproach,
     #[serde(default)]

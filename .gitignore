@@ -150,7 +150,6 @@ docs/architecture/*
 !docs/adr/
 !docs/adr/**
 !docs/product/
-docs/product/*
 !docs/product/briefs/
 !docs/product/briefs/**
 docs/specs/**/state.json

@@ -16,7 +16,7 @@ Reason about:
 ## Routing rules
 - approach "simple": greetings, quick questions, one-shot answers. Root handles it directly.
 - approach "graph": in-depth research, multi-source analysis, reports, anything needing multiple agents. Long research briefs are ALWAYS graph.
-- When approach is "graph", include "coding" in recommended_skills.
+- Recommend only catalog resources that are useful for the request; do not invent resources.
 - solution_path: sketch the high-level steps (3-6 items). This seeds the planner.
 - complexity: S (trivial), M (moderate), L (complex), XL (very complex).
 - ward_name: a reusable domain category, NEVER task-specific. Use "use_existing" when a listed ward covers the domain.

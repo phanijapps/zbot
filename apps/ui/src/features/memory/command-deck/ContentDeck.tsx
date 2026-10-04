@@ -15,9 +15,10 @@ interface Props {
   data: WardContent | null;
   timewarpDays?: number;
   onDeleteFact?: (id: string) => void | Promise<void>;
+  observatoryHref?: string;
 }
 
-export function ContentDeck({ data, timewarpDays, onDeleteFact }: Props) {
+export function ContentDeck({ data, timewarpDays, onDeleteFact, observatoryHref = "/observatory" }: Props) {
   const [tab, setTab] = useState<Tab>("facts");
   if (!data)
     return (
@@ -33,7 +34,7 @@ export function ContentDeck({ data, timewarpDays, onDeleteFact }: Props) {
         {data.summary?.description && (
           <div className="memory-deck__summary">{data.summary.description}</div>
         )}
-        <div
+        <div className="memory-deck__actions"><div
           className="memory-deck__tabs"
           role="tablist"
           aria-label="Content tabs"
@@ -51,9 +52,10 @@ export function ContentDeck({ data, timewarpDays, onDeleteFact }: Props) {
               <span className="memory-deck__tab-count">{counts[t]}</span>
             </button>
           ))}
+        </div>
           <a
             className="memory-deck__graph"
-            href="/observatory"
+            href={observatoryHref}
             target="_blank"
             rel="noopener noreferrer"
             title="Open full knowledge graph in Observatory"

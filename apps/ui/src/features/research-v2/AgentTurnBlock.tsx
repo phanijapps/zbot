@@ -100,23 +100,6 @@ export interface AgentTurnBlockProps {
   allTurns?: AgentTurn[];
 }
 
-// Agent identity → accent colour. Theme tokens where possible.
-const AGENT_COLOR: Record<string, string> = {
-  planner: "var(--success)",
-  "planner-agent": "var(--success)",
-  solution: "var(--purple)",
-  "solution-agent": "var(--purple)",
-  builder: "var(--warning)",
-  "builder-agent": "var(--warning)",
-  writer: "var(--blue)",
-  "writer-agent": "var(--blue)",
-  root: "var(--foreground)",
-};
-
-function agentColour(agentId: string): string {
-  return AGENT_COLOR[agentId] ?? "var(--muted-foreground)";
-}
-
 function formatDuration(startedAt: number, completedAt: number | null): string {
   const end = completedAt ?? Date.now();
   const ms = end - startedAt;
@@ -227,7 +210,6 @@ function SubagentResponseBody({ turn }: SubagentCardProps): React.ReactElement {
 }
 
 function SubagentCard({ turn }: SubagentCardProps) {
-  const color = agentColour(turn.agentId);
   const respondText = copyableRespondText(turn);
   // Default: expanded while running, collapsed once done. User can override
   // either way by clicking the header. Reset on status transition.
@@ -236,7 +218,7 @@ function SubagentCard({ turn }: SubagentCardProps) {
   return (
     <div
       className="subagent-card"
-      style={{ borderLeft: `3px solid ${color}` }}
+      data-status={turn.status}
       data-parent={turn.parentExecutionId ?? ""}
       data-expanded={expanded}
       data-copy-host="true"
@@ -251,12 +233,13 @@ function SubagentCard({ turn }: SubagentCardProps) {
         <span className="subagent-card__chevron" aria-hidden="true">
           {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         </span>
-        <span className="subagent-card__agent" style={{ color }}>
+        <span className="subagent-card__agent">
           {turn.agentId}
         </span>
         <LiveTicker turn={turn} />
         <span className="subagent-card__meta">
           <StatusIcon status={turn.status} />
+          <span className="subagent-card__state">{turn.status === "error" ? "Failed" : turn.status === "running" ? "Running" : turn.status === "completed" ? "Completed" : "Stopped"}</span>
           <span>{formatDuration(turn.startedAt, turn.completedAt)}</span>
         </span>
       </button>

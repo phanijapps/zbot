@@ -21,6 +21,7 @@ vi.mock("../shared/statusPill", () => ({
 
 const transportMock = {
   initChatSession: vi.fn(),
+  openChatSession: vi.fn(),
   getSessionMessages: vi.fn(),
   listSessionArtifacts: vi.fn(),
   listSavedSessionSurfaces: vi.fn(),
@@ -55,6 +56,88 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+});
+
+describe("useQuickChat — selected independent session", () => {
+  it("opens only the selected history and uses the existing fast invocation", async () => {
+    transportMock.openChatSession.mockResolvedValue({ success: true, data: {
+      sessionId: "sess-selected", conversationId: "sess-selected", created: false, isLive: false,
+    } });
+    transportMock.getSessionMessages.mockResolvedValue({ success: true, data: [
+      { id: "message-1", role: "assistant", content: "Selected answer", created_at: "2026-09-27T00:00:00Z" },
+    ] });
+    transportMock.executeAgent.mockResolvedValue({ success: true });
+    const { result } = renderHook(() => useQuickChat({ sessionId: "sess-selected" }));
+    await waitFor(() => expect(result.current.state.sessionId).toBe("sess-selected"));
+    expect(result.current.state.messages[0].content).toBe("Selected answer");
+    expect(transportMock.openChatSession).toHaveBeenCalledWith("sess-selected");
+    expect(transportMock.initChatSession).not.toHaveBeenCalled();
+    await act(async () => result.current.sendMessage("Next question"));
+    expect(transportMock.executeAgent).toHaveBeenCalledWith("root", "sess-selected", "Next question", "sess-selected", "fast");
+    await act(async () => result.current.clearSession());
+    expect(transportMock.deleteChatSession).not.toHaveBeenCalled();
+  });
+
+  it("restores active status and sends Stop to the proven conversation key", async () => {
+    transportMock.openChatSession.mockResolvedValue({ success: true, data: {
+      sessionId: "sess-active", conversationId: "chat-existing", created: false, isLive: true,
+    } });
+    transportMock.getSessionMessages.mockResolvedValue({ success: true, data: [] });
+    const { result } = renderHook(() => useQuickChat({ sessionId: "sess-active" }));
+    await waitFor(() => expect(result.current.state.status).toBe("running"));
+    await act(async () => result.current.stopAgent());
+    expect(transportMock.cancelSession).toHaveBeenCalledWith("sess-active", "chat-existing");
+    expect(result.current.state.status).toBe("running");
+    transportMock.cancelSession.mockResolvedValue({ success: false, error: "Stop unavailable" });
+    await act(async () => result.current.stopAgent());
+    expect(result.current.state.status).toBe("error");
+    expect(result.current.isActive).toBe(true);
+  });
+
+  it("reconciles reopened active history when the terminal websocket frame is missed", async () => {
+    vi.useFakeTimers();
+    try {
+      transportMock.openChatSession
+        .mockResolvedValueOnce({ success: true, data: { sessionId: "sess-active", conversationId: "sess-active", created: false, isLive: true } })
+        .mockResolvedValue({ success: true, data: { sessionId: "sess-active", conversationId: "sess-active", created: false, isLive: false } });
+      transportMock.getSessionMessages
+        .mockResolvedValueOnce({ success: true, data: [] })
+        .mockResolvedValue({ success: true, data: [{ id: "final", role: "assistant", content: "Durable final", created_at: "2026-09-27T00:00:00Z" }] });
+      const { result, unmount } = renderHook(() => useQuickChat({ sessionId: "sess-active" }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(result.current.isActive).toBe(true);
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(result.current.state.status).toBe("idle");
+      expect(result.current.isActive).toBe(false);
+      expect(result.current.state.messages[0].content).toBe("Durable final");
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never falls back to the singleton when selected open fails", async () => {
+    transportMock.openChatSession.mockResolvedValue({ success: false, error: "unavailable" });
+    const { result } = renderHook(() => useQuickChat({ sessionId: "sess-denied" }));
+    await waitFor(() => expect(result.current.state.status).toBe("error"));
+    expect(transportMock.initChatSession).not.toHaveBeenCalled();
+    expect(transportMock.deleteChatSession).not.toHaveBeenCalled();
+    expect(result.current.state.sessionId).toBeNull();
+  });
+
+  it("ignores a delayed bootstrap after selected ID changes", async () => {
+    let resolveOld!: (value: unknown) => void;
+    transportMock.openChatSession.mockImplementation((id: string) => id === "sess-a"
+      ? new Promise(resolve => { resolveOld = resolve; })
+      : Promise.resolve({ success: true, data: { sessionId: id, conversationId: id, created: false, isLive: false } }));
+    transportMock.getSessionMessages.mockResolvedValue({ success: true, data: [] });
+    const { result, rerender } = renderHook(({ id }) => useQuickChat({ sessionId: id }), { initialProps: { id: "sess-a" } });
+    await waitFor(() => expect(transportMock.openChatSession).toHaveBeenCalledWith("sess-a"));
+    rerender({ id: "sess-b" });
+    await waitFor(() => expect(result.current.state.sessionId).toBe("sess-b"));
+    await act(async () => { resolveOld({ success: true, data: { sessionId: "sess-a", conversationId: "sess-a", created: false, isLive: false } }); });
+    expect(result.current.state.sessionId).toBe("sess-b");
+  });
 });
 
 describe("useQuickChat — bootstrap", () => {

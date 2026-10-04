@@ -9,6 +9,7 @@ import { getTransport } from "@/services/transport";
 import type { ProviderResponse, ModelRegistryResponse } from "@/services/transport";
 import { ModelChip } from "@/shared/ui/ModelChip";
 import type { ProviderPreset } from "./providerPresets";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 
 // ============================================================================
 // Types
@@ -105,23 +106,6 @@ export function ProviderSlideover({
     setShowDeleteConfirm(false);
   }, [provider, preset, mode, isOpen]);
 
-  // Escape key handler
-  useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isOpen) {
-        if (isEditing && isDirty) {
-          if (confirm("You have unsaved changes. Discard them?")) {
-            handleClose();
-          }
-        } else {
-          handleClose();
-        }
-      }
-    };
-    document.addEventListener("keydown", handleEscape);
-    return () => document.removeEventListener("keydown", handleEscape);
-  }, [isOpen, isEditing, isDirty]);
-
   const handleClose = useCallback(() => {
     setIsEditing(false);
     setIsDirty(false);
@@ -137,6 +121,7 @@ export function ProviderSlideover({
       handleClose();
     }
   };
+  useDialogFocus(isOpen, panelRef, handleBackdropClick);
 
   const handleFormChange = (updates: Partial<EditForm>) => {
     setForm((prev) => ({ ...prev, ...updates }));
@@ -288,21 +273,24 @@ export function ProviderSlideover({
   return (
     <>
       {/* Backdrop */}
-      <div
+      {isOpen && <div
         className={`provider-slideover__backdrop${isOpen ? " provider-slideover__backdrop--open" : ""}`}
         role="button"
-        tabIndex={0}
+        tabIndex={-1}
         aria-label="Close panel"
         onClick={handleBackdropClick}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleBackdropClick(); }}
-      />
+      />}
 
       {/* Panel */}
       <div
         ref={panelRef}
         className={`provider-slideover${isOpen ? " provider-slideover--open" : ""}`}
-        role="dialog"
-        aria-modal="true"
+        role={isOpen ? "dialog" : undefined}
+        tabIndex={-1}
+        inert={!isOpen}
+        aria-hidden={!isOpen}
+        aria-modal={isOpen ? true : undefined}
         aria-label={mode === "create" ? "Add Provider" : `${provider?.name || "Provider"} details`}
       >
         {/* Header */}

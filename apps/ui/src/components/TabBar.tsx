@@ -21,6 +21,18 @@ export function TabBar({ tabs, activeTab, onTabChange }: TabBarProps) {
           id={`tab-${tab.id}`}
           className={`tab-bar__tab ${activeTab === tab.id ? "tab-bar__tab--active" : ""}`}
           onClick={() => onTabChange(tab.id)}
+          type="button"
+          tabIndex={activeTab === tab.id ? 0 : -1}
+          onKeyDown={event => {
+            const index = tabs.findIndex(item => item.id === tab.id);
+            const next = event.key === "ArrowRight" ? (index + 1) % tabs.length
+              : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length
+              : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : -1;
+            if (next < 0) return;
+            event.preventDefault();
+            onTabChange(tabs[next].id);
+            event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+          }}
           role="tab"
           aria-selected={activeTab === tab.id}
           aria-controls={`tabpanel-${tab.id}`}
@@ -42,10 +54,9 @@ interface TabPanelProps {
 }
 
 export function TabPanel({ id, activeTab, children }: TabPanelProps) {
-  if (activeTab !== id) return null;
   return (
-    <div role="tabpanel" id={`tabpanel-${id}`} aria-labelledby={`tab-${id}`}>
-      {children}
+    <div role="tabpanel" id={`tabpanel-${id}`} aria-labelledby={`tab-${id}`} hidden={activeTab !== id} tabIndex={0}>
+      {activeTab === id ? children : null}
     </div>
   );
 }

@@ -184,7 +184,7 @@ fn runtime_middleware_order_keeps_context_editing_before_plan_block() {
     let pipeline = build_runtime_middleware_pipeline(100_000, true, None);
     assert_eq!(
         pipeline.pre_processor_names(),
-        vec!["context_editing", "plan_block"]
+        vec!["provenance_aware_context_editing", "plan_block"]
     );
 }
 
@@ -194,7 +194,11 @@ fn runtime_middleware_order_puts_enabled_summarization_after_plan_block() {
     let pipeline = build_runtime_middleware_pipeline(100_000, true, Some(summary_client));
     assert_eq!(
         pipeline.pre_processor_names(),
-        vec!["context_editing", "plan_block", "summarization"]
+        vec![
+            "provenance_aware_context_editing",
+            "plan_block",
+            "summarization"
+        ]
     );
 }
 

@@ -26,7 +26,7 @@ function AssistantBubble({ message }: { message: QuickChatMessage }) {
   );
 }
 
-function MessageRow({ message }: { message: QuickChatMessage }) {
+export function MessageRow({ message }: { message: QuickChatMessage }) {
   const label = message.role === "user" ? "Copy question" : "Copy answer";
   return (
     <div
@@ -119,10 +119,13 @@ function refToArtifact(ref: QuickChatArtifactRef, sessionId: string): Artifact {
 const CLEAR_CONFIRM =
   "Clear this chat and start a new session? Past messages remain in Logs.";
 
-export function QuickChat() {
-  const { state, pillState, surfaces, sendMessage, stopAgent, clearSession } = useQuickChat();
+export function QuickChat({ onActive }: {onActive?: (active: boolean) => void} = {}) {
+  const { state, isActive, pillState, surfaces, sendMessage, stopAgent, clearSession } = useQuickChat();
   const endRef = useRef<HTMLDivElement | null>(null);
   const [viewing, setViewing] = useState<Artifact | null>(null);
+
+  const active = isActive || state.status === "running" || (!state.sessionId && state.status !== "error");
+  useEffect(() => { onActive?.(active); }, [active, onActive]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });

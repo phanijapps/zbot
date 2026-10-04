@@ -41,14 +41,12 @@ export function MemoryItemCard(p: MemoryItemCardProps) {
   return (
     <div
       className={`memory-item ${decay}`.trim()}
-      role="button"
-      tabIndex={0}
       onClick={p.onClick}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") p.onClick?.();
-      }}
     >
-      <div className="memory-item__body">
+      <div className="memory-item__body" role={p.onClick ? "button" : undefined} tabIndex={p.onClick ? 0 : undefined}
+        onKeyDown={(e) => {
+          if (p.onClick && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); p.onClick(); }
+        }}>
         <span className={`memory-kind memory-kind--${p.category}`}>{p.category}</span>
         {p.ward_id && <span className="memory-ward-tag">◆ {p.ward_id}</span>}
         <span className="memory-item__content">{p.content}</span>
@@ -67,9 +65,6 @@ export function MemoryItemCard(p: MemoryItemCardProps) {
             title="Delete memory"
             disabled={isDeleting}
             onClick={handleDelete}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") void handleDelete(e);
-            }}
           >
             <Trash2 size={14} />
           </button>

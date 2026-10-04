@@ -167,7 +167,10 @@ impl Default for RateLimits {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
     /// Model capabilities (text, tools, vision, etc.)
-    #[serde(default)]
+    #[serde(
+        default = "unknown_config_capabilities",
+        deserialize_with = "config_capabilities"
+    )]
     pub capabilities: crate::models::ModelCapabilities,
     /// Maximum input tokens.
     #[serde(rename = "maxInput", skip_serializing_if = "Option::is_none")]
@@ -178,6 +181,26 @@ pub struct ModelConfig {
     /// Data source: "registry", "discovered", or "user".
     #[serde(default = "default_source")]
     pub source: String,
+}
+
+// A token-only override supplies no evidence that a model rejects tools.
+// Keep registry capability defaults unchanged; provider overrides distinguish
+// missing tool metadata from an explicit false value at deserialization.
+fn unknown_config_capabilities() -> crate::models::ModelCapabilities {
+    crate::models::ModelCapabilities {
+        tools: true,
+        ..Default::default()
+    }
+}
+
+fn config_capabilities<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<crate::models::ModelCapabilities, D::Error> {
+    let mut value = serde_json::Value::deserialize(deserializer)?;
+    if let Some(map) = value.as_object_mut() {
+        map.entry("tools").or_insert(serde_json::Value::Bool(true));
+    }
+    crate::models::ModelCapabilities::deserialize(value).map_err(serde::de::Error::custom)
 }
 
 fn default_source() -> String {
