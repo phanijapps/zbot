@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 const mocks = vi.hoisted(() => ({
@@ -43,5 +43,13 @@ describe("FilesPanel (stub)", () => {
     fireEvent.click(await screen.findByRole("tab", { name: "Files" }));
     expect(await screen.findByText("summary.md")).toBeVisible();
     expect(mocks.transport.listSessionArtifacts).toHaveBeenCalledWith("sess-1");
+  });
+
+  // STUB: AC2 — opening an artifact resolves content by artifact ID under the selected session
+  it("opens artifact content by artifact ID", async () => {
+    render(<MemoryRouter><SessionShell initialSessionId="sess-1" /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("tab", { name: "Files" }));
+    fireEvent.click(await screen.findByText("summary.md"));
+    await waitFor(() => expect(mocks.transport.getArtifactContentUrl).toHaveBeenCalledWith("art-1", "sess-1"));
   });
 });

@@ -12,6 +12,7 @@ Reconcile the existing implementation and its evidence, then close verified gaps
 - The approved [brief](../../product/briefs/rig-hooks-session-graph.md) and the spec's Boundaries govern scope.
 - Preserve existing uncommitted work. Spec authoring does not approve implementation or reset another workflow.
 - Refresh from the execution base branch (`origin/develop`) into an isolated worktree before code work; never stage or rebase the shared dirty checkout.
+- Every browser journey boots the isolated harness with a seeded vault (`--fresh-vault`) and loopback binding (`--local-only`, or an asserted effective loopback bind); the host data dir is neither read nor written.
 
 ## Construction tests
 
@@ -21,7 +22,7 @@ Existing isolated browser fixtures provide the primary evidence. Include request
 
 ### Component / module decomposition
 
-`SessionShell.tsx` and `Conversations.tsx` own selection and the single inspector; QuickChat provides proven server identity through its existing transport state. Reuse an existing details panel if available before creating a focused presentation component. Original shell ACs remain in one canonical document (AC1–3).
+`SessionShell.tsx` and `Conversations.tsx` own selection and the single inspector; QuickChat provides proven server identity through its existing transport state. Reuse an existing details panel if available before creating a focused presentation component. Original shell ACs remain in one canonical document (companion AC1–3).
 
 ### State & control flow
 
@@ -37,13 +38,14 @@ Typography, surfaces and controls use existing theme.css/components.css tokens, 
 
 **Depends on:** none
 
-**Verification mode:** Goal-based and visual/manual QA
+**Verification mode:** Goal-based
 
 **Spec mapping:** AC1, AC6
 
 **Tests:**
-- Re-run existing SessionShell/QuickChat/conversation/administration tests and isolated e2e/playwright/ui-mode/session-shell.ui.spec.ts. Retain failures rather than changing the expected behavior.
+- Re-run existing SessionShell/QuickChat/conversation/administration tests and isolated e2e/playwright/ui-mode/session-shell.ui.spec.ts (with `--fresh-vault` and `--local-only`). Retain failures rather than changing the expected behavior.
 - completion-matrix.md records the overlap disposition — owner authorization 2026-10-04: this companion delivers the inspector/presentation scope still outstanding in the original cohort's remaining waves; the original cohort is inspected read-only, never reset, and its own completion remains a separate authorized transition (AC6). T2 may not start without this recorded disposition.
+- completion-matrix.md names the CLI `--host` vs settings-backed resolution precedence conflict (gateway/src/server.rs silently overrides an explicit CLI host in both directions) as a gap requiring owner disposition — a precedence correction approval or an AC13 amendment to config-only LAN selection — before T4 claims AC13.
 
 **Approach:**
 Create completion-matrix.md enumerating every original Acceptance Criterion (as amended) with its current artifact or specific unresolved gap, including effective network bind. Inspect the active shell cohort read-only and record the overlap disposition above; do not reset it.
@@ -74,7 +76,8 @@ Reuse existing components and APIs in SessionShell/Conversations and chat-v2 sta
 **Spec mapping:** AC3–5
 
 **Tests:**
-- Mode/Stop/reload and administration return journeys; desktop/narrow/code/long-card captures, contrast readings and focus restoration.
+- Mode/Stop/reload and administration return journeys; desktop/narrow/code/long-card captures, contrast readings and focus restoration. Browser journeys run with `--fresh-vault` and `--local-only` (or asserted effective loopback bind).
+- Startup-default correction verified by actual startup tests enumerating the deciding states: no `settings.json`; `settings.json` without a `network` block; unreadable/corrupt `settings.json` (must fail closed to loopback); explicit `exposeToLan=true`; explicit `advanced.bindHost`.
 
 **Approach:**
 Apply only gaps in completion-matrix.md to current components/styles; preserve existing source edits. The effective startup-default correction (gateway/src/server.rs resolves the bind from settings-backed network config, defaulting to LAN exposure) is executed under the owner's standing authorization recorded with this spec's approval (2026-10-04): default loopback with explicit LAN opt-in, verified by actual startup tests; any change beyond that scope requires fresh approval. Coordinate any locked-plan change before executing.
@@ -88,7 +91,7 @@ Apply only gaps in completion-matrix.md to current components/styles; preserve e
 **Spec mapping:** AC1–6
 
 **Tests:**
-- Full original Acceptance Criteria matrix (as amended, enumerated in completion-matrix.md), both execution routes, unauthorized details/files, active Stop and final-answer reload; no external calls or private-vault reads or mutations in fixtures.
+- Full original Acceptance Criteria matrix (as amended, enumerated in completion-matrix.md), both execution routes, unauthorized details/files, active Stop and final-answer reload; no external calls or private-vault reads or mutations in fixtures, with `--fresh-vault` and an asserted effective loopback bind mechanizing both isolation dimensions.
 - Administration journeys assert no hook-management control or hook execution action is rendered (AC5).
 
 **Approach:**
@@ -112,3 +115,4 @@ Preserve legacy routes and the original rollback path. Promote only after the ba
 ## Changelog
 
 - 2026-10-03: Draft delivery contract and construction strategy from the approved brief; no runtime implementation.
+- 2026-10-04: Owner approved spec/plan (recorded on develop in 87a2a711) and authorized two scoped decisions: the original-cohort overlap disposition (this companion delivers the outstanding inspector/presentation scope; the original cohort is never reset) and the effective startup-default correction (default loopback with explicit LAN opt-in under actual startup tests; anything beyond requires fresh approval). Pre-EXECUTE adversarial + security review rounds applied.

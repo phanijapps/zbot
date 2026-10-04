@@ -3,10 +3,10 @@
   "run_id": "dbe820eb-963e-4e6c-9abf-42b68e402562",
   "feature": "desktop-session-completion",
   "mode": "code",
-  "state": "SPEC-PLAN-DRAFTING",
-  "last_event": "findings-remain",
+  "state": "SPEC-PLAN-REVIEW",
+  "last_event": "spec-ready",
   "last_event_context": null,
-  "transition_sequence": 2,
-  "last_transition_at": "2026-10-04T20:29:13Z",
+  "transition_sequence": 3,
+  "last_transition_at": "2026-10-04T20:30:45Z",
   "gate_question": null
 }

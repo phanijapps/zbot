@@ -22,7 +22,7 @@ The existing /session experience is complete and testably coherent: the visible 
 
 - Treat all Acceptance Criteria of [desktop-session-shell/spec.md](../desktop-session-shell/spec.md) as amended — enumerated once in this spec’s completion-matrix.md — as the authoritative baseline; record each criterion’s current evidence and remaining gap before editing.
 - Reuse SessionShell, Conversations, QuickChat, existing details/artifact APIs, shared tokens and administration pages.
-- Preserve all existing user edits and workflow tracking; use seeded/isolated browser data. Every journey boots the isolated harness with a seeded vault (`--fresh-vault`); the host data dir (`~/Documents/zbot`) is neither read nor written by any fixture.
+- Preserve all existing user edits and workflow tracking; use seeded/isolated browser data. Every journey boots the isolated harness with a seeded vault (`--fresh-vault`) and loopback binding (`--local-only`, or an asserted effective loopback bind); the host data dir (`~/Documents/zbot`) is neither read nor written by any fixture.
 
 ### Ask first
 
