@@ -161,7 +161,10 @@ export function ObservatoryPage() {
               {hit.name}
             </button>
           ))}
-          {graphSearch.results.length === 0 && graphSearch.searched && (
+          {graphSearch.results.length === 0 && graphSearch.searched && graphSearch.failed && (
+            <span className="observatory__status-flag observatory__status-flag--warn">search is unavailable right now</span>
+          )}
+          {graphSearch.results.length === 0 && graphSearch.searched && !graphSearch.failed && (
             <span className="observatory__status-flag">no server matches for “{graphSearch.query}”</span>
           )}
         </div>
@@ -233,6 +236,7 @@ export function ObservatoryPage() {
             entities={entities}
             relationships={relationships}
             selectedEntityId={selectedEntity?.id}
+            selectedEntityAgentId={selectedEntity?.agent_id}
             highlightTerm={searchTerm}
             onEntitySelect={handleEntitySelect}
           />

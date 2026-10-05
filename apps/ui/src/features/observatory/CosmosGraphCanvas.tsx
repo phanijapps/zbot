@@ -15,6 +15,8 @@ interface CosmosGraphCanvasProps {
   entities: GraphEntity[];
   relationships: GraphRelationship[];
   selectedEntityId?: string;
+  /** The selected entity's agent — required for qualified emphasis (AC2). */
+  selectedEntityAgentId?: string;
   highlightTerm?: string;
   onEntitySelect: (entity: GraphEntity) => void;
 }
@@ -46,7 +48,7 @@ function tokenRgb(name: string, fallback: [number, number, number]): [number, nu
   return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
 }
 
-export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, highlightTerm, onEntitySelect }: CosmosGraphCanvasProps) {
+export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, selectedEntityAgentId, highlightTerm, onEntitySelect }: CosmosGraphCanvasProps) {
   const host = useRef<HTMLDivElement | null>(null);
   const graphRef = useRef<{ fitView(): void; destroy(): void; setPointColors(c: Float32Array): void; setPointSizes(s: Float32Array): void; setLinkColors(c: Float32Array): void; setLinkWidths(w: Float32Array): void; pause(): void; unpause(): void } | null>(null);
   const [gpuUnavailable, setGpuUnavailable] = useState(false);
@@ -54,7 +56,6 @@ export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, h
   const [hover, setHover] = useState<{ x: number; y: number; entity: GraphEntity } | null>(null);
   const entitiesRef = useRef(entities);
   entitiesRef.current = entities;
-  const selectedAgentId = entities.find(entity => entity.id === selectedEntityId)?.agent_id;
   const reducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
   const indexById = useMemo(() => {
@@ -123,6 +124,9 @@ export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, h
         graph.setLinks(links.subarray(0, linkCount * 2));
         graph.fitView();
       } catch {
+        // ready-reject after a successful construction still owns WebGL
+        // resources — destroy the instance instead of leaking the context.
+        graph?.destroy();
         if (!disposed) setGpuUnavailable(true);
         graphRef.current = null;
       }
@@ -142,12 +146,15 @@ export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, h
     const graph = graphRef.current;
     if (!graph || gpuUnavailable) return;
     // Qualified match: agent-local ids collide across agents in all-agents
-    // mode (AC2), so selection must match the selected entity's agent too.
-    const selectedIndex = selectedEntityId
-      ? entities.findIndex(
-          entity => entity.id === selectedEntityId && entity.agent_id === (selectedAgentId ?? entity.agent_id)
-        )
-      : -1;
+    // mode (AC2), so emphasis requires BOTH the id and the selecting agent.
+    const selectedIndex =
+      selectedEntityId && selectedEntityAgentId
+        ? entities.findIndex(
+            entity => entity.id === selectedEntityId && entity.agent_id === selectedEntityAgentId
+          )
+        : selectedEntityId
+          ? entities.findIndex(entity => entity.id === selectedEntityId)
+          : -1;
     const neighborhood = selectedIndex >= 0 ? neighborsOf.get(selectedIndex) : undefined;
 
     const pointColors = new Float32Array(entities.length * 4);

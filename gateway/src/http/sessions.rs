@@ -140,8 +140,9 @@ fn log_guard_denial(parts: &Parts, loopback_bound: bool) {
             }
         }
         // Bounded memory: caller-chosen path segments must not grow the map
-        // without limit; past the cap, refresh timestamps only.
-        if guard.len() < 1024 {
+        // without limit. Past the cap, existing keys keep refreshing (rate
+        // limit stays armed); only new keys are refused.
+        if guard.len() < 1024 || guard.contains_key(&key) {
             guard.insert(key.clone(), Instant::now());
         }
     }
@@ -304,6 +305,8 @@ pub async fn restore_session(
 
 /// GET /api/sessions/:id/state — returns structured session snapshot
 pub async fn get_session_state(
+    _origin: SameOrigin,
+    _bind: LoopbackBind,
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> Result<Json<SessionState>, (StatusCode, Json<ErrorResponse>)> {
@@ -351,6 +354,8 @@ pub async fn get_session_state(
 /// always reach a "delete makes it disappear" outcome. Returns 204
 /// regardless of whether a `sessions` row was present; 500 on DB error.
 pub async fn delete_session(
+    _origin: SameOrigin,
+    _bind: LoopbackBind,
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {

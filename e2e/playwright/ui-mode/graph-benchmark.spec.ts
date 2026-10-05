@@ -73,7 +73,7 @@ test("benchmark d3 vs cosmos.gl and persist measurements", async ({page}) => {
       r.error ? [`> ${r.renderer} error: ${r.error}`] : []
     ),
     "",
-    "cosmos.gl is a devDependency behind a dynamic import on this dev-only route; it is not in the production bundle. Renderer retention is decided by these measurements against the AC5 budgets (the shipped D3 renderer stays unless it fails).",
+    "D3 is the benchmark baseline; cosmos.gl is the ratified production renderer (see benchmark.md for the verdict). This file records raw runs.",
     "",
   ].join("\n");
 

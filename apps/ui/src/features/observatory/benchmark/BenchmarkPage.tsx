@@ -109,7 +109,7 @@ export function BenchmarkPage() {
       const scene = buildScene();
       const collected: RendererResult[] = [];
 
-      // ---- D3 baseline (the shipped GraphCanvas component) ----
+      // ---- D3 baseline (pre-adoption renderer, kept as the comparison baseline) ----
       try {
         setPhase("d3");
         const d3Start = now();
@@ -153,14 +153,14 @@ export function BenchmarkPage() {
         const after = heapMiB();
         clearInterval(peakSampler);
         collected.push({
-          renderer: "d3-svg (shipped)",
+          renderer: "d3-svg (baseline)",
           firstUsableViewMs: Math.round(firstUsableViewMs),
           inputFeedbackP95Ms: Math.round(inputFeedbackP95Ms),
           peakHeapMiB: Math.round(peak),
           mountCycles: { beforeMiB: Math.round(before), afterMiB: Math.round(after) },
         });
       } catch (err) {
-        collected.push({ renderer: "d3-svg (shipped)", firstUsableViewMs: -1, inputFeedbackP95Ms: -1, peakHeapMiB: -1, mountCycles: { beforeMiB: -1, afterMiB: -1 }, error: String(err) });
+        collected.push({ renderer: "d3-svg (baseline)", firstUsableViewMs: -1, inputFeedbackP95Ms: -1, peakHeapMiB: -1, mountCycles: { beforeMiB: -1, afterMiB: -1 }, error: String(err) });
       }
 
       // ---- cosmos.gl (GPU reference, devDependency) ----

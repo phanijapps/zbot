@@ -288,6 +288,9 @@ pub struct SubgraphResponse {
     pub relationships: Vec<RelationshipResponse>,
     pub center: String,
     pub max_hops: usize,
+    /// True when the byte budget dropped rows — a partial neighborhood must
+    /// never present as complete (spec Never-do: hide partial views).
+    pub truncated: bool,
 }
 
 impl From<Subgraph> for SubgraphResponse {
@@ -305,6 +308,7 @@ impl From<Subgraph> for SubgraphResponse {
                 .collect(),
             center: subgraph.center,
             max_hops: subgraph.max_hops,
+            truncated: false,
         }
     }
 }
@@ -477,11 +481,18 @@ pub async fn get_entity_subgraph(
     let response = SubgraphResponse::from(subgraph);
     // Subgraph reads are capped like every other exploration response: the
     // byte budget bounds a hub-centered 4-hop traversal on a large store.
+    let entity_total = response.entities.len();
+    let relationship_total = response.relationships.len();
+    let entities = enforce_page_budget(response.entities);
+    let relationships = enforce_page_budget(response.relationships);
+    let truncated =
+        entities.len() < entity_total || relationships.len() < relationship_total;
     Ok(Json(SubgraphResponse {
-        entities: enforce_page_budget(response.entities),
-        relationships: enforce_page_budget(response.relationships),
+        entities,
+        relationships,
         center: response.center,
         max_hops: response.max_hops,
+        truncated,
     }))
 }
 

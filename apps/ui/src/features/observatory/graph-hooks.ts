@@ -615,6 +615,8 @@ export interface GraphSearchState {
   query: string;
   results: GraphSearchHit[];
   searched: boolean;
+  /** True when the search request itself failed — distinct from no matches. */
+  failed: boolean;
   setQuery(query: string): void;
   open(hit: GraphSearchHit): void;
 }
@@ -629,11 +631,13 @@ export function useGraphSearch(
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<GraphSearchHit[]>([]);
   const [searched, setSearched] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     if (query.trim().length < 2) {
       setResults([]);
       setSearched(false);
+      setFailed(false);
       return;
     }
     let cancelled = false;
@@ -650,11 +654,14 @@ export function useGraphSearch(
           if (!cancelled) {
             setResults(data.entities);
             setSearched(true);
+            setFailed(false);
           }
         } catch {
+          // A failed request is not "no matches" (AC3): surface it distinctly.
           if (!cancelled) {
             setResults([]);
             setSearched(true);
+            setFailed(true);
           }
         }
       })();
@@ -672,5 +679,5 @@ export function useGraphSearch(
     [onSelect]
   );
 
-  return { query, results, searched, setQuery, open };
+  return { query, results, searched, failed, setQuery, open };
 }
