@@ -454,3 +454,18 @@ describe("useGraphSearch (AC4)", () => {
     vi.useRealTimers();
   });
 });
+
+// AC3 — a failed search request is distinct from no matches.
+describe("useGraphSearch failure state", () => {
+  it("flags failed on a rejected request instead of pretending no matches", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(() => Promise.resolve({ ok: false, status: 503, text: async () => "unavailable" }));
+    const { result } = renderHook(() => useGraphSearch(undefined, vi.fn()));
+    act(() => { result.current.setQuery("deep"); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(result.current.searched).toBe(true);
+    expect(result.current.failed).toBe(true);
+    expect(result.current.results).toHaveLength(0);
+    vi.useRealTimers();
+  });
+});

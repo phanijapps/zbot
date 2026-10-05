@@ -206,3 +206,51 @@ async fn projection_flags_truncation_without_losing_counts() {
     assert_eq!(deep["properties"].as_object().map(|p| p.len()), Some(0));
     assert_eq!(deep["projection_truncated"], true);
 }
+
+// AC3/Never-do — a byte-budgeted subgraph must flag truncation, never
+// presenting a partial neighborhood as complete.
+#[tokio::test]
+async fn budgeted_subgraph_flags_truncation() {
+    use knowledge_graph::types::{Entity as DomainEntity, EntityType};
+    let (server, _dir, state) = setup("127.0.0.1".parse().unwrap());
+    let store = state.kg_store().expect("kg store");
+    // Two entities with near-row-budget properties force the byte budget to
+    // bite on a 2-node subgraph (each projected row alone exceeds the cap
+    // only when combined; enforce_page_budget keeps >=1 row and truncates).
+    for index in 0..2 {
+        let mut wide = DomainEntity::new("agent-a".to_string(), EntityType::Concept, format!("W{index}"));
+        wide.id = format!("wide-{index}");
+        for entry in 0..60 {
+            wide.properties.insert(format!("k{entry}"), serde_json::json!(format!("{}","v".repeat(4000))));
+        }
+        store.upsert_entity("agent-a", wide).await.expect("wide");
+    }
+    use knowledge_graph::types::{Relationship, RelationshipType};
+    store
+        .upsert_relationship(
+            "agent-a",
+            Relationship::new(
+                "agent-a".to_string(),
+                "wide-0".to_string(),
+                "wide-1".to_string(),
+                RelationshipType::RelatedTo,
+            ),
+        )
+        .await
+        .expect("edge");
+    let response = server
+        .get("/api/graph/agent-a/entities/wide-0/subgraph?max_hops=1")
+        .await;
+    response.assert_status_ok();
+    let body: Value = response.json();
+    let truncated = body["truncated"].as_bool().unwrap_or(false);
+    let entity_rows = body["entities"].as_array().map(|rows| rows.len()).unwrap_or(0);
+    // Either the properties fit (2 rows, not truncated) or rows were cut
+    // (truncated true with fewer rows than entities exist) — never a silent
+    // partial view.
+    if truncated {
+        assert!(entity_rows < 2, "truncated must mean rows were dropped");
+    } else {
+        assert_eq!(entity_rows, 2);
+    }
+}

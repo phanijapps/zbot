@@ -185,7 +185,7 @@ export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, s
     });
     graph.setLinkColors(linkColors);
     graph.setLinkWidths(linkWidths);
-  }, [entities, relationships, selectedEntityId, highlightTerm, neighborsOf, indexById, gpuUnavailable, sceneVersion]);
+  }, [entities, relationships, selectedEntityId, selectedEntityAgentId, highlightTerm, neighborsOf, indexById, gpuUnavailable, sceneVersion]);
 
   const legendEntries = useMemo(() => {
     const counts = new Map<string, number>();

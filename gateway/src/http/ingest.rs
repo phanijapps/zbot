@@ -49,10 +49,11 @@ pub async fn ingest(
     // chunk loop or wraps the slice bounds, and tiny targets on a large
     // body explode into unbounded chunk writes.
     if let Some(opts) = req.chunk_opts.as_ref() {
-        // Same defaults the chunker constructs with below — divergent pairs
-        // would spuriously reject valid configurations.
-        let target = opts.target_tokens.unwrap_or(1000);
-        let overlap = opts.overlap_tokens.unwrap_or(100);
+        // Derived from the chunker's own defaults — divergent literals would
+        // spuriously reject valid configurations.
+        let defaults = ChunkOptions::default();
+        let target = opts.target_tokens.unwrap_or(defaults.target_tokens);
+        let overlap = opts.overlap_tokens.unwrap_or(defaults.overlap_tokens);
         if !(16..=8192).contains(&target) || overlap >= target {
             return Err((
                 StatusCode::BAD_REQUEST,

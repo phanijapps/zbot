@@ -77,6 +77,7 @@ beforeEach(() => {
     query: "",
     results: [],
     searched: false,
+    failed: false,
     setQuery: vi.fn(),
     open: vi.fn(),
   });
@@ -289,5 +290,28 @@ describe("ObservatoryPage — inert display data", () => {
     expect(screen.getByText(/<script>alert\(2\)<\/script>/)).toBeInTheDocument();
     expect(document.querySelector("img[src='x']")).toBeNull();
     expect(document.querySelector("script")).toBeNull();
+  });
+});
+
+describe("ObservatoryPage — search failure copy", () => {
+  it("renders search-unavailable distinctly from no-matches", () => {
+    mockUseGraphData.mockReturnValue({
+      entities: [], relationships: [], loading: false, error: null, refetch: vi.fn(),
+      totals: { entities: 0, relationships: 0 }, complete: true, stale: false,
+      capped: false, loopbackOnly: false, unresolvedEndpoints: 0,
+    });
+    mockUseGraphSearch.mockReturnValue({
+      query: "deep", results: [], searched: true, failed: true,
+      setQuery: vi.fn(), open: vi.fn(),
+    });
+    const { rerender } = render(<ObservatoryPage />);
+    expect(screen.getByText(/search is unavailable right now/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no server matches/i)).not.toBeInTheDocument();
+    mockUseGraphSearch.mockReturnValue({
+      query: "deep", results: [], searched: true, failed: false,
+      setQuery: vi.fn(), open: vi.fn(),
+    });
+    rerender(<ObservatoryPage />);
+    expect(screen.getByText(/no server matches for/i)).toBeInTheDocument();
   });
 });
