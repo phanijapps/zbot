@@ -99,7 +99,9 @@ export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, s
         const background = tokenRgb("--background", [255, 255, 255]);
         graph = new Graph(element, {
           backgroundColor: [...background, 1],
-          enableSimulation: !reducedMotion,
+          // While pages stream in the scene renders as a static starfield;
+          // only the settled rebuild starts the force layout (one reveal).
+          enableSimulation: settled && !reducedMotion,
           renderHoveredPointRing: true,
           onPointClick: (index: number) => {
             const entity = entitiesRef.current[index];
