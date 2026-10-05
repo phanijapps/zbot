@@ -1,11 +1,10 @@
 // ============================================================================
 // GRAPH RENDERER BENCHMARK — spec observatory-graph-completeness AC5.
-// Dev-only route (/observatory/benchmark): measures the current D3 renderer
-// against cosmos.gl on an identical seeded synthetic scene (17,000 entities /
-// 5,000 edges; generated content only, never user data). cosmos.gl is a
-// devDependency loaded by dynamic import — it never enters the production
-// bundle unless it wins on measurement. Results land in
-// #benchmark-results for the Playwright harness to persist.
+// Dev-only route (/observatory/benchmark): measures the D3 baseline against
+// the production cosmos.gl renderer on an identical seeded synthetic scene
+// (17,000 entities / 5,000 edges; generated content only, never user data).
+// The route itself never ships in production builds; raw run measurements
+// append to benchmark-runs.md via the Playwright harness.
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";

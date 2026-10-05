@@ -2156,32 +2156,39 @@ impl KnowledgeGraphSidecar {
         limit: usize,
         offset: usize,
     ) -> GraphStoreResult<(Vec<RelationshipEntry>, usize)> {
-        // Hold one sidecar lock across query + dedup + slice: the mutex
-        // serializes every writer, so page and count share one snapshot.
-        let connection = self.lock()?;
-        let mut conditions = vec!["archived = 0".to_string()];
-        let mut param_values: Vec<Box<dyn ToSql>> = Vec::new();
-        if let Some(agent_id) = agent_id {
-            conditions.push(format!("agent_id = ?{}", param_values.len() + 1));
-            param_values.push(Box::new(agent_id.to_string()));
-        }
-        if let Some(relationship_type) = relationship_type {
-            conditions.push(format!("relationship_type = ?{}", param_values.len() + 1));
-            param_values.push(Box::new(relationship_type.to_string()));
-        }
-        let sql = format!(
-            "SELECT relationship_json, confidence FROM kg_relationships
-             WHERE {}
-             ORDER BY mention_count DESC, id",
-            conditions.join(" AND ")
-        );
-        let params_refs: Vec<&dyn ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
-        let mut statement = connection.prepare(&sql).map_err(to_backend)?;
-        let rows = statement
-            .query_map(params_refs.as_slice(), decode_relationship_entry)
-            .map_err(to_backend)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(to_backend)?;
+        // Fetch candidates under one lock, then RELEASE before dedup:
+        // `deduplicate_relationship_entries` resolves missing ward_ids via
+        // `get_entity`, which locks the same non-reentrant mutex — deduping
+        // while holding the guard deadlocks the store (probe:
+        // paged_relationships_do_not_deadlock_on_wardless_rows). The total
+        // derives from the fetched snapshot's deduplicated length, so page
+        // and count stay self-consistent; cross-request mutation remains a
+        // live view.
+        let rows = {
+            let connection = self.lock()?;
+            let mut conditions = vec!["archived = 0".to_string()];
+            let mut param_values: Vec<Box<dyn ToSql>> = Vec::new();
+            if let Some(agent_id) = agent_id {
+                conditions.push(format!("agent_id = ?{}", param_values.len() + 1));
+                param_values.push(Box::new(agent_id.to_string()));
+            }
+            if let Some(relationship_type) = relationship_type {
+                conditions.push(format!("relationship_type = ?{}", param_values.len() + 1));
+                param_values.push(Box::new(relationship_type.to_string()));
+            }
+            let sql = format!(
+                "SELECT relationship_json, confidence FROM kg_relationships
+                 WHERE {}
+                 ORDER BY mention_count DESC, id",
+                conditions.join(" AND ")
+            );
+            let params_refs: Vec<&dyn ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+            let mut statement = connection.prepare(&sql).map_err(to_backend)?;
+            let rows = statement
+                .query_map(params_refs.as_slice(), decode_relationship_entry)
+                .map_err(to_backend)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(to_backend)?
+        };
         let mut deduped = self.deduplicate_relationship_entries(rows)?;
         deduped.sort_by(|left, right| {
             right

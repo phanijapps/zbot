@@ -123,7 +123,9 @@ fn project_entity(entity: Entity) -> EntityResponse {
         && entity
             .properties
             .values()
-            .all(property_within_budget);
+            .all(property_within_budget)
+        && serde_json::to_string(&entity.properties).map(|s| s.len()).unwrap_or(usize::MAX)
+            <= GRAPH_MAX_PROPERTIES_BYTES;
     let properties = if properties_ok {
         entity.properties
     } else {
@@ -353,9 +355,10 @@ pub async fn list_entities(
         )
         .await
         .map_err(store_err_to_http)?;
-    let returned = page.entities.len();
+    let entities = enforce_page_budget(page.entities.into_iter().map(project_entity).collect());
+    let returned = entities.len();
     Ok(Json(EntityListResponse {
-        entities: enforce_page_budget(page.entities.into_iter().map(project_entity).collect()),
+        entities,
         total: page.total,
         offset: query.offset,
         next_offset: next_offset(query.offset, returned, page.total),
@@ -382,14 +385,15 @@ pub async fn list_relationships(
         )
         .await
         .map_err(store_err_to_http)?;
-    let returned = page.relationships.len();
+    let relationships = enforce_page_budget(
+        page.relationships
+            .into_iter()
+            .map(RelationshipResponse::from)
+            .collect(),
+    );
+    let returned = relationships.len();
     Ok(Json(RelationshipListResponse {
-        relationships: enforce_page_budget(
-            page.relationships
-                .into_iter()
-                .map(RelationshipResponse::from)
-                .collect(),
-        ),
+        relationships,
         total: page.total,
         offset: query.offset,
         next_offset: next_offset(query.offset, returned, page.total),
@@ -418,20 +422,21 @@ pub async fn get_entity_neighbors(
         )
         .await
         .map_err(store_err_to_http)?;
-    let returned = page.neighbors.len();
-    let neighbors: Vec<NeighborEntry> = page
-        .neighbors
-        .into_iter()
-        .map(|info| NeighborEntry {
-            entity: project_entity(info.entity),
-            relationship: RelationshipResponse::from(info.relationship),
-            direction: match info.direction {
-                Direction::Outgoing => "outgoing".to_string(),
-                Direction::Incoming => "incoming".to_string(),
-                Direction::Both => "both".to_string(),
-            },
-        })
-        .collect();
+    let neighbors: Vec<NeighborEntry> = enforce_page_budget(
+        page.neighbors
+            .into_iter()
+            .map(|info| NeighborEntry {
+                entity: project_entity(info.entity),
+                relationship: RelationshipResponse::from(info.relationship),
+                direction: match info.direction {
+                    Direction::Outgoing => "outgoing".to_string(),
+                    Direction::Incoming => "incoming".to_string(),
+                    Direction::Both => "both".to_string(),
+                },
+            })
+            .collect(),
+    );
+    let returned = neighbors.len();
     Ok(Json(NeighborResponse {
         entity_id,
         total: page.total,
@@ -500,9 +505,10 @@ pub async fn search_entities(
         )
         .await
         .map_err(store_err_to_http)?;
-    let returned = page.entities.len();
+    let entities = enforce_page_budget(page.entities.into_iter().map(project_entity).collect());
+    let returned = entities.len();
     Ok(Json(EntityListResponse {
-        entities: enforce_page_budget(page.entities.into_iter().map(project_entity).collect()),
+        entities,
         total: page.total,
         offset: query.offset,
         next_offset: next_offset(query.offset, returned, page.total),
@@ -531,9 +537,10 @@ pub async fn search_all_entities(
         )
         .await
         .map_err(store_err_to_http)?;
-    let returned = page.entities.len();
+    let entities = enforce_page_budget(page.entities.into_iter().map(project_entity).collect());
+    let returned = entities.len();
     Ok(Json(EntityListResponse {
-        entities: enforce_page_budget(page.entities.into_iter().map(project_entity).collect()),
+        entities,
         total: page.total,
         offset: query.offset,
         next_offset: next_offset(query.offset, returned, page.total),
@@ -693,6 +700,7 @@ const GRAPH_ROW_BUDGET_BYTES: usize = 16 * 1024;
 const GRAPH_MAX_NAME_CHARS: usize = 1024;
 const GRAPH_MAX_PROPERTY_CHARS: usize = 4096;
 const GRAPH_MAX_PROPERTY_ENTRIES: usize = 64;
+const GRAPH_MAX_PROPERTIES_BYTES: usize = 8 * 1024;
 
 fn bad_request(message: &str) -> (StatusCode, Json<ErrorResponse>) {
     (
@@ -741,6 +749,8 @@ pub struct AggregateGraphStats {
 /// (stripped-down test fixtures) so the Observatory health bar
 /// renders cleanly.
 pub async fn distillation_status(
+    _origin: SameOrigin,
+    _bind: super::sessions::LoopbackBind,
     State(state): State<AppState>,
 ) -> Result<Json<DistillationStats>, (StatusCode, Json<ErrorResponse>)> {
     let repo_slot = state.distillation_repo();
@@ -766,6 +776,8 @@ pub async fn distillation_status(
 ///
 /// Returns an empty list when `distillation_repo` is unavailable.
 pub async fn undistilled_sessions(
+    _origin: SameOrigin,
+    _bind: super::sessions::LoopbackBind,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<UndistilledSession>>, (StatusCode, Json<ErrorResponse>)> {
     let repo_slot = state.distillation_repo();
@@ -798,6 +810,8 @@ pub struct TriggerDistillationResponse {
 /// POST /api/distillation/trigger/:session_id
 /// Trigger distillation for a specific session.
 pub async fn trigger_distillation(
+    _origin: SameOrigin,
+    _bind: super::sessions::LoopbackBind,
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> Result<Json<TriggerDistillationResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -875,7 +889,12 @@ pub async fn graph_stats(
     let (entities, relationships) = match &stores.kg_store {
         Some(store) => {
             let e = store.count_all_entities().await.unwrap_or(0);
-            let r = store.count_all_relationships().await.unwrap_or(0);
+            // Dedup-consistent with /api/graph/all/relationships (raw
+            // counts double-count duplicate rows; the traversal dedups).
+            let r = match store.list_all_relationships_paged(None, 1, 0).await {
+                Ok(page) => page.total,
+                Err(_) => store.count_all_relationships().await.unwrap_or(0),
+            };
             (e, r)
         }
         None => (0, 0),
@@ -931,14 +950,15 @@ pub async fn all_relationships(
         )
         .await
         .map_err(store_err_to_http)?;
-    let returned = page.relationships.len();
+    let relationships = enforce_page_budget(
+        page.relationships
+            .into_iter()
+            .map(RelationshipResponse::from)
+            .collect(),
+    );
+    let returned = relationships.len();
     Ok(Json(RelationshipListResponse {
-        relationships: enforce_page_budget(
-            page.relationships
-                .into_iter()
-                .map(RelationshipResponse::from)
-                .collect(),
-        ),
+        relationships,
         total: page.total,
         offset: query.offset,
         next_offset: next_offset(query.offset, returned, page.total),
@@ -964,9 +984,10 @@ pub async fn all_entities(
         )
         .await
         .map_err(store_err_to_http)?;
-    let returned = page.entities.len();
+    let entities = enforce_page_budget(page.entities.into_iter().map(project_entity).collect());
+    let returned = entities.len();
     Ok(Json(EntityListResponse {
-        entities: enforce_page_budget(page.entities.into_iter().map(project_entity).collect()),
+        entities,
         total: page.total,
         offset: query.offset,
         next_offset: next_offset(query.offset, returned, page.total),

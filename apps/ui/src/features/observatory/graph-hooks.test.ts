@@ -54,6 +54,7 @@ afterEach(() => {
 // We import after mocks so the module captures the stubs.
 import {
   useGraphData,
+  useGraphSearch,
   useGraphStats,
   useDistillationStatus,
   useEntityConnections,
@@ -405,5 +406,51 @@ describe("useGraphData truthful states", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.loopbackOnly).toBe(true);
     expect(result.current.complete).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC4 — server-backed search reaches beyond the loaded pages.
+// ---------------------------------------------------------------------------
+describe("useGraphSearch (AC4)", () => {
+  beforeEach(() => {
+    fetchMock.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          entities: [
+            { id: "late-page-hit", agent_id: "agent-z", name: "Deep result", entity_type: "Concept" },
+          ],
+          total: 1,
+          next_offset: null,
+        }),
+      })
+    );
+  });
+
+  it("debounces, queries the server search endpoint, and returns late-page hits", async () => {
+    vi.useFakeTimers();
+    const onSelect = vi.fn();
+    const { result } = renderHook(() => useGraphSearch(undefined, onSelect));
+    act(() => { result.current.setQuery("deep"); });
+    expect(fetchMock).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(result.current.searched).toBe(true);
+    expect(result.current.results[0]?.id).toBe("late-page-hit");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/graph/all/search?q=deep");
+    act(() => { result.current.open(result.current.results[0]); });
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "late-page-hit" }));
+    vi.useRealTimers();
+  });
+
+  it("uses the per-agent search endpoint when an agent is selected", async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useGraphSearch("agent-a", vi.fn()));
+    act(() => { result.current.setQuery("deep"); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(result.current.searched).toBe(true);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/graph/agent-a/search?q=deep");
+    vi.useRealTimers();
   });
 });

@@ -139,7 +139,11 @@ fn log_guard_denial(parts: &Parts, loopback_bound: bool) {
                 return;
             }
         }
-        guard.insert(key.clone(), Instant::now());
+        // Bounded memory: caller-chosen path segments must not grow the map
+        // without limit; past the cap, refresh timestamps only.
+        if guard.len() < 1024 {
+            guard.insert(key.clone(), Instant::now());
+        }
     }
     let peer = parts
         .extensions
@@ -223,6 +227,8 @@ pub async fn get_session_details(
 /// POST /api/sessions/archive
 /// Archive old session transcripts to compressed JSONL files.
 pub async fn archive_sessions(
+    _origin: SameOrigin,
+    _bind: LoopbackBind,
     State(state): State<AppState>,
     Json(body): Json<ArchiveRequest>,
 ) -> Result<Json<ArchiveResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -266,6 +272,8 @@ pub async fn archive_sessions(
 /// POST /api/sessions/restore/:id
 /// Restore an archived session from its compressed JSONL file.
 pub async fn restore_session(
+    _origin: SameOrigin,
+    _bind: LoopbackBind,
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> Result<Json<RestoreResponse>, (StatusCode, Json<ErrorResponse>)> {

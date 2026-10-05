@@ -3,10 +3,10 @@
   "run_id": "b53af4e8-514b-4797-92f0-1d3af976342f",
   "feature": "observatory-graph-completeness",
   "mode": "code",
-  "state": "CODE-VERIFICATION",
-  "last_event": "wave-complete",
+  "state": "CODE-REVIEW",
+  "last_event": "gates-clean",
   "last_event_context": null,
-  "transition_sequence": 18,
-  "last_transition_at": "2026-10-05T00:57:06Z",
+  "transition_sequence": 19,
+  "last_transition_at": "2026-10-05T01:06:11Z",
   "gate_question": null
 }

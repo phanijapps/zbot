@@ -126,8 +126,15 @@ async fn every_graph_route_denies_on_lan_bind() {
         let denied = lan.get(path).await;
         denied.assert_status(axum::http::StatusCode::FORBIDDEN);
     }
+    for path in ["/api/graph/ingest/x/progress"] {
+        lan.get(path).await.assert_status(axum::http::StatusCode::FORBIDDEN);
+    }
     lan.post("/api/graph/reindex")
         .json(&serde_json::json!({}))
+        .await
+        .assert_status(axum::http::StatusCode::FORBIDDEN);
+    lan.post("/api/graph/ingest")
+        .json(&serde_json::json!({"source_id": "x", "text": "t"}))
         .await
         .assert_status(axum::http::StatusCode::FORBIDDEN);
 }

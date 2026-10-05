@@ -143,7 +143,7 @@ export function ObservatoryPage() {
         )}
         {loopbackOnly && (
           <span className="observatory__status-flag observatory__status-flag--warn">
-            the knowledge graph is available on this device only (loopback); LAN access is disabled for graph reads
+            graph reads are loopback-only on this device
           </span>
         )}
       </div>
@@ -189,6 +189,11 @@ export function ObservatoryPage() {
               />
               <p style={{ fontSize: "var(--text-sm)" }}>Loading knowledge graph...</p>
             </div>
+          </div>
+        ) : loopbackOnly ? (
+          <div className="observatory__canvas observatory__canvas--fallback" role="status">
+            <p>The knowledge graph is available on this device only (loopback).</p>
+            <p className="observatory__hint">LAN access is disabled for graph reads. Search and inspection remain scoped to this device.</p>
           </div>
         ) : error ? (
           <div

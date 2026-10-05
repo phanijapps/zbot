@@ -45,6 +45,19 @@ pub async fn ingest(
     State(state): State<AppState>,
     Json(req): Json<IngestRequest>,
 ) -> Result<(StatusCode, Json<IngestResponse>), (StatusCode, String)> {
+    // Bounded chunking options: a zero/huge target wedges the synchronous
+    // chunk loop or wraps the slice bounds, and tiny targets on a large
+    // body explode into unbounded chunk writes.
+    if let Some(opts) = req.chunk_opts.as_ref() {
+        let target = opts.target_tokens.unwrap_or(512);
+        let overlap = opts.overlap_tokens.unwrap_or(64);
+        if !(16..=8192).contains(&target) || overlap >= target {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "chunk_opts.target_tokens must be 16..=8192 and overlap_tokens < target_tokens".to_string(),
+            ));
+        }
+    }
     // Reads through the execution group: ingestion queue + backpressure
     // (kg episode store stays a single stores read).
     let execution = state.execution();

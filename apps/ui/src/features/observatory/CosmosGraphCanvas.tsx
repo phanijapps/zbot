@@ -50,9 +50,11 @@ export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, h
   const host = useRef<HTMLDivElement | null>(null);
   const graphRef = useRef<{ fitView(): void; destroy(): void; setPointColors(c: Float32Array): void; setPointSizes(s: Float32Array): void; setLinkColors(c: Float32Array): void; setLinkWidths(w: Float32Array): void; pause(): void; unpause(): void } | null>(null);
   const [gpuUnavailable, setGpuUnavailable] = useState(false);
+  const [sceneVersion, setSceneVersion] = useState(0);
   const [hover, setHover] = useState<{ x: number; y: number; entity: GraphEntity } | null>(null);
   const entitiesRef = useRef(entities);
   entitiesRef.current = entities;
+  const selectedAgentId = entities.find(entity => entity.id === selectedEntityId)?.agent_id;
   const reducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
   const indexById = useMemo(() => {
@@ -100,6 +102,8 @@ export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, h
         });
         await graph.ready;
         if (disposed) { graph.destroy(); return; }
+        graphRef.current = graph;
+        setSceneVersion(value => value + 1); // styling pass runs once the scene exists
 
         const positions = new Float32Array(entities.length * 2);
         const random = (seed => () => ((seed = (seed * 16807) % 2147483647) / 2147483647))(42);
@@ -120,8 +124,7 @@ export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, h
         graph.fitView();
       } catch {
         if (!disposed) setGpuUnavailable(true);
-      } finally {
-        graphRef.current = graph;
+        graphRef.current = null;
       }
     })();
     return () => {
@@ -129,15 +132,21 @@ export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, h
       graphRef.current?.destroy();
       graphRef.current = null;
     };
+    // Rebuild the scene on data identity (not length): a same-length content
+    // swap must re-index nodes, links and the click/hover mapping.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entities.length, relationships.length]);
+  }, [entities, relationships]);
 
   // Styling pass: type colors, mention-driven sizes, selection emphasis.
   useEffect(() => {
     const graph = graphRef.current;
     if (!graph || gpuUnavailable) return;
+    // Qualified match: agent-local ids collide across agents in all-agents
+    // mode (AC2), so selection must match the selected entity's agent too.
     const selectedIndex = selectedEntityId
-      ? entities.findIndex(entity => entity.id === selectedEntityId)
+      ? entities.findIndex(
+          entity => entity.id === selectedEntityId && entity.agent_id === (selectedAgentId ?? entity.agent_id)
+        )
       : -1;
     const neighborhood = selectedIndex >= 0 ? neighborsOf.get(selectedIndex) : undefined;
 
@@ -169,7 +178,7 @@ export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, h
     });
     graph.setLinkColors(linkColors);
     graph.setLinkWidths(linkWidths);
-  }, [entities, relationships, selectedEntityId, highlightTerm, neighborsOf, indexById, gpuUnavailable]);
+  }, [entities, relationships, selectedEntityId, highlightTerm, neighborsOf, indexById, gpuUnavailable, sceneVersion]);
 
   const legendEntries = useMemo(() => {
     const counts = new Map<string, number>();

@@ -6,7 +6,7 @@ import * as os from "node:os";
 
 // Graph renderer benchmark (spec AC5): loads the dev-only benchmark route on
 // the Vite dev server, waits for both renderer runs to complete, and persists
-// the measured numbers to docs/specs/observatory-graph-completeness/benchmark.md.
+// the measured numbers to docs/specs/observatory-graph-completeness/benchmark-runs.md.
 // Generated synthetic scene only (17,000 entities / 5,000 edges), seeded.
 let vite: ChildProcess | undefined;
 
@@ -55,7 +55,7 @@ test("benchmark d3 vs cosmos.gl and persist measurements", async ({page}) => {
   const host = os.hostname();
   const cpus = os.cpus()[0]?.model ?? "unknown";
   const report = [
-    "# Graph renderer benchmark (spec AC5 evidence)",
+    "# Graph renderer benchmark runs (raw measurements; verdict lives in benchmark.md)",
     "",
     `Scene: ${payload.scene.entities.toLocaleString()} entities / ${payload.scene.edges.toLocaleString()} edges (seeded synthetic; generated content only).`,
     `Host: ${host}; CPU: ${cpus}; Browser: desktop Chromium (Playwright); ${new Date().toISOString()}.`,
@@ -85,7 +85,7 @@ test("benchmark d3 vs cosmos.gl and persist measurements", async ({page}) => {
     "docs",
     "specs",
     "observatory-graph-completeness",
-    "benchmark.md"
+    "benchmark-runs.md"
   );
   fs.mkdirSync(path.dirname(destination), {recursive: true});
   fs.writeFileSync(destination, report);
