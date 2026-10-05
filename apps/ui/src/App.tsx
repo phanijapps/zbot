@@ -261,7 +261,7 @@ function App() {
                 buildTimestamp={daemonBuildTimestamp}
               >
                 <Routes>
-                  <Route path="/" element={<Navigate to="/research" replace />} />
+                  <Route path="/" element={<Navigate to="/session" replace />} />
                   <Route path="/mission-control" element={<MissionControlPage />} />
                   {/* Legacy redirects — Dashboard + Logs are now Mission Control. */}
                   <Route path="/dashboard" element={<Navigate to="/mission-control" replace />} />
