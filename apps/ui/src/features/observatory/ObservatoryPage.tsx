@@ -7,7 +7,7 @@ import { Loader2, Search, Network } from "lucide-react";
 import { getTransport } from "@/services/transport";
 import type { AgentResponse, GraphEntity } from "@/services/transport/types";
 import { useGraphData, useGraphSearch } from "./graph-hooks";
-import { SigmaGraphCanvas } from "./SigmaGraphCanvas";
+import { Force3DGraphCanvas } from "./Force3DGraphCanvas";
 import { EntityDetail } from "./EntityDetail";
 import { LearningHealthBar } from "./LearningHealthBar";
 // BeliefNetworkPanel (the 3-card detail surface) intentionally removed
@@ -232,7 +232,7 @@ export function ObservatoryPage() {
             </div>
           </div>
         ) : (
-          <SigmaGraphCanvas
+          <Force3DGraphCanvas
             entities={entities}
             relationships={relationships}
             selectedEntityId={selectedEntity?.id}

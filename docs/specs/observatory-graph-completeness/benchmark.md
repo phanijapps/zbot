@@ -22,3 +22,8 @@ Per the spec ("pin a renderer only if the current implementation fails the crite
 ## Owner revision (2026-10-05, later)
 
 After living with the cosmos.gl nebula, the owner chose **sigma.js + graphology (ForceAtlas2 worker, Barnes-Hut)** as the production renderer for its label quality and stability (`go sigma js`). Nodes stream into one live graph instance — no scene rebuilds, no flicker by construction. cosmos.gl remains the measured comparison in the benchmark route. Evidence: evidence/sigma-1280.png (live 17.8k graph).
+
+
+## Owner revision 2 (2026-10-05, latest)
+
+After living with sigma.js, the owner moved to a **3D force graph** (`3d-force-graph` / three.js): a rotatable galaxy of the knowledge graph. Nodes stream into one live graph; the d3-force-3D layout runs continuously; selection uses a deterministic screen-space hit test (`graph2ScreenCoords`) because the library's raycast click proved unreliable under DPR transforms; settled traversal zoom-fits the galaxy. sigma.js canvas removed (orphaned); cosmos.gl remains in the benchmark route. Evidence: evidence/force3d-1280.png (live 17.8k graph, click-selected node with sidebar).
