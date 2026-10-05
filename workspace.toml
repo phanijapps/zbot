@@ -25,11 +25,11 @@ milestone = "Conversation-first Chat and Research shell"
 [ini-002.work]
 # Draft specs remain non-executable until their spec/plan approvals.
 queue = [
-  { path = "docs/specs/desktop-session-completion/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/desktop-session-completion/spec.md", revision = "ee35d6720922174f95a9ffc59d11b2482eecf675", parent = "docs/product/briefs/rig-hooks-session-graph.md" }, summary = "Close audited gaps in the accepted desktop session shell", needs = [] },
   { path = "docs/specs/observatory-graph-completeness/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/observatory-graph-completeness/spec.md", revision = "ee35d6720922174f95a9ffc59d11b2482eecf675", parent = "docs/product/briefs/rig-hooks-session-graph.md" }, summary = "Explore and search beyond one graph page with measured styled UX", needs = [] },
 ]
 active = [
   { path = "docs/specs/desktop-session-shell/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/desktop-session-shell/spec.md" }, summary = "Shared Chat and Research conversation shell with truthful session details and direct Memory and Observatory access", needs = [] },
+  { path = "docs/specs/desktop-session-completion/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/desktop-session-completion/spec.md", revision = "ee35d6720922174f95a9ffc59d11b2482eecf675", parent = "docs/product/briefs/rig-hooks-session-graph.md" }, summary = "Close audited gaps in the accepted desktop session shell", needs = [] },
 ]
 shipped = [
   { path = "docs/specs/external-hooks/spec.md", kind = "spec", source = { mode = "repo-origin", ref = "docs/specs/external-hooks/spec.md", revision = "ee35d6720922174f95a9ffc59d11b2482eecf675", parent = "docs/product/briefs/rig-hooks-session-graph.md" }, summary = "Execute vault-file external hooks using bounded versioned JSON", needs = [{ type = "local", kind = "spec", path = "docs/specs/rig-043-migration/spec.md" }] },
@@ -51,15 +51,30 @@ open = [
   # intent-output-fallback, intent-rig-preflight, ollama-intent-json-fallback,
   # and 'ward' in ward-search-dedup. Repair those source references separately.
   { slug = "pre-existing-intent-ward-traceability", source = "pre-flight/2026-10-04-external-hooks" },
-  # Full rendered /session and /session/:id HTML validation (standard,a11y)
-  # reports 14 existing implicit-button/native-element/text-content violations.
-  # HEAD ChatInput/DesktopRail/SessionShell retain the same offending markup;
-  # new Activity subtree passes. Finish shell accessibility in desktop-session-completion.
-  { slug = "pre-existing-session-shell-html-validation", source = "pre-flight/2026-10-04-external-hooks" },
+  # Shell rendered-HTML validation (standard,a11y) shipped clean in desktop-session-completion
+  # T3 (0 violations on /session and /session/:id) — slug removed on ship.
   # Subsequent CI checks exposed unchanged rustls 0.23.36 TLS advisory
   # RUSTSEC-2026-0285; cargo audit --db <fresh-temp-dir> and cargo deny check fail.
   # Update the affected TLS closure with its own provider/transport regression proof.
   { slug = "pre-existing-ci-rustls-advisory", source = "pre-flight/2026-10-03-ci-recovery" },
+  # PR #278 CI security scan fails on RUSTSEC-2025-0068 (serde_yml unsound/
+  # unmaintained), pulled transitively by the external engram git dependency
+  # (engram-ingest). Develop's scan has been red since 2026-09-10; the fix
+  # belongs upstream in engram, not in this workspace.
+  { slug = "pre-existing-serde-yml-rustsec", source = "pre-flight/2026-10-04-external-hooks" },
+  # deferred (desktop-session-completion AC1): the CLI --host flag is silently
+  # overridden by settings-backed bind resolution (both directions); original
+  # shell AC13's "--host can still select a LAN bind" half awaits the owner's
+  # precedence correction or a config-only AC13 amendment. Docker entrypoint
+  # (--host 0.0.0.0) demotion on fresh volumes rides on the same decision.
+  { slug = "cli-host-bind-precedence", source = "spec/desktop-session-completion AC1" },
+  # User-reported 2026-10-04 against the LIVE bot instance (not the test
+  # harness): /session only partially styled and the Activity/Sources/Files
+  # tabs not working there. The delivered inspector work rides on PR #279
+  # (feat/desktop-session-completion), which is unmerged — the live daemon
+  # serves an older build. Re-verify on the live instance after #279 merges
+  # and the bot updates; same live-instance verification gap as the hook run.
+  { slug = "live-session-tabs-verification", source = "user-observation/2026-10-04" },
   # cargo deny check fails because services/distillation/Cargo.toml declares no
   # package license. Reconcile metadata with the existing workspace license.
   { slug = "pre-existing-distillation-license", source = "pre-flight/2026-10-03-ci-recovery" },

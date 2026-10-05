@@ -57,7 +57,13 @@ pub struct RestoreResponse {
 // HANDLERS
 // ============================================================================
 
-/// Fail closed when the gateway's effective bind address cannot be proven local.
+/// Fail closed when the gateway's effective bind address cannot be proven
+/// local. When loopback-bound, browser requests (those carrying Origin) must
+/// also address this gateway by a local Host authority (`localhost` or a
+/// loopback IP literal): under DNS rebinding a foreign hostname resolves here
+/// and the browser echoes it in both Host and Origin, so Origin↔Host equality
+/// alone cannot prove locality. Origin-less native callers are governed by the
+/// loopback bind alone, per the session-details contract.
 pub(super) struct LoopbackBind;
 
 #[axum::async_trait]
@@ -68,11 +74,13 @@ where
     type Rejection = (StatusCode, Json<HttpErrorResponse>);
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        if parts
+        let loopback_bound = parts
             .extensions
             .get::<GatewayConfig>()
-            .is_some_and(|config| config.host.is_loopback())
-        {
+            .is_some_and(|config| config.host.is_loopback());
+        let browser_origin = parts.headers.contains_key(axum::http::header::ORIGIN);
+        let local_host = !browser_origin || host_is_local(parts.headers.get(axum::http::header::HOST));
+        if loopback_bound && local_host {
             Ok(Self)
         } else {
             Err(details_error(
@@ -81,6 +89,34 @@ where
             ))
         }
     }
+}
+
+/// The Host authority's hostname must be `localhost` or a loopback IP
+/// literal. Bracketed authorities admit only an IPv6 loopback literal
+/// followed by an optional `:port` — anything else fails the locality proof.
+fn host_is_local(host: Option<&axum::http::header::HeaderValue>) -> bool {
+    let Some(value) = host.and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    if let Some(rest) = value.strip_prefix('[') {
+        let Some((token, remainder)) = rest.split_once(']') else {
+            return false;
+        };
+        if !remainder.is_empty() && !remainder.starts_with(':') {
+            return false;
+        }
+        return token
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    }
+    let hostname = match value.rsplit_once(':') {
+        Some((hostname, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => hostname,
+        _ => value,
+    };
+    hostname.eq_ignore_ascii_case("localhost")
+        || hostname
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 fn details_error(

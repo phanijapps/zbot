@@ -19,12 +19,15 @@ pub async fn get_network_info(
     State(state): State<AppState>,
 ) -> Result<Json<NetworkInfoResponse>, (StatusCode, Json<NetworkInfoResponse>)> {
     let settings = state.settings().load().map_err(|e| {
+        // The load error can embed local paths; keep the response body fixed
+        // and log the detail server-side.
+        tracing::warn!("failed to load settings for network info: {e}");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(NetworkInfoResponse {
                 success: false,
                 data: None,
-                error: Some(e),
+                error: Some("network info unavailable".to_owned()),
             }),
         )
     })?;

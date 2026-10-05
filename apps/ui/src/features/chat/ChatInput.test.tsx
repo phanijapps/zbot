@@ -267,7 +267,7 @@ describe("<ChatInput>", () => {
   it("uploads via the drop handler when files are dropped on the region", async () => {
     fetchSpy.mockResolvedValueOnce(makeUploadResponse("drop.md"));
     const { container } = render(<ChatInput onSend={vi.fn()} disabled={false} />);
-    const region = container.querySelector("[role='region']")!;
+    const region = container.querySelector("section[aria-label='Drop files here']")!;
     // jsdom's fireEvent.drop doesn't populate `dataTransfer.files` from the
     // init dictionary the way browsers do, so we hand-roll a DragEvent with
     // a working DataTransfer-shaped property.

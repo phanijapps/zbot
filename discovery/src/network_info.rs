@@ -106,7 +106,12 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
     fn cfg_default() -> DiscoveryConfig {
-        DiscoveryConfig::default()
+        // These tests exercise the LAN-enabled collection path; exposure is
+        // explicit (the shipped default is loopback/off).
+        DiscoveryConfig {
+            expose_to_lan: true,
+            ..Default::default()
+        }
     }
 
     fn enumerator_with(ifaces: Vec<Interface>) -> MockEnumerator {

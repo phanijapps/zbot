@@ -72,8 +72,10 @@ struct Args {
     #[arg(long, default_value_t = gateway::DEFAULT_HTTP_PORT)]
     http_port: u16,
 
-    /// Host address to bind to. Desktop default is loopback; pass
-    /// `--host 0.0.0.0` explicitly to expose the daemon on the LAN.
+    /// Host address to bind to. Desktop default is loopback. LAN exposure is
+    /// an explicit opt-in through settings (`network.exposeToLan` or
+    /// `network.advanced.bindHost`); at startup the settings-backed network
+    /// config resolves the effective bind host.
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
 

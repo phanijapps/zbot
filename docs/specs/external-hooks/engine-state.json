@@ -3,10 +3,10 @@
   "run_id": "29bca1d6-064f-4888-ad9e-4bd4a21f1c60",
   "feature": "external-hooks",
   "mode": "code",
-  "state": "CODE-HUMAN-GATE",
-  "last_event": "reviewers-clean",
+  "state": "DONE",
+  "last_event": "done",
   "last_event_context": null,
-  "transition_sequence": 24,
-  "last_transition_at": "2026-10-04T16:25:38Z",
-  "gate_question": "Are these changes correct and ready to merge?"
+  "transition_sequence": 25,
+  "last_transition_at": "2026-10-04T16:28:37Z",
+  "gate_question": null
 }

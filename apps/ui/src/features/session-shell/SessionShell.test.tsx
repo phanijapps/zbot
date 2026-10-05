@@ -165,4 +165,26 @@ describe("SessionShell", () => {
     expect(mocks.research).toHaveBeenCalledWith({sessionId:"sess-recent",baseRoute:"/session"});
     expect(mocks.transport.createChatSession).not.toHaveBeenCalled();
   });
+
+  it("roves the inspector tabs with arrow, Home and End keys", async () => {
+    render(<MemoryRouter><SessionShell initialSessionId="sess-1" /></MemoryRouter>);
+    const activity = await screen.findByRole("tab", {name: "Activity"});
+    activity.focus();
+    expect(document.activeElement).toBe(activity);
+    // Automatic-activation roving: arrows move focus and selection together.
+    fireEvent.keyDown(activity, {key: "ArrowRight"});
+    const sources = screen.getByRole("tab", {name: "Sources"});
+    expect(document.activeElement).toBe(sources);
+    expect(sources).toHaveAttribute("aria-selected", "true");
+    expect(sources).toHaveAttribute("tabindex", "0");
+    expect(activity).toHaveAttribute("aria-selected", "false");
+    fireEvent.keyDown(sources, {key: "ArrowRight"});
+    expect(document.activeElement).toBe(screen.getByRole("tab", {name: "Files"}));
+    fireEvent.keyDown(screen.getByRole("tab", {name: "Files"}), {key: "Home"});
+    expect(document.activeElement).toBe(activity);
+    fireEvent.keyDown(activity, {key: "End"});
+    expect(document.activeElement).toBe(screen.getByRole("tab", {name: "Files"}));
+    fireEvent.keyDown(screen.getByRole("tab", {name: "Files"}), {key: "ArrowLeft"});
+    expect(document.activeElement).toBe(screen.getByRole("tab", {name: "Sources"}));
+  });
 });

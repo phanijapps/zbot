@@ -36,7 +36,7 @@ pub struct AppSettings {
 
     /// Network / discovery configuration. New top-level block; absent in
     /// pre-v0.X settings.json files, in which case the default
-    /// (`exposeToLan: true`) applies.
+    /// (`exposeToLan: false` — loopback bind, no mDNS) applies.
     #[serde(default)]
     pub network: discovery::DiscoveryConfig,
 
@@ -982,9 +982,9 @@ mod network_settings_tests {
     use super::*;
 
     #[test]
-    fn defaults_have_expose_to_lan_true() {
+    fn defaults_have_expose_to_lan_false() {
         let s = AppSettings::default();
-        assert!(s.network.expose_to_lan);
+        assert!(!s.network.expose_to_lan);
         assert_eq!(s.network.advanced.http_port, 18791);
     }
 
@@ -996,7 +996,7 @@ mod network_settings_tests {
             "execution": {}
         }"#;
         let s: AppSettings = serde_json::from_str(json).unwrap();
-        assert!(s.network.expose_to_lan);
+        assert!(!s.network.expose_to_lan);
     }
 
     #[test]

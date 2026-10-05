@@ -9,6 +9,8 @@ import { sessionMode, type SessionMode } from "./mode";
 import { DesktopRail } from "./DesktopRail";
 import { useRecentSessions } from "./useRecentSessions";
 import { ActivityPanel } from "./ActivityPanel";
+import { SourcesPanel } from "./SourcesPanel";
+import { FilesPanel } from "./FilesPanel";
 
 export function SessionShell({ initialSessionId }: {initialSessionId?: string} = {}) {
   const { sessionId: routeSessionId } = useParams<{sessionId: string}>();
@@ -82,7 +84,7 @@ export function SessionShell({ initialSessionId }: {initialSessionId?: string} =
       onSelect={id => { setSelection(id); setNavigationOpen(false); navigate(`/session/${encodeURIComponent(id)}`); }} />
     <main className="session-shell__main">
       <header className="session-shell__header">
-        <button className="session-shell__navigation-toggle btn btn--icon-ghost" aria-label="Open navigation" aria-expanded={navigationOpen} onClick={() => setNavigationOpen(!navigationOpen)}><Menu size={18} /></button>
+        <button type="button" className="session-shell__navigation-toggle btn btn--icon-ghost" aria-label="Open navigation" aria-expanded={navigationOpen} onClick={() => setNavigationOpen(!navigationOpen)}><Menu size={18} /></button>
         <div className="session-shell__mode" role="tablist" aria-label="Conversation mode">
           {(["chat", "research"] as const).map(item => <button key={item} role="tab" type="button" disabled={locked} aria-selected={mode === item}
             onClick={() => {
@@ -94,7 +96,7 @@ export function SessionShell({ initialSessionId }: {initialSessionId?: string} =
             {item === "chat" ? "Chat" : "Research"}
           </button>)}
         </div>
-        <button className="session-shell__details-toggle btn btn--icon-ghost" aria-label="Toggle session details" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(!detailsOpen)}><PanelRight size={18} /></button>
+        <button type="button" className="session-shell__details-toggle btn btn--icon-ghost" aria-label="Toggle session details" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(!detailsOpen)}><PanelRight size={18} /></button>
       </header>
       {error && <p className="session-shell__alert" role="alert">{error}</p>}
       {loading || opening ? <p className="session-shell__hint" role="status">Opening conversation…</p>
@@ -107,7 +109,7 @@ export function SessionShell({ initialSessionId }: {initialSessionId?: string} =
     <aside className="session-shell__details" aria-label="Session details">
       <h2>Workspace</h2>
       <div className="tab-bar" role="tablist" aria-label="Session detail panels">
-        {["Activity", "Sources", "Files"].map((name, index, tabs) => <button key={name} id={`session-details-${name.toLowerCase()}`} aria-controls="session-detail-panel" tabIndex={detailTab === name ? 0 : -1}
+        {["Activity", "Sources", "Files"].map((name, index, tabs) => <button key={name} type="button" id={`session-details-${name.toLowerCase()}`} aria-controls="session-detail-panel" tabIndex={detailTab === name ? 0 : -1}
           className={`tab-bar__tab${detailTab === name ? " tab-bar__tab--active" : ""}`} role="tab" aria-selected={detailTab === name} onClick={() => setDetailTab(name)}
           onKeyDown={event => {
             const next = event.key === "ArrowRight" ? (index + 1) % tabs.length : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : undefined;
@@ -118,9 +120,10 @@ export function SessionShell({ initialSessionId }: {initialSessionId?: string} =
       </div>
       <div id="session-detail-panel" role="tabpanel" aria-labelledby={`session-details-${detailTab.toLowerCase()}`} tabIndex={0}>
         {detailTab === "Activity" ? <ActivityPanel sessionId={confirmedSessionId} active={active} />
-          : <p className="session-shell__hint">{detailTab} details will be available in the next session update.</p>}
+          : detailTab === "Sources" ? <SourcesPanel sessionId={confirmedSessionId} active={active} />
+          : <FilesPanel sessionId={confirmedSessionId} active={active} />}
       </div>
-      <button className="session-shell__mobile-close btn btn--ghost" onClick={() => setDetailsOpen(false)}>Close details</button>
+      <button type="button" className="session-shell__mobile-close btn btn--ghost" onClick={() => setDetailsOpen(false)}>Close details</button>
     </aside>
   </div>;
 }

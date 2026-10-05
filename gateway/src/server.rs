@@ -170,17 +170,8 @@ impl GatewayServer {
         // Read network settings from AppSettings (cached in SettingsService).
         // If exposeToLan changed since startup, the user must restart — this
         // read happens at boot so a stale toggle from a prior run is fine.
-        let network_cfg = match self.state.settings().load() {
-            Ok(s) => s.network,
-            Err(e) => {
-                warn!(
-                    "Failed to load settings.json for network config: {}; defaulting to LAN exposure ON",
-                    e
-                );
-                discovery::DiscoveryConfig::default()
-            }
-        };
-        let resolved_host = crate::config::resolve_bind_host(&network_cfg);
+        let network_cfg = network_config_or_default(&self.state.settings());
+        let resolved_host = effective_bind_host(&network_cfg);
         if resolved_host != self.config.host {
             info!(
                 "Bind host resolved from network settings: {} (was {})",
@@ -639,6 +630,76 @@ pub(crate) fn persist_instance_id(
     let mut current = settings.load()?;
     current.network.discovery.instance_id = Some(new_id.to_string());
     settings.save(&current)
+}
+
+/// Settings-backed network config for startup resolution. A missing settings
+/// file resolves through `AppSettings::default()` (loopback); an unreadable or
+/// corrupt file fails closed to the loopback default — the desktop posture is
+/// loopback unless LAN exposure is explicit. Extracted so startup tests
+/// execute this exact production path.
+fn network_config_or_default(settings: &gateway_services::settings::SettingsService) -> discovery::DiscoveryConfig {
+    match settings.load() {
+        Ok(s) => s.network,
+        Err(e) => {
+            warn!(
+                "Failed to load settings.json for network config: {}; failing closed to the loopback default",
+                e
+            );
+            discovery::DiscoveryConfig::default()
+        }
+    }
+}
+
+/// Effective bind host from settings-backed network config: `advanced.bindHost`
+/// when present and valid, otherwise LAN exposure only when explicitly enabled,
+/// otherwise loopback. Pure over the config; startup tests enumerate the
+/// settings states that feed it.
+fn effective_bind_host(network_cfg: &discovery::DiscoveryConfig) -> std::net::IpAddr {
+    crate::config::resolve_bind_host(network_cfg)
+}
+
+#[cfg(test)]
+mod startup_bind_tests {
+    use super::*;
+    use gateway_services::settings::SettingsService;
+    use std::net::IpAddr;
+    use tempfile::TempDir;
+
+    fn bind_host_for(service: &SettingsService) -> IpAddr {
+        effective_bind_host(&network_config_or_default(service))
+    }
+
+    #[test]
+    fn startup_states_bind_loopback_unless_lan_is_explicit() {
+        let dir = TempDir::new().unwrap();
+        let config_dir = dir.path().join("config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let settings_path = config_dir.join("settings.json");
+        let service = SettingsService::from_vault_dir(dir.path().to_path_buf());
+
+        // No settings.json at all → loopback.
+        assert!(bind_host_for(&service).is_loopback());
+
+        // Old settings.json without a network block → loopback.
+        std::fs::write(&settings_path, r#"{"tools":{},"logs":{},"execution":{}}"#).unwrap();
+        service.invalidate_cache();
+        assert!(bind_host_for(&service).is_loopback());
+
+        // Corrupt settings.json → fails closed to loopback.
+        std::fs::write(&settings_path, "{not json").unwrap();
+        service.invalidate_cache();
+        assert!(bind_host_for(&service).is_loopback());
+
+        // Explicit exposeToLan=true → LAN (0.0.0.0).
+        std::fs::write(&settings_path, r#"{"network":{"exposeToLan":true}}"#).unwrap();
+        service.invalidate_cache();
+        assert!(bind_host_for(&service).is_unspecified());
+
+        // Explicit advanced.bindHost wins over everything else.
+        std::fs::write(&settings_path, r#"{"network":{"advanced":{"bindHost":"127.0.0.2"}}}"#).unwrap();
+        service.invalidate_cache();
+        assert_eq!(bind_host_for(&service), IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 2)));
+    }
 }
 
 #[cfg(test)]

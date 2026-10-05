@@ -114,7 +114,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   }, []);
 
   return (
-    <div style={{ width: "100%" }} onDrop={handleDrop} onDragOver={handleDragOver} role="region" aria-label="Drop files here">
+    <section style={{ width: "100%" }} onDrop={handleDrop} onDragOver={handleDragOver} aria-label="Drop files here">
       {/* Pending attachment chips */}
       {attachments.length > 0 && (
         <div className="chat-input__chips">
@@ -151,12 +151,14 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
         {/* Actions positioned inside the field */}
         <div className="chat-input__actions">
           <button
+            type="button"
             className="chat-input__action-btn"
             title="Attach file"
+            aria-label="Attach file"
             onClick={() => fileInputRef.current?.click()}
             disabled={isDisabled}
           >
-            <Paperclip style={{ width: 18, height: 18 }} />
+            <Paperclip style={{ width: 18, height: 18 }} aria-hidden="true" />
           </button>
           <input
             ref={fileInputRef}
@@ -170,12 +172,14 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           />
 
           <button
+            type="button"
             className="chat-input__send"
             onClick={handleSend}
             disabled={!canSend || isDisabled}
             title="Send message"
+            aria-label="Send message"
           >
-            <ArrowUp style={{ width: 18, height: 18 }} />
+            <ArrowUp style={{ width: 18, height: 18 }} aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -190,6 +194,6 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           {uploadError}
         </div>
       )}
-    </div>
+    </section>
   );
 }

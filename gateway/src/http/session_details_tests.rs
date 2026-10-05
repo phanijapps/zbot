@@ -224,6 +224,45 @@ async fn details_allows_same_origin_browser_on_loopback() {
     response.assert_status_ok();
 }
 
+// A rebinding domain whose A record points at this loopback gateway echoes
+// itself in Host and Origin; Origin↔Host equality must not satisfy the bind
+// proof — the Host authority has to name this gateway.
+#[tokio::test]
+async fn details_rejects_rebinding_host_even_with_matching_origin() {
+    let (server, _dir, state) = setup("127.0.0.1".parse().unwrap());
+    seed_session(&state, "sess-test", "fast");
+    let denied = server
+        .get("/api/sessions/sess-test/details")
+        .add_header("host", "attacker.example:18791")
+        .add_header("origin", "http://attacker.example:18791")
+        .await;
+    denied.assert_status(StatusCode::FORBIDDEN);
+    let body: Value = denied.json();
+    assert_eq!(body["error"].as_str().unwrap(), "session details unavailable");
+
+    // Loopback-literal Host authorities (with or without port) stay usable
+    // for browser callers addressing the gateway directly; conforming-only
+    // bracketed IPv6 with a loopback literal.
+    for host in ["127.0.0.1", "127.0.0.1:18791", "localhost:18791", "[::1]:18791"] {
+        let allowed = server
+            .get("/api/sessions/sess-test/details")
+            .add_header("host", host)
+            .add_header("origin", format!("http://{host}"))
+            .await;
+        allowed.assert_status_ok();
+    }
+    // Non-conforming or foreign authorities fail the locality proof even with
+    // a matching Origin.
+    for host in ["[localhost]:18791", "[::1]attacker.example", "localhost.attacker.example", "127.0.0.1.attacker.example", "attacker.example:127.0.0.1"] {
+        let denied = server
+            .get("/api/sessions/sess-test/details")
+            .add_header("host", host)
+            .add_header("origin", format!("http://{host}"))
+            .await;
+        denied.assert_status(StatusCode::FORBIDDEN);
+    }
+}
+
 // STUB: AC12 — invalid and absent session IDs have distinct fixed statuses.
 #[tokio::test]
 async fn details_rejects_invalid_ids_and_reports_missing_sessions() {
