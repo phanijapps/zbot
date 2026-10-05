@@ -85,17 +85,18 @@ pub async fn ingest(
         .await
         .map_err(|e| (StatusCode::TOO_MANY_REQUESTS, e))?;
 
+    let chunk_defaults = ChunkOptions::default();
     let opts = ChunkOptions {
         target_tokens: req
             .chunk_opts
             .as_ref()
             .and_then(|o| o.target_tokens)
-            .unwrap_or(1000),
+            .unwrap_or(chunk_defaults.target_tokens),
         overlap_tokens: req
             .chunk_opts
             .as_ref()
             .and_then(|o| o.overlap_tokens)
-            .unwrap_or(100),
+            .unwrap_or(chunk_defaults.overlap_tokens),
     };
     let chunks = chunk_text(&req.text, opts);
     let agent_id = req.agent_id.unwrap_or_else(|| "root".to_string());
