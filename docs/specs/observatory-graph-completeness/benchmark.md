@@ -17,3 +17,8 @@ Budgets (AC5): first usable view ≤ 5000 ms; input→visible p95 ≤ 150 ms acr
 - cosmos.gl 3.4.2 **passes every AC5 budget** on the identical scene: 103 ms first view, 17 ms p95, 125 MiB peak, no mount-cycle growth.
 
 Per the spec ("pin a renderer only if the current implementation fails the criterion") and the owner's standing outcome (the full force graph must be explorable), the measured decision is to **adopt cosmos.gl as the production renderer** behind a narrow boundary that preserves selection/detail/labels/zoom/fit, with the GPU-unavailable fallback (AC7). The owner ratified adoption on 2026-10-05 ("stunning visualization"): @cosmos.gl/graph is now a production dependency behind CosmosGraphCanvas (same props boundary as the D3 canvas), with the GPU-unavailable fallback (AC7). Raw re-run measurements append to benchmark-runs.md; this file keeps the verdict.
+
+
+## Owner revision (2026-10-05, later)
+
+After living with the cosmos.gl nebula, the owner chose **sigma.js + graphology (ForceAtlas2 worker, Barnes-Hut)** as the production renderer for its label quality and stability (`go sigma js`). Nodes stream into one live graph instance — no scene rebuilds, no flicker by construction. cosmos.gl remains the measured comparison in the benchmark route. Evidence: evidence/sigma-1280.png (live 17.8k graph).
