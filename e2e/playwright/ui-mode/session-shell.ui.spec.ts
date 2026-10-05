@@ -166,7 +166,12 @@ test("knowledge layouts and all subagent states are readable at each shell band"
         });
         for (const item of activeContrasts) expect(item.contrast).toBeGreaterThanOrEqual(4.5);
         records.push({path,width,height,activeContrasts});
-      } else await expect(page.locator(".graph-node")).toHaveCount(1);
+      } else {
+        // Observatory renders on the GPU canvas (cosmos.gl): the drawable is
+        // a WebGL canvas, not per-node DOM. Assert the canvas + legend surface.
+        await expect(page.locator(".observatory__cosmos-host canvas")).toBeVisible({timeout: 20_000});
+        await expect(page.locator(".observatory__legend")).toBeVisible();
+      }
       if (width === 1100 && height === 900 && process.env.DESKTOP_AXE_SCRIPT) {
         await page.addScriptTag({path:process.env.DESKTOP_AXE_SCRIPT});
         const audit = await page.evaluate(async () => {
