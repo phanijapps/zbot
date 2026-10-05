@@ -79,8 +79,8 @@ describe("useGraphData", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.entities).toEqual([{ id: "e1" }]);
     expect(result.current.relationships).toEqual([{ id: "r1" }]);
-    expect(mockGetGraphEntities).toHaveBeenCalledWith("agent-1", { limit: 200, offset: 0 });
-    expect(mockGetGraphRelationships).toHaveBeenCalledWith("agent-1", { limit: 500, offset: 0 });
+    expect(mockGetGraphEntities).toHaveBeenCalledWith("agent-1", { limit: 1000, offset: 0 });
+    expect(mockGetGraphRelationships).toHaveBeenCalledWith("agent-1", { limit: 1000, offset: 0 });
   });
 
   it("hits /api/graph/all/* endpoints when agentId is omitted (cross-agent path)", async () => {

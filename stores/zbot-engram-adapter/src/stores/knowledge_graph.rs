@@ -1228,7 +1228,7 @@ struct RelationshipEntry {
     confidence: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RelationshipDedupKey {
     agent_id: String,
     source_entity_id: String,
@@ -2267,20 +2267,27 @@ impl KnowledgeGraphSidecar {
         &self,
         rows: Vec<RelationshipEntry>,
     ) -> GraphStoreResult<Vec<RelationshipEntry>> {
-        let mut deduped: Vec<(RelationshipDedupKey, RelationshipEntry)> = Vec::new();
+        // HashMap-indexed merge: O(n) over rows (the previous linear scan was
+        // O(n^2) with per-row key comparisons — 4.7s per page at ~5k edges).
+        let mut index: HashMap<RelationshipDedupKey, usize> = HashMap::new();
+        let mut deduped: Vec<RelationshipEntry> = Vec::new();
         for entry in rows {
             let key = self.relationship_dedup_key(&entry.relationship)?;
-            if let Some((_, existing)) = deduped.iter_mut().find(|(candidate, _)| *candidate == key)
-            {
-                existing.relationship = merge_duplicate_relationships(
-                    existing.relationship.clone(),
-                    entry.relationship,
-                );
-            } else {
-                deduped.push((key, entry));
+            match index.get(&key) {
+                Some(&position) => {
+                    let existing = &mut deduped[position];
+                    existing.relationship = merge_duplicate_relationships(
+                        existing.relationship.clone(),
+                        entry.relationship,
+                    );
+                }
+                None => {
+                    index.insert(key, deduped.len());
+                    deduped.push(entry);
+                }
             }
         }
-        Ok(deduped.into_iter().map(|(_, entry)| entry).collect())
+        Ok(deduped)
     }
 
     fn relationship_dedup_key(

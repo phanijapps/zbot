@@ -97,9 +97,10 @@ const MAX_ENTITIES = 50_000;
 const MAX_RELATIONSHIPS = 100_000;
 const MAX_SERIALIZED_BYTES = 64 * 1024 * 1024;
 
-/** Page sizes for progressive traversal. */
-const ENTITY_PAGE = 200;
-const RELATIONSHIP_PAGE = 500;
+/** Page sizes for progressive traversal (contract max is 1000; fewer,
+ * larger pages cut the sequential round-trip chain ~5x). */
+const ENTITY_PAGE = 1000;
+const RELATIONSHIP_PAGE = 1000;
 
 /** Qualified identity: agent-local IDs cannot collide across agents (AC2). */
 const qualifiedKey = (agentId: string, id: string) => `${agentId}:${id}`;
@@ -120,6 +121,7 @@ async function traversePages<T>(
   merged: Map<string, T>,
   totals: { current: number | null },
   cap: (count: number) => boolean,
+  onPage?: () => void,
 ): Promise<{ stale: boolean; capped: boolean }> {
   let offset = 0;
   let stale = false;
@@ -153,6 +155,7 @@ async function traversePages<T>(
       capped = true;
       break;
     }
+    onPage?.();
     if (page.nextOffset === null || page.nextOffset === undefined) {
       totals.current = page.total;
       break loop;
@@ -342,29 +345,42 @@ export function useGraphData(agentId?: string): GraphData {
                 nextOffset: data.next_offset ?? null,
               }));
 
-        const entityResult = await traversePages(
-          isCancelled,
-          entityPage,
-          (entity) => qualifiedKey(entity.agent_id, entity.id),
-          nextEntities,
-          entityTotals,
-          entityCap
-        );
-        staleResult = staleResult || entityResult.stale;
-        cappedResult = cappedResult || entityResult.capped;
+        // Entities and relationships page in PARALLEL (independent chains)
+        // and flush into React state per page so the graph grows visibly.
+        const flush = () => {
+          if (isCancelled()) return;
+          setEntities([...nextEntities.values()]);
+          setRelationships([...nextRelationships.values()]);
+          setEntityMap(new Map(nextEntities));
+          setRelationshipMap(new Map(nextRelationships));
+          setTotals({
+            entities: entityTotals.current ?? nextEntities.size,
+            relationships: relationshipTotals.current ?? nextRelationships.size,
+          });
+        };
 
-        if (!isCancelled()) {
-          const relationshipResult = await traversePages(
+        const [entityResult, relationshipResult] = await Promise.all([
+          traversePages(
+            isCancelled,
+            entityPage,
+            (entity) => qualifiedKey(entity.agent_id, entity.id),
+            nextEntities,
+            entityTotals,
+            entityCap,
+            flush
+          ),
+          traversePages(
             isCancelled,
             relationshipPage,
             (relationship) => qualifiedKey(relationship.agent_id, relationship.id),
             nextRelationships,
             relationshipTotals,
-            relationshipCap
-          );
-          staleResult = staleResult || relationshipResult.stale;
-          cappedResult = cappedResult || relationshipResult.capped;
-        }
+            relationshipCap,
+            flush
+          ),
+        ]);
+        staleResult = entityResult.stale || relationshipResult.stale;
+        cappedResult = entityResult.capped || relationshipResult.capped;
       } catch (err) {
         if (!isCancelled()) {
           lastError = err instanceof Error ? err.message : String(err);
