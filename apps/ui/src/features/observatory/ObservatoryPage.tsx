@@ -7,7 +7,7 @@ import { Loader2, Search, Network } from "lucide-react";
 import { getTransport } from "@/services/transport";
 import type { AgentResponse, GraphEntity } from "@/services/transport/types";
 import { useGraphData, useGraphSearch } from "./graph-hooks";
-import { GraphCanvas } from "./GraphCanvas";
+import { CosmosGraphCanvas } from "./CosmosGraphCanvas";
 import { EntityDetail } from "./EntityDetail";
 import { LearningHealthBar } from "./LearningHealthBar";
 // BeliefNetworkPanel (the 3-card detail surface) intentionally removed
@@ -224,7 +224,7 @@ export function ObservatoryPage() {
             </div>
           </div>
         ) : (
-          <GraphCanvas
+          <CosmosGraphCanvas
             entities={entities}
             relationships={relationships}
             selectedEntityId={selectedEntity?.id}

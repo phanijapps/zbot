@@ -9651,3 +9651,23 @@ button[data-slot="button"][data-variant="default"]:hover {
 .observatory__search-hit { border: 1px solid var(--border); background: var(--background); color: var(--foreground); border-radius: var(--radius-sm); padding: var(--spacing-1) var(--spacing-3); font-size: var(--text-xs); cursor: pointer; }
 .observatory__search-hit:hover { border-color: var(--primary); color: var(--primary); }
 .observatory__search-hit:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+/* Observatory — GPU graph canvas (cosmos.gl) and its truthful chrome */
+.observatory__canvas--cosmos { position: relative; min-height: 0; }
+.observatory__cosmos-host { position: absolute; inset: 0; border-radius: var(--radius-md); overflow: hidden; background: var(--background); }
+.observatory__hover-chip { position: absolute; z-index: 3; pointer-events: none; display: flex; gap: var(--spacing-2); align-items: baseline; max-width: 320px; padding: var(--spacing-1) var(--spacing-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--popover, var(--background)); box-shadow: 0 4px 16px rgb(0 0 0 / 0.12); font-size: var(--text-xs); }
+.observatory__hover-name { color: var(--foreground); font-weight: 550; overflow-wrap: anywhere; }
+.observatory__hover-type { color: var(--muted-foreground); text-transform: capitalize; }
+.observatory__legend { position: absolute; z-index: 2; left: var(--spacing-3); bottom: var(--spacing-3); display: flex; flex-wrap: wrap; gap: var(--spacing-2); max-width: calc(100% - 120px); padding: var(--spacing-2) var(--spacing-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--background) 88%, transparent); backdrop-filter: blur(4px); font-size: var(--text-xs); }
+.observatory__legend-entry { display: inline-flex; gap: var(--spacing-1); align-items: center; color: var(--muted-foreground); }
+.observatory__legend-count { color: var(--subtle-foreground); }
+.observatory__legend-dot, .observatory__hover-type::before { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.observatory__legend-dot { display: inline-block; }
+.observatory__legend-dot[data-type="concept"], .observatory__hover-type[data-type="concept"]::before { background: #a75935; }
+.observatory__legend-dot[data-type="tool"], .observatory__hover-type[data-type="tool"]::before { background: #566171; }
+.observatory__legend-dot[data-type="person"], .observatory__hover-type[data-type="person"]::before { background: #3f6a8a; }
+.observatory__legend-dot[data-type="organization"], .observatory__hover-type[data-type="organization"]::before { background: #78588c; }
+.observatory__legend-dot[data-type="location"], .observatory__hover-type[data-type="location"]::before { background: #4e8062; }
+.observatory__legend-dot[data-type="event"], .observatory__hover-type[data-type="event"]::before { background: #b07a2c; }
+.observatory__legend-dot[data-type="resource"], .observatory__hover-type[data-type="resource"]::before { background: #8c624a; }
+.observatory__fit { position: absolute; z-index: 2; right: var(--spacing-3); bottom: var(--spacing-3); }
+.observatory__canvas--fallback { display: flex; flex-direction: column; gap: var(--spacing-2); align-items: center; justify-content: center; color: var(--muted-foreground); font-size: var(--text-sm); padding: var(--spacing-6); text-align: center; }

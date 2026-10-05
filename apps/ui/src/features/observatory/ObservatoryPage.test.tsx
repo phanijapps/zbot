@@ -283,21 +283,10 @@ describe("ObservatoryPage — inert display data", () => {
       first_seen_at: "2026-10-04T00:00:00Z",
       last_seen_at: "2026-10-04T00:00:00Z",
     };
-    mockUseGraphData.mockReturnValue({
-      entities: [hostile],
-      relationships: [],
-      loading: false,
-      error: null,
-      refetch: vi.fn(),
-      totals: { entities: 1, relationships: 0 },
-      complete: true,
-      stale: false,
-      capped: false,
-      loopbackOnly: false,
-      unresolvedEndpoints: 0,
-    });
-    render(<ObservatoryPage />);
+    const { EntityDetail } = await import("./EntityDetail");
+    render(<EntityDetail entity={hostile} onClose={vi.fn()} />);
     expect(screen.getByText(/alert\(1\)/)).toBeInTheDocument();
+    expect(screen.getByText(/<script>alert\(2\)<\/script>/)).toBeInTheDocument();
     expect(document.querySelector("img[src='x']")).toBeNull();
     expect(document.querySelector("script")).toBeNull();
   });
