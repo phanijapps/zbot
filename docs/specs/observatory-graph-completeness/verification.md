@@ -35,3 +35,12 @@ Resume at CODE-IMPLEMENTATION wave 3: progressive UI loading + search (the red s
 ### T4 — renderer benchmark (MEASURED; swap pending owner ratification)
 - Dev-only benchmark route (never in the production bundle) with a seeded 17k/5k synthetic scene; Playwright harness persists benchmark.md (host/CPU/browser recorded).
 - Verdict: D3 fails AC5 input latency (p95 1687ms vs 150ms); cosmos.gl 3.4.2 passes everything (103ms first view, 17ms p95, 125MiB, no growth). Production adoption of cosmos.gl behind a narrow boundary (selection/detail/labels/zoom/fit preserved, GPU-unavailable fallback per AC7) awaits the owner's ratification of the dependency-tier change; see benchmark.md.
+
+### T4 — renderer + styling (SHIPPED, waves 4) and implementation-review record
+- cosmos.gl 3.4.2 adopted as the production renderer (owner ratified "stunning visualization" 2026-10-05) behind the same props boundary: type palette, mention-driven sizes, selected-neighborhood emphasis with dimmed context, hover chips, legend with counts, fit-view, reduced-motion (simulation paused), GPU-unavailable fallback retaining scoped search/inspection. Real-browser smoke seeds the sidecar and captures 1280/390px evidence (evidence/observatory-cosmos-*.png).
+- Implementation review: 5 adversarial + security rounds to Clean. Applied: the store-deadlock fix (probe-proven; regression test graph_deadlock_regression.rs), next_offset advances by returned rows under the byte budget, chunker UTF-8 boundary snapping (CJK regression test), the full guard rollout across the graph/distillation/session-mutation surfaces with a capped+refreshing denial throttle, bounded ingest chunk_opts with unified defaults, subgraph truncation flags, qualified selection emphasis, failed-search truthfulness, benchmark artifact wording. Deferred with anchors: graph-search-sql-and-dedup-scale, graph-progressive-loading-polish, graph-stress-and-latepage-evidence (AC5 stress clause).
+
+### Runs (final)
+- cargo test (gateway, gateway-execution, knowledge-graph, zbot-engram-adapter, discovery, daemon): green except the documented pre-existing saved_surfaces baseline.
+- apps/ui: tsc clean; vitest 1478 passed; npm run build clean.
+- e2e: observatory smoke + session-shell band suites green (fresh-vault, local-only); benchmark harness persists raw runs to benchmark-runs.md.

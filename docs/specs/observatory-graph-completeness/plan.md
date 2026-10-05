@@ -1,7 +1,7 @@
 # Plan: Complete and styled graph exploration
 
 - **Spec:** [`spec.md`](spec.md)
-- **Status:** Executing
+- **Status:** Done
 
 ## Approach
 
