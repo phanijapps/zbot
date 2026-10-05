@@ -18,6 +18,8 @@ interface CosmosGraphCanvasProps {
   /** The selected entity's agent — required for qualified emphasis (AC2). */
   selectedEntityAgentId?: string;
   highlightTerm?: string;
+  /** False while pages are still streaming; the final rebuild always runs. */
+  settled: boolean;
   onEntitySelect: (entity: GraphEntity) => void;
 }
 
@@ -48,11 +50,12 @@ function tokenRgb(name: string, fallback: [number, number, number]): [number, nu
   return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
 }
 
-export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, selectedEntityAgentId, highlightTerm, onEntitySelect }: CosmosGraphCanvasProps) {
+export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, selectedEntityAgentId, highlightTerm, settled, onEntitySelect }: CosmosGraphCanvasProps) {
   const host = useRef<HTMLDivElement | null>(null);
   const graphRef = useRef<{ fitView(): void; destroy(): void; setPointColors(c: Float32Array): void; setPointSizes(s: Float32Array): void; setLinkColors(c: Float32Array): void; setLinkWidths(w: Float32Array): void; pause(): void; unpause(): void } | null>(null);
   const [gpuUnavailable, setGpuUnavailable] = useState(false);
   const [sceneVersion, setSceneVersion] = useState(0);
+  const lastRebuildRef = useRef(0);
   const [hover, setHover] = useState<{ x: number; y: number; entity: GraphEntity } | null>(null);
   const entitiesRef = useRef(entities);
   entitiesRef.current = entities;
@@ -78,36 +81,18 @@ export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, s
   }, [relationships, indexById]);
 
   // Scene construction + styling updates whenever data or selection changes.
+  // Destroy/recreate is the only verified-correct path for changing point
+  // counts; while pages stream in, rebuild at most every 1.5s so the growth
+  // stays visible without a full rebuild per page. The settled flip always
+  // triggers the final rebuild.
   useEffect(() => {
+    if (!settled && Date.now() - lastRebuildRef.current < 1500) return;
+    lastRebuildRef.current = Date.now();
     let disposed = false;
     let graph: import("@cosmos.gl/graph").Graph | null = null;
     void (async () => {
       const element = host.current;
       if (!element) return;
-      // Incremental update: once a scene exists, progressive page flushes
-      // extend positions/links in place instead of destroy-and-recreate
-      // (which would restart the simulation and flicker on every page).
-      const existing = graphRef.current as
-        | { setPointPositions(p: Float32Array): void; setLinks(l: Float32Array): void; fitView(): void }
-        | null;
-      if (existing) {
-        const positions = new Float32Array(entities.length * 2);
-        const random = (seed => () => ((seed = (seed * 16807) % 2147483647) / 2147483647))(42);
-        for (let index = 0; index < positions.length; index += 1) positions[index] = random() * 1000;
-        existing.setPointPositions(positions);
-        const links = new Float32Array(relationships.length * 2);
-        let linkCount = 0;
-        for (const relationship of relationships) {
-          const source = indexById.get(`${relationship.agent_id}:${relationship.source_entity_id}`);
-          const target = indexById.get(`${relationship.agent_id}:${relationship.target_entity_id}`);
-          if (source === undefined || target === undefined) continue;
-          links[linkCount * 2] = source;
-          links[linkCount * 2 + 1] = target;
-          linkCount += 1;
-        }
-        existing.setLinks(links.subarray(0, linkCount * 2));
-        return;
-      }
       const { Graph } = await import("@cosmos.gl/graph");
       if (disposed) return;
       try {
@@ -131,8 +116,16 @@ export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, s
         setSceneVersion(value => value + 1); // styling pass runs once the scene exists
 
         const positions = new Float32Array(entities.length * 2);
-        const random = (seed => () => ((seed = (seed * 16807) % 2147483647) / 2147483647))(42);
-        for (let index = 0; index < positions.length; index += 1) positions[index] = random() * 1000;
+        // Deterministic per-index placement: rebuilds keep every node where
+        // it was (a re-seeded random would teleport the whole graph).
+        const coord = (index: number, salt: number) => {
+          const value = Math.sin(index * 12.9898 + salt * 78.233) * 43758.5453;
+          return (value - Math.floor(value)) * 1000;
+        };
+        for (let index = 0; index < entities.length; index += 1) {
+          positions[index * 2] = coord(index, 1);
+          positions[index * 2 + 1] = coord(index, 2);
+        }
         graph.setPointPositions(positions);
 
         const links = new Float32Array(relationships.length * 2);
@@ -147,6 +140,10 @@ export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, s
         }
         graph.setLinks(links.subarray(0, linkCount * 2));
         graph.fitView();
+        // v3's async engine does not start its render loop until render()
+        // is called explicitly (without it: device ready, canvas never
+        // resizes, nothing draws).
+        graph.render();
       } catch {
         // ready-reject after a successful construction still owns WebGL
         // resources — destroy the instance instead of leaking the context.
@@ -163,7 +160,7 @@ export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, s
     // Rebuild the scene on data identity (not length): a same-length content
     // swap must re-index nodes, links and the click/hover mapping.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entities, relationships]);
+  }, [entities, relationships, settled]);
 
   // Styling pass: type colors, mention-driven sizes, selection emphasis.
   useEffect(() => {

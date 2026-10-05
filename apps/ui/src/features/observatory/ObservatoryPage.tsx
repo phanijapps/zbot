@@ -237,6 +237,7 @@ export function ObservatoryPage() {
             relationships={relationships}
             selectedEntityId={selectedEntity?.id}
             selectedEntityAgentId={selectedEntity?.agent_id}
+            settled={!loading && !stale}
             highlightTerm={searchTerm}
             onEntitySelect={handleEntitySelect}
           />

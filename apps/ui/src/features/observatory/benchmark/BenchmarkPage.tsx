@@ -173,6 +173,7 @@ export function BenchmarkPage() {
         graph.setPointPositions(scene.positions);
         graph.setLinks(scene.links);
         graph.fitView();
+        graph.render();
         await new Promise<void>(resolve => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
         });
