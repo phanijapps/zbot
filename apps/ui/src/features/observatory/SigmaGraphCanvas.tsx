@@ -53,14 +53,11 @@ export function SigmaGraphCanvas({ entities, relationships, selectedEntityId, se
   const layoutRef = useRef<FA2Layout | null>(null);
   const entitiesRef = useRef(entities);
   entitiesRef.current = entities;
+  // Live key->entity map for event handlers (the mount effect closes over
+  // refs, never over per-render maps — that closure was the click bug).
+  const entityByKeyRef = useRef(new Map<string, GraphEntity>());
   const [webglUnavailable, setWebglUnavailable] = useState(false);
   const reducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-
-  const indexById = useMemo(() => {
-    const map = new Map<string, number>();
-    entities.forEach((entity, index) => map.set(`${entity.agent_id}:${entity.id}`, index));
-    return map;
-  }, [entities]);
 
   // One Sigma instance for the component's lifetime; nodes/edges STREAM in.
   useEffect(() => {
@@ -80,7 +77,7 @@ export function SigmaGraphCanvas({ entities, relationships, selectedEntityId, se
         zIndex: true,
       });
       renderer.on("clickNode", ({ node }) => {
-        const entity = entitiesRef.current[indexById.get(node) ?? -1];
+        const entity = entityByKeyRef.current.get(node);
         if (entity) onEntitySelect(entity);
       });
     } catch {
@@ -121,9 +118,11 @@ export function SigmaGraphCanvas({ entities, relationships, selectedEntityId, se
     const renderer = rendererRef.current;
     if (!graph || !renderer || webglUnavailable) return;
 
+    const entityByKey = entityByKeyRef.current;
     for (let index = 0; index < entities.length; index += 1) {
       const entity = entities[index];
       const key = `${entity.agent_id}:${entity.id}`;
+      entityByKey.set(key, entity);
       if (!graph.hasNode(key)) {
         graph.addNode(key, {
           label: entity.name,
@@ -172,7 +171,7 @@ export function SigmaGraphCanvas({ entities, relationships, selectedEntityId, se
     }
 
     renderer.setSetting("nodeReducer", (node, data) => {
-      if (!selectedKey) {
+      if (!selectedKey || !graph.hasNode(node)) {
         if (highlightTerm && !String(data.label ?? "").toLowerCase().includes(highlightTerm.toLowerCase())) {
           return { ...data, color: "rgba(140,140,140,0.25)", zIndex: 0 };
         }
@@ -184,11 +183,17 @@ export function SigmaGraphCanvas({ entities, relationships, selectedEntityId, se
     });
     renderer.setSetting("edgeReducer", (edge, data) => {
       if (!selectedKey) return data;
-      const [source] = graph.extremities(edge);
-      const touches = source === selectedKey || graph.opposite(edge, source) === selectedKey;
-      return touches
-        ? { ...data, color: "#a75935", size: 1.6 }
-        : { ...data, color: "rgba(140,140,140,0.08)", hidden: graph.size > 4000 ? true : false };
+      try {
+        // extremities only — opposite()/lookups can throw when the streaming
+        // effect mutates the graph between the render iteration and here.
+        const [source, target] = graph.extremities(edge);
+        const touches = source === selectedKey || target === selectedKey;
+        return touches
+          ? { ...data, color: "#a75935", size: 1.6 }
+          : { ...data, color: "rgba(140,140,140,0.08)", hidden: graph.order > 4000 };
+      } catch {
+        return data;
+      }
     });
     renderer.refresh();
     return () => {

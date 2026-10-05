@@ -932,30 +932,11 @@ impl KnowledgeGraphStore for EngramKnowledgeGraphStore {
         limit: usize,
         offset: usize,
     ) -> GraphStoreResult<EntityPage> {
-        let needle = query.to_lowercase();
-        let rows = self
+        let (rows, total) = self
             .sidecar
-            .list_entity_entries(Some(agent_id), entity_type, usize::MAX, 0)?;
-        let mut matched: Vec<_> = rows
-            .into_iter()
-            .filter(|entry| entry.entity.name.to_lowercase().contains(&needle))
-            .collect();
-        matched.sort_by(|left, right| {
-            right
-                .entity
-                .mention_count
-                .cmp(&left.entity.mention_count)
-                .then_with(|| left.entity.agent_id.cmp(&right.entity.agent_id))
-                .then_with(|| left.entity.id.cmp(&right.entity.id))
-        });
-        let total = matched.len();
+            .search_entity_entries_paged(query, Some(agent_id), entity_type, limit, offset)?;
         Ok(EntityPage {
-            entities: matched
-                .into_iter()
-                .skip(offset)
-                .take(limit.max(1))
-                .map(|entry| entry.entity)
-                .collect(),
+            entities: rows.into_iter().map(|entry| entry.entity).collect(),
             total,
         })
     }
@@ -967,30 +948,11 @@ impl KnowledgeGraphStore for EngramKnowledgeGraphStore {
         limit: usize,
         offset: usize,
     ) -> GraphStoreResult<EntityPage> {
-        let needle = query.to_lowercase();
-        let rows = self
+        let (rows, total) = self
             .sidecar
-            .list_entity_entries(None, entity_type, usize::MAX, 0)?;
-        let mut matched: Vec<_> = rows
-            .into_iter()
-            .filter(|entry| entry.entity.name.to_lowercase().contains(&needle))
-            .collect();
-        matched.sort_by(|left, right| {
-            right
-                .entity
-                .mention_count
-                .cmp(&left.entity.mention_count)
-                .then_with(|| left.entity.agent_id.cmp(&right.entity.agent_id))
-                .then_with(|| left.entity.id.cmp(&right.entity.id))
-        });
-        let total = matched.len();
+            .search_entity_entries_paged(query, None, entity_type, limit, offset)?;
         Ok(EntityPage {
-            entities: matched
-                .into_iter()
-                .skip(offset)
-                .take(limit.max(1))
-                .map(|entry| entry.entity)
-                .collect(),
+            entities: rows.into_iter().map(|entry| entry.entity).collect(),
             total,
         })
     }
@@ -3054,6 +3016,63 @@ impl KnowledgeGraphSidecar {
             .query_row(&sql, params_refs.as_slice(), |row| row.get::<_, i64>(0))
             .map_err(to_backend)?;
         Ok(count.max(0) as usize)
+    }
+
+    /// SQL-side name search (exploration contract AC4): parameterized
+    /// literal-contains over the persisted name with the windowed exact
+    /// total — no full-table decode, no embedding JSON parsing. LIKE
+    /// wildcards in the needle are escaped so the match is literal.
+    fn search_entity_entries_paged(
+        &self,
+        needle: &str,
+        agent_id: Option<&str>,
+        entity_type: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GraphStoreResult<(Vec<EntityEntry>, usize)> {
+        let connection = self.lock()?;
+        // instr() is a literal contains() — no LIKE wildcards to escape.
+        let pattern = needle.to_lowercase();
+        let mut conditions = vec!["pruned = 0".to_string(), "instr(lower(name), ?1) > 0".to_string()];
+        let mut param_values: Vec<Box<dyn ToSql>> = Vec::new();
+        param_values.push(Box::new(pattern));
+        if let Some(agent_id) = agent_id {
+            conditions.push(format!(
+                "(agent_id = ?{} OR agent_id = '__global__')",
+                param_values.len() + 1
+            ));
+            param_values.push(Box::new(agent_id.to_string()));
+        }
+        if let Some(entity_type) = entity_type {
+            conditions.push(format!("entity_type = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(entity_type.to_string()));
+        }
+        let sql = format!(
+            "SELECT entity_json, NULL, NULL, COUNT(*) OVER ()
+             FROM kg_entities
+             WHERE {}
+             ORDER BY mention_count DESC, agent_id, id
+             LIMIT ?{} OFFSET ?{}",
+            conditions.join(" AND "),
+            param_values.len() + 1,
+            param_values.len() + 2
+        );
+        param_values.push(Box::new(limit.max(1) as i64));
+        param_values.push(Box::new(offset as i64));
+        let params_refs: Vec<&dyn ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let mut statement = connection.prepare(&sql).map_err(to_backend)?;
+        let rows = statement
+            .query_map(params_refs.as_slice(), |row| {
+                Ok((decode_entity_entry(row)?, row.get::<_, i64>(3)?))
+            })
+            .map_err(to_backend)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(to_backend)?;
+        let total = match rows.last() {
+            Some((_, total)) => (*total).max(0) as usize,
+            None => 0,
+        };
+        Ok((rows.into_iter().map(|(entry, _)| entry).collect(), total))
     }
 
     fn connectivity_strength(
