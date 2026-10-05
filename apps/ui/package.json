@@ -39,7 +39,6 @@
     "@react-three/fiber": "^9.6.1",
     "@tailwindcss/vite": "^4.1.18",
     "@uiw/react-md-editor": "^4.0.11",
-    "3d-force-graph": "^1.80.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "d3-force": "^3.0.0",
