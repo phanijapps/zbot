@@ -26,3 +26,12 @@ No acceptance criterion is marked complete by approval alone. Runtime/provider s
 
 ### T3/T4 — pending (wave 3/4)
 Resume at CODE-IMPLEMENTATION wave 3: progressive UI loading + search (the red stub in graph-hooks.test.ts is the entry point), then the renderer benchmark + styling/a11y. Red stub file references and the plan's Tests lists carry the full obligations.
+
+### T3 — UI progressive loading + search (SHIPPED, wave 3)
+- useGraphData traverses by next_offset to exhaustion, merges by qualified (agent_id,id) identity (no duplicates), cancels on scope change, and exposes truthful state: live totals, stale (changed totals / no-progress page) with refresh offer, admission caps (50k/100k/64MiB) with a partial notice, loopback-only denial, unresolved endpoints counted (never silently dropped).
+- useGraphSearch hits the server search endpoints (per-agent + aggregate) so results reach beyond the loaded pages; selecting a hit opens the detail panel.
+- ObservatoryPage renders loaded/available counts and every partial state; graph strings render inert (markup fixture test). 18 hook tests + 13 page tests; full UI suite 1474 passed; build clean.
+
+### T4 — renderer benchmark (MEASURED; swap pending owner ratification)
+- Dev-only benchmark route (never in the production bundle) with a seeded 17k/5k synthetic scene; Playwright harness persists benchmark.md (host/CPU/browser recorded).
+- Verdict: D3 fails AC5 input latency (p95 1687ms vs 150ms); cosmos.gl 3.4.2 passes everything (103ms first view, 17ms p95, 125MiB, no growth). Production adoption of cosmos.gl behind a narrow boundary (selection/detail/labels/zoom/fit preserved, GPU-unavailable fallback per AC7) awaits the owner's ratification of the dependency-tier change; see benchmark.md.
