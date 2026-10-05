@@ -470,11 +470,19 @@ pub async fn get_entity_subgraph(
         return Err(bad_request("max_hops must be between 1 and 4"));
     }
     let kg_store = require_kg_store(&state)?;
-    kg_store
+    let subgraph = kg_store
         .get_subgraph(normalize_agent_id(&agent_id), &entity_id, query.max_hops)
         .await
-        .map(|subgraph| Json(SubgraphResponse::from(subgraph)))
-        .map_err(store_err_to_http)
+        .map_err(store_err_to_http)?;
+    let response = SubgraphResponse::from(subgraph);
+    // Subgraph reads are capped like every other exploration response: the
+    // byte budget bounds a hub-centered 4-hop traversal on a large store.
+    Ok(Json(SubgraphResponse {
+        entities: enforce_page_budget(response.entities),
+        relationships: enforce_page_budget(response.relationships),
+        center: response.center,
+        max_hops: response.max_hops,
+    }))
 }
 
 /// GET /api/graph/:agent_id/search

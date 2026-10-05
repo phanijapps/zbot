@@ -75,6 +75,17 @@ open = [
   # serves an older build. Re-verify on the live instance after #279 merges
   # and the bot updates; same live-instance verification gap as the hook run.
   { slug = "live-session-tabs-verification", source = "user-observation/2026-10-04" },
+  # deferred (observatory-graph-completeness review): push name-contains search into
+  # parameterized SQL (current search decodes the full entity table per request) and
+  # persist the deduplicated relationship order so paged reads stop re-deduplicating
+  # O(total) rows per page; both are scale/perf hardening, correctness is covered.
+  { slug = "graph-search-sql-and-dedup-scale", source = "spec/observatory-graph-completeness review C11/Sec-C3" },
+  # deferred (observatory review): per-page progressive commit + incremental byte budget +
+  # abort-signal threading for scope changes (current traversal commits once, cooperatively).
+  { slug = "graph-progressive-loading-polish", source = "spec/observatory-graph-completeness review N15/N16/N18" },
+  # deferred (observatory review): 50000-entity stress fixture reporting supported limits,
+  # late-page e2e load-and-inspect journey, and per-feature contrast measurements.
+  { slug = "graph-stress-and-latepage-evidence", source = "spec/observatory-graph-completeness review C10" },
   # cargo deny check fails because services/distillation/Cargo.toml declares no
   # package license. Reconcile metadata with the existing workspace license.
   { slug = "pre-existing-distillation-license", source = "pre-flight/2026-10-03-ci-recovery" },
