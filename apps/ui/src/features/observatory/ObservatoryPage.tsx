@@ -6,7 +6,7 @@ import { useState, useEffect } from "react";
 import { Loader2, Search, Network } from "lucide-react";
 import { getTransport } from "@/services/transport";
 import type { AgentResponse, GraphEntity } from "@/services/transport/types";
-import { useGraphData } from "./graph-hooks";
+import { useGraphData, useGraphSearch } from "./graph-hooks";
 import { GraphCanvas } from "./GraphCanvas";
 import { EntityDetail } from "./EntityDetail";
 import { LearningHealthBar } from "./LearningHealthBar";
@@ -43,11 +43,17 @@ export function ObservatoryPage() {
   }, []);
 
   // Graph data from hook
-  const { entities, relationships, loading, error, refetch } = useGraphData(agentFilter);
+  const {
+    entities, relationships, loading, error, refetch,
+    totals, complete, stale, capped, loopbackOnly, unresolvedEndpoints,
+  } = useGraphData(agentFilter);
 
   const handleEntitySelect = (entity: GraphEntity) => {
     setSelectedEntity(entity);
   };
+
+  // Server-backed search: reaches entities beyond the loaded pages (AC4).
+  const graphSearch = useGraphSearch(agentFilter, handleEntitySelect);
 
   const handleCloseDetail = () => {
     setSelectedEntity(null);
@@ -95,7 +101,10 @@ export function ObservatoryPage() {
               className="action-bar__search-input"
               placeholder="Highlight entities..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                graphSearch.setQuery(e.target.value);
+              }}
             />
           </div>
           <button
@@ -107,6 +116,56 @@ export function ObservatoryPage() {
           </button>
         </div>
       </div>
+
+      {/* Truthful exploration status (spec AC3) */}
+      <div className="observatory__status" role="status">
+        <span>
+          {entities.length.toLocaleString()} / {totals.entities.toLocaleString()} entities ·{" "}
+          {relationships.length.toLocaleString()} / {totals.relationships.toLocaleString()} relationships
+        </span>
+        {loading && <span className="observatory__status-flag">loading…</span>}
+        {!loading && complete && <span className="observatory__status-flag">complete</span>}
+        {stale && (
+          <span className="observatory__status-flag observatory__status-flag--warn">
+            dataset changed during load
+            <button type="button" className="btn btn--ghost btn--sm" onClick={refetch}>Refresh now</button>
+          </span>
+        )}
+        {capped && (
+          <span className="observatory__status-flag observatory__status-flag--warn">
+            showing the first {entities.length.toLocaleString()} — use search to inspect the rest
+          </span>
+        )}
+        {unresolvedEndpoints > 0 && (
+          <span className="observatory__status-flag">
+            {unresolvedEndpoints.toLocaleString()} edge{unresolvedEndpoints === 1 ? "" : "s"} reference unloaded entities
+          </span>
+        )}
+        {loopbackOnly && (
+          <span className="observatory__status-flag observatory__status-flag--warn">
+            the knowledge graph is available on this device only (loopback); LAN access is disabled for graph reads
+          </span>
+        )}
+      </div>
+
+      {/* Server search results (beyond loaded pages) */}
+      {graphSearch.query && (graphSearch.results.length > 0 || graphSearch.searched) && (
+        <div className="observatory__search-results" aria-label="Server search results">
+          {graphSearch.results.map((hit: GraphEntity) => (
+            <button
+              type="button"
+              key={`${hit.agent_id}:${hit.id}`}
+              className="observatory__search-hit"
+              onClick={() => graphSearch.open(hit)}
+            >
+              {hit.name}
+            </button>
+          ))}
+          {graphSearch.results.length === 0 && graphSearch.searched && (
+            <span className="observatory__status-flag">no server matches for “{graphSearch.query}”</span>
+          )}
+        </div>
+      )}
 
       {/* Main area */}
       <div className="observatory__main">

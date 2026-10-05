@@ -78,8 +78,8 @@ describe("useGraphData", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.entities).toEqual([{ id: "e1" }]);
     expect(result.current.relationships).toEqual([{ id: "r1" }]);
-    expect(mockGetGraphEntities).toHaveBeenCalledWith("agent-1", { limit: 200 });
-    expect(mockGetGraphRelationships).toHaveBeenCalledWith("agent-1", { limit: 500 });
+    expect(mockGetGraphEntities).toHaveBeenCalledWith("agent-1", { limit: 200, offset: 0 });
+    expect(mockGetGraphRelationships).toHaveBeenCalledWith("agent-1", { limit: 500, offset: 0 });
   });
 
   it("hits /api/graph/all/* endpoints when agentId is omitted (cross-agent path)", async () => {
@@ -339,5 +339,71 @@ describe("useGraphData progressive paging (stub)", () => {
       "entity-1", "entity-2", "entity-3", "entity-4",
     ]);
     expect(result.current.error).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC1/AC3 — truthful traversal states.
+// ---------------------------------------------------------------------------
+describe("useGraphData truthful states", () => {
+  const page = (offset: number, rows: Array<{id: string}>, total: number) => ({
+    success: true,
+    data: {
+      entities: rows.map(row => ({ id: row.id, agent_id: "agent-a", name: row.id, entity_type: "Concept" })),
+      total,
+      next_offset: offset + rows.length < total ? offset + rows.length : null,
+    },
+  });
+
+  it("marks traversal stale when totals change between pages (live view)", async () => {
+    mockGetGraphEntities
+      .mockImplementationOnce(async () => page(0, [{id: "e1"}, {id: "e2"}], 4))
+      .mockImplementationOnce(async () => page(2, [{id: "e3"}, {id: "e4"}], 5));
+    mockGetGraphRelationships.mockResolvedValue({ success: true, data: { relationships: [], total: 0, next_offset: null } });
+    const { result } = renderHook(() => useGraphData("agent-a"));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.stale).toBe(true);
+    expect(result.current.complete).toBe(false);
+    expect(result.current.totals.entities).toBe(5);
+  });
+
+  it("marks traversal stale on a no-progress page (all rows already merged)", async () => {
+    mockGetGraphEntities
+      .mockImplementationOnce(async () => page(0, [{id: "e1"}, {id: "e2"}], 4))
+      .mockImplementationOnce(async () => page(2, [{id: "e1"}, {id: "e2"}], 4));
+    mockGetGraphRelationships.mockResolvedValue({ success: true, data: { relationships: [], total: 0, next_offset: null } });
+    const { result } = renderHook(() => useGraphData("agent-a"));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.stale).toBe(true);
+    expect(result.current.entities).toHaveLength(2);
+  });
+
+  it("counts unresolved relationship endpoints instead of hiding them", async () => {
+    mockGetGraphEntities.mockResolvedValue(page(0, [{id: "e1"}], 1));
+    mockGetGraphRelationships.mockResolvedValue({
+      success: true,
+      data: {
+        relationships: [
+          { id: "r1", agent_id: "agent-a", source_entity_id: "e1", target_entity_id: "missing", relationship_type: "related_to" },
+          { id: "r2", agent_id: "agent-b", source_entity_id: "x", target_entity_id: "y", relationship_type: "related_to" },
+        ],
+        total: 2,
+        next_offset: null,
+      },
+    });
+    const { result } = renderHook(() => useGraphData("agent-a"));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.unresolvedEndpoints).toBe(2);
+  });
+
+  it("reports the loopback-only denial state on graph 403s", async () => {
+    const denial = new Error("session details unavailable") as Error & { status?: number };
+    denial.status = 403;
+    mockGetGraphEntities.mockRejectedValue(denial);
+    mockGetGraphRelationships.mockResolvedValue({ success: true, data: { relationships: [], total: 0, next_offset: null } });
+    const { result } = renderHook(() => useGraphData("agent-a"));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.loopbackOnly).toBe(true);
+    expect(result.current.complete).toBe(false);
   });
 });

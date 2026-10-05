@@ -9644,3 +9644,10 @@ button[data-slot="button"][data-variant="default"]:hover {
   .attention-panel,
   .attention-panel__body { overflow: visible; }
 }
+.observatory__status { display: flex; flex-wrap: wrap; gap: var(--spacing-3); align-items: center; padding: var(--spacing-2) var(--spacing-4); border-bottom: 1px solid var(--border); color: var(--muted-foreground); font-size: var(--text-xs); }
+.observatory__status-flag { display: inline-flex; align-items: center; gap: var(--spacing-2); padding: 0 var(--spacing-2); border-radius: var(--radius-sm); }
+.observatory__status-flag--warn { color: var(--foreground); background: color-mix(in srgb, var(--primary) 12%, transparent); }
+.observatory__search-results { display: flex; flex-wrap: wrap; gap: var(--spacing-2); padding: var(--spacing-2) var(--spacing-4); border-bottom: 1px solid var(--border); }
+.observatory__search-hit { border: 1px solid var(--border); background: var(--background); color: var(--foreground); border-radius: var(--radius-sm); padding: var(--spacing-1) var(--spacing-3); font-size: var(--text-xs); cursor: pointer; }
+.observatory__search-hit:hover { border-color: var(--primary); color: var(--primary); }
+.observatory__search-hit:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
