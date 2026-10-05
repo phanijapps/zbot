@@ -12,7 +12,8 @@
 @custom-variant dark (&:is(.dark *));
 
 /* Conversation shell: the approved quiet, warm-neutral desktop surface. */
-.session-shell {
+:root {
+
   --background: #ffffff;
   --background-surface: #f7f7f5;
   --background-elevated: #f0efec;
@@ -109,7 +110,9 @@
   --shell-dialog-content-layer: 51;
 }
 
-:root {
+/* Dark theme — opt in by adding the `dark` class to <html>. */
+.dark {
+
   --customization-list-width: 16.25rem;
   --customization-editor-min-height: 25rem;
   /* ========================================================================
