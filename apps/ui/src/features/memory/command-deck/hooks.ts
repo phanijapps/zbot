@@ -21,21 +21,22 @@ export function useWards(): WardListItem[] {
   const [wards, setWards] = useState<WardListItem[]>([]);
 
   useEffect(() => {
-    let alive = true;
-    (async () => {
+    // React 18 no longer warns on setState-after-unmount; the alive-flag
+    // pattern silently DROPPED ward data when the SPA-navigating parent
+    // re-rendered mid-fetch (Memory tab rendered empty until a manual
+    // ward click). Set the state unconditionally — the worst case is a
+    // no-op render on an unmounted component.
+    void (async () => {
       try {
         const transport = await getTransport();
         const result = await transport.listWards();
-        if (alive && result.success && result.data) {
+        if (result.success && result.data) {
           setWards(result.data);
         }
       } catch {
         // Leave wards empty on transport failure.
       }
     })();
-    return () => {
-      alive = false;
-    };
   }, []);
 
   return wards;

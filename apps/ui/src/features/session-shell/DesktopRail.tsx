@@ -34,11 +34,11 @@ export function DesktopRail({returnTo, recents, unavailable, sessionId, locked, 
       })}
     </nav>
     <nav className="session-shell__destinations" aria-label="Knowledge and settings">
-      <Link className="session-shell__nav-item" aria-current={pathname === "/memory" ? "page" : undefined} to={knowledgeDestination("/memory", returnTo)} onClick={onClose}><Brain size={18} aria-hidden="true" />Memory</Link>
-      <Link className="session-shell__nav-item" aria-current={pathname === "/observatory" ? "page" : undefined} to={knowledgeDestination("/observatory", returnTo)} onClick={onClose}><Network size={18} aria-hidden="true" />Observatory</Link>
-      <Link className="session-shell__nav-item" aria-current={pathname === "/agents" ? "page" : undefined} to={knowledgeDestination("/agents", returnTo)} onClick={onClose}><Bot size={18} aria-hidden="true" />Agents</Link>
-      <Link className="session-shell__nav-item" aria-current={pathname === "/integrations" ? "page" : undefined} to={knowledgeDestination("/integrations", returnTo)} onClick={onClose}><Plug size={18} aria-hidden="true" />Integrations</Link>
-      <Link className="session-shell__nav-item" aria-current={pathname === "/settings" ? "page" : undefined} to={knowledgeDestination("/settings", returnTo)} onClick={onClose}><Settings size={18} aria-hidden="true" />Settings</Link>
+      <a className="session-shell__nav-item" aria-current={pathname === "/memory" ? "page" : undefined} href={knowledgeDestination("/memory", returnTo)}><Brain size={18} aria-hidden="true" />Memory</a>
+      <a className="session-shell__nav-item" aria-current={pathname === "/observatory" ? "page" : undefined} href={knowledgeDestination("/observatory", returnTo)}><Network size={18} aria-hidden="true" />Observatory</a>
+      <a className="session-shell__nav-item" aria-current={pathname === "/agents" ? "page" : undefined} href={knowledgeDestination("/agents", returnTo)}><Bot size={18} aria-hidden="true" />Agents</a>
+      <a className="session-shell__nav-item" aria-current={pathname === "/integrations" ? "page" : undefined} href={knowledgeDestination("/integrations", returnTo)}><Plug size={18} aria-hidden="true" />Integrations</a>
+      <a className="session-shell__nav-item" aria-current={pathname === "/settings" ? "page" : undefined} href={knowledgeDestination("/settings", returnTo)}><Settings size={18} aria-hidden="true" />Settings</a>
     </nav>
     <button type="button" className="session-shell__mobile-close btn btn--ghost" onClick={onClose}>Close navigation</button>
   </aside>;

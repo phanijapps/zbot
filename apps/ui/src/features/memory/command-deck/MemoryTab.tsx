@@ -49,7 +49,10 @@ function buildFactKey(content: string): string {
 
 export function MemoryTab({ agentId, embedded = false, observatoryHref }: Props) {
   const wards = useWards();
-  const [activeId, setActiveId] = useState<string>("");
+  // Default to __global__ immediately — waiting for the ward list to
+  // auto-select raced with SPA-navigation remounts, leaving the evidence
+  // panel empty until a manual ward click.
+  const [activeId, setActiveId] = useState<string>("__global__");
   const [subTab, setSubTab] = useState<MemorySubTab>("facts");
 
   // Auto-select the first ward once wards load.
