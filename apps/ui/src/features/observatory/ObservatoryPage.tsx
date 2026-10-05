@@ -172,7 +172,7 @@ export function ObservatoryPage() {
 
       {/* Main area */}
       <div className="observatory__main">
-        {loading ? (
+        {loading && entities.length === 0 ? (
           <div
             className="observatory__canvas"
             style={{

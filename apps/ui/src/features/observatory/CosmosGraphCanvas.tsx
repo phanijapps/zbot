@@ -84,6 +84,30 @@ export function CosmosGraphCanvas({ entities, relationships, selectedEntityId, s
     void (async () => {
       const element = host.current;
       if (!element) return;
+      // Incremental update: once a scene exists, progressive page flushes
+      // extend positions/links in place instead of destroy-and-recreate
+      // (which would restart the simulation and flicker on every page).
+      const existing = graphRef.current as
+        | { setPointPositions(p: Float32Array): void; setLinks(l: Float32Array): void; fitView(): void }
+        | null;
+      if (existing) {
+        const positions = new Float32Array(entities.length * 2);
+        const random = (seed => () => ((seed = (seed * 16807) % 2147483647) / 2147483647))(42);
+        for (let index = 0; index < positions.length; index += 1) positions[index] = random() * 1000;
+        existing.setPointPositions(positions);
+        const links = new Float32Array(relationships.length * 2);
+        let linkCount = 0;
+        for (const relationship of relationships) {
+          const source = indexById.get(`${relationship.agent_id}:${relationship.source_entity_id}`);
+          const target = indexById.get(`${relationship.agent_id}:${relationship.target_entity_id}`);
+          if (source === undefined || target === undefined) continue;
+          links[linkCount * 2] = source;
+          links[linkCount * 2 + 1] = target;
+          linkCount += 1;
+        }
+        existing.setLinks(links.subarray(0, linkCount * 2));
+        return;
+      }
       const { Graph } = await import("@cosmos.gl/graph");
       if (disposed) return;
       try {
