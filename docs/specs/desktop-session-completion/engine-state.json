@@ -3,10 +3,10 @@
   "run_id": "dbe820eb-963e-4e6c-9abf-42b68e402562",
   "feature": "desktop-session-completion",
   "mode": "code",
-  "state": "CODE-HUMAN-GATE",
-  "last_event": "reviewers-clean",
+  "state": "DONE",
+  "last_event": "done",
   "last_event_context": null,
-  "transition_sequence": 24,
-  "last_transition_at": "2026-10-04T22:38:07Z",
-  "gate_question": "Are these changes correct and ready to merge?"
+  "transition_sequence": 25,
+  "last_transition_at": "2026-10-05T11:47:25Z",
+  "gate_question": null
 }
