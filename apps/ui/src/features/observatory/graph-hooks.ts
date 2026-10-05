@@ -93,8 +93,8 @@ export interface GraphData {
 }
 
 /** UI memory admission caps (spec AC3). */
-const MAX_ENTITIES = 50_000;
-const MAX_RELATIONSHIPS = 100_000;
+const MAX_ENTITIES = 1_000;
+const MAX_RELATIONSHIPS = 2_000;
 const MAX_SERIALIZED_BYTES = 64 * 1024 * 1024;
 
 /** Page sizes for progressive traversal (contract max is 1000; fewer,
