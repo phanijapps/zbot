@@ -47,13 +47,29 @@ pub fn chunk_text(text: &str, opts: ChunkOptions) -> Vec<Chunk> {
     let mut cursor = 0usize;
     let mut index = 0usize;
 
+    // Byte-offset arithmetic on multibyte text can land mid-codepoint and
+    // panic a slice; snap every computed offset to a char boundary first.
+    let snap_down = |offset: usize| -> usize {
+        let mut offset = offset;
+        while offset > 0 && !text.is_char_boundary(offset) {
+            offset -= 1;
+        }
+        offset
+    };
+
     while cursor < total {
-        let ideal_end = (cursor + target_chars).min(total);
-        let end = if ideal_end < total {
+        let mut ideal_end = (cursor + target_chars).min(total);
+        ideal_end = snap_down(ideal_end).max(cursor);
+        let mut end = if ideal_end < total {
             find_preferred_split(text, cursor, ideal_end)
         } else {
             ideal_end
         };
+        end = snap_down(end);
+        if end <= cursor {
+            // Degenerate snap (cursor itself mid-boundary): advance one char.
+            end = cursor + text[cursor..].chars().next().map_or(1, char::len_utf8);
+        }
 
         let chunk_text_str = text[cursor..end].trim().to_string();
         if !chunk_text_str.is_empty() {
@@ -69,7 +85,10 @@ pub fn chunk_text(text: &str, opts: ChunkOptions) -> Vec<Chunk> {
         if end >= total {
             break;
         }
-        let next_cursor = end.saturating_sub(overlap_chars);
+        let mut next_cursor = end.saturating_sub(overlap_chars);
+        while next_cursor > 0 && next_cursor < end && !text.is_char_boundary(next_cursor) {
+            next_cursor -= 1;
+        }
         cursor = if next_cursor <= cursor {
             end
         } else {
@@ -196,5 +215,30 @@ mod tests {
         assert_eq!(estimate_tokens(""), 0);
         assert_eq!(estimate_tokens("abcd"), 1);
         assert_eq!(estimate_tokens("abcdefghijklmnop"), 4);
+    }
+}
+
+#[cfg(test)]
+mod multibyte_tests {
+    use super::*;
+
+    #[test]
+    fn multibyte_text_chunks_without_panicking() {
+        // Pure CJK: every codepoint is 3 bytes, so byte-offset arithmetic
+        // lands mid-codepoint constantly. Must not panic, must cover the
+        // whole text, and chunks must be valid str slices.
+        let text = "語".repeat(20_000);
+        let chunks = chunk_text(
+            &text,
+            ChunkOptions { target_tokens: 1000, overlap_tokens: 100 },
+        );
+        assert!(!chunks.is_empty());
+        for chunk in &chunks {
+            assert!(!chunk.text.is_empty());
+        }
+        let first = chunks.first().unwrap();
+        let last = chunks.last().unwrap();
+        assert_eq!(first.char_start, 0);
+        assert!(last.char_end <= text.len());
     }
 }

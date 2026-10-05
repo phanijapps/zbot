@@ -268,6 +268,8 @@ pub async fn init_chat_session(
 /// disappear. The next call to `POST /api/chat/init` self-heals into
 /// a fresh session.
 pub async fn clear_chat_session(
+    _origin: crate::http::SameOrigin,
+    _bind: crate::http::sessions::LoopbackBind,
     State(state): State<AppState>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let _guard = chat_session_lock().lock().await;

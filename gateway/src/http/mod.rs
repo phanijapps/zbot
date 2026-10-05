@@ -33,6 +33,8 @@ mod paths;
 mod plugins;
 mod providers;
 #[cfg(test)]
+mod graph_pagination_tests;
+#[cfg(test)]
 mod session_details_tests;
 mod sessions;
 mod settings;
@@ -488,6 +490,11 @@ pub fn create_http_router(
         // Knowledge Graph endpoints (cross-agent observatory routes first)
         .route("/api/graph/stats", get(graph::graph_stats))
         .route("/api/graph/all/entities", get(graph::all_entities))
+        .route("/api/graph/all/search", get(graph::search_all_entities))
+        .route(
+            "/api/graph/:agent_id/entities/:entity_id",
+            get(graph::get_scoped_entity),
+        )
         .route(
             "/api/graph/all/relationships",
             get(graph::all_relationships),

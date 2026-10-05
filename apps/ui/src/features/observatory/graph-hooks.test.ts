@@ -54,6 +54,7 @@ afterEach(() => {
 // We import after mocks so the module captures the stubs.
 import {
   useGraphData,
+  useGraphSearch,
   useGraphStats,
   useDistillationStatus,
   useEntityConnections,
@@ -78,8 +79,8 @@ describe("useGraphData", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.entities).toEqual([{ id: "e1" }]);
     expect(result.current.relationships).toEqual([{ id: "r1" }]);
-    expect(mockGetGraphEntities).toHaveBeenCalledWith("agent-1", { limit: 200 });
-    expect(mockGetGraphRelationships).toHaveBeenCalledWith("agent-1", { limit: 500 });
+    expect(mockGetGraphEntities).toHaveBeenCalledWith("agent-1", { limit: 200, offset: 0 });
+    expect(mockGetGraphRelationships).toHaveBeenCalledWith("agent-1", { limit: 500, offset: 0 });
   });
 
   it("hits /api/graph/all/* endpoints when agentId is omitted (cross-agent path)", async () => {
@@ -308,5 +309,163 @@ describe("useBackfill", () => {
     await act(async () => { await result.current.run(); });
     expect(result.current.error).toMatch(/backend off/);
     expect(result.current.isRunning).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// STUB: AC1/AC2 — progressive paged loading beyond the first page.
+// Red today: useGraphData fetches one page (limit 200) and never follows
+// next_offset. The stub serves two pages through the transport and asserts a
+// duplicate-free merged traversal with a truthful complete state.
+// ---------------------------------------------------------------------------
+describe("useGraphData progressive paging (stub)", () => {
+  it("follows next_offset pages and merges entities without duplicates", async () => {
+    const page = (offset: number) => ({
+      success: true,
+      data: {
+        entities: [
+          { id: `entity-${offset + 1}`, agent_id: "agent-a", name: `E${offset + 1}`, entity_type: "Concept" },
+          { id: `entity-${offset + 2}`, agent_id: "agent-a", name: `E${offset + 2}`, entity_type: "Concept" },
+        ],
+        total: 4,
+        next_offset: offset + 2 < 4 ? offset + 2 : null,
+      },
+    });
+    mockGetGraphEntities.mockImplementation(async (_id: string, options?: {offset?: number}) => page(options?.offset ?? 0));
+    mockGetGraphRelationships.mockResolvedValue({ success: true, data: { relationships: [], total: 0, next_offset: null } });
+
+    const { result } = renderHook(() => useGraphData("agent-a"));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.entities.map(e => e.id).sort()).toEqual([
+      "entity-1", "entity-2", "entity-3", "entity-4",
+    ]);
+    expect(result.current.error).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC1/AC3 — truthful traversal states.
+// ---------------------------------------------------------------------------
+describe("useGraphData truthful states", () => {
+  const page = (offset: number, rows: Array<{id: string}>, total: number) => ({
+    success: true,
+    data: {
+      entities: rows.map(row => ({ id: row.id, agent_id: "agent-a", name: row.id, entity_type: "Concept" })),
+      total,
+      next_offset: offset + rows.length < total ? offset + rows.length : null,
+    },
+  });
+
+  it("marks traversal stale when totals change between pages (live view)", async () => {
+    mockGetGraphEntities
+      .mockImplementationOnce(async () => page(0, [{id: "e1"}, {id: "e2"}], 4))
+      .mockImplementationOnce(async () => page(2, [{id: "e3"}, {id: "e4"}], 5));
+    mockGetGraphRelationships.mockResolvedValue({ success: true, data: { relationships: [], total: 0, next_offset: null } });
+    const { result } = renderHook(() => useGraphData("agent-a"));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.stale).toBe(true);
+    expect(result.current.complete).toBe(false);
+    expect(result.current.totals.entities).toBe(5);
+  });
+
+  it("marks traversal stale on a no-progress page (all rows already merged)", async () => {
+    mockGetGraphEntities
+      .mockImplementationOnce(async () => page(0, [{id: "e1"}, {id: "e2"}], 4))
+      .mockImplementationOnce(async () => page(2, [{id: "e1"}, {id: "e2"}], 4));
+    mockGetGraphRelationships.mockResolvedValue({ success: true, data: { relationships: [], total: 0, next_offset: null } });
+    const { result } = renderHook(() => useGraphData("agent-a"));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.stale).toBe(true);
+    expect(result.current.entities).toHaveLength(2);
+  });
+
+  it("counts unresolved relationship endpoints instead of hiding them", async () => {
+    mockGetGraphEntities.mockResolvedValue(page(0, [{id: "e1"}], 1));
+    mockGetGraphRelationships.mockResolvedValue({
+      success: true,
+      data: {
+        relationships: [
+          { id: "r1", agent_id: "agent-a", source_entity_id: "e1", target_entity_id: "missing", relationship_type: "related_to" },
+          { id: "r2", agent_id: "agent-b", source_entity_id: "x", target_entity_id: "y", relationship_type: "related_to" },
+        ],
+        total: 2,
+        next_offset: null,
+      },
+    });
+    const { result } = renderHook(() => useGraphData("agent-a"));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.unresolvedEndpoints).toBe(2);
+  });
+
+  it("reports the loopback-only denial state on graph 403s", async () => {
+    const denial = new Error("session details unavailable") as Error & { status?: number };
+    denial.status = 403;
+    mockGetGraphEntities.mockRejectedValue(denial);
+    mockGetGraphRelationships.mockResolvedValue({ success: true, data: { relationships: [], total: 0, next_offset: null } });
+    const { result } = renderHook(() => useGraphData("agent-a"));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.loopbackOnly).toBe(true);
+    expect(result.current.complete).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC4 — server-backed search reaches beyond the loaded pages.
+// ---------------------------------------------------------------------------
+describe("useGraphSearch (AC4)", () => {
+  beforeEach(() => {
+    fetchMock.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          entities: [
+            { id: "late-page-hit", agent_id: "agent-z", name: "Deep result", entity_type: "Concept" },
+          ],
+          total: 1,
+          next_offset: null,
+        }),
+      })
+    );
+  });
+
+  it("debounces, queries the server search endpoint, and returns late-page hits", async () => {
+    vi.useFakeTimers();
+    const onSelect = vi.fn();
+    const { result } = renderHook(() => useGraphSearch(undefined, onSelect));
+    act(() => { result.current.setQuery("deep"); });
+    expect(fetchMock).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(result.current.searched).toBe(true);
+    expect(result.current.results[0]?.id).toBe("late-page-hit");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/graph/all/search?q=deep");
+    act(() => { result.current.open(result.current.results[0]); });
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "late-page-hit" }));
+    vi.useRealTimers();
+  });
+
+  it("uses the per-agent search endpoint when an agent is selected", async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useGraphSearch("agent-a", vi.fn()));
+    act(() => { result.current.setQuery("deep"); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(result.current.searched).toBe(true);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/graph/agent-a/search?q=deep");
+    vi.useRealTimers();
+  });
+});
+
+// AC3 — a failed search request is distinct from no matches.
+describe("useGraphSearch failure state", () => {
+  it("flags failed on a rejected request instead of pretending no matches", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(() => Promise.resolve({ ok: false, status: 503, text: async () => "unavailable" }));
+    const { result } = renderHook(() => useGraphSearch(undefined, vi.fn()));
+    act(() => { result.current.setQuery("deep"); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(result.current.searched).toBe(true);
+    expect(result.current.failed).toBe(true);
+    expect(result.current.results).toHaveLength(0);
+    vi.useRealTimers();
   });
 });

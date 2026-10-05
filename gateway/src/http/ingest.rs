@@ -40,9 +40,27 @@ pub struct IngestResponse {
 }
 
 pub async fn ingest(
+    _origin: crate::http::SameOrigin,
+    _bind: crate::http::sessions::LoopbackBind,
     State(state): State<AppState>,
     Json(req): Json<IngestRequest>,
 ) -> Result<(StatusCode, Json<IngestResponse>), (StatusCode, String)> {
+    // Bounded chunking options: a zero/huge target wedges the synchronous
+    // chunk loop or wraps the slice bounds, and tiny targets on a large
+    // body explode into unbounded chunk writes.
+    if let Some(opts) = req.chunk_opts.as_ref() {
+        // Derived from the chunker's own defaults — divergent literals would
+        // spuriously reject valid configurations.
+        let defaults = ChunkOptions::default();
+        let target = opts.target_tokens.unwrap_or(defaults.target_tokens);
+        let overlap = opts.overlap_tokens.unwrap_or(defaults.overlap_tokens);
+        if !(16..=8192).contains(&target) || overlap >= target {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "chunk_opts.target_tokens must be 16..=8192 and overlap_tokens < target_tokens".to_string(),
+            ));
+        }
+    }
     // Reads through the execution group: ingestion queue + backpressure
     // (kg episode store stays a single stores read).
     let execution = state.execution();
@@ -67,17 +85,18 @@ pub async fn ingest(
         .await
         .map_err(|e| (StatusCode::TOO_MANY_REQUESTS, e))?;
 
+    let chunk_defaults = ChunkOptions::default();
     let opts = ChunkOptions {
         target_tokens: req
             .chunk_opts
             .as_ref()
             .and_then(|o| o.target_tokens)
-            .unwrap_or(1000),
+            .unwrap_or(chunk_defaults.target_tokens),
         overlap_tokens: req
             .chunk_opts
             .as_ref()
             .and_then(|o| o.overlap_tokens)
-            .unwrap_or(100),
+            .unwrap_or(chunk_defaults.overlap_tokens),
     };
     let chunks = chunk_text(&req.text, opts);
     let agent_id = req.agent_id.unwrap_or_else(|| "root".to_string());
@@ -127,6 +146,8 @@ pub struct ProgressResponse {
 }
 
 pub async fn progress(
+    _origin: crate::http::SameOrigin,
+    _bind: crate::http::sessions::LoopbackBind,
     State(state): State<AppState>,
     Path(source_id): Path<String>,
 ) -> Result<Json<ProgressResponse>, (StatusCode, String)> {

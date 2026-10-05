@@ -1,3 +1,4 @@
+use crate::types::{Entity, NeighborInfo, Relationship};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -124,4 +125,30 @@ pub struct ArchivableEntity {
     pub agent_id: String,
     pub entity_type: String,
     pub name: String,
+}
+
+/// One consistent page of entities together with the exact total for the
+/// same scope/filter (exploration contract AC1). The total counts every
+/// row the scope can yield, not just this page; `rows.len()` may be smaller
+/// than `total` because of the page limit or a byte-budget-shortened page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityPage {
+    pub entities: Vec<Entity>,
+    pub total: usize,
+}
+
+/// One consistent page of relationships with the exact deduplicated total
+/// for the same scope/filter (exploration contract AC1).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationshipPage {
+    pub relationships: Vec<Relationship>,
+    pub total: usize,
+}
+
+/// One consistent page of hydrated neighbors with the exact agent-scoped
+/// total (exploration contract AC1).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NeighborPage {
+    pub neighbors: Vec<NeighborInfo>,
+    pub total: usize,
 }

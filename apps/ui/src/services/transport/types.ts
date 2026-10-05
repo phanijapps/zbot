@@ -1375,12 +1375,16 @@ export interface GraphRelationship {
 export interface GraphEntityListResponse {
   entities: GraphEntity[];
   total: number;
+  offset?: number;
+  next_offset?: number | null;
 }
 
 /** Relationship list response */
 export interface GraphRelationshipListResponse {
   relationships: GraphRelationship[];
   total: number;
+  offset?: number;
+  next_offset?: number | null;
 }
 
 /** Filter for entity queries */

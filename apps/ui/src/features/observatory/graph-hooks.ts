@@ -3,13 +3,14 @@
 // Data fetching hooks for the Observatory knowledge graph visualization.
 // ============================================================================
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { getTransport } from "@/services/transport";
 import type {
   GraphEntity,
   GraphRelationship,
   GraphEntityListResponse,
   GraphNeighborResponse,
+  GraphRelationshipListResponse,
 } from "@/services/transport/types";
 
 // ============================================================================
@@ -75,7 +76,92 @@ export interface GraphData {
   loading: boolean;
   error: string | null;
   refetch: () => void;
+  /** Server-exact scope totals from the same reads as the pages (live). */
+  totals: { entities: number; relationships: number };
+  /** True when every page in scope has been loaded (exhausted). */
+  complete: boolean;
+  /** True when traversal stopped early: totals changed or a page made no
+   * progress (all rows already merged). The view offers refresh. */
+  stale: boolean;
+  /** True when the memory-admission cap stopped further pages. */
+  capped: boolean;
+  /** Loopback-only denial (403 from the graph boundary). */
+  loopbackOnly: boolean;
+  /** Edges whose endpoint entities are not (yet) loaded — counted, never
+   * silently discarded (AC2). */
+  unresolvedEndpoints: number;
 }
+
+/** UI memory admission caps (spec AC3). */
+const MAX_ENTITIES = 50_000;
+const MAX_RELATIONSHIPS = 100_000;
+const MAX_SERIALIZED_BYTES = 64 * 1024 * 1024;
+
+/** Page sizes for progressive traversal. */
+const ENTITY_PAGE = 200;
+const RELATIONSHIP_PAGE = 500;
+
+/** Qualified identity: agent-local IDs cannot collide across agents (AC2). */
+const qualifiedKey = (agentId: string, id: string) => `${agentId}:${id}`;
+
+interface PagedFetch<T> {
+  rows: T[];
+  total: number;
+  nextOffset: number | null;
+}
+
+/** Progressively traverse a paged endpoint until exhausted, capped, or
+ * invalidated — merging by qualified identity so no row appears twice and a
+ * no-progress page (all rows already merged) stops traversal as stale. */
+async function traversePages<T>(
+  isCancelled: () => boolean,
+  fetchPage: (offset: number) => Promise<PagedFetch<T>>,
+  rowKey: (row: T) => string,
+  merged: Map<string, T>,
+  totals: { current: number | null },
+  cap: (count: number) => boolean,
+): Promise<{ stale: boolean; capped: boolean }> {
+  let offset = 0;
+  let stale = false;
+  let capped = false;
+  let expectedTotal: number | null = null;
+  loop: while (true) {
+    if (isCancelled()) return { stale, capped };
+    const page = await fetchPage(offset);
+    if (isCancelled()) return { stale, capped };
+    totals.current = page.total;
+    if (expectedTotal === null) expectedTotal = page.total;
+    else if (page.total !== expectedTotal) {
+      // Live view: the dataset changed under traversal.
+      stale = true;
+      break;
+    }
+    let added = 0;
+    for (const row of page.rows) {
+      const key = rowKey(row);
+      if (!merged.has(key)) {
+        merged.set(key, row);
+        added += 1;
+      }
+    }
+    if (added === 0 && page.rows.length > 0) {
+      // No-progress page (AC1): all rows were already merged.
+      stale = true;
+      break;
+    }
+    if (cap(merged.size)) {
+      capped = true;
+      break;
+    }
+    if (page.nextOffset === null || page.nextOffset === undefined) {
+      totals.current = page.total;
+      break loop;
+    }
+    offset = page.nextOffset;
+  }
+  return { stale, capped };
+}
+
 
 // ============================================================================
 // INTERNAL HELPERS
@@ -121,7 +207,9 @@ async function fetchJson<T>(path: string): Promise<T> {
     clearTimeout(timeoutId);
     if (!res.ok) {
       const text = await res.text().catch(() => res.statusText);
-      throw new Error(text || `HTTP ${res.status}`);
+      const error = new Error(text || `HTTP ${res.status}`) as Error & { status?: number };
+      error.status = res.status;
+      throw error;
     }
     return (await res.json()) as T;
   } catch (err) {
@@ -167,58 +255,169 @@ export function useGraphData(agentId?: string): GraphData {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const [totals, setTotals] = useState({ entities: 0, relationships: 0 });
+  const [complete, setComplete] = useState(false);
+  const [stale, setStale] = useState(false);
+  const [capped, setCapped] = useState(false);
+  const [loopbackOnly, setLoopbackOnly] = useState(false);
+  const [entityMap, setEntityMap] = useState<Map<string, GraphEntity>>(new Map());
+  const [relationshipMap, setRelationshipMap] = useState<Map<string, GraphRelationship>>(new Map());
 
   const refetch = useCallback(() => setTick((t) => t + 1), []);
 
-  const fetchPerAgentData = async (id: string): Promise<{ entities: GraphEntity[]; relationships: GraphRelationship[] }> => {
-    const transport = await getTransport();
-    const [entRes, relRes] = await Promise.all([
-      transport.getGraphEntities(id, { limit: 200 }),
-      transport.getGraphRelationships(id, { limit: 500 }),
-    ]);
-    if (!entRes.success || !entRes.data) throw new Error(entRes.error || "Failed to fetch entities");
-    if (!relRes.success || !relRes.data) throw new Error(relRes.error || "Failed to fetch relationships");
-    return { entities: entRes.data.entities, relationships: relRes.data.relationships };
-  };
-
   useEffect(() => {
     let cancelled = false;
+    const isCancelled = () => cancelled;
+    setLoading(true);
+    setError(null);
+    setStale(false);
+    setCapped(false);
+    setComplete(false);
+    setLoopbackOnly(false);
+    setEntities([]);
+    setRelationships([]);
+    setEntityMap(new Map());
+    setRelationshipMap(new Map());
+    setTotals({ entities: 0, relationships: 0 });
 
     const load = async () => {
-      setLoading(true);
-      setError(null);
+      const nextEntities = new Map<string, GraphEntity>();
+      const nextRelationships = new Map<string, GraphRelationship>();
+      const entityTotals = { current: null as number | null };
+      const relationshipTotals = { current: null as number | null };
+      let staleResult = false;
+      let cappedResult = false;
+      let lastError: string | null = null;
+      let denied = false;
+
+      const serializedBudget = () => {
+        let bytes = 0;
+        for (const entity of nextEntities.values()) bytes += JSON.stringify(entity).length;
+        for (const relationship of nextRelationships.values()) bytes += JSON.stringify(relationship).length;
+        return bytes;
+      };
+      const entityCap = (count: number) =>
+        count >= MAX_ENTITIES || serializedBudget() >= MAX_SERIALIZED_BYTES;
+      const relationshipCap = (count: number) =>
+        count >= MAX_RELATIONSHIPS || serializedBudget() >= MAX_SERIALIZED_BYTES;
+
       try {
-        if (agentId) {
-          const data = await fetchPerAgentData(agentId);
-          if (cancelled) return;
-          setEntities(data.entities);
-          setRelationships(data.relationships);
-        } else {
-          // Cross-agent: hit the /api/graph/all/* endpoints
-          const [entData, relData] = await Promise.all([
-            fetchJson<GraphEntityListResponse>("/api/graph/all/entities?limit=200"),
-            fetchJson<{ relationships: GraphRelationship[]; total: number }>(
-              "/api/graph/all/relationships?limit=500"
-            ),
-          ]);
-          if (cancelled) return;
-          setEntities(entData.entities);
-          setRelationships(relData.relationships);
+        const transport = await getTransport();
+        const entityPage = (offset: number): Promise<PagedFetch<GraphEntity>> =>
+          agentId
+            ? transport
+                .getGraphEntities(agentId, { limit: ENTITY_PAGE, offset })
+                .then((response) => {
+                  if (!response.success || !response.data) throw new Error(response.error || "Failed to fetch entities");
+                  return {
+                    rows: response.data.entities,
+                    total: response.data.total,
+                    nextOffset: response.data.next_offset ?? null,
+                  };
+                })
+            : fetchJson<GraphEntityListResponse>(
+                `/api/graph/all/entities?limit=${ENTITY_PAGE}&offset=${offset}`
+              ).then((data) => ({
+                rows: data.entities,
+                total: data.total,
+                nextOffset: data.next_offset ?? null,
+              }));
+        const relationshipPage = (offset: number): Promise<PagedFetch<GraphRelationship>> =>
+          agentId
+            ? transport
+                .getGraphRelationships(agentId, { limit: RELATIONSHIP_PAGE, offset })
+                .then((response) => {
+                  if (!response.success || !response.data) throw new Error(response.error || "Failed to fetch relationships");
+                  return {
+                    rows: response.data.relationships,
+                    total: response.data.total,
+                    nextOffset: response.data.next_offset ?? null,
+                  };
+                })
+            : fetchJson<GraphRelationshipListResponse>(
+                `/api/graph/all/relationships?limit=${RELATIONSHIP_PAGE}&offset=${offset}`
+              ).then((data) => ({
+                rows: data.relationships,
+                total: data.total,
+                nextOffset: data.next_offset ?? null,
+              }));
+
+        const entityResult = await traversePages(
+          isCancelled,
+          entityPage,
+          (entity) => qualifiedKey(entity.agent_id, entity.id),
+          nextEntities,
+          entityTotals,
+          entityCap
+        );
+        staleResult = staleResult || entityResult.stale;
+        cappedResult = cappedResult || entityResult.capped;
+
+        if (!isCancelled()) {
+          const relationshipResult = await traversePages(
+            isCancelled,
+            relationshipPage,
+            (relationship) => qualifiedKey(relationship.agent_id, relationship.id),
+            nextRelationships,
+            relationshipTotals,
+            relationshipCap
+          );
+          staleResult = staleResult || relationshipResult.stale;
+          cappedResult = cappedResult || relationshipResult.capped;
         }
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
+        if (!isCancelled()) {
+          lastError = err instanceof Error ? err.message : String(err);
+          denied = (err as Error & { status?: number }).status === 403;
         }
-      } finally {
-        if (!cancelled) setLoading(false);
       }
+
+      if (isCancelled()) return;
+      setEntities([...nextEntities.values()]);
+      setRelationships([...nextRelationships.values()]);
+      setEntityMap(nextEntities);
+      setRelationshipMap(nextRelationships);
+      setTotals({
+        entities: entityTotals.current ?? nextEntities.size,
+        relationships: relationshipTotals.current ?? nextRelationships.size,
+      });
+      setStale(staleResult);
+      setCapped(cappedResult);
+      setComplete(!staleResult && !cappedResult && lastError === null);
+      setError(lastError);
+      setLoopbackOnly(denied);
+      setLoading(false);
     };
 
     load();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [agentId, tick]);
 
-  return { entities, relationships, loading, error, refetch };
+  // Unresolved edge endpoints (AC2): counted, never silently discarded.
+  const unresolvedEndpoints = useMemo(() => {
+    let unresolved = 0;
+    for (const relationship of relationshipMap.values()) {
+      if (!entityMap.has(qualifiedKey(relationship.agent_id, relationship.source_entity_id))) unresolved += 1;
+      else if (!entityMap.has(qualifiedKey(relationship.agent_id, relationship.target_entity_id))) unresolved += 1;
+    }
+    return unresolved;
+  }, [entityMap, relationshipMap]);
+
+  return {
+    entities,
+    relationships,
+    loading,
+    error,
+    refetch,
+    totals,
+    complete,
+    stale,
+    capped,
+    loopbackOnly,
+    unresolvedEndpoints,
+  };
 }
 
 /**
@@ -404,4 +603,81 @@ export function useBackfill(onComplete?: () => void) {
   }, [onComplete]);
 
   return { run, isRunning, isDone, progress, error };
+}
+
+// ============================================================================
+// SERVER-BACKED SEARCH (AC4) — reaches entities beyond the loaded pages.
+// ============================================================================
+
+export interface GraphSearchHit extends GraphEntity {}
+
+export interface GraphSearchState {
+  query: string;
+  results: GraphSearchHit[];
+  searched: boolean;
+  /** True when the search request itself failed — distinct from no matches. */
+  failed: boolean;
+  setQuery(query: string): void;
+  open(hit: GraphSearchHit): void;
+}
+
+/** Debounced server search over the selected scope. Selecting a hit loads
+ * the entity through the direct per-agent read (or the aggregate endpoint)
+ * and hands it to the page's selection handler. */
+export function useGraphSearch(
+  agentId: string | undefined,
+  onSelect: (entity: GraphEntity) => void,
+): GraphSearchState {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<GraphSearchHit[]>([]);
+  const [searched, setSearched] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (query.trim().length < 2) {
+      setResults([]);
+      setSearched(false);
+      setFailed(false);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const data = agentId
+            ? await fetchJson<GraphEntityListResponse>(
+                `/api/graph/${encodeURIComponent(agentId)}/search?q=${encodeURIComponent(query.trim())}&limit=20`
+              )
+            : await fetchJson<GraphEntityListResponse>(
+                `/api/graph/all/search?q=${encodeURIComponent(query.trim())}&limit=20`
+              );
+          if (!cancelled) {
+            setResults(data.entities);
+            setSearched(true);
+            setFailed(false);
+          }
+        } catch {
+          // A failed request is not "no matches" (AC3): surface it distinctly.
+          if (!cancelled) {
+            setResults([]);
+            setSearched(true);
+            setFailed(true);
+          }
+        }
+      })();
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query, agentId]);
+
+  const open = useCallback(
+    (hit: GraphSearchHit) => {
+      onSelect(hit);
+    },
+    [onSelect]
+  );
+
+  return { query, results, searched, failed, setQuery, open };
 }

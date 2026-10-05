@@ -83,6 +83,7 @@ where
         if loopback_bound && local_host {
             Ok(Self)
         } else {
+            log_guard_denial(parts, loopback_bound);
             Err(details_error(
                 StatusCode::FORBIDDEN,
                 "session details unavailable",
@@ -117,6 +118,46 @@ fn host_is_local(host: Option<&axum::http::header::HeaderValue>) -> bool {
         || hostname
             .parse::<std::net::IpAddr>()
             .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Rate-limited denial logging: at most one line per (method, path) per
+/// second, method + path + peer address only, never any payload.
+fn log_guard_denial(parts: &Parts, loopback_bound: bool) {
+    use std::collections::HashMap;
+    use std::time::Instant;
+    static LAST_LOG: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<(String, String), Instant>>,
+    > = std::sync::OnceLock::new();
+    let key = (
+        parts.method.as_str().to_string(),
+        parts.uri.path().to_string(),
+    );
+    let map = LAST_LOG.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = map.lock() {
+        if let Some(last) = guard.get(&key) {
+            if last.elapsed().as_secs() < 1 {
+                return;
+            }
+        }
+        // Bounded memory: caller-chosen path segments must not grow the map
+        // without limit. Past the cap, existing keys keep refreshing (rate
+        // limit stays armed); only new keys are refused.
+        if guard.len() < 1024 || guard.contains_key(&key) {
+            guard.insert(key.clone(), Instant::now());
+        }
+    }
+    let peer = parts
+        .extensions
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    tracing::warn!(
+        "local-caller guard denied {} {} from {} (loopback_bound={})",
+        key.0,
+        key.1,
+        peer,
+        loopback_bound
+    );
 }
 
 fn details_error(
@@ -187,6 +228,8 @@ pub async fn get_session_details(
 /// POST /api/sessions/archive
 /// Archive old session transcripts to compressed JSONL files.
 pub async fn archive_sessions(
+    _origin: SameOrigin,
+    _bind: LoopbackBind,
     State(state): State<AppState>,
     Json(body): Json<ArchiveRequest>,
 ) -> Result<Json<ArchiveResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -230,6 +273,8 @@ pub async fn archive_sessions(
 /// POST /api/sessions/restore/:id
 /// Restore an archived session from its compressed JSONL file.
 pub async fn restore_session(
+    _origin: SameOrigin,
+    _bind: LoopbackBind,
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> Result<Json<RestoreResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -260,6 +305,8 @@ pub async fn restore_session(
 
 /// GET /api/sessions/:id/state — returns structured session snapshot
 pub async fn get_session_state(
+    _origin: SameOrigin,
+    _bind: LoopbackBind,
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> Result<Json<SessionState>, (StatusCode, Json<ErrorResponse>)> {
@@ -307,6 +354,8 @@ pub async fn get_session_state(
 /// always reach a "delete makes it disappear" outcome. Returns 204
 /// regardless of whether a `sessions` row was present; 500 on DB error.
 pub async fn delete_session(
+    _origin: SameOrigin,
+    _bind: LoopbackBind,
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {

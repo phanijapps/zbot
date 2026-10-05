@@ -35,6 +35,7 @@ import { VaultPage } from "./features/vault";
 import { AccentPicker } from "./components/AccentPicker";
 import { SessionShell } from "./features/session-shell/SessionShell";
 import { DesktopKnowledgePage } from "./features/session-shell/DesktopKnowledgePage";
+import { BenchmarkPage } from "./features/observatory/benchmark/BenchmarkPage";
 import { DesktopAdministrationPage } from "./features/session-shell/DesktopAdministrationPage";
 import { conversationDestination } from "./features/session-shell/navigation";
 
@@ -243,6 +244,9 @@ function App() {
           <Route path="/session/:sessionId?" element={<CommissioningGuard><SessionShell /></CommissioningGuard>} />
           <Route path="/memory" element={<CommissioningGuard><DesktopKnowledgePage kind="memory" /></CommissioningGuard>} />
           <Route path="/observatory" element={<CommissioningGuard><DesktopKnowledgePage kind="observatory" /></CommissioningGuard>} />
+          {import.meta.env.DEV && (
+            <Route path="/observatory/benchmark" element={<BenchmarkPage />} />
+          )}
           <Route path="/agents" element={<CommissioningGuard><DesktopAdministrationPage><WebAgentsPanel /></DesktopAdministrationPage></CommissioningGuard>} />
           <Route path="/settings" element={<CommissioningGuard><DesktopAdministrationPage><WebSettingsPanel /></DesktopAdministrationPage></CommissioningGuard>} />
           <Route path="/integrations" element={<CommissioningGuard><DesktopAdministrationPage><WebIntegrationsPanel /></DesktopAdministrationPage></CommissioningGuard>} />

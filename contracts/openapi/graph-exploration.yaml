@@ -2,9 +2,11 @@ openapi: 3.1.0
 info:
   title: Zbot Observatory graph exploration
   version: 0.1.0
-  description: Draft delivery contract; additive paging of existing scoped graph reads.
-    Every operation runs gateway::http::SameOrigin and sessions::LoopbackBind before
-    any store read. Mismatched Origin, LAN bind or missing bind proof returns sanitized
+  description: Draft delivery contract; paging of existing scoped graph reads with two explicit semantics changes: total becomes the exact scope count (was page length) and ordering gains a unique (agent_id, id) tiebreaker after the unchanged mention_count DESC ranking.
+    Every route under /api/graph/* — the operations modeled here and the sibling
+    per-agent stats, aggregate stats, subgraph (max_hops bounded 1-4), reindex and
+    ingest routes — runs gateway::http::SameOrigin and the hardened
+    sessions::LoopbackBind (with its Host-locality check) before any store access. Mismatched Origin, LAN bind or missing bind proof returns sanitized
     403 with zero store access, including Origin-less native callers. Agent IDs select
     scope, never authenticate. Counts and each page are one consistent store read;
     pages across requests are a live view, not a frozen snapshot. Names/properties
@@ -95,6 +97,7 @@ paths:
       - $ref: '#/components/parameters/Limit'
       - $ref: '#/components/parameters/Offset'
       - $ref: '#/components/parameters/EntityType'
+      - $ref: '#/components/parameters/WardId'
       responses:
         '200':
           description: Bounded scoped graph response.
@@ -314,7 +317,7 @@ components:
           - integer
           - 'null'
           minimum: 0
-      description: Stable ascending (agent_id,id) ordering, exact filtered total from
+      description: Stable deterministic ordering `mention_count DESC, agent_id, id` (unique tiebreaker; preserves the existing most-mentioned-first page while making offset paging stable). Exact filtered total from
         the same read as rows. next_offset=offset+returned rows when more rows exist,
         else null; offset>=total returns empty/exhausted. Under concurrent mutation
         offsets may shift; UI deduplicates, labels counts as observed live totals,
@@ -347,7 +350,7 @@ components:
           - integer
           - 'null'
           minimum: 0
-      description: Stable ascending (agent_id,id) ordering, exact filtered total from
+      description: Stable deterministic ordering `mention_count DESC, agent_id, id` (unique tiebreaker; preserves the existing most-mentioned-first page while making offset paging stable). Exact filtered total from
         the same read as rows. next_offset=offset+returned rows when more rows exist,
         else null; offset>=total returns empty/exhausted. Under concurrent mutation
         offsets may shift; UI deduplicates, labels counts as observed live totals,
@@ -505,6 +508,14 @@ components:
         type: string
         minLength: 1
         maxLength: 128
+    WardId:
+      name: ward_id
+      in: query
+      description: Optional ward filter (existing parameter, now documented).
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 64
     RelationshipType:
       name: relationship_type
       in: query
